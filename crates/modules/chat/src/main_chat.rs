@@ -49,6 +49,24 @@ pub fn text(state: &Value, key: &str) -> String {
         .replace("{notes}", &name("notes_name", "main_notes_name"))
 }
 
+/// Guidance text `key` (`review` or `contribute`) under its bold heading, which carries the
+/// agent's names so the guidance itself can stay name-free; empty when the text is.
+pub fn guidance(state: &Value, key: &str) -> String {
+    let body = text(state, key);
+    let heading = text(
+        state,
+        if key == "review" {
+            "main_chat_heading"
+        } else {
+            "notes_heading"
+        },
+    );
+    if body.trim().is_empty() || heading.trim().is_empty() {
+        return body;
+    }
+    format!("**{}**\n\n{body}", heading.trim())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {

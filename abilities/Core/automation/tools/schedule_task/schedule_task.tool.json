@@ -100,7 +100,7 @@
           "entry_id"
         ],
         "additionalProperties": false,
-        "description": "Bind a Main Notes action. Only Main Chat may coordinate it; trigger must match saved user timing. Uses one stable schedule identity."
+        "description": "Bind a cross-session notes action. Only the agent's central chat may coordinate it; trigger must match saved user timing. Uses one stable schedule identity."
       }
     },
     "required": [

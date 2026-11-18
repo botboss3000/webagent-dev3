@@ -64,8 +64,8 @@ pub(crate) async fn guidance_store(
     } else {
         "contribute"
     };
-    // The agent's override or the file's text, with its two names filled in.
-    let text = webagent_chat::main_chat::text(&state, name);
+    // The agent's override or the file's text under its heading, with the names filled in.
+    let text = webagent_chat::main_chat::guidance(&state, name);
     Ok((!text.trim().is_empty()).then_some(text))
 }
 /// Main Notes context for one model call of session `sid`: the section definitions (how to
@@ -741,14 +741,14 @@ mod api_tests {
                 .await
                 .unwrap()
                 .as_deref(),
-            Some("Review sentinel")
+            Some("**Coordinator guidance**\n\nReview sentinel")
         );
         assert_eq!(
             guidance(&app, "shared_default", "working")
                 .await
                 .unwrap()
-                .as_deref(),
-            Some("Contribute sentinel")
+                .map(|text| text.ends_with("guidance**\n\nContribute sentinel")),
+            Some(true)
         );
         let disable = config(2, json!(1), "disable", false);
         assert!(configure_api(Extension(app.clone()), Json(disable.clone()))
@@ -867,8 +867,8 @@ mod api_tests {
             guidance(&other, "agent-two", "working")
                 .await
                 .unwrap()
-                .as_deref(),
-            Some("Updated sentinel")
+                .map(|text| text.ends_with("guidance**\n\nUpdated sentinel")),
+            Some(true)
         );
         assert!(
             app.store.main_chat_state().await.unwrap()["skill_overrides"]["contribute"].is_null()
@@ -878,7 +878,7 @@ mod api_tests {
         let state = other.store.main_chat_state().await.unwrap();
         let main = state["session_id"].as_str().unwrap().to_owned();
         let prompt = guidance(&other, "agent-two", &main).await.unwrap().unwrap();
-        assert_eq!(prompt, webagent_chat::main_chat::text(&state, "review"));
+        assert_eq!(prompt, webagent_chat::main_chat::guidance(&state, "review"));
         assert!(!prompt.contains("{chat}") && !prompt.contains("{notes}"));
         assert!(tool(&other, &main, "none", "main_notes_read", &json!({}))
             .await
