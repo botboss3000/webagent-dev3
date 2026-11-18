@@ -50,6 +50,15 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(executor.Executor.sidekick_infrastructure(failed(255)))
         self.assertFalse(executor.Executor.sidekick_infrastructure(failed(101)))
         self.assertFalse(executor.Executor.sidekick_infrastructure(executor.SidekickDeclined("off")))
+    def test_control_replies_skip_the_log_scrubber_and_phase_logs_do_not(self):
+        """The scrubber masks hash-like values; a masked hash broke the status JSON on the first real job."""
+        seen=[]
+        runner=types.SimpleNamespace(command=lambda argv,**kw:seen.append(kw)or'{"version": 3}',compiler_runtime=lambda job:{})
+        w=executor.Executor(runner,None,{"scheduler":{"sidekick":SETTINGS},"state_root":tempfile.mkdtemp(dir=STATE.name)})
+        self.assertEqual(w.sidekick_json(SETTINGS,"status"),{"version":3});self.assertTrue(seen[-1]["private_raw"])
+        w.persist_phase_log=lambda job,logs:None
+        w._sidekick_workload({"job_id":"j"},"test",["x"],"engine:rust1.90:test",60,{"settings":SETTINGS,"image":"i","cargo_key":"k"})
+        self.assertNotIn("private_raw",seen[-1])
     def test_ssh_pins_the_host_key_and_uses_only_the_broker_key(self):
         argv=executor.Executor.sidekick_argv(SETTINGS,"status")
         self.assertEqual(argv[-2:],["ar@100.126.37.96","status"])
@@ -133,6 +142,7 @@ class HalfTests(unittest.TestCase):
         raise AssertionError(words)
     def run_half(self,begin="accepted",staged=None,accepting=True,state=None):
         self.begin=begin;self.staged=staged;self.accepting=accepting;self.w.sidekick_call=self.call;state={}if state is None else state
+        self.w.sidekick_claim(self.job,SETTINGS,state)
         return self.w.sidekick_test_half(self.job,b"blob",self.app,self.output,SETTINGS,state),state
     def test_passing_half_runs_both_phases_remotely_in_order(self):
         logs,state=self.run_half()

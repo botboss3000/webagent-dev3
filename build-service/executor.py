@@ -389,11 +389,15 @@ class Executor:
             "-o","UserKnownHostsFile="+settings["known_hosts"],"-o","ConnectTimeout=10","-o","ServerAliveInterval=15",
             "-o","ServerAliveCountMax=4",settings["user"]+"@"+settings["host"],*words]
     def sidekick_call(self,settings,*words,stdin=None,timeout=120,output_file=None):
-        return self.runner.command(self.sidekick_argv(settings,*words),stdin=stdin,timeout=timeout,output_file=output_file)
+        """A control verb; its small JSON reply is read raw, since the log scrubber masks hash-like values."""
+        return self.runner.command(self.sidekick_argv(settings,*words),stdin=stdin,timeout=timeout,output_file=output_file,private_raw=output_file is None)
+    def sidekick_json(self,settings,*words,**kwargs):
+        return json.loads(self.sidekick_call(settings,*words,**kwargs))
     def _sidekick_workload(self,job,phase,argv,profile,timeout,remote):
         """One phase on the sidekick: the same image, recipe and incremental setting as a local phase."""
         request=json.dumps({"argv":argv,"image":remote["image"],"cargo_key":remote["cargo_key"],"incremental":self.incremental(job,profile)}).encode()
-        logs=self.sidekick_call(remote["settings"],"run",job["job_id"],phase,str(int(timeout)),stdin=request,timeout=int(timeout)+120)
+        # Phase output is a log: it keeps the scrubbed, observed path of a local phase.
+        logs=self.runner.command(self.sidekick_argv(remote["settings"],"run",job["job_id"],phase,str(int(timeout))),stdin=request,timeout=int(timeout)+120)
         self.persist_phase_log(job,logs);return logs
     @staticmethod
     def sidekick_program():
@@ -402,12 +406,12 @@ class Executor:
         return path.read_bytes()if path.is_file()else None
     def sidekick_sync(self,settings,record):
         """Health check plus version sync: push this release's sidekick program when the hashes differ."""
-        status=json.loads(self.sidekick_call(settings,"status",timeout=30))
+        status=self.sidekick_json(settings,"status",timeout=30)
         program=self.sidekick_program()
         if program is not None and status.get("code_sha256")!=hashlib.sha256(program).hexdigest():
             sha=hashlib.sha256(program).hexdigest()
             self.sidekick_call(settings,"update",sha,stdin=program,timeout=60)
-            status=json.loads(self.sidekick_call(settings,"status",timeout=30))
+            status=self.sidekick_json(settings,"status",timeout=30)
             if status.get("code_sha256")!=sha:raise ValueError("Sidekick program update did not take effect")
             record["program_updated"]=sha[:12]
         if status.get("version",0)<SIDEKICK_PROTOCOL:raise ValueError("Sidekick program is older than this broker")
@@ -479,6 +483,15 @@ class Executor:
     def suite_remainder(selection,done):
         """The selection's script without the steps already passed."""
         return ["sh","-c","\n".join(line for line in selection["argv"][2].split("\n")if Executor.suite_step(line)not in done)]
+    def sidekick_claim(self,job,settings,state):
+        """Health check, program sync and the job lock, in seconds and before the release compile starts:
+        a sidekick that is off, paused, busy or failing leaves this job on the usual server order."""
+        jid=job["job_id"];record=job["sidekick"]={"host":settings["host"],"decision":"started","started_at":time.time()}
+        self.sidekick_sync(settings,record)
+        accepted=self.sidekick_json(settings,"begin",jid)
+        if accepted.get("decision")in {"busy","disabled"}:raise SidekickDeclined("sidekick "+accepted["decision"]+": "+str(accepted.get("reason")or accepted.get("job_id")or""))
+        if accepted.get("decision")!="accepted":raise ValueError("Sidekick "+str(accepted.get("decision"))+": "+str(accepted.get("reason")or""))
+        state["held"]=True
     def sidekick_test_half(self,job,blob,application,output,settings,state):
         """Compile the workspace tests on the sidekick, fetch them, then run the suite there.
 
@@ -486,25 +499,20 @@ class Executor:
         steps that passed), so the caller finishes here from the last completed step if anything fails. Passing
         results are trusted: same image by ID, same source by digest, staged binaries hash-checked against the
         manifest built here. A failed step is always rerun here before it can fail the job."""
-        jid=job["job_id"];record=job["sidekick"]={"host":settings["host"],"decision":"started","started_at":time.time()}
-        self.sidekick_sync(settings,record)
-        accepted=json.loads(self.sidekick_call(settings,"begin",jid))
-        if accepted.get("decision")in {"busy","disabled"}:raise SidekickDeclined("sidekick "+accepted["decision"]+": "+str(accepted.get("reason")or accepted.get("job_id")or""))
-        if accepted.get("decision")!="accepted":raise ValueError("Sidekick "+str(accepted.get("decision"))+": "+str(accepted.get("reason")or""))
-        state["held"]=True
+        jid=job["job_id"];record=job["sidekick"]
         image=self.runner.compiler_runtime(job)["image"]
-        if image not in json.loads(self.sidekick_call(settings,"status")).get("images",[]):
+        if image not in self.sidekick_json(settings,"status").get("images",[]):
             saver=subprocess.Popen(["docker","save",image],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
-            try:loaded=json.loads(self.sidekick_call(settings,"load-image",jid,image,stdin=saver.stdout,timeout=1800))
+            try:loaded=self.sidekick_json(settings,"load-image",jid,image,stdin=saver.stdout,timeout=1800)
             finally:saver.stdout.close();saver.wait(120)
             if saver.returncode or not loaded.get("present"):raise ValueError("Compiler image transfer to the sidekick failed")
             record["image_transferred"]=True
         tree,digest_value=self.sidekick_tree(application)
-        synced=json.loads(self.sidekick_call(settings,"sync-source",jid,stdin=tree,timeout=600))
+        synced=self.sidekick_json(settings,"sync-source",jid,stdin=tree,timeout=600)
         if synced.get("sha256")!=digest_value:raise ValueError("Sidekick source differs from captured inputs")
         key=(job.get("dependency_cache")or{}).get("key")
         if not isinstance(key,str)or not re.fullmatch(r"[a-f0-9]{64}",key):raise ValueError("Dependency cache key unavailable")
-        if not json.loads(self.sidekick_call(settings,"has-cargo",key)).get("present"):
+        if not self.sidekick_json(settings,"has-cargo",key).get("present"):
             archive=output/"sidekick-cargo.tar"
             try:
                 with tarfile.open(archive,"w")as tar:tar.add(output/"cargo/registry",arcname="registry")
@@ -526,7 +534,7 @@ class Executor:
         selection=state["selection"]=self.test_selection(job,blob,application,output,state["manifest"])
         origin={Path(name).name:name for name in names}
         pairs=[[origin[row["file"].removeprefix("tests/")],row["file"]]for row in state["manifest"]["tests"]]
-        staged=json.loads(self.sidekick_call(settings,"stage",jid,stdin=json.dumps(pairs).encode(),timeout=300))
+        staged=self.sidekick_json(settings,"stage",jid,stdin=json.dumps(pairs).encode(),timeout=300)
         if staged!={row["file"]:row["sha256"]for row in state["manifest"]["tests"]}:raise ValueError("Sidekick test executables differ from the retained manifest")
         argv,steps=self.sidekick_suite_argv(selection)
         try:suite=self.phase(job,"test","test",application,output,argv,"engine:rust1.90:test",sidekick=remote)
@@ -1988,9 +1996,43 @@ class Executor:
                 shutil.rmtree(linked_source,ignore_errors=True)
                 shutil.rmtree(release_cargo,ignore_errors=True)
         state={}
+        def note_fallback(error):
+            job.setdefault("sidekick",{}).update(decision="declined"if isinstance(error,SidekickDeclined)else"fallback",reason=str(error)[:600],
+                failed_step="claim"if not state.get("held")else"suite"if state.get("selection")else"compile",kept_steps=len(state.get("done")or[]))
+            self.sidekick_outcome(sidekick,error)
         if sidekick:
+            try:self.sidekick_claim(job,sidekick,state)
+            except PermissionError:raise
+            except Exception as error:
+                note_fallback(error);self.sidekick_release(sidekick,job,"fallback")
+                logs+="Broker sidekick not used ("+job["sidekick"]["reason"][:200]+"); the test half runs here.\n"
+                sidekick=None
+        def local_test_half():
+            """compile_test, manifest and focused checks here; their logs go to state."""
+            shutil.rmtree(output/"artifacts/tests",ignore_errors=True);(output/"artifacts/test-manifest.json").unlink(missing_ok=True)
+            state["logs"]=state.get("logs","")+self.phase(job,"compile_test","engine",application,output,COMPILE_TEST_ARGV,"engine:rust1.90:compile_test")
+            artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
+            state["manifest"]=self.retain_test_manifest(output,artifacts)
+            state["logs"]+=self.focused_tests(job,application,output,fresh_tests=artifacts)
+            if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
+        if sidekick:
+            def half_work():
+                try:result=self.sidekick_test_half(job,blob,application,output,sidekick,state)
+                except PermissionError:raise
+                except Exception as error:
+                    # Finish here at once, beside the release compile that is still running.
+                    note_fallback(error);self.sidekick_release(sidekick,job,"fallback")
+                    state["logs"]=state.get("logs","")+"Broker sidekick did not finish ("+job["sidekick"]["reason"][:200]+"); the rest of the test half runs here.\n"
+                    if state.get("manifest")is None:state.pop("logs",None);local_test_half();state["logs"]="Broker sidekick did not finish ("+job["sidekick"]["reason"][:200]+"); the test half runs here.\n"+state["logs"]
+                    if state.get("proof")is None:state["logs"]+=self.linked_reference(job,application,output,state)
+                    selection=state.get("selection")or self.test_selection(job,blob,application,output,state["manifest"]);state["selection"]=selection
+                    done=state.get("done")or[]
+                    if done:state["logs"]+="Kept %d suite step(s) the sidekick passed; the rest run here.\n"%len(done)
+                    return state.get("partial","")+self.phase(job,"test","test",application,output,self.suite_remainder(selection,done)if done else selection["argv"],"engine:rust1.90:test")
+                self.sidekick_outcome(sidekick);self.sidekick_release(sidekick,job,"passed")
+                return result
             # The whole test half runs on the sidekick while the release compiles here at once.
-            half=self.background(lambda:self.sidekick_test_half(job,blob,application,output,sidekick,state),"sidekick-tests")
+            half=self.background(half_work,"sidekick-tests")
             try:live_log=release(release_inputs())
             except BaseException:
                 # Stop the sidekick's work, then let its thread finish before this job's folders are reused.
@@ -2001,42 +2043,19 @@ class Executor:
             try:suite_output=half.result()
             except PermissionError:
                 self.sidekick_release(sidekick,job,"cancelled");raise
-            except Exception as error:
-                job.setdefault("sidekick",{}).update(decision="declined"if isinstance(error,SidekickDeclined)else"fallback",reason=str(error)[:600],
-                    failed_step="suite"if state.get("selection")else"compile",kept_steps=len(state.get("done")or[]))
-                self.sidekick_outcome(sidekick,error)
-                suite_output=None
-            else:self.sidekick_outcome(sidekick)
-            self.sidekick_release(sidekick,job,"passed"if suite_output is not None else"fallback")
-            if suite_output is None:
-                logs+="Broker sidekick did not finish ("+job["sidekick"]["reason"][:200]+"); the rest of the test half runs here.\n"
-                if state.get("manifest")is None:
-                    shutil.rmtree(output/"artifacts/tests",ignore_errors=True);(output/"artifacts/test-manifest.json").unlink(missing_ok=True)
-        if not sidekick or state.get("manifest")is None:
-            logs+=state.pop("logs","")if sidekick else""
-            logs+=self.phase(job,"compile_test","engine",application,output,COMPILE_TEST_ARGV,"engine:rust1.90:compile_test")
-            artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
-            state["manifest"]=self.retain_test_manifest(output,artifacts)
-            logs+=self.focused_tests(job,application,output,fresh_tests=artifacts)
-            if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
-        else:logs+=state.pop("logs","")
-        if state.get("proof")is None:logs+=self.linked_reference(job,application,output,state)
-        manifest,linked,proof=state["manifest"],state["linked"],state["proof"]
-        stable=output/"stable"
-        if not sidekick:
+            logs+=state.pop("logs","")
+            selection=state["selection"]
+        else:
+            local_test_half();logs+=state.pop("logs","")
+            logs+=self.linked_reference(job,application,output,state)
             # The full suite runs beside the live (deployed) release compile.
             release_cargo=release_inputs()
-            selection=self.test_selection(job,blob,application,output,manifest)
+            selection=self.test_selection(job,blob,application,output,state["manifest"])
             suite=self.concurrent_phase(job,"test","test",application,output,selection["argv"],"engine:rust1.90:test")
             try:live_log=release(release_cargo)
             finally:suite_output=suite.result()
-        elif suite_output is None:
-            # Steps the sidekick passed before it stopped are kept; the rest, including a failed step, run (and are confirmed) here.
-            selection=state.get("selection")or self.test_selection(job,blob,application,output,manifest)
-            done=state.get("done")or[]
-            if done:logs+="Kept %d suite step(s) the sidekick passed; the rest run here.\n"%len(done)
-            suite_output=state.get("partial","")+self.phase(job,"test","test",application,output,self.suite_remainder(selection,done)if done else selection["argv"],"engine:rust1.90:test")
-        else:selection=state["selection"]
+        manifest,linked,proof=state["manifest"],state["linked"],state["proof"]
+        stable=output/"stable"
         logs+=suite_output
         counts=Executor.suite_totals(suite_output)
         if not any(counts)and not selection["skipped"]:raise ValueError("Suite executed no tests")

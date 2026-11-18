@@ -653,8 +653,10 @@ for `pause_seconds`; after `max_failures` in a row it switches itself off with t
 (`status` shows it; `on` clears it). Busy or switched-off declines and real compile or
 test failures change nothing. The job's `sidekick` record has the decision and reason.
 
-**Per job.** The server checks the sidekick's program hash and pushes this release's
-`sidekick.py` when it differs, takes the job lock (`begin`), copies the compiler image by
+**Per job.** Before the release compile starts, the server checks the sidekick's
+program hash (pushing this release's `sidekick.py` when it differs) and takes the job lock
+(`begin`); if that fails the job keeps the usual server order (test compile, then the suite
+beside the release compile). After that it copies the compiler image by
 ID if missing, mirrors the captured application tree (only changed files are rewritten, so
 the warm Cargo target rebuilds only what changed) and checks its digest, sends the locked
 crate store once per dependency key, runs `compile_test` there, fetches the test
@@ -663,9 +665,10 @@ stages the selected executables there (their hashes must equal the manifest's) a
 suite there with a marker after each step. Phase timings keep their usual names and recipes.
 
 **Integrity.** Same image ID, same source digest, hash-checked binaries; passing steps are
-accepted. Anything the sidekick did not finish runs here: steps it passed before a
-disconnect or failure are kept, and the rest, including a failed step, run (and are
-confirmed) here. Focused tests are skipped on the sidekick path (the release compile has
+accepted. Anything the sidekick did not finish runs here at once, beside the
+release compile if it is still running: steps it passed before a disconnect or failure are
+kept, and the rest, including a failed step, run (and are confirmed) here. Control replies
+are read raw (the log scrubber masks hash-like values); phase output is scrubbed as usual. Focused tests are skipped on the sidekick path (the release compile has
 already started; the full suite still gates). Stable releases always test here.
 
 **Sync.** `sidekick.py` ships in the broker release (install list) and reaches the sidekick
