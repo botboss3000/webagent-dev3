@@ -525,24 +525,39 @@ class Executor:
         record.update(image=image,source_sha256=digest_value,source_changed=synced.get("changed"),cargo_key=key)
         state["logs"]=self.phase(job,"compile_test","engine",application,output,COMPILE_TEST_ARGV,"engine:rust1.90:compile_test",sidekick=remote)
         self.sidekick_fetch(settings,job,output,["test-artifacts.json"])
-        names=self.sidekick_test_files(output/"test-artifacts.json");self.sidekick_fetch(settings,job,output,names)
-        record["fetched_files"]=len(names)
-        artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
-        state["manifest"]=self.retain_test_manifest(output,artifacts)
-        # Fail-fast checks exist to stop before the release compile; it is already running here.
-        job["focused_verification"]={"policy":HOST_FOCUSED_POLICY,"policy_sha256":HOST_FOCUSED_POLICY_SHA256,"required_suite":"workspace",
-            "status":"not_applicable","reason":"suite_on_sidekick_beside_release_compile","runs":[]}
-        state["logs"]+=self.linked_reference(job,application,output,state)
-        selection=state["selection"]=self.test_selection(job,blob,application,output,state["manifest"])
-        origin={Path(name).name:name for name in names}
-        pairs=[[origin[row["file"].removeprefix("tests/")],row["file"]]for row in state["manifest"]["tests"]]
-        staged=self.sidekick_json(settings,"stage",jid,stdin=json.dumps(pairs).encode(),timeout=300)
-        if staged!={row["file"]:row["sha256"]for row in state["manifest"]["tests"]}:raise ValueError("Sidekick test executables differ from the retained manifest")
-        argv,steps=self.sidekick_suite_argv(selection)
-        try:suite=self.phase(job,"test","test",application,output,argv,"engine:rust1.90:test",sidekick=remote)
-        except PermissionError:raise
-        except Exception as error:
-            state["partial"],state["done"]=self.sidekick_partial(getattr(error,"log",None)or str(error),steps);raise
+        names=self.sidekick_test_files(output/"test-artifacts.json");rows=self.sidekick_test_rows(output/"test-artifacts.json")
+        # The suite starts on the sidekick at once; the executables copy here meanwhile. Its result counts only
+        # if the staged hashes equal the manifest built here and its script equals the one that manifest gives.
+        staged=self.sidekick_json(settings,"stage",jid,stdin=json.dumps([[row["source"],row["file"]]for row in rows]).encode(),timeout=300)
+        early={"argv":self.early_suite_argv(output,rows)}
+        argv,steps=self.sidekick_suite_argv(early)
+        def suite_run():
+            try:return self.phase(job,"test","test",application,output,argv,"engine:rust1.90:test",sidekick=remote)
+            except PermissionError:raise
+            except Exception as error:
+                state["partial"],state["done"]=self.sidekick_partial(getattr(error,"log",None)or str(error),steps);raise
+        running=self.background(suite_run,"sidekick-suite")
+        try:
+            self.sidekick_fetch(settings,job,output,names)
+            record["fetched_files"]=len(names)
+            artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
+            state["manifest"]=self.retain_test_manifest(output,artifacts)
+            # Fail-fast checks exist to stop before the release compile; it is already running here.
+            job["focused_verification"]={"policy":HOST_FOCUSED_POLICY,"policy_sha256":HOST_FOCUSED_POLICY_SHA256,"required_suite":"workspace",
+                "status":"not_applicable","reason":"suite_on_sidekick_beside_release_compile","runs":[]}
+            state["logs"]+=self.linked_reference(job,application,output,state)
+            selection=self.test_selection(job,blob,application,output,state["manifest"],run_all=True)
+            if staged!={row["file"]:row["sha256"]for row in state["manifest"]["tests"]}:raise ValueError("Sidekick test executables differ from the retained manifest")
+            if selection["argv"]!=early["argv"]:raise ValueError("Sidekick suite script differs from the one the retained manifest gives")
+            state["selection"]=selection
+        except BaseException:
+            # Stop the early suite: its result cannot count. Then wait for its thread before this job continues.
+            self.sidekick_release(settings,job,"cancelled")
+            try:running.result()
+            except BaseException:pass
+            state.pop("partial",None);state.pop("done",None)
+            raise
+        suite=running.result()
         record.update(decision="passed",seconds=round(time.time()-record["started_at"],3))
         return "Workspace tests compiled and run on the broker sidekick "+settings["host"]+".\n"+suite
     def linked_reference(self,job,application,output,state):
@@ -1786,10 +1801,10 @@ class Executor:
             digest.update(name.encode()+b"\0"+hashlib.sha256(path.read_bytes()).digest())
         return digest.hexdigest()
 
-    def test_selection(self,job,blob,application,output,manifest):
+    def test_selection(self,job,blob,application,output,manifest,run_all=False):
         """The suite command: doctests, then each package's test executables from its directory as
-        `cargo test` runs them, skipping any whose pass key already passed. Without the Cargo
-        metadata to place an executable, the whole workspace suite runs as before."""
+        `cargo test` runs them, skipping any whose pass key already passed (run_all: none are skipped).
+        Without the Cargo metadata to place an executable, the whole workspace suite runs as before."""
         threads="--test-threads="+str(self.tuning("test_threads",TEST_THREADS))
         full={"argv":["cargo","test","--workspace","--locked","--offline","--",threads],"skipped":[],"run":[]}
         metadata_path=output/"dependency-metadata.json"
@@ -1807,15 +1822,45 @@ class Executor:
             if not directory.startswith("/build")or ".."in directory.split("/")or not re.fullmatch(r"tests/[a-z0-9_]+-[a-f0-9]{16}",row.get("file","")):return full
             key=self.test_pass_key(blob,row,runtime,support)
             entry={"file":row["file"],"directory":directory,"key":key}
-            (skipped if (ledger/(key+".json")).is_file()else run).append(entry)
+            (skipped if not run_all and (ledger/(key+".json")).is_file()else run).append(entry)
+        job["test_selection"]={"run":len(run),"skipped":len(skipped),"runtime_inputs_sha256":runtime}
+        return {"argv":self.suite_script(run,skipped,threads),"skipped":skipped,"run":run}
+    @staticmethod
+    def suite_script(run,skipped,threads):
         script=["set -e","cargo test --workspace --locked --offline --doc -- "+threads,
                 'export LD_LIBRARY_PATH="$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"']
         for entry in run:
             script.append("cd "+shlex.quote(entry["directory"])+" && /output/artifacts/"+entry["file"]+" "+threads)
         for entry in skipped:
             script.append("echo "+shlex.quote("skipped "+entry["file"].removeprefix("tests/")+": identical executable and inputs already passed"))
-        job["test_selection"]={"run":len(run),"skipped":len(skipped),"runtime_inputs_sha256":runtime}
-        return {"argv":["sh","-c","\n".join(script)],"skipped":skipped,"run":run}
+        return ["sh","-c","\n".join(script)]
+    def early_suite_argv(self,output,rows):
+        """The suite script test_selection(run_all=True) will give once the manifest exists, built from the test
+        compile's own list so the sidekick can start before the executables reach this server."""
+        threads="--test-threads="+str(self.tuning("test_threads",TEST_THREADS))
+        full=["cargo","test","--workspace","--locked","--offline","--",threads]
+        metadata_path=output/"dependency-metadata.json"
+        if not metadata_path.is_file():return full
+        metadata=self.metadata_receipt(metadata_path)
+        directories={p.get("id"):posixpath.dirname(p.get("manifest_path",""))for p in metadata.get("packages",[])if p.get("source")is None}
+        run=[]
+        for row in sorted(rows,key=lambda r:r["file"]):
+            directory=directories.get(row.get("package_id"),"")
+            if not directory.startswith("/build")or ".."in directory.split("/")or not re.fullmatch(r"tests/[a-z0-9_]+-[a-f0-9]{16}",row["file"]):return full
+            run.append({"file":row["file"],"directory":directory})
+        return self.suite_script(run,[],threads)
+    @staticmethod
+    def sidekick_test_rows(metadata):
+        """The test executables (profile.test) of the test compile, as manifest rows: file, package and target path."""
+        rows={}
+        for line in metadata.read_text().splitlines():
+            value=json.loads(line)
+            executable=value.get("executable")if value.get("reason")=="compiler-artifact"else None
+            if not executable or (value.get("profile")or{}).get("test")is not True:continue
+            name=Path(executable).name
+            if not executable.startswith("/output/target/debug/")or ".."in Path(executable).parts or not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",name):raise ValueError("Sidekick test executable identity")
+            rows["tests/"+name]={"file":"tests/"+name,"package_id":value.get("package_id"),"source":executable.removeprefix("/output/")}
+        return list(rows.values())
 
     def record_test_passes(self,job,selection):
         """After the whole suite passed, remember each executable that ran so an identical one is skipped."""

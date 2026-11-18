@@ -119,10 +119,11 @@ class HalfTests(unittest.TestCase):
         self.job={"job_id":"1"*8+"-0000-0000-0000-"+"0"*12,"dependency_cache":{"key":"a"*64}}
         self.w=worker();self.calls=[];self.staged=None
         manifest={"tests":[{"file":"tests/t-0123456789abcdef","sha256":"f"*64}]}
-        self.w.sidekick_fetch=lambda settings,job,output,names:(output/"test-artifacts.json").write_text(json.dumps({"reason":"compiler-artifact","executable":"/output/target/debug/deps/t-0123456789abcdef"}))
+        self.w.sidekick_fetch=lambda settings,job,output,names:(output/"test-artifacts.json").write_text(json.dumps({"reason":"compiler-artifact","executable":"/output/target/debug/deps/t-0123456789abcdef","package_id":"p","profile":{"test":True}}))
         self.w.retain_test_manifest=lambda output,artifacts:manifest
         self.w.linked_reference=lambda job,app,output,state:state.update(linked="l",proof={"ok":1})or""
-        self.w.test_selection=lambda job,blob,app,output,manifest:{"argv":["suite"],"run":[],"skipped":[]}
+        self.w.test_selection=lambda job,blob,app,output,manifest,run_all=False:{"argv":["suite"],"run":[],"skipped":[]}
+        self.w.early_suite_argv=lambda output,rows:["suite"]
         self.suite_error=None;self.code="old"
         def phase(job,phase,*args,sidekick=None,**kw):
             self.calls.append(("phase",phase,sidekick is not None))
@@ -130,6 +131,7 @@ class HalfTests(unittest.TestCase):
             return phase+" log\n"
         self.w.phase=phase
         self.w.sidekick_program=lambda:b"program"
+        self.released=[];self.w.sidekick_release=lambda settings,job,result:self.released.append(result)
     def tearDown(self):self.temp.cleanup()
     def call(self,settings,*words,stdin=None,timeout=0,output_file=None):
         self.calls.append(words[0])
@@ -160,16 +162,31 @@ class HalfTests(unittest.TestCase):
         with self.assertRaises(executor.SidekickDeclined):self.run_half(accepting=False)
         self.calls.clear()
         with self.assertRaisesRegex(ValueError,"differ from the retained manifest"):self.run_half(staged={"tests/t-0123456789abcdef":"0"*64})
-        self.assertNotIn(("phase","test",True),self.calls)
+        # The early suite may have started; its result never counts and the sidekick is cancelled.
+        self.assertIn("cancelled",self.released)
     def test_a_disconnect_keeps_the_steps_already_passed(self):
         script="set -e\ncargo test --workspace --locked --offline --doc -- --test-threads=8\nexport X=1\ncd /build && /output/artifacts/tests/a-0123456789abcdef --test-threads=8\ncd /build/crates/b && /output/artifacts/tests/b-0123456789abcdef --test-threads=8"
-        self.w.test_selection=lambda *a:{"argv":["sh","-c",script],"run":[],"skipped":[]}
+        self.w.test_selection=lambda *a,**k:{"argv":["sh","-c",script],"run":[],"skipped":[]}
+        self.w.early_suite_argv=lambda output,rows:["sh","-c",script]
         error=RuntimeError("fixed command failed: doc ok\n"+executor.SUITE_MARK+"doctests\ntest result: ok. 3 passed; 0 failed\n"+executor.SUITE_MARK+"tests/a-0123456789abcdef\nb half output");error.exit_code=255
         self.suite_error=error;state={}
         with self.assertRaises(RuntimeError):self.run_half(state=state)
         self.assertEqual(state["done"],["doctests","tests/a-0123456789abcdef"]);self.assertNotIn("b half",state["partial"])
         rest=executor.Executor.suite_remainder(state["selection"],state["done"])[2]
         self.assertNotIn("--doc",rest);self.assertNotIn("tests/a-",rest);self.assertIn("tests/b-",rest);self.assertIn("export X=1",rest)
+class EarlySuiteTests(unittest.TestCase):
+    def test_the_early_script_equals_the_selection_the_manifest_gives(self):
+        with tempfile.TemporaryDirectory()as d:
+            out=Path(d);w=worker()
+            (out/"dependency-metadata.json").write_text(json.dumps({"packages":[{"id":"p","source":None,"manifest_path":"/build/crates/x/Cargo.toml"}]}))
+            rows=[{"file":"tests/x-0123456789abcdef","package_id":"p"}]
+            early=w.early_suite_argv(out,rows)
+            run=[{"file":"tests/x-0123456789abcdef","directory":"/build/crates/x"}]
+            self.assertEqual(early,executor.Executor.suite_script(run,[],"--test-threads=8"))
+            metadata=out/"t.json"
+            metadata.write_text("\n".join(json.dumps(r)for r in [{"reason":"compiler-artifact","executable":"/output/target/debug/deps/x-0123456789abcdef","package_id":"p","profile":{"test":True}},
+                {"reason":"compiler-artifact","executable":"/output/target/debug/webagent-mcp","package_id":"p","profile":{"test":False}}]))
+            self.assertEqual(executor.Executor.sidekick_test_rows(metadata),[{"file":"tests/x-0123456789abcdef","package_id":"p","source":"target/debug/deps/x-0123456789abcdef"}])
 class StagePlaceTests(unittest.TestCase):
     def test_sidekick_phases_get_their_stage_time_and_label(self):
         import test_admin_build as fixtures
@@ -183,6 +200,12 @@ class StagePlaceTests(unittest.TestCase):
         self.assertEqual(host.stage_places(job),{"compile tests":"sidekick","run tests":"sidekick"})
         job["execution_history"].append({"phase":"test","started_at":260,"elapsed_seconds":20})
         self.assertEqual(host.stage_places(job)["run tests"],"sidekick → server")
+    def test_a_running_replay_is_judged_as_a_replay_once_packaging_starts(self):
+        import test_admin_build as fixtures
+        job={"operation":"build_deploy","status":"running","started_at":0,
+             "phase_timings":[{"phase":"packaging_api","started_at":10,"seconds":30,"outcome":"completed"}],
+             "active_phases":[{"phase":"test","started_at":5}]}
+        self.assertTrue(fixtures.host.job_progress(job,{},100)["class"].startswith("build_deploy/artifacts-reused/"))
 class BootstrapTests(unittest.TestCase):
     def test_update_checks_the_hash_and_keeps_previous_programs(self):
         import sys,hashlib

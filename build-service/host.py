@@ -2689,7 +2689,9 @@ def job_progress(job, baselines, now):
     now = job.get("finished_at") or now  # a finished job's clock stops at its end
     phases = ({e.get("phase") for e in job.get("execution_history") or []} | {(job.get("execution_observation") or {}).get("phase")}
               | {t.get("phase") for t in job.get("phase_timings") or []})
-    known = job.get("operation") != "build_deploy" or bool(phases & {"compile_test", "compile_linked", "compile_release", "package"})
+    # Host packaging steps (packaging_api, image_build_*) mean the compile is settled: a replay job reaches them
+    # without any compile step, so their presence fixes the class while it runs.
+    known = job.get("operation") != "build_deploy" or bool(phases & {"compile_test", "compile_linked", "compile_release", "package", *HOST_STAGE})
     cls = job_class(job) if known or job.get("status") not in {"queued", "running"} else "build_deploy/compile/tests-ran"
     if job.get("status") in {"queued", "running"} and phases & {"compile_test", "compile_linked", "compile_release"}:
         # job_class needs a compile step past 30 s; a running job compiles as soon as one appears.
