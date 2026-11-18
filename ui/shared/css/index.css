@@ -2,37 +2,6 @@
    Stargaze background + dynamic spotlight overrides
    Loaded last so it wins the cascade.
    ============================================================ */
-
-/* COLOR SCHEME → ui/shared/css/design-system.css (single source of truth).
-   No raw hex/rgb here: use var(--brand) / var(--accent) / var(--accent-hover) for
-   the brand accent, rgba(var(--brand-rgb), a) for any accent opacity, var(--success|
-   warning|danger) (or rgba(var(--*-rgb), a)) for status, var(--purple) for the 2nd hue.
-   Need a colour that doesn't exist yet? Add a token to the palette in design-system.css
-   (the dark :root block AND its body.light-mode twin), then reference it here.
-   Re-theming the whole app (e.g. peach → green) is then a one-file edit. */
-
-/* —— Background genui + overlay —— */
-.stargaze-genui {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  pointer-events: none;
-}
-.stargaze-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  /* The edge vignette fades to the page-background colour, so it tracks the
-     "Background" palette swatch (--bg-0-rgb) live in both themes. */
-  background:
-    radial-gradient(ellipse 80% 60% at 50% 0%,   transparent 0%,  rgba(var(--bg-0-rgb), 0.6) 92%),
-    radial-gradient(ellipse 100% 70% at 50% 100%, transparent 30%, rgba(var(--bg-0-rgb), 0.6) 100%);
-  opacity: 0.55;
-  transition: opacity 0.3s, background 0.3s;
-}
 /* Light mode only differs in strength — the colour auto-switches via --bg-0-rgb. */
 body.light-mode .stargaze-overlay { opacity: 0.45; }
 
@@ -97,24 +66,6 @@ body.is-booting:not([data-chat-ui-ready]) #chat-input-row.chat-pill-boot {
   /* The composer must remain docked while sessions and footer profiles change.
      Animate internal spacing only — never its vertical position. */
   transition: padding 0.3s ease, gap 0.3s ease;
-}
-
-/* Empty new sessions use the same bottom dock as active sessions. This avoids
-   a vertical jump when the first message starts while preserving the canonical
-   footer positioning in ui/shared/css/app1.css. */
-
-/* A session (and often its agent) owns the complete chat projection. Keep the
-   old header/transcript/footer from overlapping the target agent's differently
-   configured controls while the asynchronous control builder and transcript
-   loader settle. visibility preserves layout, so switching never collapses the
-   panel or moves the main workspace. */
-#chat-panel.session-transitioning > #chat-header,
-#chat-panel.session-transitioning > #chat-sub-header,
-#chat-panel.session-transitioning > #chat-messages,
-#chat-panel.session-transitioning > .chat-spinner-edge,
-#chat-panel.session-transitioning > #chat-input-area {
-  visibility: hidden !important;
-  pointer-events: none !important;
 }
 
 /* —— Chat panel: transparent — sits on the background directly —— */
@@ -397,79 +348,6 @@ body.light-mode #main-panel {
 body.route-error-active #main-panel > .tab-content {
   display: none !important;
 }
-.route-error-panel {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  display: grid;
-  place-items: center;
-  padding: clamp(24px, 6vw, 72px);
-  background: var(--bg-0);
-}
-.route-error-card {
-  width: min(100%, 560px);
-  padding: clamp(28px, 5vw, 52px);
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--bg-elev);
-  box-shadow: var(--shadow-lg);
-  text-align: center;
-}
-.route-error-code {
-  display: block;
-  margin-bottom: 14px;
-  color: var(--brand);
-  font-size: clamp(46px, 9vw, 76px);
-  font-weight: 750;
-  line-height: .9;
-  letter-spacing: -.06em;
-}
-.route-error-eyebrow {
-  margin: 0 0 8px;
-  color: var(--fg-3);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-.route-error-copy h1 {
-  margin: 0;
-  color: var(--fg-1);
-  font-size: clamp(22px, 3vw, 30px);
-  letter-spacing: -.025em;
-}
-.route-error-copy p:not(.route-error-eyebrow) {
-  margin: 12px auto 0;
-  max-width: 420px;
-  color: var(--fg-3);
-  line-height: 1.55;
-}
-.route-error-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 38px;
-  margin-top: 26px;
-  padding: 0 16px;
-  border-radius: var(--r-md);
-  background: var(--brand);
-  color: var(--on-brand, #fff);
-  font-weight: 650;
-  text-decoration: none;
-}
-.route-error-action:hover,
-.route-error-action:focus-visible {
-  background: var(--brand-hover);
-  color: var(--on-brand, #fff);
-}
-.route-error-action:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 3px;
-}
-@media (max-width: 800px) {
-  .route-error-panel { padding: 18px; }
-  .route-error-card { padding: 30px 22px; }
-}
 /* Tighter on small screens — the outer margin ate too much width, squashing
    content. Pull panels closer to the screen edge and trim chat padding. */
 @media (max-width: 800px) {
@@ -488,30 +366,6 @@ html,
 body {
   overscroll-behavior-x: none;
 }
-
-/* —— Dynamic cursor-follow spotlight — applied via JS to .spot elements ——
-   Tinted with the theme accent (var(--brand-rgb)) so the glow follows whatever
-   theme/preset is active in BOTH modes — no hard-coded blue/orange. */
-.spot { position: relative; --spot-color: rgba(var(--brand-rgb), 0.12); }
-.spot::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  background: radial-gradient(
-    var(--spot-radius, 320px) circle at var(--mx, -100%) var(--my, -100%),
-    var(--spot-color, rgba(var(--brand-rgb), 0.12)) 0%,
-    transparent 60%
-  );
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  border-radius: inherit;
-}
-.spot.spot-active::before { opacity: 1; }
-
-/* Size variants */
-#main-panel.spot { --spot-radius: 600px; --spot-color: rgba(var(--brand-rgb), 0.07); }
 .main-tab.spot         { --spot-radius: 140px; }
 .chat-bubble.spot      { --spot-radius: 240px; }
 
@@ -545,27 +399,6 @@ body {
 #cursor-glow.boot-is-on { opacity: 1; }
 /* Glow colour follows the theme accent (var(--brand-rgb)) in both modes. */
 @media (prefers-reduced-motion: reduce) { #cursor-glow { display: none; } }
-
-@media (prefers-reduced-motion: reduce) {
-  .stargaze-genui { display: none; }
-}
-
-/* —— "Load earlier messages" button in chat —— */
-.load-earlier-btn {
-  text-align: center;
-  font-size: 12px;
-  color: var(--fg-3);
-  cursor: pointer;
-  padding: 6px 12px;
-  margin: 4px 0;
-  border-radius: 6px;
-  user-select: none;
-  transition: background 0.15s, color 0.15s;
-}
-.load-earlier-btn:hover {
-  background: rgba(var(--ink-rgb),0.06);
-  color: var(--fg-1);
-}
 body.light-mode .load-earlier-btn:hover {
   background: rgba(var(--ink-rgb),0.04);
   color: var(--fg-1);
@@ -621,8 +454,7 @@ body[data-offline-readonly="true"] #offline-reader-composer-notice {
 /* app1 normally disables the session trigger whenever the server is offline.
    Cached-reader mode is the exception: once IndexedDB has painted the list,
    browsing those sessions is the primary available action. */
-body[data-offline-readonly="true"] .session-dropdown[data-offline="true"][data-loaded="true"] .session-dropdown-trigger,
-body[data-offline-readonly="true"] #session-dropdown[data-offline="true"][data-loaded="true"] .session-dropdown-chevron {
+body[data-offline-readonly="true"] .session-dropdown[data-offline="true"][data-loaded="true"] .session-dropdown-trigger {
   pointer-events: auto;
   opacity: 1;
   cursor: pointer;
@@ -648,32 +480,6 @@ body[data-offline-readonly="true"] :is(
   .session-manage-delete-selected
 ) {
   display: none !important;
-}
-
-.cached-catalog-unavailable {
-  align-items: center;
-  justify-content: center;
-  padding: 32px;
-}
-
-.cached-catalog-unavailable > section {
-  max-width: 560px;
-  padding: 24px;
-  border: var(--border-width) solid var(--border-soft);
-  border-radius: 12px;
-  color: var(--fg-2);
-  background: var(--bg-1);
-  text-align: center;
-}
-
-.cached-catalog-unavailable h1 {
-  margin: 0 0 10px;
-  font-size: 20px;
-}
-
-.cached-catalog-unavailable p {
-  margin: 8px 0 0;
-  color: var(--fg-3);
 }
 
 /* Role-scoped glimmer parameters affect only chat bubbles, never other spots. */
