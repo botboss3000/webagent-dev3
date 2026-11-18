@@ -6,6 +6,7 @@
 //! broker, and the checks on broker notices, dashboard requests.
 //! Model arguments never choose identity, agent, workspace, credentials, host origin
 //! or a Docker command; the host attaches those.
+pub mod app_defaults;
 pub mod arguments;
 pub mod dashboard;
 pub mod find_ranking;

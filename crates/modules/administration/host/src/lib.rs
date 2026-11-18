@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use webagent_access::Permission;
 use webagent_host_core::StoreCore;
 
+pub mod app_defaults;
 pub mod artifacts;
 pub mod dashboard;
 mod find_log;
@@ -128,6 +129,11 @@ pub trait AdministrationHost: Sync {
     ) -> Pending<'a, Result<Value>>;
     /// Whether the global shutoff is active.
     fn shutoff(&self) -> Pending<'_, Result<bool>>;
+    /// Whether the store's user is an app administrator now (account role, not an agent
+    /// level). App Default releases are renewed only while this holds.
+    fn account_administrator(&self) -> Pending<'_, Result<bool>> {
+        Box::pin(async { Ok(false) })
+    }
     /// Write `docs` and one `kind` event for session `sid` in one transaction, in
     /// `agent`'s storage view when given.
     fn record<'a>(

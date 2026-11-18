@@ -52,7 +52,8 @@ pub async fn renew_jobs(host: &dyn AdministrationHost) -> Result<()> {
             store.delete(&format!("administrator_host:{sid}")).await?;
         }
     }
-    Ok(())
+    // A running App Default Save has no agent run behind it; it renews on its own terms.
+    crate::app_defaults::renew(host).await
 }
 
 /// Count broker jobs still leased to `sid`, renewing them as `renew_jobs` does. Changed

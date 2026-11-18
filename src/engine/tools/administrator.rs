@@ -380,6 +380,15 @@ impl AdministrationHost for Host<'_> {
     fn shutoff(&self) -> Pending<'_, Result<bool>> {
         Box::pin(self.0.shutoff())
     }
+    fn account_administrator(&self) -> Pending<'_, Result<bool>> {
+        Box::pin(async move {
+            use webagent_accounts_host::AccountsStore as _;
+            let store = &self.0.store;
+            let account = store.account_by_id(store.current_user_id()).await?;
+            Ok(account
+                .is_some_and(|account| webagent_access::require_administrator(&account).is_ok()))
+        })
+    }
     fn record<'a>(
         &'a self,
         agent: Option<&'a str>,

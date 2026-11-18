@@ -20,6 +20,8 @@ mod administrator;
 pub(crate) mod agent_members;
 #[path = "../../crates/modules/webapp/host/agent_pages.rs"]
 mod agent_pages;
+#[cfg(feature = "administrator")]
+mod app_defaults;
 #[path = "../../crates/modules/webapp/host/app_pages.rs"]
 mod app_pages;
 #[path = "../../crates/modules/configuration/host/app_settings.rs"]
@@ -32,6 +34,13 @@ mod build_dashboard;
 mod administrator {
     use super::*;
     pub(super) fn session_router() -> Router<App> {
+        Router::new()
+    }
+}
+#[cfg(not(feature = "administrator"))]
+mod app_defaults {
+    use super::*;
+    pub(super) fn admin_router() -> Router<App> {
         Router::new()
     }
 }
@@ -253,6 +262,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/ability-drift/dismiss", post(ability_drift::dismiss))
         .route("/admin/ability-drift/rebuild", post(ability_drift::rebuild))
         .merge(build_dashboard::admin_router())
+        .merge(app_defaults::admin_router())
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
