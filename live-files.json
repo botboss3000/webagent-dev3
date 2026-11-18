@@ -3,7 +3,7 @@
   "version": 1,
   "files": [
     "abilities/Administrator/codebase_admin/tools/file_search/find-ranking.json",
-    "crates/modules/access/access-policy.json",
+    "crates/modules/access/policy.json",
     "crates/modules/accounts/authentication.json",
     "crates/modules/browser/browser-limits.json",
     "crates/modules/configuration/prompts/*.json",
@@ -18,7 +18,6 @@
     "crates/modules/engine/gates/*.json",
     "crates/modules/engine/gates/*.md",
     "crates/modules/engine/loop-runtime.json",
-    "crates/modules/files/storage-policy.json",
     "crates/modules/media/voice.json",
     "crates/modules/models/models-runtime.json",
     "crates/modules/models/providers/*.json",

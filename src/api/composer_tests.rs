@@ -521,7 +521,7 @@ async fn unrestricted_attachment_defaults_remove_size_count_and_storage_caps() {
         controls["composer"]["attachment_limits"]["max_per_message"],
         Value::Null
     );
-    // Chat limits add no size cap; per-tier storage limits are separate (storage-policy.json).
+    // Chat limits add no size cap; per-tier storage limits are separate (storage section of policy.json).
     let aid = uuid();
     let body = json!({"client_upload_id":aid,"name":"unrestricted.txt","media_type":"text/plain",
         "data":STANDARD.encode(vec![b'x';26*1024*1024])});

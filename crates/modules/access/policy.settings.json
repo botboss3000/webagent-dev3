@@ -1,0 +1,350 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "access.registration",
+      "description": "Whether anyone can sign up (open) or new accounts need an administrator (restricted).",
+      "type": "enum",
+      "pointer": "/registration",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "stop new signups",
+        "let anyone register",
+        "close registration"
+      ],
+      "areas": [
+        "accounts",
+        "signup",
+        "security"
+      ],
+      "enum": [
+        "open",
+        "restricted"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "access.login_protection.account.failures",
+      "description": "Failed sign-ins on one account, within the window, before sign-in is slowed down.",
+      "type": "integer",
+      "pointer": "/login_protection/account/failures",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "slow down logins after 3 wrong passwords",
+        "allow 10 failed attempts"
+      ],
+      "areas": [
+        "security",
+        "login",
+        "accounts"
+      ],
+      "min": 1,
+      "max": 100,
+      "bounds": "validator"
+    },
+    {
+      "id": "access.login_protection.address.block_seconds",
+      "description": "How long, in seconds, a network address is first blocked after too many failed sign-ins.",
+      "type": "integer",
+      "pointer": "/login_protection/address/block_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "block an IP for 5 minutes after failed logins",
+        "shorter lockout for addresses"
+      ],
+      "areas": [
+        "security",
+        "login",
+        "network"
+      ],
+      "unit": "s",
+      "min": 1,
+      "bounds": "validator",
+      "notes": "Must not exceed access.login_protection.address.max_block_seconds (3600)."
+    },
+    {
+      "id": "access.tier.max_sessions",
+      "description": "Most chat sessions one account at this account level may keep.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/max_sessions",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let base users have 20 chats",
+        "anonymous visitors get only 2 sessions"
+      ],
+      "areas": [
+        "accounts",
+        "limits",
+        "sessions"
+      ],
+      "min": 1,
+      "max": 100000,
+      "parameters": {
+        "tier": [
+          "administrator",
+          "free",
+          "anonymous"
+        ]
+      },
+      "bounds": "proposed"
+    },
+    {
+      "id": "access.tier.max_active_runs",
+      "description": "How many agent runs one account at this account level may have going at the same time.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/max_active_runs",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "base users can run 3 tasks at once",
+        "one run at a time for anonymous"
+      ],
+      "areas": [
+        "accounts",
+        "limits",
+        "runs"
+      ],
+      "min": 1,
+      "max": 1000,
+      "parameters": {
+        "tier": [
+          "administrator",
+          "free",
+          "anonymous"
+        ]
+      },
+      "bounds": "proposed"
+    },
+    {
+      "id": "access.tier_names",
+      "description": "Display name of an account level.",
+      "type": "string",
+      "pointer": "/tier_names/{tier}",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "rename the Base level to Member",
+        "call anonymous users Guests"
+      ],
+      "areas": [
+        "accounts",
+        "naming"
+      ],
+      "max_length": 40,
+      "parameters": {
+        "tier": [
+          "administrator",
+          "free",
+          "anonymous"
+        ]
+      },
+      "bounds": "proposed"
+    },
+    {
+      "id": "storage.tier.user_storage_mb",
+      "description": "Total storage, in megabytes, one account at this account level may use across chats, attachments and browser data; empty means unlimited.",
+      "type": "integer",
+      "pointer": "/storage/tiers/{tier}/user_storage_mb",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "give base users 500 MB of storage",
+        "anonymous visitors get 10 megabytes",
+        "raise my storage limit",
+        "let people keep more files"
+      ],
+      "areas": [
+        "storage",
+        "limits",
+        "accounts"
+      ],
+      "unit": "MB",
+      "min": 0,
+      "parameters": {
+        "tier": [
+          "administrator",
+          "free",
+          "anonymous"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "null means unlimited; the composer sets numbers only, so set unlimited in the JSON file.",
+      "nullable": true
+    },
+    {
+      "id": "storage.tier.agent_storage_mb",
+      "description": "Folder size, in megabytes, of each agent an account at this account level publishes; empty means unlimited.",
+      "type": "integer",
+      "pointer": "/storage/tiers/{tier}/agent_storage_mb",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "agent folders can hold 1 GB",
+        "limit published agent files to 256 MB",
+        "make agents' file space unlimited for operators"
+      ],
+      "areas": [
+        "storage",
+        "agents",
+        "limits"
+      ],
+      "unit": "MB",
+      "min": 0,
+      "parameters": {
+        "tier": [
+          "administrator",
+          "free",
+          "anonymous"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "null means unlimited; the composer sets numbers only, so set unlimited in the JSON file.",
+      "nullable": true
+    },
+    {
+      "id": "storage.tier.max_published_agents",
+      "description": "How many agents an account at this account level may publish; empty means unlimited.",
+      "type": "integer",
+      "pointer": "/storage/tiers/{tier}/max_published_agents",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "base users can publish 10 agents",
+        "no published agents for anonymous visitors",
+        "let people create more agents"
+      ],
+      "areas": [
+        "agents",
+        "limits",
+        "accounts"
+      ],
+      "min": 0,
+      "parameters": {
+        "tier": [
+          "administrator",
+          "free",
+          "anonymous"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "null means unlimited; the composer sets numbers only, so set unlimited in the JSON file.",
+      "nullable": true
+    },
+    {
+      "id": "storage.warning_percent",
+      "description": "Share of the storage limit, in percent, at which users are warned they are running out of space.",
+      "type": "integer",
+      "pointer": "/storage/warning_percent",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "warn at 90 percent full",
+        "tell me earlier when storage is nearly full",
+        "storage warning threshold"
+      ],
+      "areas": [
+        "storage",
+        "limits",
+        "notifications"
+      ],
+      "unit": "%",
+      "min": 1,
+      "max": 100,
+      "bounds": "validator"
+    },
+    {
+      "id": "storage.compression.mode",
+      "description": "Whether saved chat text and files are compressed to save space.",
+      "type": "enum",
+      "pointer": "/storage/compression/mode",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "turn off compression",
+        "compress saved data",
+        "stop squeezing stored text"
+      ],
+      "areas": [
+        "storage",
+        "compression"
+      ],
+      "enum": [
+        "off",
+        "on_save"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "storage.compression.level",
+      "description": "How hard saved data is compressed, from 1 (fastest) to 19 (smallest).",
+      "type": "integer",
+      "pointer": "/storage/compression/level",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "compress harder",
+        "faster compression",
+        "use maximum compression"
+      ],
+      "areas": [
+        "storage",
+        "compression",
+        "performance"
+      ],
+      "min": 1,
+      "max": 19,
+      "bounds": "validator"
+    },
+    {
+      "id": "storage.compression.min_bytes",
+      "description": "Smallest item, in bytes, worth compressing; smaller items are stored as they are.",
+      "type": "integer",
+      "pointer": "/storage/compression/min_bytes",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "only compress items over 1 KB",
+        "skip compressing tiny messages",
+        "compress everything regardless of size"
+      ],
+      "areas": [
+        "storage",
+        "compression"
+      ],
+      "unit": "bytes",
+      "min": 0,
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {
+    "/login_protection/account/*": "Other login-protection timings; not offered in v1.",
+    "/login_protection/address/*": "Other login-protection timings; not offered in v1.",
+    "/request_limits/**": "Request rate limits; tuned in policy.json, not offered in v1.",
+    "/revision": "Internal revision counter.",
+    "/tier_order": "Account level order; changed with the account levels themselves.",
+    "/tiers/*/allowed_models/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
+    "/tiers/*/id": "Internal tier identity.",
+    "/tiers/*/model_policy/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
+    "/tiers/*/revision": "Internal tier identity.",
+    "/storage/compress_idle_days": "Reserved for compaction tiers, which are not built yet; changing it has no effect.",
+    "/storage/compression/algorithm": "Only zstd is supported; not a choice.",
+    "/storage/compression/skip_media_types/**": "List of already-compressed media types; technical, edited in its JSON file."
+  }
+}

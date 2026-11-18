@@ -5,8 +5,9 @@ use crate::Tier;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use uuid::Uuid;
-/// The live access policy (`live-files.json`), relative to the checkout.
-pub const LIVE_POLICY: &str = "crates/modules/access/access-policy.json";
+/// The live app policy (`live-files.json`), relative to the checkout: access, tiers and, in
+/// its `storage` section, storage limits.
+pub const LIVE_POLICY: &str = "crates/modules/access/policy.json";
 const POLICY_LIMIT: u64 = 4 * 1024 * 1024;
 /// Fresh-install tiers; which abilities their owners' agents get is in the ability manifests.
 fn fresh_install_tiers() -> [Tier; 2] {

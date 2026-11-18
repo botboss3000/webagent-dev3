@@ -1,4 +1,4 @@
-//! Per-account-tier storage limits from the live `storage-policy.json`.
+//! Per-account-tier storage limits from the `storage` section of the live `policy.json`.
 //!
 //! Tier keys are the access ladder's tier ids. A tier with no entry, or a `null` value, has no
 //! limit. Agent-level overrides may only lower these values (later release).
@@ -6,8 +6,8 @@ use anyhow::{bail, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-/// Live policy file, relative to the checkout.
-pub const LIVE_POLICY: &str = "crates/modules/files/storage-policy.json";
+/// Live policy file, relative to the checkout; storage settings are its `storage` section.
+pub const LIVE_POLICY: &str = "crates/modules/access/policy.json";
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MIB: u64 = 1024 * 1024;
 
@@ -61,7 +61,9 @@ impl StoragePolicy {
         Self::read_in(&webagent_configuration::live::roots())
     }
     pub fn read_in(roots: &[std::path::PathBuf]) -> Result<Self> {
-        webagent_configuration::live::parsed_from(roots, LIVE_POLICY, MAX_POLICY_BYTES, Self::parse)
+        webagent_configuration::live::parsed_from(roots, LIVE_POLICY, MAX_POLICY_BYTES, |bytes| {
+            Self::parse(&storage_section(bytes)?)
+        })
     }
     /// Data folder byte limit of each agent owned by an account at `tier`; `None` is unlimited.
     pub fn agent_limit(&self, tier: &str) -> Option<u64> {
@@ -131,6 +133,15 @@ pub fn check_user(limit: Option<u64>, used: u64, added: u64) -> std::result::Res
     }
 }
 
+/// The `storage` section of the whole policy document, as bytes for the section parsers.
+pub fn storage_section(document: &[u8]) -> Result<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(document)?;
+    match value.get_mut("storage").map(serde_json::Value::take) {
+        Some(section) => Ok(serde_json::to_vec(&section)?),
+        None => bail!("Policy has no storage section"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,10 +150,8 @@ mod tests {
     fn shipped_policy_parses_and_names_only_ladder_tiers() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let policy = StoragePolicy::read_in(&[root.clone()]).unwrap();
-        let access: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(root.join("crates/modules/access/access-policy.json")).unwrap(),
-        )
-        .unwrap();
+        let access: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join(LIVE_POLICY)).unwrap()).unwrap();
         for tier in policy.tiers.keys() {
             assert!(access["tiers"].get(tier).is_some(), "unknown tier {tier}");
         }

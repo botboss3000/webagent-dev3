@@ -5,7 +5,7 @@ use super::{
 };
 use anyhow::Context;
 use webagent_configuration::{digest, read};
-const IDS: [&str; 15] = [
+const IDS: [&str; 14] = [
     "app_settings",
     "app_ui",
     "chat",
@@ -17,7 +17,6 @@ const IDS: [&str; 15] = [
     "message_visibility",
     "closing_status",
     "voice",
-    "storage_policy",
     "browser_limits",
     "admin_alerts",
     "find_ranking",
@@ -32,7 +31,6 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
         "message_visibility" => "crates/modules/engine/gates/message_visibility_v1.json",
         "closing_status" => "crates/modules/engine/gates/closing_status.json",
         "voice" => webagent_media::settings::LIVE_VOICE,
-        "storage_policy" => webagent_files::storage_policy::LIVE_POLICY,
         "browser_limits" => webagent_browser::limits::LIVE_LIMITS,
         "admin_alerts" => webagent_notifications::alerts::LIVE_CONFIG,
         "find_ranking" => webagent_administration::find_ranking::LIVE_RANKING,
@@ -104,11 +102,6 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         "voice" => {
             webagent_media::settings::VoiceSettings::parse(&serde_json::to_vec(value)?)?;
         }
-        "storage_policy" => {
-            let bytes = serde_json::to_vec(value)?;
-            webagent_files::storage_policy::StoragePolicy::parse(&bytes)?;
-            webagent_storage::compression::Compression::from_policy(&bytes)?;
-        }
         "browser_limits" => {
             webagent_browser::limits::Limits::parse(&serde_json::to_vec(value)?)?;
         }
@@ -121,7 +114,15 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         "tool_output_retention" => {
             serde_json::from_value::<tool_output::Policy>(value.clone())?.validate()?
         }
-        "access_policy" => crate::registration::validate_configuration(value)?,
+        "access_policy" => {
+            crate::registration::validate_configuration(value)?;
+            // Fixture policies may omit storage; the live file always has it.
+            if let Some(storage) = value.get("storage") {
+                let storage = serde_json::to_vec(storage)?;
+                webagent_files::storage_policy::StoragePolicy::parse(&storage)?;
+                webagent_storage::compression::Compression::from_policy(&storage)?;
+            }
+        }
         "message_visibility" | "closing_status" => {
             let expected = if id == "message_visibility" {
                 gate_registry::MESSAGE_VISIBILITY

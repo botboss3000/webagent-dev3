@@ -838,11 +838,12 @@ buffers and provider-specific conversions still allocate, and recovery saves
 still perform history-sized integrity work. No measured process-wide CPU or
 peak-RAM reduction is claimed from these allocation removals alone.
 
-## App access-policy configuration
+## App policy configuration
 
-V3 owns the live file `crates/modules/access/access-policy.json` (listed in
-`live-files.json`): registration mode, account levels (tiers, order, names) and
-page policy, for example `{"registration": "restricted", ...}`.
+V3 owns the live file `crates/modules/access/policy.json` (listed in
+`live-files.json`): registration mode, account levels (tiers, order, names),
+page policy and, in its `storage` section, per-tier storage limits and file
+compression, for example `{"registration": "restricted", ..., "storage": {...}}`.
 
 Its `login_protection` section tunes sign-in throttling (all values optional; these are
 the defaults): `{"address": {"failures": 5, "window_seconds": 300, "block_seconds": 60,

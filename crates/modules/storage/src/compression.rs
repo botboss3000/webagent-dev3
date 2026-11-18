@@ -1,7 +1,7 @@
 //! Optional zstd compression of record and file plaintext before encryption.
 //!
-//! Settings come from the `compression` section of the live
-//! `crates/modules/files/storage-policy.json`, reread at most every ten seconds. Readers need no
+//! Settings come from `storage.compression` in the live
+//! `crates/modules/access/policy.json`, reread at most every ten seconds. Readers need no
 //! setting: a zstd frame starts with a magic number no JSON text can start with, so compressed and
 //! uncompressed records coexist and turning compression off never breaks reads.
 use anyhow::{anyhow, bail, Result};
@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-const POLICY: &str = "crates/modules/files/storage-policy.json";
+const POLICY: &str = "crates/modules/access/policy.json";
 const MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 /// Decompressed size bound; larger than any record or attachment the app admits.
 const MAX_PLAIN: usize = 512 * 1024 * 1024;
@@ -73,6 +73,15 @@ impl Compression {
         section.validate()?;
         Ok(section)
     }
+    /// Read `storage.compression` from the whole policy document.
+    pub fn from_document(bytes: &[u8]) -> Result<Self> {
+        let mut value: serde_json::Value = serde_json::from_slice(bytes)?;
+        let storage = value
+            .get_mut("storage")
+            .map(serde_json::Value::take)
+            .ok_or_else(|| anyhow!("Policy has no storage section"))?;
+        Self::from_policy(&serde_json::to_vec(&storage)?)
+    }
     /// Fix the settings for this process, ignoring the policy file. For tests whose
     /// assertions depend on exact stored sizes.
     pub fn force(settings: Self) {
@@ -94,7 +103,7 @@ impl Compression {
             &webagent_configuration::live::roots(),
             POLICY,
             64 * 1024,
-            Self::from_policy,
+            Self::from_document,
         )
         .ok()
         .or_else(|| current.as_ref().map(|(_, s)| s.clone()))
@@ -185,6 +194,6 @@ mod tests {
             assert!(Compression::from_policy(bad.as_bytes()).is_err(), "{bad}");
         }
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        Compression::from_policy(&std::fs::read(root.join(POLICY)).unwrap()).unwrap();
+        Compression::from_document(&std::fs::read(root.join(POLICY)).unwrap()).unwrap();
     }
 }

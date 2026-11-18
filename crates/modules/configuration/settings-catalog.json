@@ -10,16 +10,12 @@
       "descriptors": "crates/modules/webapp/app-settings.settings.json"
     },
     {
-      "config": "crates/modules/access/access-policy.json",
-      "descriptors": "crates/modules/access/access-policy.settings.json"
+      "config": "crates/modules/access/policy.json",
+      "descriptors": "crates/modules/access/policy.settings.json"
     },
     {
       "config": "crates/modules/context/context-compaction.json",
       "descriptors": "crates/modules/configuration/settings/context-compaction.settings.json"
-    },
-    {
-      "config": "crates/modules/files/storage-policy.json",
-      "descriptors": "crates/modules/configuration/settings/storage-policy.settings.json"
     },
     {
       "config": "crates/modules/context/tool-output-retention.json",

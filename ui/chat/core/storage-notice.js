@@ -1,5 +1,5 @@
 // Tells the signed-in user, once per page load, that their storage is nearly full.
-// The server owns the limit and threshold (storage-policy.json); this only presents them.
+// The server owns the limit and threshold (storage section of policy.json); this only presents them.
 import {showNotification} from './chat-action-panel.js';
 const MIB=1024*1024;
 export function createStorageNotice({request,show=showNotification}){
