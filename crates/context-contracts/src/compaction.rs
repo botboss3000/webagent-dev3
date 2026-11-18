@@ -575,7 +575,8 @@ pub fn turn_key(item: &Value) -> Option<String> {
 
 /// Completed boundaries of `input` after its earlier summary blocks: before a user message,
 /// or after a tool result that closes every open call. `None` for a malformed exchange (a
-/// reused call ID, or a result without its call); a call still open just ends the list.
+/// reused call ID, or a result without its call); a repeated result of an answered call is
+/// skipped, and a call still open just ends the list.
 fn requested_boundaries(input: &[Value], blocks: usize) -> Option<Vec<(usize, Boundary)>> {
     let mut pending = HashSet::new();
     let mut seen = HashSet::new();
@@ -593,7 +594,18 @@ fn requested_boundaries(input: &[Value], blocks: usize) -> Option<Vec<(usize, Bo
                 pending.insert(id.to_owned());
             }
             Some("function_call_output") => {
-                if !pending.remove(call_id(item)?) {
+                let id = call_id(item)?;
+                if !pending.remove(id) {
+                    // A result saved twice is skipped: the extra copy of a call already
+                    // answered, or one saved ahead of its own call (a call with its ID
+                    // follows). A result whose call never appears is still malformed.
+                    let call_follows = input[i + 1..].iter().any(|later| {
+                        later.get("type").and_then(Value::as_str) == Some("function_call")
+                            && call_id(later) == Some(id)
+                    });
+                    if seen.contains(id) || call_follows {
+                        continue;
+                    }
                     return None;
                 }
                 if pending.is_empty() && i + 1 > blocks && i + 1 < input.len() {
@@ -1186,6 +1198,32 @@ mod tests {
         assert_eq!((plan.first, plan.drop_until), (0, 2));
         assert!(super::plan_command(&input[2..], &config).unwrap().is_none());
     }
+    #[test]
+    fn a_repeated_result_does_not_make_the_history_malformed() {
+        let call = json!({"type":"function_call","call_id":"m","name":"set_execution_mode","arguments":"{}"});
+        let result = json!({"type":"function_call_output","call_id":"m","output":"ok"});
+        let user = json!({"role":"user","content":"next"});
+        let history = vec![
+            json!({"role":"user","content":"first"}),
+            call.clone(),
+            result.clone(),
+            result.clone(),
+            user,
+        ];
+        assert!(super::requested_boundaries(&history, 0).is_some());
+        // Saved once ahead of its call, then again after it (sessions before 1b7148e7).
+        let early = vec![
+            json!({"role":"user","content":"first"}),
+            result.clone(),
+            call.clone(),
+            result.clone(),
+            json!({"role":"user","content":"next"}),
+        ];
+        assert!(super::requested_boundaries(&early, 0).is_some());
+        let orphan = vec![json!({"role":"user","content":"first"}), result];
+        assert!(super::requested_boundaries(&orphan, 0).is_none());
+    }
+
     #[test]
     fn summaries_omit_skill_text_and_main_notes_updates() {
         let mut input = vec![
