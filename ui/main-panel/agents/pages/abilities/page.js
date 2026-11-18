@@ -7,6 +7,7 @@ import { buildMcpControls } from './mcp.js';
 import { buildPromptsGroup } from './prompts.js';
 import { buildGroup, setGroupStatus } from './table.js';
 import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js';
+import { APP_DEFAULT, APP_DEFAULTS_CSS, buildAppDefaultsBar, buildToolDefaultsPanel, createAppDefaults, loadAppDefaults } from './app-defaults.js';
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
@@ -48,7 +49,9 @@ export async function renderAbilities(host, request, options) {
   host._abilityGeneration = generation;
   // Start every read at once; manager-only reads are refused for members and ignored below.
   const managed = (path, fallback) => request(scope + path).catch(() => fallback);
-  const effectiveRead = levelId
+  // App Default is no agent level: it edits the app's source files, for administrators only.
+  const appDefaultsRead = loadAppDefaults(request);
+  const effectiveRead = levelId && levelId !== APP_DEFAULT
     ? request(scope + '/abilities/effective?' + new URLSearchParams({ level_id: levelId })) : null;
   effectiveRead?.catch(() => {});
   const reads = [managed('/slots', { slots: [] }), managed('/context-composition', { tokens: 0 }),
@@ -58,7 +61,9 @@ export async function renderAbilities(host, request, options) {
   const [slotsResult, compositionResult, repository, sourceSites] = canManage
     ? await Promise.all(reads) : [{ slots: [] }, { tokens: 0 }, null, null];
   const effective = canManage && effectiveRead ? await effectiveRead : data;
+  const appDefaultsDrafts = await appDefaultsRead;
   if (host._abilityGeneration !== generation) return;
+  const appDefaults = levelId === APP_DEFAULT && appDefaultsDrafts ? createAppDefaults(request, appDefaultsDrafts) : null;
   const effectiveAbilities = effective.abilities || [];
   const projection = ability => effectiveAbilities.find(item => item.id === ability.id) || ability;
   const rerender = next => renderAbilities(host, request, { ...options, ...next });
@@ -149,9 +154,15 @@ export async function renderAbilities(host, request, options) {
   search.setAttribute('aria-label', 'Search abilities');
   search.value = searchText;
   const prompts = canManage ? await buildPromptsGroup(request, agentId) : null;
-  const levelSelector = buildPolicyControls({ data, levelId, rerender, status });
+  const levelSelector = buildPolicyControls({ data, levelId, rerender, status, appDefaults: !!appDefaultsDrafts });
   if (host._abilityGeneration !== generation) return;
-  overview.querySelector('[data-tier-selector]').replaceChildren(levelSelector);
+  // Reload sits with the level selector so it is reachable without scrolling the whole list.
+  const reload = node('button', 'ac-btn ac-btn-sm', 'Reload abilities');
+  reload.type = 'button';
+  reload.onclick = () => rerender({ administratorNotice: '' }).catch(error => { status.textContent = error.message; });
+  const appBar = appDefaults ? buildAppDefaultsBar(appDefaults, { onStatus: message => { status.textContent = message; } }) : null;
+  if (appDefaults) appDefaults.state.error = message => { status.textContent = 'Draft not saved: ' + message; };
+  overview.querySelector('[data-tier-selector]').replaceChildren(levelSelector, ...(appBar ? [appBar] : []), reload);
 
   // The spinner covers the control until the save returns, then a check; the page
   // keeps the returned revision instead of re-reading everything. A failure leaves
@@ -257,6 +268,15 @@ export async function renderAbilities(host, request, options) {
   };
   const buildAbilityBody = (detail, ability, onBack) => {
     if (detail.childElementCount) return;
+    if (appDefaults) {
+      // App Default edits this ability's source files, not the agent's settings.
+      const config = createConfigPage({ title: ability.name, onBack });
+      config.body.append(node('p', 'ac-hint', 'App Default: edits are drafts of this ability\'s source files until you Save.'));
+      for (const tool of ability.tools || []) config.body.append(buildToolDefaultsPanel(appDefaults, ability, tool));
+      if (!(ability.tools || []).length) config.body.append(node('p', 'ac-hint', 'This ability has no tools. Its manifest and skills become editable in the next App Default update.'));
+      detail.append(config.element);
+      return;
+    }
     // The tool page is the shared config page: one shell owns the back control and
     // the list itself, so every setting that opens at this level looks the same.
     const config = createConfigPage({ title: ability.name, onBack });
@@ -523,11 +543,8 @@ export async function renderAbilities(host, request, options) {
     + '.v3-abilities-page .ab-page .cfg-page{padding-top:2px}'
     + '.v3-abilities-page .ab-tool-skill{padding:2px 0 10px}'
     + '.v3-abilities-page .ab-tool-skill .rte-doc{max-height:300px}';
+  style.textContent += APP_DEFAULTS_CSS;
   page.append(style);
-  const reload = node('button', 'ac-btn ac-btn-sm', 'Reload abilities');
-  reload.type = 'button';
-  reload.onclick = () => rerender({ administratorNotice: '' }).catch(error => { status.textContent = error.message; });
-  page.append(reload);
   closeFloatingMenu();
   host.replaceChildren(page);
   window.lucide?.createIcons({ nodes: [...page.querySelectorAll('[data-lucide]:not(.lucide)')] });
