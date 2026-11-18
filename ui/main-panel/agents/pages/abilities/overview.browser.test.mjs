@@ -238,7 +238,7 @@ test('a revision poll re-reads the estimate only when the stamp moves', async ()
 });
 
 // The tool page is the shared config page, and a tool's skill opens in place in the
-// shared editor instead of a modal.
+// shared editor instead of a modal, read-only.
 test("a tool's skill opens in the shared editor under its row", async () => {
   const server = await serve();
   let browser;
@@ -261,7 +261,7 @@ test("a tool's skill opens in the shared editor under its row", async () => {
       }
       const opened = {bands: document.querySelectorAll('.ab-tool-skill').length,
         text: band()?.querySelector('.rte-doc')?.innerText || '',
-        toolbar: band()?.querySelectorAll('.rte-btn').length || 0,
+        editable: band()?.querySelector('.rte-doc')?.isContentEditable,
         expanded: link.getAttribute('aria-expanded')};
       link.click();
       return {...opened, shell, after: document.querySelectorAll('.ab-tool-skill').length};
@@ -269,7 +269,7 @@ test("a tool's skill opens in the shared editor under its row", async () => {
     assert.equal(result.shell, true, 'the tool page body is the shared config page');
     assert.equal(result.bands, 1, 'one editor opens under the clicked tool row: ' + JSON.stringify(result));
     assert.equal(result.text, 'Use the weather tool for forecasts.');
-    assert.ok(result.toolbar > 0, 'the editor keeps its formatting toolbar');
+    assert.equal(result.editable, false, 'a read view: tool skills are edited at the App Default level');
     assert.equal(result.expanded, 'true');
     assert.equal(result.after, 0, 'a second press closes the editor');
   } finally {

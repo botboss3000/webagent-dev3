@@ -242,8 +242,9 @@ export async function renderAbilities(host, request, options) {
     // rest of its settings off screen.
     for (const stale of row.parentElement?.querySelectorAll('.ab-tool-skill') || []) stale.remove();
     const band = node('div', 'ab-tool-skill');
+    // A read view: tool skills are edited, and saved, at the App Default level.
     const editor = createRichTextEditor({
-      value: '', label: tool + ' skill', placeholder: 'Loading tool skill…',
+      value: '', label: tool + ' skill', placeholder: 'Loading tool skill…', readOnly: true,
     });
     band.append(editor.element);
     row.after(band);
@@ -253,7 +254,9 @@ export async function renderAbilities(host, request, options) {
       encodeURIComponent(tool) + '/skill-content').then(result => {
         if (band.isConnected) editor.setValue(result.content || 'No skill text.');
       }).catch(error => {
-        if (band.isConnected) editor.setValue(error.message || 'Could not load tool skill.');
+        if (!band.isConnected) return;
+        editor.setValue('');
+        band.append(node('p', 'ac-hint', error.message || 'Could not load tool skill.'));
       });
   };
   const toolPolicy = () => data.capability_levels?.levels?.[levelId] || data.permissions;
