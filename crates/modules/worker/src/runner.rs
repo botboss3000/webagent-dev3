@@ -24,6 +24,8 @@ struct Spec {
     /// Commands: Unix socket fence, no stdin, descendants get SIGTERM before SIGKILL.
     /// Plugins: no fence, the protocol frame on stdin, descendants get SIGKILL at once.
     command: bool,
+    /// A Sandbox ability command: the strict sandbox, resource limits and a folder cap.
+    strict: Option<crate::sandbox_tools::Confinement>,
 }
 
 fn invalid(error: impl std::fmt::Display) -> io::Error {
@@ -35,12 +37,25 @@ fn invalid(error: impl std::fmt::Display) -> io::Error {
 /// to stop, and 1 when the command could not start confined.
 #[must_use]
 pub fn supervise(argv_json: &str) -> i32 {
-    let spec = serde_json::from_str(argv_json).map(|argv| Spec {
-        argv,
-        read_paths: command_read_paths(std::env::var("V3_CHECKOUT_READ").is_ok_and(|v| v == "1")),
-        command: true,
+    let strict = std::env::var("V3_SANDBOX_CONFINEMENT")
+        .ok()
+        .map(|text| crate::sandbox_tools::Confinement::parse(&text))
+        .transpose();
+    let spec = strict.and_then(|strict| {
+        let argv = serde_json::from_str(argv_json).map_err(invalid)?;
+        Ok(Spec {
+            argv,
+            // A Sandbox command reads only the strict sandbox's own system files.
+            read_paths: if strict.is_some() {
+                Vec::new()
+            } else {
+                command_read_paths(std::env::var("V3_CHECKOUT_READ").is_ok_and(|v| v == "1"))
+            },
+            command: true,
+            strict,
+        })
     });
-    finish(spec.map_err(invalid).and_then(run), true)
+    finish(spec.and_then(run), true)
 }
 
 /// Runs an ability plugin: `spec_json` is `{"argv": [...], "read": [package root,
@@ -58,6 +73,7 @@ pub fn supervise_plugin(spec_json: &str) -> i32 {
                 argv: strings("argv")?,
                 read_paths: strings("read")?.into_iter().map(PathBuf::from).collect(),
                 command: false,
+                strict: None,
             })
         });
     finish(spec.and_then(run), false)
@@ -161,19 +177,38 @@ fn run(spec: Spec) -> io::Result<i32> {
         })
         .collect::<io::Result<_>>()?;
     let read_paths: Vec<&Path> = spec.read_paths.iter().map(PathBuf::as_path).collect();
-    let sandbox =
-        crate::sandbox::prepare(&std::env::current_dir()?, &read_paths, &ports, spec.command)?;
+    let base = std::env::current_dir()?;
+    let sandbox = match spec.strict {
+        Some(_) => crate::sandbox::prepare_strict(&base, &read_paths)?,
+        None => crate::sandbox::prepare(&base, &read_paths, &ports, spec.command)?,
+    };
+    let limits = spec.strict.map(resource_limits).transpose()?;
     let mut command = Command::new(program);
     command.args(args);
     if spec.command {
         command.stdin(Stdio::null());
     }
-    // SAFETY: `apply` only makes raw system calls on memory prepared before the fork.
+    // SAFETY: setrlimit and `apply` only make raw system calls on memory prepared before
+    // the fork.
     unsafe {
-        command.pre_exec(move || sandbox.apply());
+        command.pre_exec(move || {
+            if let Some(limits) = &limits {
+                for (resource, value) in limits {
+                    let limit = libc::rlimit {
+                        rlim_cur: *value,
+                        rlim_max: *value,
+                    };
+                    if libc::setrlimit(*resource, &limit) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+            }
+            sandbox.apply()
+        });
     }
     let mut child = command.spawn()?;
     let mut pause = Duration::from_millis(1);
+    let mut measured = Instant::now();
     let status = loop {
         if TERMINATED.load(Ordering::SeqCst) {
             clean_descendants(graceful);
@@ -182,6 +217,28 @@ fn run(spec: Spec) -> io::Result<i32> {
         if let Some(status) = child.try_wait()? {
             break status;
         }
+        if let Some(strict) = spec.strict {
+            // Processes and threads beyond the allowance stop the whole command.
+            let tasks: u64 = descendants().iter().map(|pid| task_count(*pid)).sum();
+            if tasks > strict.processes {
+                eprintln!(
+                    "Sandbox: the command started more than {} processes, so it was stopped",
+                    strict.processes
+                );
+                clean_descendants(false);
+                return Ok(126);
+            }
+            if measured.elapsed() >= FOLDER_CHECK {
+                measured = Instant::now();
+                if crate::sandbox_tools::folder_bytes(&base) > strict.folder_cap_bytes {
+                    eprintln!(
+                        "Sandbox: the folder passed its size limit, so the command was stopped"
+                    );
+                    clean_descendants(graceful);
+                    return Ok(125);
+                }
+            }
+        }
         std::thread::sleep(pause);
         pause = (pause * 2).min(Duration::from_millis(50));
     };
@@ -189,6 +246,97 @@ fn run(spec: Spec) -> io::Result<i32> {
     Ok(status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
+}
+
+/// How often a Sandbox command's folder is measured against its cap.
+const FOLDER_CHECK: Duration = Duration::from_millis(500);
+
+#[cfg(target_env = "gnu")]
+type Resource = libc::__rlimit_resource_t;
+#[cfg(not(target_env = "gnu"))]
+type Resource = libc::c_int;
+
+/// The resource limits of a Sandbox command. The kernel's process limit counts every task
+/// of this user on the host, which a container's `/proc` may not show, so it is applied
+/// (the user's visible count plus the command's allowance) only when a probe child can
+/// still fork under it. The supervisor also counts the command's processes either way.
+fn resource_limits(
+    strict: crate::sandbox_tools::Confinement,
+) -> io::Result<Vec<(Resource, libc::rlim_t)>> {
+    let mut limits = vec![
+        (libc::RLIMIT_CPU, strict.cpu_seconds),
+        (libc::RLIMIT_AS, strict.memory_bytes),
+        (libc::RLIMIT_FSIZE, strict.file_bytes),
+        (libc::RLIMIT_NOFILE, strict.open_files),
+        (libc::RLIMIT_CORE, 0),
+    ];
+    let processes = user_tasks()?.saturating_add(strict.processes);
+    if forks_under(processes) {
+        limits.push((libc::RLIMIT_NPROC, processes));
+    }
+    Ok(limits)
+}
+
+/// Whether a child that sets `RLIMIT_NPROC` to `limit` can still start one process: false
+/// when this user runs tasks this `/proc` does not show. The supervisor is single-threaded,
+/// so forking here is sound.
+fn forks_under(limit: libc::rlim_t) -> bool {
+    // SAFETY: fork in a single-threaded process; the child only makes raw system calls
+    // and leaves with _exit.
+    unsafe {
+        let probe = libc::fork();
+        if probe < 0 {
+            return false;
+        }
+        if probe == 0 {
+            let rlimit = libc::rlimit {
+                rlim_cur: limit,
+                rlim_max: limit,
+            };
+            if libc::setrlimit(libc::RLIMIT_NPROC, &rlimit) != 0 {
+                libc::_exit(1);
+            }
+            let child = libc::fork();
+            if child < 0 {
+                libc::_exit(1);
+            }
+            if child == 0 {
+                libc::_exit(0);
+            }
+            libc::waitpid(child, std::ptr::null_mut(), 0);
+            libc::_exit(0);
+        }
+        let mut status = 0;
+        libc::waitpid(probe, &mut status, 0) == probe
+            && libc::WIFEXITED(status)
+            && libc::WEXITSTATUS(status) == 0
+    }
+}
+
+/// Tasks (threads included) of process `pid`; 1 when it has gone or is unreadable.
+fn task_count(pid: i32) -> u64 {
+    std::fs::read_dir(format!("/proc/{pid}/task")).map_or(1, |tasks| tasks.count() as u64)
+}
+
+/// The tasks (threads included) this process's user runs, from `/proc`.
+fn user_tasks() -> io::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: getuid has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    let mut tasks = 0u64;
+    for entry in std::fs::read_dir("/proc")?.flatten() {
+        if !entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.bytes().all(|b| b.is_ascii_digit()))
+        {
+            continue;
+        }
+        if entry.metadata().is_ok_and(|meta| meta.uid() == uid) {
+            tasks += std::fs::read_dir(entry.path().join("task")).map_or(1, |t| t.count() as u64);
+        }
+    }
+    Ok(tasks)
 }
 
 /// This process's descendants, from the public parent links in `/proc`.

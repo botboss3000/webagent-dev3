@@ -72,7 +72,7 @@ pub async fn call(roots: &Roots, runner: &[String], request: &Value) -> Value {
         Err(_) => return json!({"status":"failed","output":"Port claim failed"}),
     };
     let checkout = files::checkout_granted(request);
-    match run(runner, &argv, &base, &ports, timeout as u64, checkout).await {
+    match run(runner, &argv, &base, &ports, timeout as u64, checkout, None).await {
         Ok(result) => result,
         Err(error) => json!({"status":"failed","output":error.to_string()}),
     }
@@ -227,13 +227,16 @@ pub(crate) fn stop_in_background(mut child: tokio::process::Child, group: i32) {
     }
 }
 
-async fn run(
+/// Runs `argv` under its supervisor in `base`. `confinement` (a Sandbox ability command's
+/// [`crate::sandbox_tools::Confinement`]) selects the strict sandbox instead.
+pub(crate) async fn run(
     runner: &[String],
     argv: &[String],
     base: &Path,
     ports: &[u16],
     timeout: u64,
     checkout: bool,
+    confinement: Option<&str>,
 ) -> io::Result<Value> {
     let (reader, writer) = std::io::pipe()?;
     let ports: Vec<String> = ports.iter().map(u16::to_string).collect();
@@ -260,6 +263,9 @@ async fn run(
         .stdin(Stdio::null())
         .stdout(Stdio::from(writer.try_clone()?))
         .stderr(Stdio::from(writer));
+    if let Some(confinement) = confinement {
+        command.env("V3_SANDBOX_CONFINEMENT", confinement);
+    }
     // SAFETY: setsid is async-signal-safe and touches no memory.
     unsafe {
         command.as_std_mut().pre_exec(|| {

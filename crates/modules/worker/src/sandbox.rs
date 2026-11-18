@@ -62,10 +62,10 @@ struct Program {
     filter: *const Filter,
 }
 
-/// A ruleset, and for commands the Unix socket filter, ready to apply in a child.
+/// A ruleset, and for commands a system-call filter, ready to apply in a child.
 pub struct Prepared {
     ruleset: OwnedFd,
-    filter: Option<[Filter; 11]>,
+    filter: Option<Vec<Filter>>,
 }
 
 fn checked(value: libc::c_long) -> io::Result<libc::c_long> {
@@ -111,29 +111,17 @@ pub fn prepare(
     ports: &[u16],
     deny_unix: bool,
 ) -> io::Result<Prepared> {
-    let base = std::fs::canonicalize(base)?;
     let ruleset = ruleset(if deny_unix { 1 | 2 } else { 1 })?;
+    allow_command_files(&ruleset, base, read_paths)?;
     let allow = |path: &Path, rights: u64| allow(&ruleset, path, rights);
-    for path in ["/usr", "/bin", "/lib", "/lib64", "/opt/rust"] {
-        allow(Path::new(path), READ)?;
-    }
+    allow(Path::new("/opt/rust"), READ)?;
     for path in [
-        "/etc/ld.so.cache",
         "/etc/resolv.conf",
         "/etc/hosts",
         "/etc/nsswitch.conf",
         "/etc/ssl/certs",
-        "/etc/passwd",
-        "/etc/group",
-        "/dev/random",
-        "/dev/urandom",
     ] {
         allow(Path::new(path), READ)?;
-    }
-    allow(Path::new("/dev/null"), (1 << 1) | (1 << 2))?;
-    allow(&base, READ | WRITE)?;
-    for path in read_paths {
-        allow(path, READ)?;
     }
     // The worker assigns unique workspace preview ports; a command cannot bind another
     // workspace's port, even while a listener is being replaced.
@@ -187,11 +175,85 @@ pub fn prepare(
     Ok(Prepared {
         ruleset,
         filter: if deny_unix {
-            Some(unix_socket_filter()?)
+            Some(unix_socket_filter()?.to_vec())
         } else {
             None
         },
     })
+}
+
+/// What every workspace command reads: the system folders the shell and Python need, the
+/// loader cache, user and group names and the random devices. It writes `base` and
+/// `/dev/null`, and reads `read_paths`.
+fn allow_command_files(ruleset: &OwnedFd, base: &Path, read_paths: &[&Path]) -> io::Result<()> {
+    let base = std::fs::canonicalize(base)?;
+    for path in ["/usr", "/bin", "/lib", "/lib64"] {
+        allow(ruleset, Path::new(path), READ)?;
+    }
+    for path in [
+        "/etc/ld.so.cache",
+        "/etc/passwd",
+        "/etc/group",
+        "/dev/random",
+        "/dev/urandom",
+        "/dev/zero",
+    ] {
+        allow(ruleset, Path::new(path), READ)?;
+    }
+    allow(ruleset, Path::new("/dev/null"), (1 << 1) | (1 << 2))?;
+    allow(ruleset, &base, READ | WRITE)?;
+    for path in read_paths {
+        allow(ruleset, path, READ)?;
+    }
+    Ok(())
+}
+
+/// Builds the Sandbox ability's boundary for a child in `base` that may also read
+/// `read_paths`: the command files above and nothing else (no checkout, `/proc`, `/etc`
+/// network files or `/opt/rust`), no TCP bind or connect at all, and a filter refusing
+/// every `socket` (any family, so UDP and raw sockets too, which Landlock does not
+/// mediate) and every io_uring call (it can open sockets without `socket`).
+///
+/// # Errors
+/// When Landlock ABI 6 is unavailable or a rule cannot be added; the command then never
+/// starts unconfined.
+pub fn prepare_strict(base: &Path, read_paths: &[&Path]) -> io::Result<Prepared> {
+    let ruleset = ruleset(1 | 2)?;
+    allow_command_files(&ruleset, base, read_paths)?;
+    Ok(Prepared {
+        ruleset,
+        filter: Some(no_network_filter()?.to_vec()),
+    })
+}
+
+/// Refuses `socket` and the three io_uring calls with EPERM; x32 and foreign-architecture
+/// calls are killed first, as in [`unix_socket_filter`].
+fn no_network_filter() -> io::Result<[Filter; 12]> {
+    let (architecture, socket) = if cfg!(target_arch = "x86_64") {
+        (0xc000_003e, 41)
+    } else if cfg!(target_arch = "aarch64") {
+        (0xc000_00b7, 198)
+    } else {
+        return Err(unavailable(
+            "Sandbox network fence requires a supported native architecture",
+        ));
+    };
+    // io_uring_setup, io_uring_enter and io_uring_register share these numbers on both.
+    let f = |code, jt, jf, k| Filter { code, jt, jf, k };
+    Ok([
+        f(0x20, 0, 0, 4),
+        f(0x15, 1, 0, architecture),
+        f(0x06, 0, 0, 0x8000_0000),
+        f(0x20, 0, 0, 0),
+        f(0x35, 0, 1, 0x4000_0000),
+        f(0x06, 0, 0, 0x8000_0000),
+        f(0x15, 4, 0, socket),
+        f(0x15, 3, 0, 425),
+        f(0x15, 2, 0, 426),
+        f(0x15, 1, 0, 427),
+        f(0x06, 0, 0, 0x7fff_0000),
+        f(0x06, 0, 0, 0x0005_0001),
+    ])
 }
 
 /// A new ruleset handling every filesystem right through ABI 8 and `net` rights, with
@@ -355,7 +417,8 @@ impl Prepared {
             ))?;
             if let Some(filter) = &self.filter {
                 let program = Program {
-                    len: 11,
+                    // The filters above have 11 or 12 instructions.
+                    len: filter.len() as u16,
                     filter: filter.as_ptr(),
                 };
                 if libc::prctl(libc::PR_SET_SECCOMP, 2, &program as *const Program, 0, 0) != 0 {

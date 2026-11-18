@@ -33,6 +33,17 @@ fn live_policy() -> Result<webagent_files::storage_policy::StoragePolicy, ApiErr
     webagent_files::storage_policy::StoragePolicy::live()
         .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
+/// Bytes the signed-in user may still store under their tier limit (unlimited without
+/// one), for writers outside the upload routes such as the Sandbox ability.
+pub(crate) async fn storage_room(app: &App) -> Result<u64, ApiError> {
+    let Some(tier) = owner_tier(app).await? else {
+        return Ok(u64::MAX);
+    };
+    let Some(limit) = live_policy()?.user_limit(&tier) else {
+        return Ok(u64::MAX);
+    };
+    Ok(limit.saturating_sub(app.store.storage_used().await?))
+}
 /// The signed-in user's storage use against their tier limit, for the near-full notice.
 pub(crate) async fn storage_status(app: &App) -> Api {
     let policy = live_policy()?;

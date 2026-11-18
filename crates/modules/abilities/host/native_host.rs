@@ -75,9 +75,16 @@ impl NativeHost for Host<'_> {
     ) -> Pending<'a, Result<Value>> {
         Box::pin(async move {
             // Directory decisions read the live checkout only when Codebase Admin supplies
-            // file_list to this run.
+            // file_list to this run. Sandbox calls carry the ability's limits and the
+            // storage owner's remaining room, which only the root may set.
             let trusted = if name == "decision_candidates" {
                 tools::administrator::checkout_grant(self.0, sid, run, "file_list", None).await
+            } else if webagent_native_tools::sandbox::owns(name) {
+                let mut limits = webagent_native_tools::sandbox::limits()?;
+                limits["room_bytes"] = serde_json::json!(api::uploads::storage_room(self.0)
+                    .await
+                    .map_err(|e| anyhow!(e.1))?);
+                Some(serde_json::json!({"sandbox":limits}))
             } else {
                 None
             };

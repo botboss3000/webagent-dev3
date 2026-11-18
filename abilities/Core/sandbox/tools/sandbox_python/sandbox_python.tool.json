@@ -1,0 +1,42 @@
+{
+  "name": "sandbox_python",
+  "description": "Run Python code in this conversation's sandbox folder: standard library only, no network, nothing outside the folder, resource limits.",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "low"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 65536
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 600
+      }
+    },
+    "required": [
+      "code"
+    ],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "run a python script in the sandbox",
+      "check this JSON with python"
+    ],
+    "keywords": [
+      "sandbox",
+      "python"
+    ]
+  }
+}

@@ -116,6 +116,16 @@ impl
                     cancel,
                 ))
                 .await
+            } else if tools::native::sandbox::owns(&name) {
+                // The root adds the ability's limits as trusted fields before the worker call.
+                Box::pin(tools::native::sandbox::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                ))
+                .await
             } else if tools::native::knowledge_files::owns(&name) {
                 // Boxed so this branch does not grow the shared dispatch future's stack frame.
                 Box::pin(tools::native::knowledge_files::execute(

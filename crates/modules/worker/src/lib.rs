@@ -11,6 +11,7 @@ pub mod manager;
 pub mod plugins;
 pub mod runner;
 pub mod sandbox;
+pub mod sandbox_tools;
 pub mod terminal;
 pub mod tunnel;
 
@@ -295,6 +296,17 @@ async fn handle(
         let _registered = Registered { active, id };
         let result = tokio::select! {
             result = file_manager_call(&config.files, parsed) => result,
+            () = hang_up(&mut client_read) => return Ok(()),
+            () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
+        };
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
+    if let Some(parsed) = parsed.as_ref().filter(|_| sandbox_tools::handles(name)) {
+        let workspace = parsed["workspace"].as_str().unwrap_or_default();
+        let (id, stop) = active.start(workspace);
+        let _registered = Registered { active, id };
+        let result = tokio::select! {
+            result = sandbox_tools::call(&config.files, &config.runner, parsed) => result,
             () = hang_up(&mut client_read) => return Ok(()),
             () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
         };

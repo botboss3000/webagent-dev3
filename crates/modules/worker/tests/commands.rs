@@ -78,7 +78,18 @@ impl Worker {
     }
 
     async fn call(&self, name: &str, arguments: Value, timeout: u64) -> Value {
-        let (stream, ()) = self.send(name, arguments, timeout).await;
+        self.call_with(name, arguments, timeout, Value::Null).await
+    }
+
+    /// A call carrying the `trusted` fields only the app sends.
+    async fn call_with(&self, name: &str, arguments: Value, timeout: u64, trusted: Value) -> Value {
+        let mut stream = UnixStream::connect(&self.socket).await.expect("connect");
+        let request = json!({"version":2,"id":"c","name":name,"workspace":SESSION,
+            "arguments":arguments,"timeout_seconds":timeout,"trusted":trusted});
+        stream
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .expect("request");
         let mut line = Vec::new();
         BufReader::new(stream)
             .read_until(b'\n', &mut line)
@@ -356,8 +367,232 @@ async fn shutoff_stops_commands_before_they_start() {
     assert!(!worker.workspace().join("forbidden").exists());
 }
 
+/// The Sandbox ability's limits as the app sends them, with `overrides` applied.
+fn sandbox_limits(overrides: Value) -> Value {
+    let mut sandbox = json!({"timeout_seconds":30,"memory_mb":256,"processes":16,
+        "file_mb":1,"open_files":256,"folder_mb":3,"read_kb":64,"room_bytes":u64::MAX});
+    for (key, value) in overrides.as_object().expect("overrides") {
+        sandbox[key] = value.clone();
+    }
+    json!({"sandbox":sandbox})
+}
+
+impl Worker {
+    async fn sandbox(&self, name: &str, arguments: Value) -> Value {
+        self.call_with(name, arguments, 60, sandbox_limits(json!({})))
+            .await
+    }
+}
+
+async fn sandbox_tools_need_the_apps_limits() {
+    let worker = worker().await;
+    let result = worker
+        .call("sandbox_shell", json!({"command":"touch made"}), 30)
+        .await;
+    assert_eq!(result["output"], "Sandbox limits missing", "{result}");
+    assert!(!worker.workspace().join("sandbox/made").exists());
+}
+
+async fn sandbox_commands_see_only_their_scratch_folder() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    std::fs::create_dir_all(worker.workspace()).expect("workspace");
+    let beside = worker.workspace().join("beside.txt");
+    std::fs::write(&beside, "WORKSPACE_FIXTURE").expect("fixture");
+    let private = worker.dir.path().join("unrelated-private");
+    std::fs::write(&private, "PRIVATE_FIXTURE").expect("fixture");
+    let script = format!(
+        "pwd; echo ok > inside.txt && cat inside.txt; \
+         cat {beside} || echo no-workspace; cat {private} || echo no-private; \
+         echo x > {private} || echo no-write; ls /proc >/dev/null 2>&1 || echo no-proc; \
+         cat /etc/hostname 2>/dev/null || echo no-etc; ls / >/dev/null 2>&1 || echo no-root; \
+         kill -0 $PPID 2>/dev/null || echo no-signal; ln -s {private} link; cat link || echo no-link",
+        beside = beside.display(),
+        private = private.display()
+    );
+    let result = worker
+        .sandbox("sandbox_shell", json!({"command":script}))
+        .await;
+    let output = result["output"].as_str().expect("text");
+    let scratch = worker.workspace().join("sandbox");
+    assert!(
+        output.starts_with(&format!("{}\nok\n", scratch.display())),
+        "{output}"
+    );
+    for refused in [
+        "no-workspace",
+        "no-private",
+        "no-write",
+        "no-proc",
+        "no-etc",
+        "no-root",
+        "no-signal",
+        "no-link",
+    ] {
+        assert!(output.contains(refused), "{refused} missing: {output}");
+    }
+    assert!(!output.contains("FIXTURE"), "{output}");
+    assert_eq!(
+        std::fs::read_to_string(&private).expect("kept"),
+        "PRIVATE_FIXTURE"
+    );
+}
+
+async fn sandbox_commands_have_no_network() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    let open = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral listener");
+    let port = open.local_addr().expect("address").port();
+    let code = format!(
+        "import socket\n\
+         for family, kind in [(socket.AF_INET, socket.SOCK_STREAM), (socket.AF_INET, socket.SOCK_DGRAM), \
+         (socket.AF_INET6, socket.SOCK_DGRAM), (socket.AF_UNIX, socket.SOCK_STREAM)]:\n \
+         try:\n  s = socket.socket(family, kind); s.connect(('127.0.0.1', {port})) if family == socket.AF_INET else None; print('open')\n \
+         except OSError as e:\n  print('denied', e.errno)"
+    );
+    let result = worker.sandbox("sandbox_python", json!({"code":code})).await;
+    assert_eq!(
+        result["output"], "denied 1\ndenied 1\ndenied 1\ndenied 1\n",
+        "{result}"
+    );
+}
+
+async fn sandbox_commands_run_under_resource_limits() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    let memory = worker
+        .sandbox(
+            "sandbox_python",
+            json!({"code":"try:\n b = bytearray(600 * 1024 * 1024); print('allocated')\nexcept MemoryError:\n print('memory capped')"}),
+        )
+        .await;
+    assert_eq!(memory["output"], "memory capped\n", "{memory}");
+    let large = worker
+        .sandbox(
+            "sandbox_python",
+            json!({"code":"try:\n open('big','wb').write(b'x' * (2 * 1024 * 1024)); print('written')\nexcept OSError as e:\n print('file capped', e.errno)"}),
+        )
+        .await;
+    assert_eq!(large["output"], "file capped 27\n", "{large}");
+    let big = std::fs::metadata(worker.workspace().join("sandbox/big")).expect("partial file");
+    assert!(big.len() <= 1024 * 1024);
+    let forks = worker
+        .sandbox(
+            "sandbox_python",
+            json!({"code":"import os, time\npids = []\ntry:\n for i in range(100):\n  pid = os.fork()\n  if pid == 0:\n   time.sleep(5)\n   os._exit(0)\n  pids.append(pid)\n print('uncapped')\nexcept OSError as e:\n print('capped', len(pids), e.errno)\nfor pid in pids:\n os.kill(pid, 9)"}),
+        )
+        .await;
+    // The kernel limit refuses the fork (errno 11) where it can apply; otherwise the
+    // supervisor stops the command once it passes its allowance.
+    let output = forks["output"].as_str().expect("text");
+    match output.strip_prefix("capped ") {
+        Some(rest) => {
+            let started: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|count| count.parse().ok())
+                .unwrap_or_else(|| panic!("{forks}"));
+            assert!(
+                started <= 16 && output.trim_end().ends_with(" 11"),
+                "{forks}"
+            );
+        }
+        None => {
+            assert_eq!(forks["exit_code"], 126, "{forks}");
+            assert!(output.contains("more than 16 processes"), "{forks}");
+        }
+    }
+}
+
+async fn sandbox_commands_stop_at_the_folder_cap() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    let result = worker
+        .sandbox(
+            "sandbox_shell",
+            json!({"command":"i=0; while true; do head -c 900000 /dev/zero > f$i || exit 9; i=$((i+1)); done"}),
+        )
+        .await;
+    assert_eq!(result["exit_code"], 125, "{result}");
+    assert!(result["output"]
+        .as_str()
+        .expect("text")
+        .contains("size limit"));
+    let refused = worker
+        .sandbox("sandbox_shell", json!({"command":"echo more > g"}))
+        .await;
+    assert!(
+        refused["output"]
+            .as_str()
+            .expect("text")
+            .starts_with("Sandbox folder is full"),
+        "{refused}"
+    );
+    let freed = worker
+        .sandbox("sandbox_file", json!({"action":"delete","path":"f0"}))
+        .await;
+    assert_eq!(freed["status"], "success", "{freed}");
+}
+
+async fn sandbox_files_round_trip_inside_the_scratch_folder() {
+    let worker = worker().await;
+    let wrote = worker
+        .sandbox(
+            "sandbox_file",
+            json!({"action":"write","path":"element/index.html","content":"<p>hi</p>"}),
+        )
+        .await;
+    assert_eq!(wrote["status"], "success", "{wrote}");
+    let read = worker
+        .sandbox(
+            "sandbox_file",
+            json!({"action":"read","path":"element/index.html"}),
+        )
+        .await;
+    assert_eq!(read["output"], "<p>hi</p>", "{read}");
+    let escape = worker
+        .sandbox(
+            "sandbox_file",
+            json!({"action":"write","path":"../outside.txt","content":"x"}),
+        )
+        .await;
+    assert_eq!(escape["status"], "failed");
+    assert!(!worker.workspace().join("outside.txt").exists());
+    let usage: Value = serde_json::from_slice(
+        &std::fs::read(worker.dir.path().join("sandbox-usage.json")).expect("usage"),
+    )
+    .expect("usage JSON");
+    assert!(usage[SESSION].as_u64().expect("bytes") >= 9);
+}
+
 fn main() {
     harness::main(&[
+        ("sandbox_tools_need_the_apps_limits", || {
+            Box::pin(sandbox_tools_need_the_apps_limits())
+        }),
+        ("sandbox_commands_see_only_their_scratch_folder", || {
+            Box::pin(sandbox_commands_see_only_their_scratch_folder())
+        }),
+        ("sandbox_commands_have_no_network", || {
+            Box::pin(sandbox_commands_have_no_network())
+        }),
+        ("sandbox_commands_run_under_resource_limits", || {
+            Box::pin(sandbox_commands_run_under_resource_limits())
+        }),
+        ("sandbox_commands_stop_at_the_folder_cap", || {
+            Box::pin(sandbox_commands_stop_at_the_folder_cap())
+        }),
+        ("sandbox_files_round_trip_inside_the_scratch_folder", || {
+            Box::pin(sandbox_files_round_trip_inside_the_scratch_folder())
+        }),
         (
             "a_shell_command_runs_in_its_workspace_with_merged_output",
             || Box::pin(a_shell_command_runs_in_its_workspace_with_merged_output()),

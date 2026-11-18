@@ -1,0 +1,49 @@
+{
+  "name": "sandbox_file",
+  "description": "Read, write, list or delete a file in this conversation's sandbox folder.",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "low"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write",
+          "list",
+          "delete"
+        ]
+      },
+      "path": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "content": {
+        "type": "string",
+        "maxLength": 524288
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "write an html file in the sandbox",
+      "read a file from the scratch folder"
+    ],
+    "keywords": [
+      "sandbox",
+      "file"
+    ]
+  }
+}

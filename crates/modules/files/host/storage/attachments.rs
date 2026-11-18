@@ -87,32 +87,49 @@ impl Store {
             }
         }
     }
-    /// Bytes in the private browser folders of this user's sessions, as the worker
-    /// publishes them. `/workspaces` is not counted: only administrator app-development
-    /// tools write there, and that work is not the user's own storage.
-    async fn browser_used(&self) -> Result<u64> {
+    /// Bytes in the private browser folders and Sandbox ability folders of this user's
+    /// sessions, as the worker publishes them. The rest of `/workspaces` is not counted:
+    /// only administrator app-development tools write there, and that work is not the
+    /// user's own storage.
+    async fn worker_used(&self) -> Result<u64> {
         let ids: Vec<String> =
             sqlx::query_scalar("SELECT key FROM docs WHERE key LIKE 'session:%'")
                 .fetch_all(&self.pool)
                 .await?;
-        let usage = std::env::var_os("V3_BROWSER_USAGE").map_or_else(
-            || webagent_configuration::paths::runtime().join("worker/browser-usage.json"),
-            std::path::PathBuf::from,
-        );
+        let published = |variable: &str, file: &str| {
+            std::env::var_os(variable).map_or_else(
+                || {
+                    webagent_configuration::paths::runtime()
+                        .join("worker")
+                        .join(file)
+                },
+                std::path::PathBuf::from,
+            )
+        };
+        let files = [
+            published("V3_BROWSER_USAGE", "browser-usage.json"),
+            published("V3_SANDBOX_USAGE", "sandbox-usage.json"),
+        ];
         Ok(tokio::task::spawn_blocking(move || {
-            // Small (one number per session folder); missing until the worker first writes it.
-            let browser: std::collections::HashMap<String, u64> = std::fs::read(&usage)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or_default();
-            ids.iter()
-                .filter_map(|key| key.strip_prefix("session:"))
-                .filter_map(|sid| browser.get(sid).copied())
-                .fold(0u64, u64::saturating_add)
+            let mut total = 0u64;
+            for usage in &files {
+                // Small (one number per session folder); missing until the worker first writes it.
+                let folders: std::collections::HashMap<String, u64> = std::fs::read(usage)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                    .unwrap_or_default();
+                total = ids
+                    .iter()
+                    .filter_map(|key| key.strip_prefix("session:"))
+                    .filter_map(|sid| folders.get(sid).copied())
+                    .fold(total, u64::saturating_add);
+            }
+            total
         })
         .await?)
     }
-    /// Bytes this user stores: the database and its journal, attachment files and browser folders.
+    /// Bytes this user stores: the database and its journal, attachment files, browser
+    /// folders and Sandbox folders.
     pub(crate) async fn storage_used(&self) -> Result<u64> {
         let files = self
             .get(webagent_files::QUOTA_KEY)
@@ -130,7 +147,7 @@ impl Store {
         }
         Ok(files
             .saturating_add(database)
-            .saturating_add(self.browser_used().await?))
+            .saturating_add(self.worker_used().await?))
     }
     /// Remove only an unclaimed upload owned by this session and decrement its quota atomically.
     pub(crate) async fn delete_pending_upload(&self, sid: &str, aid: &str) -> Result<()> {

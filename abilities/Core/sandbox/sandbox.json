@@ -1,0 +1,17 @@
+{
+  "display_name": "Sandbox",
+  "kind": "ability",
+  "description": "Run shell commands and Python, and keep files, in this conversation's own scratch folder: no network, nothing outside the folder, and resource limits on every command.",
+  "icon": "box",
+  "color": "#9ece6a",
+  "order": 15,
+  "placeholder": false,
+  "readiness": "ready",
+  "config": {},
+  "migration_note": "Compiled Rust adapters calling the isolated worker's strict sandbox (Landlock with no TCP, a seccomp filter refusing every socket and io_uring call, resource limits and a folder cap). Limits come from limits.json and the storage owner's remaining room.",
+  "skill_summary": "Build and test small files and scripts in a private scratch folder with sandbox_shell, sandbox_python and sandbox_file.",
+  "owner_tier": [
+    "free",
+    "administrator"
+  ]
+}

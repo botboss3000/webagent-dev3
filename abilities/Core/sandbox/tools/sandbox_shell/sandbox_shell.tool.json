@@ -1,0 +1,42 @@
+{
+  "name": "sandbox_shell",
+  "description": "Run a shell command in this conversation's sandbox folder: no network, nothing outside the folder, resource limits.",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "low"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 65536
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 600
+      }
+    },
+    "required": [
+      "command"
+    ],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "run a shell command in the sandbox",
+      "list the files I made in the scratch folder"
+    ],
+    "keywords": [
+      "sandbox",
+      "shell"
+    ]
+  }
+}

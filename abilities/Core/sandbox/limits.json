@@ -1,0 +1,9 @@
+{
+  "timeout_seconds": 120,
+  "memory_mb": 512,
+  "processes": 64,
+  "file_mb": 10,
+  "open_files": 256,
+  "folder_mb": 50,
+  "read_kb": 64
+}

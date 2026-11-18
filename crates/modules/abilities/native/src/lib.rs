@@ -48,6 +48,8 @@ pub mod prompt;
 pub mod recall;
 #[path = "../../../../../abilities/Core/reply_buttons/tools/offer_choices/offer_choices.rs"]
 pub mod reply_buttons;
+#[path = "../../../../../abilities/Core/sandbox/tools/shared/sandbox.rs"]
+pub mod sandbox;
 #[path = "../../../../../abilities/Core/base/tools/shared/self_edit.rs"]
 pub mod self_edit;
 #[path = "../../../../../abilities/Core/base/tools/shared/session.rs"]
