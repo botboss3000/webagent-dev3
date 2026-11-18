@@ -19,22 +19,18 @@ pub fn texts() -> Value {
 }
 
 /// The per-agent override keys and the `main_chat.json` field each one replaces.
-pub const TEXT_FIELDS: [(&str, &str); 4] = [
+pub const TEXT_FIELDS: [(&str, &str); 2] = [
     ("contribute", "notes_guidance"),
     ("review", "main_chat_prompt"),
-    ("notes_header", "notes_header"),
-    ("update_heading", "update_heading"),
 ];
 
-/// Text `key` (an override key) for this agent: its own override when set, else the file's,
-/// with {chat} and {notes} replaced by the agent's two names.
+/// Text `key` for this agent, with {chat} and {notes} replaced by the agent's two names: for an
+/// override key its own override when set, else the file's; any other key is a file field.
 pub fn text(state: &Value, key: &str) -> String {
-    let field = TEXT_FIELDS
-        .iter()
-        .find(|(name, _)| *name == key)
-        .map_or(key, |(_, field)| *field);
-    let raw = state["skill_overrides"][key]
-        .as_str()
+    let overridable = TEXT_FIELDS.iter().find(|(name, _)| *name == key);
+    let field = overridable.map_or(key, |(_, field)| *field);
+    let raw = overridable
+        .and_then(|_| state["skill_overrides"][key].as_str())
         .filter(|text| !text.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| texts()[field].as_str().unwrap_or("").to_owned());
@@ -113,7 +109,7 @@ pub fn empty() -> Value {
         "revision": 0,
         "notes_version": 0,
         "settings": Settings::default(),
-        "skill_overrides": {"contribute": null, "review": null, "notes_header": null, "update_heading": null},
+        "skill_overrides": {"contribute": null, "review": null},
         "session_id": null,
         "topics": {},
         "proposals": {},

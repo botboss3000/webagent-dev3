@@ -27,7 +27,7 @@ try{
   await page.evaluate(async light=>{
    document.body.classList.toggle('light-mode',light);
    const {renderMainChat}=await import('/ui/main-panel/agents/pages/identity/main-chat.js');window.mount=renderMainChat;
-   const make=id=>({agent_id:id,can_manage:true,revision:7,session_metadata_revision:2,session_id:null,review_status:'disabled',settings:{enabled:false,chat_name:'Main '+id,notes_name:'Notes '+id,write_mode:'new_topics'},skills:{contribute:{override:null,fallback:'Fallback contributor: retain source references.'},review:{override:null,fallback:'Fallback coordinator: read notes and verify conditions.'},notes_header:{override:null,fallback:'{notes} as of version {version}.'},update_heading:{override:null,fallback:'{notes} update (v{version}):'}}});
+   const make=id=>({agent_id:id,can_manage:true,revision:7,session_metadata_revision:2,session_id:null,review_status:'disabled',settings:{enabled:false,chat_name:'Main '+id,notes_name:'Notes '+id,write_mode:'new_topics'},skills:{contribute:{override:null,fallback:'Fallback contributor: retain source references.'},review:{override:null,fallback:'Fallback coordinator: read notes and verify conditions.'}}});
    const states={one:make('one'),two:make('two')};window.fixture={states,writes:[],fail:false,activations:{one:0,two:0},demoted:[]};
    fixture.request=async(url,method='GET',body)=>{
     const match=url.match(/^\/models\/agents\/(one|two)\/main-chat$/);if(!match)throw Error('Wrong or unscoped route');const state=states[match[1]];

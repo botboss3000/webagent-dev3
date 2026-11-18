@@ -33,7 +33,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
   field('chat_name','Main Chat name');field('notes_name','Main Notes name');
   field('write_mode','Notes write approval',[['automatic','Automatic writes and edits (default)'],['new_topics','Approve new topics and scope changes'],['every_write','Approve every write or edit']]);
   // Texts from prompts/main_chat.json; {chat} and {notes} become the two names above.
-  for(const [key,title,description]of [['contribute','Notes guidance','Sent ahead of the notes in this agent’s working sessions while enabled.'],['review','Main Chat prompt','Sent only in this agent’s Main Chat while enabled.'],['notes_header','Notes header','Opens the notes in every session; {version} and {revision} are the notes’ numbers.'],['update_heading','Update heading','Opens each change another session made; {version} is its version.']]){
+  for(const [key,title,description]of [['contribute','Notes guidance','Sent ahead of the notes in this agent’s working sessions while enabled.'],['review','Main Chat prompt','Sent only in this agent’s Main Chat while enabled.']]){
     const card=document.createElement('details');card.className='ac-row main-chat-skill';card.dataset.mainChatSkill=key;
     const summary=document.createElement('summary');summary.className='ac-ability-row';summary.style.cssText='cursor:pointer;padding:8px 0;min-height:32px';summary.textContent=title;card.append(summary);
     const label=document.createElement('label');label.className='ac-label';label.textContent=title+' override';

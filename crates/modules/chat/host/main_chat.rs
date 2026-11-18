@@ -741,13 +741,13 @@ mod api_tests {
                 .await
                 .unwrap()
                 .as_deref(),
-            Some("**Coordinator guidance**\n\nReview sentinel")
+            Some("**Coordinator:**\n\nReview sentinel")
         );
         assert_eq!(
             guidance(&app, "shared_default", "working")
                 .await
                 .unwrap()
-                .map(|text| text.ends_with("guidance**\n\nContribute sentinel")),
+                .map(|text| text.ends_with(":**\n\nContribute sentinel")),
             Some(true)
         );
         let disable = config(2, json!(1), "disable", false);
@@ -867,7 +867,7 @@ mod api_tests {
             guidance(&other, "agent-two", "working")
                 .await
                 .unwrap()
-                .map(|text| text.ends_with("guidance**\n\nUpdated sentinel")),
+                .map(|text| text.ends_with(":**\n\nUpdated sentinel")),
             Some(true)
         );
         assert!(
