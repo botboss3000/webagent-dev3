@@ -1,8 +1,21 @@
 //! staff_message_send: validate a visitor's contact details and save their message.
 use super::text;
 use anyhow::{anyhow, bail, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use webagent_host_core::{digest, now, StoreCore};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SendArgs {
+    name: String,
+    kind: String,
+    message: String,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    phone: Option<String>,
+}
 
 const MESSAGE_KINDS: [&str; 5] = ["question", "booking", "callback", "feedback", "other"];
 
@@ -38,13 +51,13 @@ pub(super) async fn run(
     rid: &str,
     pending: &str,
 ) -> Result<Value> {
-    let (email, phone) = contact(args["email"].as_str(), args["phone"].as_str())?;
-    let kind = args["kind"]
-        .as_str()
+    let sent: SendArgs = webagent_abilities::tool_arguments::read("staff_message_send", args)?;
+    let (email, phone) = contact(sent.email.as_deref(), sent.phone.as_deref())?;
+    let kind = Some(sent.kind.as_str())
         .filter(|k| MESSAGE_KINDS.contains(k))
         .ok_or_else(|| anyhow!("Invalid message kind"))?;
-    let visitor_name = text(args["name"].as_str().unwrap_or(""), 120)?;
-    let message = text(args["message"].as_str().unwrap_or(""), 2000)?;
+    let visitor_name = text(&sent.name, 120)?;
+    let message = text(&sent.message, 2000)?;
     if visitor_name.is_empty() || message.is_empty() {
         bail!("Name and message are required");
     }

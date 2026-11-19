@@ -483,12 +483,16 @@ pub fn argument_types(
         context_assets::ARGUMENT_TYPES,
         decision::ARGUMENT_TYPES,
         directory_decision::ARGUMENT_TYPES,
+        human_escalation::ARGUMENT_TYPES,
         image_vision::ARGUMENT_TYPES,
+        knowledge_files::ARGUMENT_TYPES,
         mode::ARGUMENT_TYPES,
         model_switcher::ARGUMENT_TYPES,
         orchestration::ARGUMENT_TYPES,
         prompt::ARGUMENT_TYPES,
         recall::ARGUMENT_TYPES,
+        reply_buttons::ARGUMENT_TYPES,
+        sandbox::ARGUMENT_TYPES,
         self_edit::ARGUMENT_TYPES,
         session::ARGUMENT_TYPES,
         task::ARGUMENT_TYPES,
@@ -497,6 +501,7 @@ pub fn argument_types(
         vault::ARGUMENT_TYPES,
         web_access::ARGUMENT_TYPES,
         webhooks::ARGUMENT_TYPES,
+        wiki::ARGUMENT_TYPES,
     ]
     .into_iter()
     .flatten()

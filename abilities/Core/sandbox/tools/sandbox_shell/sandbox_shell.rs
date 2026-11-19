@@ -1,12 +1,23 @@
 //! `sandbox_shell`: one `/bin/sh -c` command in the session's sandbox folder.
-use super::{only, text, timeout};
+use super::{text, timeout};
 use anyhow::Result;
+use serde::Deserialize;
 use serde_json::{json, Value};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ShellArgs {
+    command: String,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
 
 /// The worker request for `args` (`command`, optional `timeout_seconds`).
 pub(super) fn request(args: &Value) -> Result<Value> {
-    only(args, &["command", "timeout_seconds"])?;
-    Ok(json!({"command":text(args, "command")?,"timeout_seconds":timeout(args)?}))
+    let shell: ShellArgs = webagent_abilities::tool_arguments::read("sandbox_shell", args)?;
+    Ok(
+        json!({"command":text("command", &shell.command)?,"timeout_seconds":timeout(shell.timeout_seconds)?}),
+    )
 }
 
 #[cfg(test)]

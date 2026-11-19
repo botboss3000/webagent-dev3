@@ -42,6 +42,17 @@ pub const TOOLS: &[&str] = &[
     "sandbox_share",
 ];
 
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("sandbox_delete", delete::DeleteArgs),
+    webagent_abilities::argument_type!("sandbox_file", file::FileArgs),
+    webagent_abilities::argument_type!("sandbox_present", present::PresentArgs),
+    webagent_abilities::argument_type!("sandbox_python", python::PythonArgs),
+    webagent_abilities::argument_type!("sandbox_save", save::SaveArgs),
+    webagent_abilities::argument_type!("sandbox_share", share::ShareArgs),
+    webagent_abilities::argument_type!("sandbox_shell", shell::ShellArgs),
+];
+
 /// The worker request the root sends with `trusted.element_sync`, never a model tool.
 pub const ELEMENT_SYNC: &str = "sandbox_element";
 
@@ -222,22 +233,17 @@ async fn sync_saved(
 }
 
 /// An optional `timeout_seconds` argument, copied for the worker (which caps it).
-fn timeout(args: &Value) -> Result<Option<u64>> {
-    match args.get("timeout_seconds") {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .filter(|seconds| (1..=600).contains(seconds))
-            .map(Some)
-            .ok_or_else(|| anyhow!("timeout_seconds must be a whole number from 1 to 600")),
+fn timeout(seconds: Option<u64>) -> Result<Option<u64>> {
+    match seconds {
+        Some(seconds) if !(1..=600).contains(&seconds) => {
+            bail!("timeout_seconds must be a whole number from 1 to 600")
+        }
+        seconds => Ok(seconds),
     }
 }
 
-/// A required text argument `key` of at most `max` characters.
-fn short<'a>(args: &'a Value, key: &str, max: usize) -> Result<&'a str> {
-    let text = args[key]
-        .as_str()
-        .ok_or_else(|| anyhow!("{key} must be text"))?;
+/// Text argument `key` of at most `max` characters.
+fn short<'a>(key: &str, text: &'a str, max: usize) -> Result<&'a str> {
     if text.chars().count() > max {
         bail!("{key} must be at most {max} characters");
     }
@@ -245,17 +251,15 @@ fn short<'a>(args: &'a Value, key: &str, max: usize) -> Result<&'a str> {
 }
 
 /// The one text argument `key` of a command tool, 1 to 65536 bytes.
-fn text<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
-    let text = args[key]
-        .as_str()
-        .ok_or_else(|| anyhow!("{key} must be text"))?;
+fn text<'a>(key: &str, text: &'a str) -> Result<&'a str> {
     if text.is_empty() || text.len() > 65536 {
         bail!("{key} must be 1 to 65536 bytes");
     }
     Ok(text)
 }
 
-/// Refuses arguments outside `allowed`, as the tool's schema does.
+/// Refuses arguments outside `allowed`, as the tool's schema does (for `sandbox_elements`,
+/// which takes none).
 fn only(args: &Value, allowed: &[&str]) -> Result<()> {
     let object = args
         .as_object()

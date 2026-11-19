@@ -1,29 +1,37 @@
 //! `sandbox_file`: read, write, list or delete one path in the session's sandbox folder.
 //! The worker resolves the path beneath the folder without following any symlink.
-use super::only;
 use anyhow::{anyhow, bail, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 /// Largest `content` one write carries; it must fit the worker's 1 MiB request.
 const MAX_CONTENT: usize = 512 * 1024;
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileArgs {
+    action: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+}
+
 /// The worker request for `args` (`action`, `path`, `content` for a write).
 pub(super) fn request(args: &Value) -> Result<Value> {
-    only(args, &["action", "path", "content"])?;
-    let action = args["action"]
-        .as_str()
-        .ok_or_else(|| anyhow!("action must be read, write, list or delete"))?;
-    let path = match &args["path"] {
-        Value::Null => "",
-        Value::String(path) if path.len() <= 512 => path,
-        _ => bail!("path must be text of at most 512 bytes"),
-    };
+    let file: FileArgs = webagent_abilities::tool_arguments::read("sandbox_file", args)?;
+    let action = file.action.as_str();
+    let path = file.path.as_deref().unwrap_or("");
+    if path.len() > 512 {
+        bail!("path must be text of at most 512 bytes");
+    }
     match action {
         "list" => Ok(json!({"action":action,"path":path})),
         "read" | "delete" if !path.is_empty() => Ok(json!({"action":action,"path":path})),
         "write" if !path.is_empty() => {
-            let content = args["content"]
-                .as_str()
+            let content = file
+                .content
+                .as_deref()
                 .ok_or_else(|| anyhow!("write needs content as text"))?;
             if content.len() > MAX_CONTENT {
                 bail!("content must be at most 512 KiB per write");

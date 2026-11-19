@@ -3,8 +3,10 @@
 //! administrators change it, whatever an agent's tool policy allows.
 use crate::{Call, NativeHost};
 use anyhow::{anyhow, bail, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use webagent_abilities::tool_arguments::read;
 use webagent_access::Relationship;
 use webagent_host_core::{now, StoreCore};
 
@@ -54,6 +56,26 @@ pub const TOOLS: &[&str] = &[
     "wiki_restore",
     "wiki_backlinks",
 ];
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("wiki_backlinks", ArticleArgs),
+    webagent_abilities::argument_type!("wiki_create", wiki_create::CreateArgs),
+    webagent_abilities::argument_type!("wiki_delete", wiki_delete::DeleteArgs),
+    webagent_abilities::argument_type!("wiki_get", ArticleArgs),
+    webagent_abilities::argument_type!("wiki_get_revision", wiki_get_revision::RevisionArgs),
+    webagent_abilities::argument_type!("wiki_history", ArticleArgs),
+    webagent_abilities::argument_type!("wiki_list", wiki_list::ListArgs),
+    webagent_abilities::argument_type!("wiki_restore", wiki_restore::RestoreArgs),
+    webagent_abilities::argument_type!("wiki_search", wiki_search::SearchArgs),
+    webagent_abilities::argument_type!("wiki_set_status", wiki_set_status::StatusArgs),
+    webagent_abilities::argument_type!("wiki_update", wiki_update::UpdateArgs),
+];
+/// The arguments of the tools that read one article: `wiki_get`, `wiki_history`, `wiki_backlinks`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArticleArgs {
+    slug: String,
+}
 /// Whether operation `name` only reads.
 #[must_use]
 pub fn read_only(name: &str) -> bool {
@@ -76,41 +98,33 @@ fn valid_slug(slug: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
-fn slug_arg(args: &Value) -> Result<String> {
-    args["slug"]
-        .as_str()
+fn slug_arg(slug: &str) -> Result<String> {
+    Some(slug)
         .filter(|s| valid_slug(s))
         .map(str::to_owned)
         .ok_or_else(|| anyhow!("Invalid slug; use one from wiki_search or wiki_list"))
 }
-/// `args[key]` unless absent or null.
-fn given<'a>(args: &'a Value, key: &str) -> Option<&'a Value> {
-    args.get(key).filter(|v| !v.is_null())
+/// The slug of the one article `args` names.
+fn article_slug(name: &str, args: &Value) -> Result<String> {
+    slug_arg(&read::<ArticleArgs>(name, args)?.slug)
 }
-fn title_arg(value: &Value) -> Result<String> {
-    value
-        .as_str()
-        .map(str::trim)
+fn title_arg(value: &str) -> Result<String> {
+    Some(value.trim())
         .filter(|t| !t.is_empty() && t.len() <= 200 && !t.chars().any(char::is_control))
         .map(str::to_owned)
         .ok_or_else(|| anyhow!("Title must be 1 to 200 characters"))
 }
-fn body_arg(value: &Value) -> Result<String> {
-    let body = value.as_str().ok_or_else(|| anyhow!("Body must be text"))?;
+fn body_arg(body: &str) -> Result<String> {
     if body.len() > BODY_MAX_BYTES {
         bail!("Body must be at most 200 KiB");
     }
     Ok(body.to_owned())
 }
 /// A list of up to `max` trimmed, non-empty strings of up to `len` bytes.
-fn list_arg(value: &Value, max: usize, len: usize, label: &str) -> Result<Value> {
-    let items = value
-        .as_array()
-        .ok_or_else(|| anyhow!("{label} must be a list"))?;
+fn list_arg(items: &[String], max: usize, len: usize, label: &str) -> Result<Value> {
     let items: Vec<&str> = items
         .iter()
-        .filter_map(Value::as_str)
-        .map(str::trim)
+        .map(|t| t.trim())
         .filter(|t| !t.is_empty())
         .collect();
     if items.len() > max || items.iter().any(|t| t.len() > len) {
@@ -118,24 +132,22 @@ fn list_arg(value: &Value, max: usize, len: usize, label: &str) -> Result<Value>
     }
     Ok(json!(items))
 }
-fn tags_arg(value: &Value) -> Result<Value> {
+fn tags_arg(value: &[String]) -> Result<Value> {
     list_arg(value, 20, 40, "tags")
 }
-fn keywords_arg(value: &Value) -> Result<Value> {
+fn keywords_arg(value: &[String]) -> Result<Value> {
     list_arg(value, 30, 60, "keywords")
 }
-fn category_arg(value: &Value) -> Result<String> {
-    value
-        .as_str()
-        .map(str::trim)
+fn category_arg(value: &str) -> Result<String> {
+    Some(value.trim())
         .filter(|c| c.len() <= 60)
         .map(str::to_owned)
         .ok_or_else(|| anyhow!("Category must be up to 60 characters"))
 }
-fn status_arg(value: &Value) -> Result<&'static str> {
-    match value.as_str() {
-        Some("draft") => Ok("draft"),
-        Some("published") => Ok("published"),
+fn status_arg(value: &str) -> Result<&'static str> {
+    match value {
+        "draft" => Ok("draft"),
+        "published" => Ok("published"),
         _ => bail!("Status must be draft or published"),
     }
 }
@@ -242,7 +254,7 @@ pub async fn operate(
     let actor = viewer.actor;
     let output = match name {
         "wiki_search" => wiki_search::run(args, &visible)?,
-        "wiki_list" => wiki_list::run(args, &visible),
+        "wiki_list" => wiki_list::run(args, &visible)?,
         "wiki_get" => wiki_get::run(args, &visible)?,
         "wiki_backlinks" => wiki_backlinks::run(args, &visible)?,
         "wiki_history" | "wiki_get_revision" if !staff => {
@@ -252,33 +264,32 @@ pub async fn operate(
         "wiki_get_revision" => wiki_get_revision::run(store, args).await?,
         _ => {
             // Writes. A retried call finds its own pending_id and reports the saved result.
-            let slug = match name {
-                "wiki_create" => wiki_create::slug(args)?,
-                _ => slug_arg(args)?,
-            };
+            let write = Write::read(name, args)?;
+            let slug = write.slug()?;
             let current = stored(&slug);
             if let Some(done) = current.filter(|a| a["pending_id"] == pending_id) {
                 return Ok(json!({"status":"success","output":summary(done)}));
             }
             let live = current.filter(|a| a["deleted"] != true);
             let revision = current.and_then(|a| a["revision"].as_u64()).unwrap_or(0);
-            if name != "wiki_create" {
+            if let Some(expected) = write.expected_revision() {
                 if live.is_none() && name != "wiki_restore" {
                     bail!("Wiki article not found");
                 }
-                if args["expected_revision"].as_u64() != Some(revision) {
+                if expected != revision {
                     bail!("Wiki article changed; wiki_get it again before changing it");
                 }
             }
             let stamp = json!({"revision":revision + 1,"updated_by":actor,"updated_at":now(),"pending_id":pending_id});
-            let mut article = match name {
-                "wiki_create" => wiki_create::article(args, &slug, live, visible.len(), actor)?,
-                "wiki_update" => wiki_update::article(args, live)?,
-                "wiki_set_status" => wiki_set_status::article(args, live)?,
-                "wiki_restore" => wiki_restore::article(store, args, &slug).await?,
+            let mut article = match &write {
+                Write::Create(create) => {
+                    wiki_create::article(create, &slug, live, visible.len(), actor)?
+                }
+                Write::Update(update) => wiki_update::article(update, live)?,
+                Write::SetStatus(set) => wiki_set_status::article(set, live)?,
+                Write::Restore(restore) => wiki_restore::article(store, restore, &slug).await?,
                 // Delete keeps a tombstone so history survives and numbering continues.
-                "wiki_delete" => wiki_delete::article(&slug),
-                _ => bail!("Unknown Wiki tool"),
+                Write::Delete(_) => wiki_delete::article(&slug),
             };
             for (field, value) in stamp.as_object().into_iter().flatten() {
                 article[field] = value.clone();
@@ -293,6 +304,50 @@ pub async fn operate(
         }
     };
     Ok(json!({"status":"success","output":output}))
+}
+
+/// A write tool's checked arguments.
+enum Write {
+    Create(wiki_create::CreateArgs),
+    Update(wiki_update::UpdateArgs),
+    SetStatus(wiki_set_status::StatusArgs),
+    Restore(wiki_restore::RestoreArgs),
+    Delete(wiki_delete::DeleteArgs),
+}
+
+impl Write {
+    fn read(name: &str, args: &Value) -> Result<Self> {
+        Ok(match name {
+            "wiki_create" => Self::Create(read(name, args)?),
+            "wiki_update" => Self::Update(read(name, args)?),
+            "wiki_set_status" => Self::SetStatus(read(name, args)?),
+            "wiki_restore" => Self::Restore(read(name, args)?),
+            "wiki_delete" => Self::Delete(read(name, args)?),
+            _ => bail!("Unknown Wiki tool"),
+        })
+    }
+
+    /// The article's slug: from the title for a create, else the one given.
+    fn slug(&self) -> Result<String> {
+        match self {
+            Self::Create(create) => wiki_create::slug(&create.title),
+            Self::Update(update) => slug_arg(&update.slug),
+            Self::SetStatus(set) => slug_arg(&set.slug),
+            Self::Restore(restore) => slug_arg(&restore.slug),
+            Self::Delete(delete) => slug_arg(&delete.slug),
+        }
+    }
+
+    /// The revision the caller last saw; a create has none.
+    fn expected_revision(&self) -> Option<u64> {
+        match self {
+            Self::Create(_) => None,
+            Self::Update(update) => Some(update.expected_revision),
+            Self::SetStatus(set) => Some(set.expected_revision),
+            Self::Restore(restore) => Some(restore.expected_revision),
+            Self::Delete(delete) => Some(delete.expected_revision),
+        }
+    }
 }
 
 /// Visible article `slug`, if any.

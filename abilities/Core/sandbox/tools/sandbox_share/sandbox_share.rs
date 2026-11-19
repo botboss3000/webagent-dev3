@@ -1,16 +1,21 @@
 //! `sandbox_share` (operators only, by its `role_access`): share one of the operator's saved
 //! UI elements with every user of this agent, or stop sharing it.
-use super::{elements, only, short, Owner};
-use anyhow::{anyhow, Result};
+use super::{elements, short, Owner};
+use anyhow::Result;
+use serde::Deserialize;
 use serde_json::{json, Value};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ShareArgs {
+    name: String,
+    shared: bool,
+}
 
 /// The checked arguments: `name` and `shared` (true to share, false to stop).
 pub(super) fn check(args: &Value) -> Result<Value> {
-    only(args, &["name", "shared"])?;
-    let shared = args["shared"]
-        .as_bool()
-        .ok_or_else(|| anyhow!("shared must be true or false"))?;
-    Ok(json!({"name":short(args, "name", 40)?,"shared":shared}))
+    let share: ShareArgs = webagent_abilities::tool_arguments::read("sandbox_share", args)?;
+    Ok(json!({"name":short("name", &share.name, 40)?,"shared":share.shared}))
 }
 
 pub(super) fn run(

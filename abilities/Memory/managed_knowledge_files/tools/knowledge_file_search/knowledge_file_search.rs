@@ -1,8 +1,17 @@
 //! knowledge_file_search: rank knowledge files by query words with excerpts.
 use super::summary;
 use anyhow::Result;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use webagent_host_core::StoreCore;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SearchArgs {
+    query: String,
+    #[serde(default)]
+    limit: Option<u64>,
+}
 
 /// Score by how many distinct query words appear; excerpt around the first hit.
 fn search(files: &[Value], query: &str, limit: usize) -> Vec<Value> {
@@ -49,8 +58,10 @@ fn search(files: &[Value], query: &str, limit: usize) -> Vec<Value> {
     hits.into_iter().take(limit).map(|(_, hit)| hit).collect()
 }
 pub(super) async fn run(store: &StoreCore, args: &Value, prefix: &str) -> Result<Value> {
-    let limit = args["limit"].as_u64().unwrap_or(5).clamp(1, 10) as usize;
-    let output = json!({"results":search(&store.list(prefix).await?, args["query"].as_str().unwrap_or(""), limit),"authority":"operator_supplied_reference"});
+    let request: SearchArgs =
+        webagent_abilities::tool_arguments::read("knowledge_file_search", args)?;
+    let limit = request.limit.unwrap_or(5).clamp(1, 10) as usize;
+    let output = json!({"results":search(&store.list(prefix).await?, &request.query, limit),"authority":"operator_supplied_reference"});
     Ok(json!({"status":"success","output":output}))
 }
 

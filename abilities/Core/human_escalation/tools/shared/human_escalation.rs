@@ -27,6 +27,13 @@ pub const TOOLS: &[&str] = &[
     "staff_message_list",
     "staff_message_update",
 ];
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("request_human", request_human::HelpArgs),
+    webagent_abilities::argument_type!("staff_message_list", staff_message_list::ListArgs),
+    webagent_abilities::argument_type!("staff_message_send", staff_message_send::SendArgs),
+    webagent_abilities::argument_type!("staff_message_update", staff_message_update::UpdateArgs),
+];
 
 pub(crate) fn text(value: &str, limit: usize) -> Result<String> {
     let value = value.trim();

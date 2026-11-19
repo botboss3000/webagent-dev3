@@ -1,13 +1,28 @@
 //! wiki_create: slug from the title and the new article's fields.
-use super::{
-    body_arg, category_arg, given, keywords_arg, status_arg, tags_arg, title_arg, ARTICLE_LIMIT,
-};
+use super::{body_arg, category_arg, keywords_arg, status_arg, tags_arg, title_arg, ARTICLE_LIMIT};
 use anyhow::{bail, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use webagent_host_core::{digest, now};
 
-pub(super) fn slug(args: &Value) -> Result<String> {
-    let title = title_arg(&args["title"])?;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreateArgs {
+    pub(super) title: String,
+    body: String,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    keywords: Option<Vec<String>>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+/// The slug for `title`.
+pub(super) fn slug(title: &str) -> Result<String> {
+    let title = title_arg(title)?;
     let slug = slugify(&title);
     // Titles without ASCII words still get a stable slug.
     Ok(if slug.is_empty() {
@@ -18,7 +33,7 @@ pub(super) fn slug(args: &Value) -> Result<String> {
 }
 
 pub(super) fn article(
-    args: &Value,
+    args: &CreateArgs,
     slug: &str,
     live: Option<&Value>,
     visible: usize,
@@ -30,12 +45,12 @@ pub(super) fn article(
     if visible >= ARTICLE_LIMIT {
         bail!("Wiki article limit (1000) reached");
     }
-    let tags = given(args, "tags").map(tags_arg).transpose()?;
-    let keywords = given(args, "keywords").map(keywords_arg).transpose()?;
-    let category = given(args, "category").map(category_arg).transpose()?;
-    let status = given(args, "status").map(status_arg).transpose()?;
+    let tags = args.tags.as_deref().map(tags_arg).transpose()?;
+    let keywords = args.keywords.as_deref().map(keywords_arg).transpose()?;
+    let category = args.category.as_deref().map(category_arg).transpose()?;
+    let status = args.status.as_deref().map(status_arg).transpose()?;
     Ok(
-        json!({"slug":slug,"title":title_arg(&args["title"])?,"body":body_arg(&args["body"])?,
+        json!({"slug":slug,"title":title_arg(&args.title)?,"body":body_arg(&args.body)?,
         "tags":tags.unwrap_or_else(|| json!([])),"keywords":keywords.unwrap_or_else(|| json!([])),"category":category.unwrap_or_default(),
         "status":status.unwrap_or("draft"),"created_by":actor,"created_at":now()}),
     )

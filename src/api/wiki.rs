@@ -33,7 +33,13 @@ async fn run(
         staff: administrator,
         actor: user,
     };
-    let result = wiki::operate(&app.store, &viewer, name, args, pending_id)
+    // The request's own fields are not the operation's arguments, which refuse unknown ones.
+    let mut args = args.clone();
+    if let Some(fields) = args.as_object_mut() {
+        fields.remove("client_request_id");
+        fields.remove("action");
+    }
+    let result = wiki::operate(&app.store, &viewer, name, &args, pending_id)
         .await
         .map_err(failed)?;
     if result["status"] == "denied" {

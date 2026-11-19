@@ -2,6 +2,7 @@
 //! label as the user's own next message.
 use crate::{human_escalation::text, Call, NativeHost};
 use anyhow::{anyhow, bail, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use webagent_host_core::digest;
@@ -13,19 +14,27 @@ pub fn owns(name: &str) -> bool {
 }
 /// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &["offer_choices"];
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!(
+        "offer_choices",
+        ChoiceArgs
+    )];
 
-fn choices(id: &str, prompt: &str, options: &[Value]) -> Result<Value> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChoiceArgs {
+    prompt: String,
+    options: Vec<String>,
+}
+
+fn choices(id: &str, prompt: &str, options: &[String]) -> Result<Value> {
     if options.is_empty() || options.len() > 8 {
         bail!("Expected 1..8 options");
     }
     let mut clean = Vec::new();
     for (n, option) in options.iter().enumerate() {
-        let label = text(
-            option
-                .as_str()
-                .ok_or_else(|| anyhow!("Option must be text"))?,
-            80,
-        )?;
+        let label = text(option, 80)?;
         if label.is_empty() || label.contains('\n') {
             bail!("Option labels must be one non-empty line");
         }
@@ -50,14 +59,11 @@ pub async fn execute(
     if !owns(name) {
         bail!("Unknown reply buttons tool");
     }
+    let request: ChoiceArgs = webagent_abilities::tool_arguments::read(name, args)?;
     let (sid, pending) = (call.sid, call.pending_id);
     let run = host.authorize(call, name, args, &cancel).await?;
     let id = format!("choices-{}", &digest(&json!(pending))[..24]);
-    let spec = choices(
-        &id,
-        args["prompt"].as_str().unwrap_or(""),
-        args["options"].as_array().map(Vec::as_slice).unwrap_or(&[]),
-    )?;
+    let spec = choices(&id, &request.prompt, &request.options)?;
     // A session lists at most 64 components; keep headroom for other displays.
     if host.chat_components(host.store(), sid).await?.len() >= 48 {
         bail!("This conversation has too many choice cards; ask in text instead");
@@ -79,15 +85,15 @@ mod tests {
         let spec = choices(
             "choices-1",
             "Pick a time",
-            &[json!("10:00"), json!("11:30")],
+            &["10:00".into(), "11:30".into()],
         )
         .unwrap();
         assert_eq!(spec["id"], "choices-1");
         assert_eq!(spec["authority"], "user_reply");
         assert_eq!(spec["data"]["options"][1]["label"], "11:30");
         assert!(choices("c", "x", &[]).is_err());
-        assert!(choices("c", "x", &[json!("a\nb")]).is_err());
-        assert!(choices("c", "x", &vec![json!("a"); 9]).is_err());
+        assert!(choices("c", "x", &["a\nb".into()]).is_err());
+        assert!(choices("c", "x", &vec!["a".into(); 9]).is_err());
     }
     #[test]
     fn schemas_match_owned_tools() {

@@ -2,8 +2,19 @@
 use super::{file_id, summary};
 use crate::Call;
 use anyhow::{anyhow, bail, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use webagent_host_core::{digest, now, StoreCore};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SaveArgs {
+    name: String,
+    content: String,
+    expected_revision: u64,
+    #[serde(default)]
+    file_id: Option<String>,
+}
 
 const FILE_MAX_BYTES: usize = 200 * 1024;
 const FILE_LIMIT: usize = 100;
@@ -16,21 +27,16 @@ pub(super) async fn run(
     actor: &str,
     prefix: &str,
 ) -> Result<Value> {
-    let file_name = args["name"]
-        .as_str()
-        .map(str::trim)
+    let save: SaveArgs = webagent_abilities::tool_arguments::read("knowledge_file_save", args)?;
+    let file_name = Some(save.name.trim())
         .filter(|n| !n.is_empty() && n.len() <= 120 && !n.chars().any(char::is_control))
         .ok_or_else(|| anyhow!("Invalid file name"))?;
-    let content = args["content"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Content required"))?;
+    let content = save.content.as_str();
     if content.trim().is_empty() || content.len() > FILE_MAX_BYTES {
         bail!("Content must be 1 byte to 200 KiB of text");
     }
-    let expected = args["expected_revision"]
-        .as_u64()
-        .ok_or_else(|| anyhow!("Revision required"))?;
-    let id = match args.get("file_id").filter(|v| !v.is_null()) {
+    let expected = save.expected_revision;
+    let id = match &save.file_id {
         Some(value) => file_id(value)?,
         None => digest(&json!([agent, call.sid, call.run_id, call.pending_id]))[..24].to_owned(),
     };

@@ -1,25 +1,36 @@
 //! wiki_search: scored search over visible articles with alternate terms.
-use super::{excerpt, given, list_arg, summary};
+use super::{excerpt, list_arg, summary};
 use anyhow::Result;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SearchArgs {
+    query: String,
+    #[serde(default)]
+    also: Option<Vec<String>>,
+    #[serde(default)]
+    limit: Option<u64>,
+}
+
 pub(super) fn run(args: &Value, visible: &[&Value]) -> Result<Value> {
-    let limit = args["limit"].as_u64().unwrap_or(5).clamp(1, 10) as usize;
-    let also = given(args, "also")
+    let search_args: SearchArgs = webagent_abilities::tool_arguments::read("wiki_search", args)?;
+    let limit = search_args.limit.unwrap_or(5).clamp(1, 10) as usize;
+    let also = search_args
+        .also
+        .as_deref()
         .map(|v| list_arg(v, 8, 100, "alternate terms"))
         .transpose()?;
     // Alternate phrasings join the query; the caller supplies synonyms, not a model call.
     let query = also
         .iter()
         .flat_map(|v| v.as_array().into_iter().flatten())
-        .fold(
-            args["query"].as_str().unwrap_or("").to_owned(),
-            |mut query, term| {
-                query.push(' ');
-                query.push_str(term.as_str().unwrap_or(""));
-                query
-            },
-        );
+        .fold(search_args.query, |mut query, term| {
+            query.push(' ');
+            query.push_str(term.as_str().unwrap_or(""));
+            query
+        });
     Ok(json!({"results":search(visible, &query, limit)}))
 }
 

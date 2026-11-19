@@ -2,7 +2,14 @@
 use super::text;
 use crate::NativeHost;
 use anyhow::Result;
+use serde::Deserialize;
 use serde_json::{json, Value};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HelpArgs {
+    reason: String,
+}
 
 pub(super) async fn run(
     host: &dyn NativeHost,
@@ -17,7 +24,8 @@ pub(super) async fn run(
             json!({"status":"denied","output":"Human handoff is not enabled for this agent; offer to leave staff a message instead"}),
         );
     }
-    text(args["reason"].as_str().unwrap_or(""), 300)?;
+    let help: HelpArgs = webagent_abilities::tool_arguments::read("request_human", args)?;
+    text(&help.reason, 300)?;
     let owner = host.shared_chat_owner(sid, actor).await?;
     let owner = host.user_store(&owner).await?;
     let request = host

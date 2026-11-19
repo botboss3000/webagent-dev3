@@ -1,11 +1,11 @@
 //! wiki_history: an article's revisions, newest first.
-use super::{revision_id, slug_arg, summary, REVISIONS};
+use super::{article_slug, revision_id, summary, REVISIONS};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use webagent_host_core::StoreCore;
 
 pub(super) async fn run(store: &StoreCore, args: &Value, all: &[Value]) -> Result<Value> {
-    let slug = slug_arg(args)?;
+    let slug = article_slug("wiki_history", args)?;
     let mut revisions = store.list(&format!("{REVISIONS}{slug}:")).await?;
     if revisions.is_empty() {
         bail!("Wiki article not found");

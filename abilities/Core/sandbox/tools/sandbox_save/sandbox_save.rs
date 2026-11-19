@@ -2,21 +2,32 @@
 //! for the user, kept across all their conversations with the agent. The tool needs
 //! approval, so it follows the session's execution mode: in Ask the user approves it in the
 //! chat, in Auto it runs.
-use super::{elements, only, short, Owner};
+use super::{elements, short, Owner};
 use anyhow::{bail, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SaveArgs {
+    folder: String,
+    name: String,
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
+}
 
 /// The checked arguments: `folder` (in the sandbox), `name`, `title`, `description`.
 pub(super) fn check(args: &Value) -> Result<Value> {
-    only(args, &["folder", "name", "title", "description"])?;
-    let folder = short(args, "folder", 200)?;
-    let name = short(args, "name", 40)?;
+    let save: SaveArgs = webagent_abilities::tool_arguments::read("sandbox_save", args)?;
+    let folder = short("folder", &save.folder, 200)?;
+    let name = short("name", &save.name, 40)?;
     if !elements::name_ok(name) {
         bail!("name must be 1-40 lowercase letters, digits, - or _");
     }
     Ok(
-        json!({"folder":folder,"name":name,"title":short(args, "title", 80)?,
-        "description":args["description"].as_str().unwrap_or("")}),
+        json!({"folder":folder,"name":name,"title":short("title", &save.title, 80)?,
+        "description":save.description.as_deref().unwrap_or("")}),
     )
 }
 

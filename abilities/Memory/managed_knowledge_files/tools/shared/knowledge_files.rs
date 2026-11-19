@@ -29,10 +29,16 @@ pub const TOOLS: &[&str] = &[
     "knowledge_file_save",
     "knowledge_file_delete",
 ];
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("knowledge_file_delete", knowledge_file_delete::DeleteArgs),
+    webagent_abilities::argument_type!("knowledge_file_get", knowledge_file_get::GetArgs),
+    webagent_abilities::argument_type!("knowledge_file_save", knowledge_file_save::SaveArgs),
+    webagent_abilities::argument_type!("knowledge_file_search", knowledge_file_search::SearchArgs),
+];
 
-fn file_id(value: &Value) -> Result<String> {
-    value
-        .as_str()
+fn file_id(value: &str) -> Result<String> {
+    Some(value)
         .filter(|v| !v.is_empty() && v.len() <= 64 && v.bytes().all(|b| b.is_ascii_hexdigit()))
         .map(str::to_owned)
         .ok_or_else(|| anyhow!("Invalid file ID"))
