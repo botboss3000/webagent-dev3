@@ -452,7 +452,8 @@ async fn dashboard_requests_are_checked_before_the_broker() {
         404
     );
     host.broker_reply = |_, _| json!({"status":"success","output":{"jobs":[]}});
-    assert_eq!(dashboard::list(&host).await.unwrap(), json!({"jobs":[]}));
+    // `board` depends on whether a board service runs here, so only the broker part is fixed.
+    assert_eq!(dashboard::list(&host).await.unwrap()["jobs"], json!([]));
     let sent = host.sent();
     assert_eq!(
         sent.last().unwrap().trusted.as_ref().unwrap()["session_id"],

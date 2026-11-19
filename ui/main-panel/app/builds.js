@@ -232,6 +232,22 @@ export function mountBuilds(panel, onStatus = () => {}) {
   leftoverSummary.append(leftoverTitle, leftoverCount, leftoverChevron);
   leftovers.append(leftoverSummary, leftoverList);
   leftovers.hidden = true;
+  // Blocker-board notes sessions left on each other's tasks; hidden when there are none.
+  const board = document.createElement('details');
+  board.className = 'build-retained';
+  board.setAttribute('aria-label', 'Board notes');
+  const boardSummary = document.createElement('summary');
+  boardSummary.className = 'build-retained-summary';
+  const boardTitle = document.createElement('h3');
+  boardTitle.textContent = 'Board notes';
+  const boardCount = document.createElement('span');
+  boardCount.className = 'build-retained-count';
+  const boardChevron = leftoverChevron.cloneNode(true);
+  const boardList = document.createElement('div');
+  boardList.className = 'build-retained-list';
+  boardSummary.append(boardTitle, boardCount, boardChevron);
+  board.append(boardSummary, boardList);
+  board.hidden = true;
   const reviewed = new Set();
   const reviewErrors = new Map();
   const synchronization = document.createElement('div');
@@ -248,7 +264,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
   // The three secondary sections share one bordered list of identical disclosure rows.
   const more = document.createElement('div');
   more.className = 'bq-more';
-  more.append(...scheduler.root.querySelectorAll(':scope > details.build-retained'), leftovers);
+  more.append(...scheduler.root.querySelectorAll(':scope > details.build-retained'), board, leftovers);
   panel.append(toolbar, resources, status, synchronization, list, scheduler.root, more);
 
   // Draws the scheduler mode, free memory, reserve, pressure and disk use as small tiles at the top.
@@ -811,6 +827,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       }
       leftoverList.append(card);
     }
+    renderBoard(snapshot.board);
     showSynchronization(synchronization, snapshot.synchronization);
     const jobs = snapshot.jobs;
     const groups = groupTasks(jobs);
@@ -949,6 +966,32 @@ export function mountBuilds(panel, onStatus = () => {}) {
       list.append(node);
     });
     void loadDetails(groups);
+  }
+  // Each open note: its text, then which task it is on, who left it and when.
+  function renderBoard(feed) {
+    const notes = Array.isArray(feed?.notes) ? feed.notes : [];
+    boardList.replaceChildren();
+    board.hidden = !notes.length;
+    boardCount.textContent = String(notes.length + (feed?.more || 0));
+    for (const note of [...notes].reverse()) {
+      const card = document.createElement('article');
+      card.className = 'build-retained-notice';
+      const text = document.createElement('p');
+      text.textContent = note.text;
+      const detail = document.createElement('p');
+      const from = note.from_task ? ' from ' + note.from_task : '';
+      const who = note.author + (note.session ? ' (' + note.session + ')' : '');
+      const when = Number.isFinite(note.at) ? new Date(note.at * 1000).toLocaleString() : '';
+      detail.textContent = 'On ' + note.to_task + from + ' · ' + who + (note.verified ? '' : ' · unverified') +
+        (when ? ' · ' + when : '');
+      card.append(text, detail);
+      boardList.append(card);
+    }
+    if (feed?.more) {
+      const rest = document.createElement('p');
+      rest.textContent = feed.more + ' older notes not shown.';
+      boardList.append(rest);
+    }
   }
   async function load() {
     if (loading || stopped || document.hidden) return;

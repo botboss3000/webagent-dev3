@@ -54,9 +54,20 @@ fn job_not_found(value: &Value) -> Option<ApiError> {
         .then(|| ApiError(StatusCode::NOT_FOUND, "Build job not found".into()))
 }
 
-/// Jobs, tasks and source status.
+/// Jobs, tasks and source status, with the open blocker-board notes (null when the board is
+/// unreachable, so the page still shows the builds).
 pub async fn list(host: &dyn AdministrationHost) -> Result<Value, ApiError> {
-    broker(host, "v3_build_dashboard", json!({})).await
+    let mut value = broker(host, "v3_build_dashboard", json!({})).await?;
+    let request = json!({"action":"list","user":host.actor(),"limit":50});
+    let notes = crate::tools::board_call(&request)
+        .await
+        .ok()
+        .filter(|reply| reply["status"] == "success")
+        .map(|reply| reply["output"].clone());
+    if let Some(object) = value.as_object_mut() {
+        object.insert("board".into(), notes.unwrap_or(Value::Null));
+    }
+    Ok(value)
 }
 
 /// Mark one retained-work notice reviewed.
