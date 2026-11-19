@@ -1,0 +1,173 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Manage Account tab ── */
+  #tab-account {
+    overflow-y: auto;
+    /* Matches the centered 760px / 5px-inset Agents configuration content shell. */
+    padding: 24px 5px 48px;
+  }
+.account-tab-wrap {
+    width: 100%;
+    max-width: 760px;
+    min-width: 0;
+    box-sizing: border-box;
+    margin: 0 auto;
+  }
+.account-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: var(--border-width) solid var(--border);
+  }
+.account-header-id {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+.account-header-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--fg-1);
+  }
+.account-header-email {
+    font-size: 13px;
+    color: var(--fg-3);
+    margin-top: 4px;
+  }
+.account-section {
+    background: var(--bg-elev);
+    border: var(--border-width) solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+.account-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--brand);
+    margin: 0 0 12px;
+  }
+.account-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+.account-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-2);
+  }
+.account-field input {
+    padding: 8px 10px;
+    background: var(--bg-0);
+    border: var(--border-width) solid var(--border);
+    border-radius: 6px;
+    color: var(--fg-1);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+  }
+.account-field input:focus {
+    border-color: var(--brand);
+  }
+.account-field select {
+    padding: 8px 10px;
+    background: var(--bg-0);
+    border: var(--border-width) solid var(--border);
+    border-radius: 6px;
+    color: var(--fg-1);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+  }
+.account-field select:focus {
+    border-color: var(--brand);
+  }
+.account-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+.account-btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: var(--border-width) solid var(--border);
+    background: var(--bg-tint);
+    color: var(--fg-1);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+.account-btn:hover {
+    background: var(--bg-tint-2);
+    border-color: var(--brand);
+  }
+.account-btn-primary {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: var(--bg-0);
+    font-weight: 700;
+  }
+.account-btn-primary:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+.account-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+.account-status {
+    font-size: 12px;
+    color: var(--fg-2);
+  }
+.account-pref-desc {
+    font-size: 11px;
+    color: var(--fg-3);
+    line-height: 1.4;
+  }
+body.light-mode .account-pref-desc { color: var(--fg-3); }
+/* Light-mode for Manage Account tab */
+  body.light-mode .account-header { border-bottom-color: var(--border); }
+body.light-mode .account-header-name { color: var(--fg-1); }
+body.light-mode .account-header-email { color: var(--fg-3); }
+body.light-mode .account-section {
+    background: var(--bg-elev-2);
+    border-color: var(--border);
+  }
+body.light-mode .account-section-title { color: var(--brand); }
+body.light-mode .account-field label { color: var(--fg-2); }
+body.light-mode .account-field input {
+    background: var(--bg-0);
+    border-color: var(--border);
+    color: var(--fg-1);
+  }
+body.light-mode .account-field input:focus { border-color: var(--brand); }
+body.light-mode .account-field select {
+    background: var(--bg-0);
+    border-color: var(--border);
+    color: var(--fg-1);
+  }
+body.light-mode .account-field select:focus { border-color: var(--brand); }
+body.light-mode .account-btn {
+    background: var(--bg-elev);
+    border-color: var(--border);
+    color: var(--fg-1);
+  }
+body.light-mode .account-btn:hover {
+    background: var(--bg-tint-2);
+    border-color: var(--brand);
+  }
+body.light-mode .account-btn-primary {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: var(--bg-0);
+  }
+body.light-mode .account-status { color: var(--fg-2); }

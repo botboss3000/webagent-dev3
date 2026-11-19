@@ -1,0 +1,992 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Mobile keyboard: clear the bottom clutter off a focused field */
+/* Floating provider dropdown */
+.ac-model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: 0 0 6px 6px;
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(var(--shadow-rgb), 0.4);
+}
+/* Persistent Model Name catalog: one normal-flow control containing the
+   capability filters, search row, and scrollable catalog. Provider remains a
+   separate popover combobox. */
+.ac-model-catalog-control {
+  overflow: hidden;
+  background: var(--bg-base, var(--bg-0));
+  border: var(--border-width) solid var(--border);
+  border-radius: 6px;
+  transition: border-color 0.15s;
+}
+.ac-model-catalog-control:focus-within { border-color: var(--accent); }
+.ac-model-catalog-control .ac-model-search-field {
+  border-bottom: var(--border-width) solid var(--border);
+}
+.ac-model-catalog-control .ac-model-search-field > .ac-input {
+  padding-right: 12px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+/* The results remain a normal-flow, three-row internal scroller, but no longer
+   draw a second card around themselves. */
+.ac-model-results-panel {
+  margin-top: 0;
+  height: 216px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.ac-model-results-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.ac-model-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--fg-1, var(--fg-1));
+}
+.ac-model-item:hover { background: rgba(var(--brand-rgb),0.08); }
+.ac-model-item-row { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
+.ac-model-item-badges { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.ac-model-item-caps { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+/* Context / cost badges (model rows + selected-model panel) */
+.ac-model-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--fg-2);
+  background: var(--bg-base, var(--bg-0));
+  border: var(--border-width) solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.ac-model-meta-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+/* ── MODEL-META-LINES ───────────────────────────────────────────────────────
+   ONE label/value format for every field in the expanded saved-model detail.
+   The identity trio rendered by model-table.js (Actual model / Provider / Auth)
+   is the REFERENCE for that format: a muted grey label plus the detail in the
+   bright tone. Specs (context / max output / price), token usage + cost,
+   capabilities and the editable Display name all use these same classes, so a
+   new field can never grow its own look. model-table.js builds the rows with
+   metaLine()/metaValue(); keep the two in sync when adding a field. ───────── */
+.ac-model-meta-list { margin-top: 8px; display: grid; gap: 2px; }
+.ac-model-meta-line { font-size: 12px; line-height: 1.5; color: var(--fg-3); }
+.ac-model-meta-k { color: var(--fg-3); }
+.ac-model-meta-v { color: var(--fg-2); font-weight: 700; }
+.ac-model-meta-v.is-off { color: var(--fg-3); font-weight: 400; }
+.ac-model-meta-sep { color: var(--fg-3); }
+/* Display name is the single EDITABLE row: the value rests as plain text and only
+   underlines on hover/focus, so it reads as a field without shouting. */
+.ac-model-meta-editable { cursor: pointer; border-bottom: 1px dashed transparent; }
+.ac-model-meta-editable:hover,
+.ac-model-meta-editable:focus-visible { border-bottom-color: var(--fg-3); outline: none; }
+.ac-model-meta-edit-input { min-width: 200px; max-width: 100%; padding: 1px 6px; font-size: 12px; font-weight: 700; }
+/* MODEL-PRICE-EDIT: the reference-price editor holds a PAIR of rates (in / out), so it
+   lays out as one inline group inside the Price line instead of a single wide input;
+   it overrides that input's 200px floor so both rates fit on the line. The price note
+   marks a catalog row's credit figure as the app admin's, not the reader's. */
+.ac-model-meta-edit-group { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ac-model-meta-edit-group .ac-model-meta-edit-input { min-width: 0; width: 84px; }
+.ac-model-meta-edit-field { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-3); }
+.ac-model-meta-edit-note { font-size: 11px; font-style: italic; color: var(--fg-3); }
+.ac-model-price-note { margin-left: 8px; font-size: 11px; color: var(--fg-3); }
+/* DEFAULT-FOR-NEW-AGENTS (grep MODEL-DEFAULT-ACCOUNT): a labelled checkbox on
+   its own meta line directly under Display name. Tokens only, dark + light safe. */
+.ac-model-default-choice { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--fg-2); }
+.ac-model-default-choice input { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+/* ── MODEL-ANALYTICS ───────────────────────────────────────────────────────
+   Standalone Models-page comparison chart, mounted as a sibling immediately
+   before #ac-model-host. This stays outside MODEL-TABLE by design. */
+.ac-model-analytics {
+  margin: 14px 0;
+  padding: 16px;
+  border: var(--border-width) solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-1);
+}
+.ac-model-analytics-head { position: relative; display: flex; justify-content: flex-end; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+/* MODEL-FOCUS-NOTE: the transient "no usage yet" note the chart raises when the row
+   the user opened names a model it cannot plot. Absolutely positioned inside the
+   header, whose left side is empty (its controls sit right), so showing and hiding it
+   never reflows the chart. It fades out after 2s, or on click. */
+.ac-model-analytics-note {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  margin: 0;
+  padding: 4px 10px;
+  border: var(--border-width) solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-2, var(--bg-1));
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease;
+}
+.ac-model-analytics-note.on { opacity: 1; visibility: visible; }
+.ac-model-analytics-head h3 { margin: 0; font-size: 15px; color: var(--fg-1); }
+.ac-model-analytics-head p { margin: 3px 0 0; font-size: 12px; color: var(--fg-3); }
+.ac-model-analytics-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ac-model-analytics-toggle { display: inline-flex; gap: 3px; padding: 2px; border: var(--border-width) solid var(--border); border-radius: 7px; background: var(--bg-0); }
+.ac-model-analytics-chart { margin-top: 4px; min-height: 38px; }
+.ac-model-analytics-svg { display: block; width: 100%; height: auto; min-height: 190px; overflow: visible; }
+/* The y axis was removed from the chart, so no grid line rule remains here. */
+.ac-model-analytics-axis { fill: var(--fg-3); font-size: 10px; }
+.ac-model-analytics-legend-item { display: inline-flex; align-items: center; gap: 5px; max-width: 200px; padding: 0; overflow: hidden; border: 0; background: transparent; color: var(--fg-2); font: inherit; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ac-model-analytics-legend-item:hover { color: var(--accent); }
+.ac-model-analytics-popover { position: fixed; inset: auto; width: min(290px, calc(100vw - 32px)); margin: 0; padding: 14px; border: var(--border-width) solid var(--border-strong); border-radius: 10px; background: var(--bg-1); color: var(--fg-1); box-shadow: 0 14px 36px rgba(0, 0, 0, .2); }
+.ac-model-analytics-popover::backdrop { background: rgba(0, 0, 0, .18); }
+.ac-model-analytics-popover label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; }
+.ac-model-analytics-popover small { display: block; margin-top: 7px; color: var(--fg-3); font-size: 11px; }
+.ac-model-analytics-popover [data-model-analytics-models] { display: grid; gap: 7px; max-height: 260px; margin-top: 9px; overflow: auto; }
+.ac-model-analytics-popover [data-model-analytics-models] label { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; font-weight: 500; }
+.ac-model-analytics-model-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* SHARED-DELETE-CONTROL: model history clear uses the shared two-click state machine. */
+.ac-model-analytics-history-clear { display: inline-grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--fg-3); cursor: pointer; }
+.ac-model-analytics-history-clear svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ac-model-analytics-history-clear:hover { background: rgba(var(--danger-rgb, 220, 38, 38), .10); color: var(--danger, #dc2626); }
+.ac-model-analytics-history-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ac-model-analytics-history-clear.warning { color: var(--danger, #dc2626); background: rgba(var(--danger-rgb, 220, 38, 38), .12); }
+.ac-model-analytics-history-clear.deleting { color: var(--danger, #dc2626); cursor: wait; }
+.ac-model-analytics-bar { transition: opacity .15s ease; }
+.ac-model-analytics-bar:hover { opacity: .72; }
+.ac-model-analytics-legend { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 5px; font-size: 11px; color: var(--fg-2); }
+.ac-model-analytics-legend span { display: inline-flex; align-items: center; gap: 5px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-model-analytics-legend i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
+/* ── MODEL-ANALYTICS CHART MENU ─────────────────────────────────────────────
+   Metric / stacking / grouping live behind the top-right kebab so the header
+   stays quiet. The order inside the panel is fixed — metric, divider, stacked
+   checkbox, divider, group-by. Keep it in sync with model-analytics.js. */
+.ac-model-analytics-more { display: inline-grid; width: 28px; height: 28px; place-items: center; padding: 0; border: var(--border-width) solid var(--border); border-radius: 7px; background: var(--bg-0); color: var(--fg-2); cursor: pointer; }
+.ac-model-analytics-more svg { width: 15px; height: 15px; fill: currentColor; }
+.ac-model-analytics-more:hover { border-color: var(--accent); color: var(--accent); }
+.ac-model-analytics-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ac-model-analytics-menu-group { display: grid; gap: 7px; }
+.ac-model-analytics-menu-label { color: var(--fg-3); font-size: 11px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.ac-model-analytics-sep { height: 0; margin: 11px 0; border: 0; border-top: var(--border-width) solid var(--border); }
+/* The popover's generic `label` rule lays out a grid; a checkbox needs one row. */
+.ac-model-analytics-popover .ac-model-analytics-check { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 650; }
+.ac-model-analytics-check input { margin: 0; }
+/* Sessions mode replaces the legend with a count, not a list of 155 names. */
+.ac-model-analytics-legend-count { display: block; color: var(--fg-2); font-size: 12px; font-weight: 650; }
+/* Keep the trend path available for hover-node geometry, but hide its bar-top
+   overlay. Opacity preserves SVG length measurements used by the glowing node. */
+.ac-model-analytics-trend { opacity: 0; fill: none; stroke-width: 2; stroke-dasharray: 6 4; stroke-linecap: round; pointer-events: none; }
+/* The sessions tooltip is deliberately capped, so say so instead of looking cut off. */
+.ac-model-analytics-tip-note { margin-top: 4px; padding-top: 4px; border-top: var(--border-width) solid var(--border); color: var(--fg-3); font-size: 11px; font-weight: 650; }
+.ac-model-analytics-empty { margin: 13px 0; font-size: 12px; color: var(--fg-3); }
+/* Dashboard-style chart interaction layer: the overlay stays inside the SVG plot area. */
+.ac-model-analytics-plot { position: relative; }
+.ac-model-analytics-hover-layer { position: absolute; z-index: 2; cursor: crosshair; touch-action: none; }
+.ac-model-analytics-cross { position: absolute; top: 0; width: 1px; background: var(--accent); opacity: .8; pointer-events: none; }
+/* The locator's intersection with the curve: a glowing node that glides along the
+   curve. It is placed by evaluating the same spline the trend path is drawn from, so
+   it sits exactly on the line wherever the pointer goes. Its colour comes from the
+   line it is riding (--node-color), so node and curve read as one thing. */
+.ac-model-analytics-node { position: absolute; z-index: 3; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: radial-gradient(circle at 50% 50%, var(--node-color, var(--accent)) 0 52%, transparent 96%); box-shadow: 0 0 4px var(--node-color, var(--accent)), 0 0 10px 1px var(--node-color, var(--accent)); pointer-events: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ac-model-analytics-node { animation: ac-model-analytics-node-glow 2.4s ease-in-out infinite; }
+}
+/* The charge: a lit streak that travels the curve with the node, in that line's own
+   colour. Two stacked strokes — a wide soft halo behind a narrow core — give the glow
+   without an SVG filter, which would need re-rasterising on every pointer move. It
+   stays parked as a zero-length dash until the node picks a line to ride. */
+.ac-model-analytics-charge-glow,
+.ac-model-analytics-charge { fill: none; stroke: currentColor; stroke-dasharray: 0 100000; stroke-linecap: round; pointer-events: none; }
+.ac-model-analytics-charge-glow { stroke-width: 9; opacity: .18; }
+.ac-model-analytics-charge { stroke-width: 3.5; opacity: .9; }
+.ac-model-analytics-zoombox { position: absolute; top: 0; bottom: 0; border: 1px solid var(--accent); background: rgba(var(--brand-rgb), .14); pointer-events: none; }
+/* TIP-PINNED-PANEL: the info panel is pinned to the plot's top-left corner and stays
+   put, instead of chasing the pointer. A panel this tall can never reliably dodge a
+   trend curve that spans most of a short plot, so it stops trying: it parks in the
+   corner and is always readable. `pointer-events: none` keeps the chart beneath it
+   fully interactive, so hovering through the panel still focuses the days. */
+.ac-model-analytics-tip { position: absolute; z-index: 3; top: 8px; left: 8px; min-width: 168px; max-width: min(250px, calc(50% - 16px)); padding: 9px 10px; border: var(--border-width) solid var(--border-strong); border-radius: 8px; background: var(--bg-1); box-shadow: 0 8px 20px rgba(0, 0, 0, .18); color: var(--fg-1); font-size: 11px; line-height: 1.35; pointer-events: none; }
+.ac-model-analytics-tip-date { margin-bottom: 5px; color: var(--fg-2); font-weight: 700; }
+.ac-model-analytics-tip-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.ac-model-analytics-tip-row i { width: 8px; height: 8px; border-radius: 50%; }
+.ac-model-analytics-tip-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-model-analytics-tip-row b { font-variant-numeric: tabular-nums; }
+/* The Total row has no colour swatch, so its label starts in the label column. */
+.ac-model-analytics-tip-row.ac-model-analytics-tip-total { margin-top: 4px; padding-top: 4px; border-top: var(--border-width) solid var(--border); color: var(--fg-1); font-weight: 700; }
+/* Reset-range sits in the header to the LEFT of the chart menu and is only shown
+   while a range is selected, so the header stays quiet otherwise. */
+.ac-model-analytics-reset-range { display: inline-grid; width: 28px; height: 28px; place-items: center; padding: 0; border: var(--border-width) solid var(--border); border-radius: 7px; background: var(--bg-0); color: var(--accent); cursor: pointer; }
+/* `display: inline-grid` above would defeat the hidden attribute without this. */
+.ac-model-analytics-reset-range[hidden] { display: none; }
+/* Range zoom is confined to the band under the plot, so a drag inside the graph
+   can never reshape the axis. It sits above the date labels it covers. */
+.ac-model-analytics-axis-band { position: absolute; z-index: 3; cursor: ew-resize; touch-action: none; }
+.ac-model-analytics-reset-range svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ac-model-analytics-reset-range:hover { border-color: var(--accent); background: rgba(var(--brand-rgb), .09); }
+.ac-model-analytics-reset-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 650px) {
+  .ac-model-analytics { padding: 12px; }
+  /* The header holds only the kebab now, so keep it hard against the right edge. */
+  .ac-model-analytics-controls { width: 100%; justify-content: flex-end; }
+  .ac-model-analytics-svg { min-height: 160px; }
+  /* Keep the pinned hover panel from obscuring the shorter phone plot. */
+  .ac-model-analytics-tip { min-width: 148px; padding: 5px 6px; font-size: 10px; line-height: 1.25; }
+  .ac-model-analytics-tip-date { margin-bottom: 3px; }
+  .ac-model-analytics-tip-row { grid-template-columns: 6px minmax(0, 1fr) auto; gap: 4px; }
+  .ac-model-analytics-tip-row i { width: 6px; height: 6px; }
+  .ac-model-analytics-tip-row.ac-model-analytics-tip-total { margin-top: 3px; padding-top: 3px; }
+  .ac-model-analytics-tip-note { margin-top: 3px; padding-top: 3px; font-size: 10px; }
+}
+/* ══ Models — configurator table (4 rows, each field auto-saves) ══════════════
+   A flush `.ac-list` table where each row is a label + its input/select on the
+   right, plus the shared green auto-save check. overflow:visible so the model
+   search dropdown can escape the table. */
+.ac-list.ac-model-config { overflow: visible; }
+/* beat .ac-list's overflow:hidden */
+/* First/last child round the table corners — the last row may now be an injected
+   saved-model `.ac-row` wrapper, so match any element, not just `.ac-ability-row`. */
+.ac-model-config > :first-child { border-top-left-radius: 9px; border-top-right-radius: 9px; }
+.ac-model-config > :last-child { border-bottom-left-radius: 9px; border-bottom-right-radius: 9px; }
+.ac-model-cfg-row { align-items: center; padding-top: 4px; padding-bottom: 4px; }
+/* display:block opts this label OUT of the shared `display:contents` stacked-row
+   promotion — here the label is a fixed-width form column, not a title+desc. */
+.ac-model-cfg-row > .ac-ability-label { display: block; flex: 0 0 116px; }
+.ac-model-cfg-control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  position: relative;   /* anchor for the overlaid auto-save check */
+}
+.ac-model-cfg-control > .ac-input { flex: 1; min-width: 0; }
+/* The Provider field is a combobox wrapper rather than a bare input, so it needs
+   the same fill as `.ac-input` above. Its native <select> is retained only as the
+   hidden store of options (see the Provider row in model-table.js) and never
+   renders — the visible field is the input + chevron inside `.ac-model-search-field`. */
+.ac-model-cfg-control > .ac-model-search-field { flex: 1; min-width: 0; }
+.ac-model-provider-native { display: none; }
+.ac-subscription-auth {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ac-subscription-auth:empty { display: none; }
+.ac-model-search-wrap { position: relative; flex: 1; min-width: 0; }
+/* Positioning context for the in-field chevron. It must be the INPUT's own
+   container: the wrap above also carries the capability chips, so a chevron
+   anchored to the wrap centres on the chips and strands itself at the field's
+   top edge instead of inside the field. */
+.ac-model-search-field { position: relative; display: block; }
+.ac-model-search-field > .ac-input { width: 100%; padding-right: 32px; }
+/* The clickable chevron occupies the right corner where WebKit draws its native
+   search reset, and the model bar already ships a Clear button — so drop the
+   native one rather than leaving a dead control under the arrow. Same rule as the
+   chat launcher applies in search mode. */
+.ac-model-search-field > .ac-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+/* In-field dropdown arrow for the Provider and Model name rows. It is the SAME
+   glyph the prompt-injection rows below use (grep CHEVRON-CONSISTENCY) — the
+   16px / 1.8-stroke row chevron — rendered in the same muted ink, so every
+   chevron on this subpage matches. The glyph itself is rotated 90° below so a
+   right-pointing row chevron reads as a chevron-DOWN in the field. Centred on
+   the input; the rotation lives on the SVG, so this wrapper's centring
+   transform is untouched. It takes the pointer so it can show the click
+   cursor; the press itself is forwarded to the input in JS, which is what
+   opens the menu. */
+.ac-model-search-chevron {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted, var(--fg-3));
+  cursor: pointer;
+  z-index: 2;
+}
+.ac-model-search-chevron svg {
+  display: block;
+  transform: rotate(90deg);
+}
+/* The advanced "Reset Usage Counters" row is built from the shared Lucide icon
+   set, whose default 2px stroke is a hair heavier than the 1.8px row chevron
+   the rest of this subpage uses (grep CHEVRON-CONSISTENCY). Normalise it so
+   every chevron in the models subpage is the same glyph at the same weight. */
+.ac-model-config .ac-row-chevron svg {
+  stroke-width: 1.8;
+}
+/* Model catalog CAPABILITY filters (Text / Vision / Image / Voice / Video) are
+   deliberately shared by the global and per-agent model tables through
+   model-table.js. They filter by capability, never by roster role. */
+.ac-model-cap-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.ac-model-cap-filter {
+  appearance: none;
+  background: var(--bg-1);
+  border: var(--border-width) solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-3);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.3;
+  padding: 3px 7px;
+}
+.ac-model-cap-filter:hover { border-color: var(--accent); color: var(--accent); }
+.ac-model-cap-filter.active {
+  background: rgba(var(--brand-rgb), 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ac-model-cap-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Config / settings control slot (SHARED) */
+/* The transient auto-save check OVERLAYS the control's right edge rather than
+   reserving layout width — so the Provider / Base URL / API Key inputs and the
+   Add / Clear buttons all reach the same full-width right edge as the model
+   field above them, instead of stopping short by the check's old slot. It only
+   appears briefly after a save, so the overlap is momentary. */
+.ac-model-cfg-control > .agents-autosave-check {
+  position: absolute;
+  right: 6px;
+  top: 0;
+  bottom: 0;
+  margin: auto 0;
+  flex: none;
+  pointer-events: none;
+}
+/* ── Model row — the model field sits full-width on top; a wrapping bar below
+   holds the detected caps on the LEFT and Add / Clear on the RIGHT. No divider
+   above the field: the field + bar read as one "add a model" composer. The bar
+   wraps so caps + buttons are inline when wide and stack when narrow. ── */
+.ac-model-config > .ac-model-cfg-model { border-top: none; }
+.ac-model-cfg-model > .ac-ability-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ac-model-cfg-model .ac-model-search-wrap { width: 100%; flex: none; }
+.ac-model-cfg-modelbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ac-model-cfg-modelbar > .ac-model-caps { flex: 1 1 auto; margin: 0; }
+.ac-model-cfg-modelbar > .ac-model-add-control { margin-left: auto; flex: 0 0 auto; }
+/* Detected-capability badges (read-only — from the model catalog, not boxes).
+   nowrap keeps Text / Vision / Image / Voice / Video inline on their own line; if
+   the bar is too narrow it's the Add/Clear group (later flex item) that wraps below. */
+.ac-model-caps { display: flex; gap: 5px; margin-top: 4px; flex-wrap: nowrap; }
+/* Action row: two icon buttons pinned to the right; the row is not clickable
+   (beat the generic `.ac-row > .ac-ability-row { cursor: pointer }` rule). */
+.ac-model-advanced-head { align-items: center; }
+.ac-row > .ac-ability-row.ac-model-advanced-head { cursor: default; }
+.ac-model-row-actions {
+  margin-left: auto;          /* push both buttons to the right edge */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* ── Add-new-model form: COLLAPSED by default. The 4 configurator rows
+   (provider / base-url / key / model) are hidden until the `+` button removes
+   `ac-cfg-collapsed` from the table. Saved-model rows + the action row stay
+   visible regardless. ── */
+.ac-model-config.ac-cfg-collapsed .ac-model-cfg-row { display: none; }
+/* The model-load status line is part of the configurator — hide it (along with
+   the search box) while the form is collapsed. !important beats the inline
+   display the JS sets when it has a message to show. */
+.ac-model-config.ac-cfg-collapsed .ac-model-cfg-status { display: none !important; }
+/* Shared bare icon button (Advanced toggle) — no border, just the glyph. */
+.ac-model-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex: none;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.ac-model-icon-btn:hover { color: var(--accent); }
+/* A successful credential save briefly draws attention to Advanced, where its
+   redacted saved-credential entry is available. The class is self-clearing. */
+.ac-model-icon-btn.ac-model-credential-pulse {
+  color: var(--accent);
+  animation: ac-model-credential-glow 0.8s ease-in-out 2;
+}
+@keyframes ac-model-credential-glow {
+  0%, 100% { box-shadow: none; background: transparent; }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+}
+/* ══ Skeleton loading state for the model table ──────────────────────────
+   Shown while saved-models data loads so the user sees table structure
+   (header + phantom rows) instead of just the Advanced/+ buttons. Uses
+   shared sk-shimmer primitives (defined elsewhere in this file). */
+.ac-model-skeleton .ac-saved-head {
+  border-bottom: var(--border-width) solid var(--border);   /* line under header only */
+}
+/* The `+` toggle: borderless `+` when the form is CLOSED. When the form is OPEN
+   a square border appears and ONLY the glyph rotates 45° (+ → ×) — the box stays
+   square, never a diamond. */
+.ac-model-add-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex: none;
+  border: 1px solid transparent;   /* no visible border while collapsed */
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.ac-model-add-toggle > svg { transition: transform 0.15s ease; }
+.ac-model-add-toggle:hover { color: var(--accent); }
+.ac-model-config:not(.ac-cfg-collapsed) .ac-model-add-toggle {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.ac-model-config:not(.ac-cfg-collapsed) .ac-model-add-toggle > svg {
+  transform: rotate(45deg);
+}
+.ac-cap-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: var(--border-width) solid var(--border);
+  color: var(--fg-4);
+  opacity: 0.55;
+}
+.ac-cap-badge.on { color: var(--accent); border-color: var(--accent); opacity: 1; }
+/* ══ Saved Models — expandable rows injected into the unified model table.
+   Single fixed layout: model name · Text / In / Out capability checkboxes ·
+   stacked usage block (tokens-in / out / cost). The model name is the expand
+   trigger — there is no chevron and no × (deletion lives in the expanded
+   panel). JS sets the same grid inline; this is the fallback. */
+.ac-model-config .ac-saved-row {
+  display: grid;
+  /* Drag · Model · Flags · Usage · More (JS sets the same grid inline). */
+  grid-template-columns: 20px minmax(0, 1fr) 38px 20px;
+  align-items: center;
+  column-gap: 2px;
+  padding-top: 3px;
+  padding-right: 4px;
+  padding-bottom: 3px;
+}
+/* The shared ability label uses display:contents for flex rows. Saved-model
+   rows are CSS grids, so restore a real grid item; otherwise its children
+   consume extra grid cells and push the roles menu onto an off-screen row. */
+.ac-model-config .ac-saved-row > .ac-ability-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+/* No hairline divider between data rows — only the header gets one below it. */
+.ac-model-config > .ac-saved-injected:not(.ac-saved-head) + .ac-saved-injected {
+  border-top: none;
+}
+/* MODEL-ROW-GROUP: an opened row's detail IS that row's content, not a separate box
+   hanging off it. The base `.ac-ability-body` draws a hairline directly under the
+   model name, which cuts the panel away from the row that opened it; drop that line
+   here and carry the divider down instead, so the opened row and its detail read as
+   one block — bounded below the group rather than split down the middle. */
+.ac-model-config > .ac-saved-injected.expanded > .ac-ability-body {
+  border-top: none;
+}
+.ac-model-config > .ac-saved-injected.expanded + .ac-saved-injected {
+  border-top: var(--border-width) solid var(--border);
+}
+/* Drag handle on saved-model rows — mirrors .ac-mp-drag-handle styling. */
+.ac-saved-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--fg-3);
+  flex-shrink: 0;
+  cursor: grab;
+  touch-action: none;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.ac-saved-row:hover .ac-saved-drag-handle { opacity: 0.8; }
+.ac-saved-drag-handle:active { cursor: grabbing; }
+.ac-saved-drag-handle svg { width: 14px; height: 14px; }
+.ac-saved-injected.dragging { opacity: 0.5; }
+.ac-saved-head:hover { background: transparent; }
+.ac-saved-th {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.ac-saved-usage-th { text-align: right; }
+/* ── Role-flag column — 10×10 square avatars ────────────────────────────
+   Rendered in the header for unassigned roles, and on model rows for roles
+   that model holds. Uses a flex row so flags squeeze together compactly. */
+.ac-saved-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  vertical-align: middle;
+  flex-wrap: nowrap;
+}
+.ac-role-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+  background: var(--bg-tint);
+  color: var(--fg-3);
+  border: var(--border-width) solid var(--border);
+  cursor: default;
+}
+/* Context limit after the role flags; empty until the model's catalog info loads. */
+.ac-saved-ctx {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-3);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ac-saved-ctx:empty { display: none; }
+.ac-saved-cap { display: flex; align-items: center; justify-content: center; position: relative; }
+/* Save-status overlay for a saved-model box (capability checkbox / Default radio):
+   the shared `.ac-save-overlay` fills its container, but a cap cell is a wide
+   28×15 grid slot, so a stretched overlay reads as a wide rectangle around a 15px
+   box. Pin it to a small CENTRED SQUARE (just larger than the box) so the spinner
+   / ✓ / ⚠ chip hugs the control instead of filling the column. */
+.ac-saved-cap .ac-save-overlay {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  border-radius: 4px;
+}
+/* ── Roles more-button + floating popover ─────────────────────────────────
+   Replaces the old inline role columns (Default/Premium/Vision/Image) with a
+   single ⋮ button. The popover mirrors the session-dropdown menu style.      */
+.ac-saved-roles-cell {
+  justify-content: flex-end;
+  padding-right: 0;
+}
+.ac-saved-roles-btn {
+  position: relative;
+  background: none;
+  border: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+.ac-saved-roles-btn:hover { color: var(--brand); background: rgba(var(--brand-rgb),0.12); }
+.ac-saved-roles-btn.open { color: var(--brand); background: rgba(var(--brand-rgb),0.12); }
+/* Floating popover — right-aligned so it doesn't overflow the table edge */
+.ac-saved-roles-popover {
+  position: fixed;
+  top: 0;
+  left: 0;
+  min-width: 180px;
+  max-width: 220px;
+  max-height: min(320px, calc(100vh - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(var(--shadow-rgb),0.4);
+  z-index: 1000;
+  padding: 8px;
+  box-sizing: border-box;
+}
+body.light-mode .ac-saved-roles-popover {
+  background: var(--bg-0);
+  box-shadow: 0 8px 24px rgba(var(--shadow-rgb),0.1);
+}
+.ac-saved-roles-popover[hidden] { display: none; }
+/* Popover section — mirrors the session-dropdown more-menu info rows */
+.ac-pm-section { display: flex; flex-direction: column; gap: 6px; }
+.ac-pm-section + .ac-pm-section { margin-top: 8px; padding-top: 8px; border-top: var(--border-width) solid var(--border); }
+.ac-pm-section-head { display: flex; align-items: center; gap: 8px; }
+.ac-pm-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+/* One role toggle row inside the popover */
+.ac-saved-role-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 4px;
+  border-radius: 4px;
+  cursor: default;
+  transition: background 0.1s;
+}
+.ac-saved-role-row:hover { background: rgba(var(--brand-rgb),0.08); }
+.ac-saved-role-row + .ac-saved-role-row { border-top: 1px solid var(--border); }
+.ac-saved-role-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-1);
+  white-space: nowrap;
+}
+/* ── Hold-to-cancel hazard cover for a capability checkbox. The instant a box is
+   ticked it LOCKS (the underlying checkbox is disabled) and this cover drops on
+   top so an accidental double-click can't flip it back. The change has already
+   been sent to the server; the ONLY way to reverse it is a deliberate long-press
+   of this triangle (the same hold-to-confirm gesture the delete buttons use — a
+   rising fill tracks the press), which reverts the box and saves the reverted
+   value. It then settles to the shared green ✓ / orange ⚠ save overlay. */
+.ac-cap-hazard {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--warning);
+  background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px rgba(var(--warning-rgb), 0.55);
+  cursor: pointer;
+  overflow: hidden;
+  z-index: 7;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+.ac-cap-hazard.show { opacity: 1; }
+.ac-cap-hazard-fill {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 0%;
+  background: rgba(var(--warning-rgb), 0.38);
+  pointer-events: none;
+}
+.ac-cap-hazard-icon {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  line-height: 0;
+}
+/* RTL flow so an over-long name truncates at the START — the ellipsis sits on
+   the left and the END of the name (the distinguishing version suffix) stays
+   visible. `text-align: left` keeps a SHORT (non-truncated) name flush-left,
+   sitting directly above the provider line rather than pushed to the right edge.
+   The inner bdi[dir=ltr] isolates the name so leading numbers and hyphens
+   retain their entered order; only this outer clipping box uses RTL. */
+.ac-saved-model-name {
+  display: flex;
+  align-items: center;
+  direction: ltr;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Keep long model identifiers suffix-first while the outer LTR flex row keeps
+   assigned-role markers visually after the model name. */
+.ac-saved-model-text {
+  direction: rtl;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Clicking the name expands the row; show it as interactive. Both the model
+   name and the provider line are left-aligned; the RTL flow above only governs
+   which END truncates, not the resting alignment. */
+.ac-model-credential-email {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-3);
+  font-size: 11px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ac-saved-name-click { cursor: pointer; }
+.ac-saved-name-click:hover .ac-saved-model-name { color: var(--accent); }
+/* ── Stacked usage block — three tiny labelled lines that sit inside the row
+   height (the row never grows taller than the two-line name cell). ── */
+.ac-saved-usage {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+}
+.ac-saved-usage-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  font-size: 9px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.ac-saved-usage-v {
+  font-weight: 600;
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+/* ── Delete control inside the expanded panel ── */
+.ac-saved-del-row { margin-top: 10px; }
+.ac-saved-del-btn {
+  color: var(--danger);
+  border-color: var(--border);
+}
+.ac-saved-del-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+body.light-mode .ac-cap-badge { color: var(--fg-3); border-color: var(--border-strong); }
+body.light-mode .ac-cap-badge.on { color: var(--brand); border-color: var(--brand); }
+body.light-mode .ac-saved-th { color: var(--fg-3); }
+/* The meta chips (context / out / price) fall back to a dark pill because
+   --bg-base is undefined; give light mode a warm pill so they don't read as
+   dark blobs on the cream panel. */
+body.light-mode .ac-model-badge {
+  background: var(--bg-tint);
+  border-color: var(--border);
+  color: var(--fg-2);
+}
+/* ── Spinning loader for the models panel ── */
+@keyframes ac-spin { to { transform: rotate(360deg); } }
+/* The + (add-a-model) button shows a spinner IN PLACE OF its glyph while the
+   provider's available-model list loads — that fetch is the one genuinely slow
+   part of the panel (it powers the "Search models…" box), so its indicator sits
+   right on the control that opens the add-a-model form. */
+.ac-model-add-spinner {
+  display: none;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ac-spin 0.7s linear infinite;
+}
+.ac-model-add-toggle.loading > svg { display: none; }
+.ac-model-add-toggle.loading > .ac-model-add-spinner { display: block; }
+/* Keep the persistent catalog on the exact same surface as its search input. */
+body.light-mode .ac-model-catalog-control {
+  background: var(--bg-1);
+  border-color: var(--border-strong);
+}
+body.light-mode .ac-model-catalog-control .ac-model-search-field {
+  border-bottom-color: var(--border-strong);
+}
+body.light-mode .ac-model-catalog-control:focus-within { border-color: var(--brand); }
+/* ── Chevron column slot ─────────────────────────────────────────────────────
+   Every .ac-list row has a 13px-wide slot before the icon (matching the SVG
+   chevron width). The margin-right: -10px cancels the flex column-gap so the
+   chevron sits flush against the icon with zero extra padding. Rows WITHOUT a
+   chevron keep the empty slot (invisible), so icons stay aligned. The real
+   chevron element replaces this pseudo when present. */
+.ac-list .ac-ability-row:not(.ac-saved-row)::before {
+  content: '';
+  display: flex;
+  align-items: center;
+  width: 13px;
+  min-width: 13px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding-top: 3px;   /* centres 13px SVG with the 18px icon below */
+  margin-right: -10px;
+}
+/* ── Unified save-status indicator — OVERLAY ON TOP of the control ────────────
+   (SISTER-PANEL: AGENT-ABILITY-TABLE) ONE save-status language for every config
+   control in the ability tree. The indicator is centered DIRECTLY OVER the
+   control it confirms (toggle / field / dropdown / permission segment), not in a
+   slot beside it: a spinner while the save is in flight, then a green check ✓
+   once the backend confirms, or an orange warning triangle ⚠ on failure (the
+   caller then reverts the control to its prior value). Driven by `_markSaving` /
+   `_flashSaveCheck` in dom-utils.js, which make the control's container
+   position:relative and drop this overlay into it. Colours come from the
+   design-system palette so it's theme-safe and matches the `.agents-autosave-check`
+   tick the model + appearance tables use. */
+.ac-save-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 6;
+}
+.ac-save-overlay.show { opacity: 1; }
+/* In-flight: a dimming backdrop (theme-aware) so the spinner reads over the
+   control underneath. */
+.ac-save-overlay:has(.agents-spinner) {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--bg-elev) 72%, transparent);
+}
+.ac-save-overlay.ok  { color: var(--success); background: var(--success-soft); }
+.ac-save-overlay.err { color: var(--warning); background: var(--warning-soft); }
+/* Over a toggle the wrap is square, so the overlay's `border-radius: inherit`
+   comes out square and its corners poke past the pill-shaped switch underneath.
+   Give it the toggle's own pill radius (matching `.conn-toggle-track`) so the
+   green/orange confirm box hugs the switch shape with no square corners showing. */
+.ac-ability-toggle-wrap .ac-save-overlay { border-radius: 10px; }
+/* Tiny 1–2 word warning popup that floats just above the ⚠ triangle on a failed
+   save, so the failure is unmissable even at a glance. Anchored to the overlay's
+   centre; small entrance lift + fade. (SISTER-PANEL: AGENT-ABILITY-TABLE.) */
+.ac-save-pop {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 50%;
+  transform: translate(-50%, 4px);
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: calc(var(--radius-sm, 6px) * 0.8);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--warning);
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--warning);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 7;
+}
+.ac-save-pop.show { opacity: 1; transform: translate(-50%, 0); }
+/* Little downward-pointing nub. */
+.ac-save-pop::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--warning);
+}
+/* In-flight control spinner — mirrors agents.css `.agents-spinner` but lives HERE
+   in the globally-loaded sheet so the ability-tree's saving spinners animate on
+   EVERY page, including the admin Agent Settings page (which doesn't load
+   agents.css). (SISTER-PANEL: AGENT-ABILITY-TABLE — toggle/eye/permission/config
+   saving feedback.) The `.ac-save-overlay` selector covers the overlay spinner on
+   controls (e.g. the toggle wrap) that aren't inside `.ac-config-control`. */
+.ac-ability-status .agents-spinner,
+.ac-config-control .agents-spinner,
+.ac-save-overlay .agents-spinner,
+.agents-eye-toggle .agents-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: agents-spin 0.6s linear infinite;
+  vertical-align: middle;
+}
+@keyframes agents-spin { to { transform: rotate(360deg); } }
+/* ── Inline roster-role prompt directives (Agent Config model table) ──────────
+   Agent Config places these below the model-table card in the existing Model
+   topic. The explanatory heading and copy remain frameless, like the list. */
+.ac-directives-section { margin-top: 18px; }
+.ac-directives-list--plain { display: flex; flex-direction: column; }
+/* Prompt lines are intentionally unframed: no enclosing card and no row dividers. */
+.ac-directives-list--plain > * + * { border-top: 0; }
+.ac-directives-section--plain .ac-directives-section-title {
+  margin-bottom: 4px; color: var(--fg-1); font-size: 14px; letter-spacing: 0;
+}
+.ac-directives-section-description {
+  margin: 0 0 12px; color: var(--fg-2); font-size: 12px; line-height: 1.45;
+}
+.ac-directive-symbol { display: inline-block; min-width: 18px; margin-right: 5px; color: var(--fg-2); }
+.ac-directive-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-directive-body { display: none; gap: 10px; }
+.ac-row.expanded > .ac-directive-body { display: flex; flex-direction: column; }
+.ac-directive-textarea {
+  box-sizing: border-box; width: 100%; min-height: 150px; resize: vertical;
+  font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5;
+}
+.ac-directive-textarea[readonly] { opacity: .85; }
+.ac-directive-actions { display: flex; align-items: center; gap: 10px; }
+.ac-directive-error { flex: 1; min-width: 0; color: var(--danger); font-size: 12px; }
+.ac-directive-save { margin-left: auto; }
+@media (max-width: 560px) {
+  .ac-directive-body { padding-left: 14px; padding-right: 14px; }
+  .ac-directive-textarea { min-height: 130px; }
+}

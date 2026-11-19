@@ -30,7 +30,7 @@ import { createEffortSlider, modelEfforts } from './effort-slider.js';
  * The markup (configurator rows + advanced row) is built here, not in HTML, so
  * the single source of truth is one file. All DOM refs are instance-scoped
  * closures (NO document.getElementById) so two instances never collide on ids.
- * Styling reuses the app-wide `.ac-*` model-table classes in ui/shared/css/app3.css.
+ * Styling reuses the app-wide `.ac-*` model-table classes in ui/shared/models/model-table.css.
  *
  * Contract — mountModelTable(host, opts) → { reload(), destroy(), getState() }
  *   opts.adapter (required):
@@ -492,7 +492,7 @@ export function mountModelTable(host, opts = {}) {
 
   // CHEVRON-CONSISTENCY: Provider's in-field dropdown arrow and every
   // prompt-injection-row expander below use this exact 16px / 1.8-stroke glyph.
-  // Provider rotates it 90° in CSS (see `.ac-model-search-chevron` in app3.css)
+  // Provider rotates it 90° in CSS (see `.ac-model-search-chevron` in ui/shared/models/model-table.css)
   // so the right-pointing row chevron reads as down; Model Name intentionally
   // has no chevron because its catalog is a persistent inline panel.
   const ROW_CHEVRON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
@@ -2218,7 +2218,7 @@ export function mountModelTable(host, opts = {}) {
     // format for this entire panel: a muted grey label followed by the value in
     // the bright detail tone. Specs, token usage + cost, capabilities and the
     // editable Display name all render through these two helpers, so a new field
-    // can never grow its own look. Styles: MODEL-META-LINES in app3.css.
+    // can never grow its own look. Styles: MODEL-META-LINES in ui/shared/models/model-table.css.
     const metaLine = (label, valueHtml) =>
       `<div class="ac-model-meta-line"><span class="ac-model-meta-k">${esc(label)}</span> ${valueHtml}</div>`;
     const metaValue = (text, cls) => `<span class="ac-model-meta-v${cls || ''}">${esc(text)}</span>`;

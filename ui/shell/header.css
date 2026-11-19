@@ -1,0 +1,239 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Main header ── */
+  #main-header {
+    display: flex;
+    align-items: center;
+    /* Gap between the tab carousel (right chevron pinned to its right edge) and
+       #status-right (the Chat button). Kept tight so the chevron sits close to
+       the chat icon — added padding already comes from the chevron (4px) and the
+       chat button (8px). */
+    gap: 2px;
+    padding: 0 4px;
+    background: transparent;
+    border-bottom: none;
+    font-size: 11px;
+    color: var(--fg-3);
+    flex-shrink: 0;
+  }
+#status-right { margin-left: auto; display: flex; gap: 0; align-items: center; }
+/* ── User Dropdown (status-right) ── */
+  .user-dropdown {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+.user-dropdown-trigger {
+    cursor: pointer !important;
+    user-select: none;
+    transition: opacity 0.15s;
+  }
+.user-dropdown-trigger:hover {
+    opacity: 0.8;
+  }
+.user-dropdown-menu {
+		    position: absolute;
+		    top: 100%;
+		    left: 0;
+		    margin-top: 6px;
+	    background: var(--bg-elev);
+	    border: var(--border-width) solid var(--border);
+	    border-radius: 12px;
+	    box-shadow: 0 8px 32px rgba(var(--shadow-rgb),0.5);
+	    z-index: 1100;
+	    min-width: 180px;
+	    padding: 6px 0;
+	    animation: user-dd-fadein 0.15s ease;
+	  }
+@keyframes user-dd-fadein {
+from { opacity: 0; transform: translateY(-6px); }
+to { opacity: 1; transform: translateY(0); }
+  }
+.user-dropdown-divider {
+    height: 1px;
+    background: var(--bg-tint);
+    margin: 4px 8px;
+  }
+.user-dropdown-action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 14px;
+    background: none;
+    border: none;
+    color: var(--fg-1);
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s;
+    text-align: left;
+  }
+.user-dropdown-action:hover {
+    background: var(--bg-tint-2);
+    color: var(--danger);
+  }
+/* ── Theme toggle in user dropdown ── */
+  .theme-toggle-section {
+    padding: 4px 14px 8px;
+  }
+.theme-toggle-label {
+    display: block;
+    font-size: 11px;
+    color: var(--fg-3);
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+.theme-toggle-group {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-0);
+    border: var(--border-width) solid var(--border);
+    border-radius: 999px;
+    padding: 2px;
+  }
+.theme-option {
+    flex: 1;
+    background: none;
+    border: none;
+    color: var(--fg-3);
+    font-size: 16px;
+    padding: 6px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+    line-height: 1;
+  }
+.theme-option > * {
+    pointer-events: none;
+  }
+.theme-option:hover {
+    color: var(--fg-1);
+    background: var(--bg-tint);
+  }
+.theme-option.active {
+    background: var(--bg-tint-2);
+    color: var(--brand);
+    box-shadow: 0 0 0 1px rgba(var(--brand-rgb), 0.25);
+  }
+
+/* */
+body.light-mode .theme-option { color: var(--fg-4); }
+body.light-mode .theme-option:hover {
+    color: var(--brand);
+    background: var(--bg-tint);
+  }
+body.light-mode .theme-option.active {
+    background: var(--bg-tint-2);
+    color: var(--brand);
+    box-shadow: 0 0 0 1px rgba(var(--brand-rgb), 0.25);
+  }
+body.light-mode #top-user-id { color: var(--brand) !important; }
+/* ── User-dropdown redesign ── */
+  .user-dropdown-trigger {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 0;
+    border-radius: 50%;
+    transition: background 0.15s;
+    background: none;
+    border: none;
+    -webkit-appearance: none;
+    appearance: none;
+    touch-action: manipulation;
+  }
+.user-dropdown-trigger:hover {
+    background: rgba(var(--brand-rgb), 0.1);
+  }
+/* Widen menu to fit large current-user row.
+   position:fixed (not absolute) so the popover escapes the overflow clip of
+   its scrolling ancestor #main-tabs; sessions.js anchors top/left to the
+   trigger on open. ID+class specificity overrides the base .user-dropdown-menu
+   rule's position:absolute.
+
+   ── PANEL COHESION ──
+   All dropdown panels (user menu, feedback view, login) MUST share the same
+   visual dimensions: 360px wide, 12px border-radius, var(--bg-elev) background,
+   1px solid var(--bg-tint) border, box-shadow 0 8px 32px rgba(var(--shadow-rgb),0.5).
+   This keeps the UI consistent — never change one without the others. */
+  #user-dropdown-menu.user-dropdown-menu {
+    position: fixed;
+    min-width: 280px;
+    width: 360px;
+    padding: 8px 0 6px;
+    background: var(--bg-elev);
+    border: var(--border-width) solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(var(--shadow-rgb),0.5);
+  }
+/* Current user row */
+  .user-dropdown-current-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px 6px;
+  }
+.user-dropdown-current-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+.user-dropdown-current-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+.user-dropdown-current-email {
+    font-size: 12px;
+    color: var(--fg-3);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+/* Manage Account button */
+  .user-dropdown-manage-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: calc(100% - 24px);
+    margin: 6px 12px 4px;
+    padding: 8px 12px;
+    background: var(--bg-tint);
+    border: var(--border-width) solid var(--border);
+    border-radius: 6px;
+    color: var(--fg-1);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+.user-dropdown-manage-btn:hover {
+    background: var(--bg-tint-2);
+    border-color: var(--brand);
+  }
+/* Light-mode overrides for new dropdown elements */
+  body.light-mode .user-dropdown-current-name { color: var(--fg-1); }
+body.light-mode .user-dropdown-current-email,
+body.light-mode .user-dropdown-account-email { color: var(--fg-3); }
+body.light-mode .user-dropdown-manage-btn {
+    background: var(--bg-elev);
+    border-color: var(--border);
+    color: var(--fg-1);
+  }
+body.light-mode .user-dropdown-manage-btn:hover {
+    background: var(--bg-tint-2);
+    border-color: var(--brand);
+  }
+body.light-mode #user-dropdown-menu.user-dropdown-menu {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  box-shadow: 0 8px 32px rgba(var(--shadow-rgb),0.1);
+}

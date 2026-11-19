@@ -1,5 +1,5 @@
 /* Setting rows from ui/shared/config-rows/config-rows.js. The list and row frame are the
-   app's option-row look (.ac-list / .ac-ability-row in ui/shared/css/app3.css); the
+   app's option-row look (.ac-list / .ac-ability-row in ui/shared/option-list/option-list.css); the
    controls inside are in ui/shared/controls/controls.css. This file holds only what the
    rows add: stacked rows, the error line, button rows and a form's Save bar. */
 .cfr-stacked { flex-direction: column; align-items: stretch; gap: 8px; }

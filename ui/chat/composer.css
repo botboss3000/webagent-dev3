@@ -1,5 +1,5 @@
-/* Chat styles moved out of ui/shared/css/app1.css, in their original order. Linked from
-   index.html right after app1.css so the cascade order is unchanged. */
+/* Chat styles from the former app-wide app1.css, in their original order. index.html links
+   them where app1.css loaded, so the cascade order is unchanged. */
 
 /* ── Idle footer mode (CSS-driven, no DOM rebuild) ──
      When the textarea is empty and unfocused, .footer-mode-idle collapses

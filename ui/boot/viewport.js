@@ -9,8 +9,7 @@
   // the keyboard is open when the visual viewport is meaningfully shorter than
   // the largest viewport at the current width AND an editable field holds focus. Some pages
   // hide bottom-docked clutter while it's up so the focused field isn't covered —
-  // e.g. the App Config chat pill + sticky section headings (see app3.css
-  // `body.kb-open` rules). Class is mobile-gated here, so desktop never sets it.
+  // e.g. bottom-docked pills on a page (`body.kb-open` rules in ui/shell/app.css). Class is mobile-gated here, so desktop never sets it.
   (function () {
     var root = document.documentElement;
     var vv = window.visualViewport;

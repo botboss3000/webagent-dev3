@@ -151,7 +151,7 @@
   --purple-alt:   var(--purple-strong);
 
   /* Chat bubbles. The theme-following DEFAULT is derived at the bubble element
-     in index.css (color-mix over var(--bg-elev)), NOT here — declaring it at
+     in ui/boot/loading-shell.css (color-mix over var(--bg-elev)), NOT here — declaring it at
      :root would bake in the pre-theme panel colour (the "peach bubbles in every
      theme" bug). --user-bubble-bg / --agent-bubble-bg are left UNSET on purpose:
      the Appearance panel's "User bubble" / "Agent bubble" swatches set them only
@@ -298,7 +298,7 @@ body.light-mode {
   --danger-mid:   rgba(var(--danger-rgb), 0.25);
   --purple-alt:   var(--purple-strong);
 
-  /* Bubble bg left UNSET — themed default derived at the element in index.css. */
+  /* Bubble bg left UNSET — themed default derived at the element in ui/boot/loading-shell.css. */
   --user-bubble-border:  var(--border);
   --agent-bubble-border: var(--border);
   --chat-pill-border:    var(--border);
@@ -756,7 +756,7 @@ body.light-mode .settings-menu-item:hover {
    All dropdown panels (user menu, feedback view, login) MUST share the same
    visual dimensions: 360px wide, 12px border-radius, var(--bg-elev) background,
    the global border (var(--border-width) solid var(--border)), box-shadow
-   0 8px 32px rgba(0,0,0,0.5). Keep these values in sync with app1.css. */
+   0 8px 32px rgba(0,0,0,0.5). Keep these values in sync with ui/chat/composer.css. */
 .user-dropdown-menu {
   border-radius: 12px;
   border: var(--border-width) solid var(--border);
@@ -1391,7 +1391,7 @@ body:not(.is-admin) #main-tab-select option[value="admin-tools"] { display: none
    Drop-in: add the class to any overflow:auto scroller for full-width rounded,
    pinned corners. For a centred-column variant (corners inset to a fixed-width
    column that tracks the panel width) feed --rsc-side a computed value — see
-   #app-config-content (App Settings) in app3.css. Targets modern Chrome (the
+   #app-config-content (the retired App Settings page). Targets modern Chrome (the
    unprefixed mask-composite path), like the rest of the app.
    Doc: docs/claude/ui-guidance.md "Pinned rounded scroll corners". */
 .rounded-scroll-corners {

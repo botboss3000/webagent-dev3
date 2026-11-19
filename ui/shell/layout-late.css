@@ -1,0 +1,14 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Debug Console Log Panel ─────────────────────────────────────────────── */
+/* Body becomes a flex column so the panel sits below the stage in normal flow,
+   rather than overlay-fixed over the chat footer. html (ui/shell/layout.css) is already
+   display:flex;flex-direction:column — body fills it and passes the flex down. */
+body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+}
+#main-header { flex-shrink: 0; }
+#stage { flex: 1 1 0; min-height: 0; }

@@ -1214,7 +1214,7 @@ function _toggleGroup(sid) {
 
 // Fill the table body with phantom "shimmer" rows that mirror the real column
 // layout, so the first paint has the table's shape instead of a lone centered
-// spinner. Uses the shared skeleton primitives (sk-shimmer in app3.css).
+// spinner. Uses the shared skeleton primitives (sk-shimmer in ui/shared/skeleton/skeleton.css).
 // SESSIONS-SKELETON (breadcrumb) — the sessions table paints a DETERMINISTIC
 // loading state: exactly SIX rows, every content cell one 60%-wide shimmer bar,
 // so loading reads as the same shape on every load and on every agent switch.

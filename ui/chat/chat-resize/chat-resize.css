@@ -1,0 +1,69 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Chat resize handle ── */
+  #chat-resize-handle {
+    width: 14px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 10;
+    position: relative;
+    transition: background 0.15s;
+  }
+/* Subtle center grip line so the wider hit-area still reads visually as a divider. */
+  #chat-resize-handle::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 2px;
+    height: 36px;
+    border-radius: 2px;
+    background: color-mix(in oklab, currentColor 18%, transparent);
+    transition: background 0.15s, height 0.15s;
+    pointer-events: none;
+    z-index: 2; /* above the glow layer */
+  }
+#chat-resize-handle:hover::before,
+#chat-resize-handle.resizing::before {
+    background: rgba(var(--brand-rgb), 0.67);
+    height: 56px;
+  }
+/* Cursor-follow glow using ::after — a ~100px-tall spot (50px each side of
+     the cursor) with softer/gradated fade at the top and bottom edges so it
+     doesn't abruptly clip when the pointer nears the bar's extremes. */
+  #chat-resize-handle::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background: radial-gradient(
+      100px circle at 50% var(--my, -100%),
+      rgba(var(--brand-rgb), 0.22) 0%,
+      transparent 50%
+    );
+    opacity: 0;
+    transition: opacity 0.35s ease;
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 10%,
+      black 25%,
+      black 75%,
+      transparent 90%
+    );
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 10%,
+      black 25%,
+      black 75%,
+      transparent 90%
+    );
+  }
+#chat-resize-handle.resizing::after {
+    opacity: 1;
+  }
+@media (max-width: 514px) {
+#chat-resize-handle { display: none; }
+  }

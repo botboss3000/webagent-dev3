@@ -1,0 +1,66 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* SEARCH-FIELD-INLINE-ICON — the magnifier is a SIBLING of the input in the
+   markup (list.js `_appendManageRow`) and is lifted out of the flex flow here so
+   it paints inside the field's left edge rather than in its own column beside
+   it. The input, now the first in-flow child, expands into the freed width, and
+   the padding-left below reserves the icon's slot. The `:has()` guard keeps a
+   copy of `.session-manage-search` that carries no icon (the chip-only Agents →
+   Sessions footer docks) on its original geometry. Keep both halves together. */
+.session-manage-search {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-right: 6px;
+    color: var(--fg-3);
+  }
+/* Archived rows: dimmed, unarchive or delete only */
+.session-row.archived .session-row-title { opacity: .72; }
+.session-row-actions {
+    position: fixed;
+    background: var(--bg-elev);
+    border: var(--border-width) solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 6px 16px rgba(var(--shadow-rgb),0.4);
+    /* This popup is body-mounted while its source row remains inside the
+       session dropdown (z-index: 10001), so it must paint above the panel. */
+    z-index: 10002;
+    min-width: 140px;
+    padding: 4px;
+    font-size: 12px;
+  }
+body.light-mode .session-row-actions,
+body.light-mode .agent-row-actions {
+    background: var(--bg-0);
+    border-color: var(--border);
+  }
+.session-row-action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    padding: 6px 8px;
+    border-radius: 4px;
+    text-align: left;
+  }
+.session-row-action:hover { background: rgba(var(--brand-rgb), 0.1); }
+.session-row-action.danger,
+.agent-row-action.danger { color: var(--danger); }
+.session-row-action.danger:hover,
+.agent-row-action.danger:hover { background: rgba(var(--danger-rgb), 0.12); }
+.session-row-action.disabled,
+.agent-row-action.disabled {
+    color: var(--fg-4);
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+.session-row-action.disabled:hover,
+.agent-row-action.disabled:hover { background: none; }

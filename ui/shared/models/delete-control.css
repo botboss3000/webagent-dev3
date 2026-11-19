@@ -1,0 +1,96 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* SHARED-DELETE-CONTROL — deleting (busy) state: pulsing-aura trash. While
+       a delete is in flight delete-control.js swaps the loader spinner for a
+       trash icon wrapped in .delete-pulse-aura; this pulses a danger ring
+       around it (plus a soft icon fade) so the state reads "deleting", not
+       "loading". Themed via --danger, so it holds in both light and dark. */
+    .delete-pulse-aura {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--danger);
+    }
+.delete-pulse-aura::before,
+    .delete-pulse-aura::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 2px solid var(--danger);
+      opacity: 0;
+      animation: delete-aura-ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+    }
+.delete-pulse-aura::after { animation-delay: 0.7s; }
+.delete-pulse-aura > * { animation: delete-aura-icon-pulse 1.4s ease-in-out infinite; }
+/* Undoing (restore) variant — the same pulsing aura but green, used when a
+       delete is being undone. Reuses the ring/icon pulse animations above. */
+    .delete-pulse-aura.undo { color: var(--success); }
+.delete-pulse-aura.undo::before,
+    .delete-pulse-aura.undo::after { border-color: var(--success); }
+/* Arming feedback: one single delete pulse (one expanding ring, static
+       icon) plays while the button transitions trash → hazard, replacing the
+       old spinner. Duration matches ARM_DELAY_MS so the ring lands exactly as
+       the hazard appears. */
+    .delete-pulse-aura.arm::before,
+    .delete-pulse-aura.arm::after { animation: delete-aura-ping 0.4s ease-out 1; }
+.delete-pulse-aura.arm::after { animation: none; }
+.delete-pulse-aura.arm > * { animation: none; }
+@keyframes delete-aura-ping {
+      0%   { transform: scale(0.55); opacity: 0.85; }
+      70%  { transform: scale(1.9);  opacity: 0; }
+      100% { transform: scale(1.9);  opacity: 0; }
+    }
+@keyframes delete-aura-icon-pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.45; }
+    }
+@media (prefers-reduced-motion: reduce) {
+      .delete-pulse-aura::before,
+      .delete-pulse-aura::after,
+      .delete-pulse-aura > * { animation: none; }
+      .delete-pulse-aura::before { opacity: 0.35; }
+    }
+/* SHARED-DELETE-CONTROL — armed (hazard) hue when a danger menu row is using the
+   two-click delete affordance (delete-control.js adds .warning). Specificity
+   (0,3,0) beats the .danger rule above so it wins regardless of source order. */
+.session-row-action.danger.warning,
+.agent-row-action.danger.warning { color: var(--warning); }
+.session-row-action.danger.warning:hover,
+.agent-row-action.danger.warning:hover { background: rgba(var(--warning-rgb), 0.12); }
+/* SHARED-DELETE-CONTROL — LABELLED danger menu rows ("Archive session" / "Delete session"). The
+   shared control replaces the button's inner HTML with its state icon, which is
+   right for the icon-only trash buttons but would leave a labelled menu row
+   blank mid-interaction. The two-click affordance must keep saying what the
+   NEXT click does, so each transient state prints its own label. The resting
+   state keeps the row's real markup (icon + "Delete session"). */
+.session-row-actions .session-row-action.danger[data-state="arming"]::after { content: "Arming\2026"; }
+.session-row-actions .session-row-action.danger[data-state="warning"]::after { content: "Click again to delete"; }
+.session-row-actions .session-row-action.danger[data-state="deleting"]::after { content: "Deleting\2026"; }
+.session-row-actions .session-row-action.danger[data-state="undoing"] { color: var(--success); }
+.session-row-actions .session-row-action.danger[data-state="undoing"]::after { content: "Click to unarchive"; }
+.session-row-actions .session-row-action.danger[data-action="archive"][data-state="warning"]::after { content: "Click again to archive"; }
+.session-row-actions .session-row-action.danger[data-action="archive"][data-state="deleting"]::after { content: "Archiving\2026"; }
+/* Shared per-row session panel details.  The chat dropdown and Agents →
+   Sessions page both use .session-row-actions, including these copyable IDs. */
+.session-row-actions .session-row-actions-info {
+    padding: 5px 0 3px;
+    margin-top: 4px;
+    border-top: var(--border-width) solid var(--border);
+}
+.session-row-actions .session-row-id {
+    font-size: 10px;
+    color: var(--fg-2);
+}
+.session-row-actions .session-row-id-key {
+    flex: 0 0 auto;
+    width: 14px;
+    color: var(--fg-3);
+}
+.session-row-actions .session-row-id-val {
+    font-family: var(--font-mono, monospace);
+    color: var(--fg-2);
+    user-select: text;
+}
+.session-row-actions .session-row-id.copied .session-row-id-val { color: var(--success); }

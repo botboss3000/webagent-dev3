@@ -210,7 +210,7 @@ Backgrounds are plugins: a drop-in folder `ui/background/<id>/` (`<id>.json` + `
 
 Write every **neutral container / table / divider border** as `var(--border-width) solid var(--border)` (or `-soft` / `-strong`). Then: **recolour** = `--border`/`-soft`/`-strong` in CSS, or `border_color_dark`/`border_color_light` in `data/config/app-settings.json`; **thickness** = `--border-width` or `border_width` (default `1px`); **all off** = width `0`. Edit surfaces: App Settings → **Appearance**; the JSON (served via `/api/v1/auth/ui-config`, injected at boot by `ui/shared/js/appearance.js`); or the PALETTE defaults.
 
-Rules: (1) a neutral border's width is `var(--border-width)`, never a literal px — a hard-coded `1px` opts out of the thickness/off control. (2) Accent/semantic borders (focus rings, hover/active highlights, error/drag outlines, status borders, spinner rings) are deliberately **not** wired to this — leave them. (3) Colour-only exceptions: the floating-glass surfaces in `index.css` (`#main-panel`, chat pill family, bubbles, `#chat-header`) keep a translucent `color-mix(currentColor)` border *colour* but **do** read `var(--border-width)`.
+Rules: (1) a neutral border's width is `var(--border-width)`, never a literal px — a hard-coded `1px` opts out of the thickness/off control. (2) Accent/semantic borders (focus rings, hover/active highlights, error/drag outlines, status borders, spinner rings) are deliberately **not** wired to this — leave them. (3) Colour-only exceptions: the floating-glass surfaces in `ui/boot/loading-shell.css` (`#main-panel`, chat pill family, bubbles, `#chat-header`) keep a translucent `color-mix(currentColor)` border *colour* but **do** read `var(--border-width)`.
 
 #### Known self-contained palette exceptions
 
@@ -234,7 +234,7 @@ For rounded corners that **stay put while content scrolls**, use **`.rounded-scr
 
 ### Mobile soft keyboard — `body.kb-open`
 
-On mobile-width viewports, when the visual viewport is meaningfully shorter than the layout viewport **and** an editable field holds focus, `index.html`'s viewport tracker sets **`body.kb-open`** (never on desktop). Use it to hide bottom-docked clutter while the keyboard is up — App Config does this in `app3.css` (chat pills hide; sticky headings drop from `sticky` to `static`). Scope any new reaction to the page's own selectors.
+On mobile-width viewports, when the visual viewport is meaningfully shorter than the layout viewport **and** an editable field holds focus, `index.html`'s viewport tracker sets **`body.kb-open`** (never on desktop). Use it to hide bottom-docked clutter while the keyboard is up — The shell's own `body.kb-open` rules are in `ui/shell/app.css`. Scope any new reaction to the page's own selectors.
 
 Design history and provenance: docs/ui-theming-design-history.md — not needed for operative work.
 
@@ -250,7 +250,7 @@ Whenever a surface shows a category/section heading followed by a vertical list 
 
 #### Canonical implementation — copy this, don't re-invent
 
-The whole component lives in **`ui/shared/css/app3.css`** under the boxed comment **"SHARED EXPANDABLE OPTION-ROW LIST"**:
+The whole component lives in **`ui/shared/option-list/option-list.css`**:
 
 - **`.ac-list`** — the bordered, rounded container; it draws the hairline dividers (`.ac-list > * + *`). `.ac-abilities-compact` is its legacy alias.
 - **`.ac-ability-row`** — one row: `.ac-ability-icon` + `.ac-ability-label` (→ `.ac-ability-name` + `.ac-ability-desc`) + optional `.ac-ability-status`, `.ac-ability-toggle-wrap`, `.ac-row-chevron`.
@@ -259,9 +259,11 @@ The whole component lives in **`ui/shared/css/app3.css`** under the boxed commen
 
 Light-mode overrides (peach tint) sit in the `body.light-mode` rules below.
 
-> **Restyle the toggle-list look in `app3.css` only.** Don't fork a per-page copy. The agent card keeps its `.conn-*` class names purely as JS/behaviour hooks.
+> **Restyle the toggle-list look in `ui/shared/option-list/option-list.css` only.** Don't fork a per-page copy. The agent card keeps its `.conn-*` class names purely as JS/behaviour hooks.
 
 **Build new settings from the shared parts, not by hand.** Controls (switch, dropdown, text field, number stepper, choice cards) come from `ui/shared/controls/controls.js` and are styled only in `controls.css` beside it. A setting row around a control comes from `ui/shared/config-rows/config-rows.js` (`createToggleRow`, `createSelectRow`, `createTextRow`, `createNumberRow`, `createChoiceRow`, `createLongTextRow`, `createReadTextRow`, `createActionRow`, `createConfigForm`), which adds the row frame, the error line and saving; its own styles are in `config-rows.css`. Long text uses `ui/shared/rich-text-editor/`. Restyle a control in `controls.css`, a row addition in `config-rows.css`.
+
+**Where styles live.** There are no app-wide catch-all stylesheets: `ui/shared/css/` holds only `design-system.css` (the colour and size tokens). Every other rule lives in a stylesheet beside the code that uses it: the page frame and header in `ui/shell/`, the start-up shell in `ui/boot/loading-shell.css`, chat in `ui/chat/`, shared parts in their `ui/shared/<component>/` folder, page rules in the page's folder. Add a new stylesheet beside its component and link it from `index.html` (and `embed/embed.html` when the embed uses it).
 
 #### It's not just for simple toggle rows — the row is a flexible shell
 
@@ -290,6 +292,6 @@ The full per-area conformance audit (status legend, exact files per surface) liv
 4. **JS-built sections ship a build gate.** `.ac-section.is-building` + one `.ac-section-loader` child hide every real child behind a spinner until reveal. Reveal **only after structure AND the first data load**; `init()` owns the whole reveal (never gate it on `load()`); clear the class directly — **no `requestAnimationFrame`**.
 5. **Sticky section navigator (shared, opt-in).** Add class `ac-stickynav` to the page's `<section class="ac-section">` and call `initStickyNav(...)`. Rules: `.ac-stickynav .ac-category-group { display: contents }`; headings are **SQUARE** (`border-radius: 0`); collapsible groups are `<div class="ac-category-group ac-collapsible">` toggled by `.ac-open` — **never `<details>`**.
 
-**Related shared controls.** The on/off switch (`.conn-toggle`) lives in `ui/shared/controls/controls.css`, loaded for every page. The per-agent Abilities row uses **one** 3-position visibility tri (`.ac-tri.ac-tri-vis`: Off · Discoverable · Visible) instead of a switch + eye pair — **agent-only** (the admin table keeps its plain switch + delete button), plus an **"Available to"** dropdown (`.ac-access-select`: Everyone · Registered · Admins), a server-enforced boundary. Destructive confirmations use **`hazardConfirm(...)`** from `ui/shared/js/confirm-dialog.js` — never native `confirm()`.
+**Related shared controls.** The on/off switch (`.conn-toggle`) lives in `ui/shared/controls/controls.css`, loaded for every page. The per-agent Abilities row uses **one** 3-position visibility tri (`.ac-tri.ac-tri-vis`: Off · Discoverable · Visible) instead of a switch + eye pair — **agent-only** (the admin table keeps its plain switch + delete button), plus an **"Available to"** dropdown (`.ac-access-select`: Everyone · Registered · Admins), a server-enforced boundary. Destructive actions use the shared two-click delete control (`advanceDeleteBtn` / `resetDeleteBtn` in `ui/shared/models/delete-control.js`, styled by `delete-control.css` beside it) — never native `confirm()`.
 
 Design history and provenance: docs/ui-toggle-list-design-history.md — not needed for operative work.

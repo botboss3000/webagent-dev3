@@ -955,7 +955,7 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
 /* ── Skeleton rows (first-load placeholder) ──
    Phantom shimmer rows shown while the first fetch is in flight, so the table
    has its column shape immediately instead of a lone spinner. `.sk-shimmer`
-   (the animated fill) is shared in ui/shared/css/app3.css. */
+   (the animated fill) is shared in ui/shared/skeleton/skeleton.css. */
 #sessions-table tbody tr.sessions-skeleton-row {
   cursor: default;
   pointer-events: none;
@@ -1431,7 +1431,7 @@ body.light-mode .sess-agent-badge {
 /* ── Session activity chart ──────────────────────────────────────────────────
    One vertical lane per session, mounted above #sessions-table-wrap by
    sessions-page.js (see sessions/js/sessions-activity-chart.js). The shell
-   reuses the shared .ac-model-analytics* classes in ui/shared/css/app3.css so it
+   reuses the shared .ac-model-analytics* classes in ui/shared/models/model-table.css so it
    reads as the same chart family as the Abilities and Model pages; only the lane
    plot below is new.
 
@@ -1620,7 +1620,7 @@ body.light-mode .sess-agent-badge {
 .sessions-activity-lane[aria-pressed="true"] { transform: scale(1.5); }
 
 /* The stats panel is the shared model-chart pinned tip (.ac-model-analytics-tip in
-   ui/shared/css/app3.css), parked in the plot's top-left corner. Its Total row carries
+   ui/shared/models/field-tip.css), parked in the plot's top-left corner. Its Total row carries
    no swatch, so its two cells take the whole row instead of the swatch/label/value
    columns a dotted row uses. */
 .sessions-activity-tip .ac-model-analytics-tip-total { grid-template-columns: minmax(0, 1fr) auto; }
@@ -1633,7 +1633,7 @@ body.light-mode .sess-agent-badge {
    reads as the panel's footer rather than as a fifth figure.
 
    The pinned panel is pointer-transparent (see .ac-model-analytics-tip in
-   ui/shared/css/app3.css) so the lanes beneath it stay clickable — which means this
+   ui/shared/models/model-table.css) so the lanes beneath it stay clickable — which means this
    control has to re-enable the pointer for itself, or the panel would swallow its own
    link. It is a <button>, because it performs an action rather than navigating
    anywhere, but it is styled as a link: the panel is a readout, and this is the one

@@ -1,7 +1,7 @@
 /* Shared form controls, drawn by ui/shared/controls/controls.js: the switch, text field
    and dropdown, number stepper and choice cards. Loaded once by index.html for every page.
    Restyle a control here only; how it sits in a setting row (width, slot) is in
-   ui/shared/css/app3.css under .ac-config-control, and the row itself in config-rows.css.
+   ui/shared/option-list/option-list.css under .ac-config-control, and the row itself in config-rows.css.
    Pages that still write this markup by hand get the same look from these class names. */
 
 /* ── Text field and dropdown ── */

@@ -1,0 +1,36 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Skeleton loading placeholders (shared) ─────────────────────────────────
+   Phantom "shimmer" shapes shown while a page's data loads, so the layout has
+   form from the first paint instead of a blank area or a lone spinner. Lives in
+   this globally-loaded sheet so EVERY page (including fragment-loaded pages with
+   no sheet of their own) can compose skeletons from the same primitives.
+
+   Usage: give an element `sk-shimmer` for the animated fill, plus a shape helper
+   (`sk-line` for a text row, `sk-block` for a rounded panel, `sk-circle` for an
+   avatar/icon). Size via inline style or a page-local class. Theme-aware — the
+   gradient is built from design-system elevation vars, so it works in dark and
+   light with no per-page colours.
+
+   The Agents page (ui/main-panel/agents/agents.css) was the original home of
+   `.sk-shimmer`; its `.agent-skeleton .sk-icon/.sk-lines/.sk-line` LAYOUT stays
+   page-local, but the shimmer paint + keyframe were promoted HERE. */
+.sk-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--bg-elev) 25%,
+    var(--bg-elev-2) 37%,
+    var(--bg-elev) 63%
+  );
+  background-size: 400% 100%;
+  animation: skShimmer 1.4s ease-in-out infinite;
+}
+@keyframes skShimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+/* Generic shape helpers — combine with `sk-shimmer`. */
+.sk-line   { height: 11px; border-radius: 6px; }
+@media (prefers-reduced-motion: reduce) {
+  .sk-shimmer { animation: none; }
+}

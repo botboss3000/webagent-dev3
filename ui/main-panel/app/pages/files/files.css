@@ -1,3 +1,8 @@
+/* Moved from the app-wide ui/shared/css/app3.css; loaded before this page's own rules. */
+/* ── Admin Tools restricted overlay (light mode) ── */
+body.light-mode #files-restricted-overlay { background: var(--bg-0) !important; }
+body.light-mode .files-restricted-card { background: var(--bg-elev) !important; border-color: var(--border-strong) !important; box-shadow: 0 12px 32px rgba(var(--shadow-rgb), 0.10) !important; }
+
 /* ============================================================
    Files tab — VS Code-style file base editor
    Sidebar + tree, draggable tabs, editor pane, status bar
@@ -577,7 +582,7 @@ body {
 }
 
 /* Skeleton tree rows shown while /tree loads (built by _treeSkeletonHtml).
-   `.sk-shimmer` (animated fill) is shared in ui/shared/css/app3.css. */
+   `.sk-shimmer` (animated fill) is shared in ui/shared/skeleton/skeleton.css. */
 .files-tree-sk-row {
   display: flex;
   align-items: center;
@@ -1651,7 +1656,7 @@ body.light-mode .token.regex, body.light-mode .token.important, body.light-mode 
    overlay. `body.admin-restricted` is toggled by startAdminTools/stopAdminTools
    in files.js, and removing it reasserts the user's saved chat visibility. The
    #main-panel rule also wins over the mobile `body.chat-visible #main-panel{
-   display:none}` stack rule (app2.css), so the overlay shows on mobile too. */
+   display:none}` stack rule (ui/shell/responsive.css), so the overlay shows on mobile too. */
 body.admin-restricted #chat-panel,
 body.admin-restricted #chat-resize-handle { display: none !important; }
 body.admin-restricted #main-panel { display: flex !important; }

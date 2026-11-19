@@ -20,7 +20,7 @@
    A horizontal drag on any NON-scrollable surface of this tab (toolbar, card
    header, detail background, form areas…) would otherwise overscroll the
    viewport and trigger the browser's swipe back/forward history navigation.
-   index.css also sets this on html/body, but only when the floating-glass skin
+   ui/boot/loading-shell.css also sets this on html/body, but only when the floating-glass skin
    is loaded — this rule makes it unconditional and also seals the page-level
    scrollers (open-card mode #agents-grid.carousel, overview mode
    #tab-agents.agents-show-sessions). The real horizontal scrollers (agents
@@ -453,7 +453,7 @@ body.light-mode .agent-clones-status { background: rgba(60, 44, 46, 0.08); color
 /* (The builder footer row + system-agents eye toggle were removed along with the
    page-level "Ask WebAgent…" pill. The hybrid search/chat pill that replaced it
    lives above the ability table — see ui/shared/js/dom-utils.js + the
-   .ability-search-pill skin in ui/shared/css/index.css.) */
+   .ability-search-pill skin in ui/boot/loading-shell.css.) */
 
 /* ── Empty state ── */
 .agents-empty {
@@ -542,7 +542,7 @@ body.light-mode .agent-clones-status { background: rgba(60, 44, 46, 0.08); color
 .agent-skeleton .sk-line.long  { width: 70%; }
 .agent-skeleton .sk-line.short { width: 38%; }
 /* `.sk-shimmer` + its keyframe + reduced-motion now live in the globally-loaded
-   ui/shared/css/app3.css (shared skeleton primitives) so every page can reuse
+   ui/shared/skeleton/skeleton.css (shared skeleton primitives) so every page can reuse
    them; only the agent-card LAYOUT above stays page-local. */
 
 /* ── Phantom first-paint shell (STATIC — ships in agents.html) ─────────
@@ -989,7 +989,7 @@ body.light-mode .agent-card-desc { color: var(--fg-2); }
 }
 .agent-card-tabs::-webkit-scrollbar { display: none; }
 /* SISTER-CAROUSEL: ACTIVE-TAB-GROW — shared formatting with the App Configuration
-   tab strip (`.ac-tab` in ui/shared/css/app3.css). Both are horizontal
+   tab strip (`.ac-tab`, whose shared rules were retired). Both are horizontal
    chevron-scroll tab carousels where the ACTIVE tab renders a couple px larger
    than the rest, with `font-size` in the transition so the change animates as
    you switch tabs. Keep the two in sync: any change to the active-tab
@@ -1620,7 +1620,7 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
    imports the tab module before its renderer writes anything — a blank flash.
    These pseudo-elements paint ONLY while the body has no children (:empty): a
    shimmering title bar + content card, using the shared sk-shimmer paint and
-   skShimmer keyframe (app3.css). The instant the renderer appends its first
+   skShimmer keyframe (ui/shared/skeleton/skeleton.css). The instant the renderer appends its first
    node, :empty stops matching and the skeleton disappears — no JS timing, no
    cleanup. Tabs that already show their own loader (Prompts spinner, Members
    skeleton, Abilities table, Billing skeleton) replace it with theirs on the
@@ -1673,7 +1673,7 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
    removed. Its hybrid replacement — live ability search + chat-to-WebAgent — now
    sits inline above the ability table inside each agent's Abilities tab. The pill
    geometry still comes from the shared .chat-pill* block in ui/chat/composer.css and its
-   floating-glass skin (.ability-search-pill) from index.css.) */
+   floating-glass skin (.ability-search-pill) from ui/boot/loading-shell.css.) */
 
 /* ── Config fields ── */
 /* Expanded Public link URL: a plain inline link with copy + QR actions, not an
@@ -1734,7 +1734,7 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
 /* ── Config-tab Settings table —
    The `.ac-config-control` control-slot rules (used by this tab's `.ac-list
    .ac-config-list` Settings table, and now ALSO by both ability tables' expanded
-   settings) were MOVED to ui/shared/css/app3.css so the admin ability table —
+   settings) were MOVED to the shared ui/shared/option-list/option-list.css so the admin ability table —
    which doesn't load this file — shares the identical neat look. Edit them there. */
 .agents-textarea {
   width: 100%;
@@ -3104,7 +3104,7 @@ body.light-mode .lv-edit-save-btn.dirty { background: var(--bg-elev); border-col
 .agent-context-composition-tip span { margin-top: 2px; color: var(--fg-3); }
 .agent-context-composition-tip b { margin-top: 5px; color: var(--fg-2); font-weight: 650; }
 /* CONTEXT-CHART-LOADING: the chart container's pending state wears the SHARED skeleton
-   paint (sk-shimmer, ui/shared/css/app3.css) instead of a flat fill, so the placeholder
+   paint (sk-shimmer, ui/shared/skeleton/skeleton.css) instead of a flat fill, so the placeholder
    for the disc glimmers — clipped to the container's own radius, with its centre plate
    on top. The :not(.sk-shimmer) branch keeps a flat surface if the markup ever omits the
    class (and it must be scoped that way: a class PAIR outranks the single primitive, so
@@ -3369,9 +3369,9 @@ body.light-mode .lv-edit-save-btn.dirty { background: var(--bg-elev); border-col
 }
 
 /* The agent-card connection list now uses the SHARED expandable-row component
-   (`.ac-list` / `.ac-row` / `.ac-ability-*` in app3.css). The `.conn-*` classes
+   (`.ac-list` / `.ac-row` / `.ac-ability-*` in ui/shared/option-list/option-list.css). The `.conn-*` classes
    below are kept ONLY as JS/behaviour hooks — their visual rules are gutted so
-   the shared component governs the look. Change the look in app3.css, not here. */
+   the shared component governs the look. Change the look in ui/shared/option-list/option-list.css, not here. */
 .conn-grid {
   /* Container look comes from `.ac-list`. */
 }
@@ -3411,7 +3411,7 @@ body.light-mode .lv-edit-save-btn.dirty { background: var(--bg-elev); border-col
   border: var(--border-width) solid var(--border);
 }
 
-/* Toggle switch — MOVED to the globally-loaded ui/shared/css/app3.css (search
+/* Toggle switch — MOVED to the globally-loaded ui/shared/controls/controls.css (search
    "Toggle switch (SISTER-PANEL: AGENT-ABILITY-TABLE)") so the admin config pages
    (App Settings / Agent Settings), which don't load this per-page sheet, render
    the same `.conn-toggle` switch. The dark + light + saving-state rules and the
@@ -3426,7 +3426,7 @@ body.light-mode .lv-edit-save-btn.dirty { background: var(--bg-elev); border-col
 /* Token / config fields — show/hide + padding/border come from the shared
    `.ac-ability-body` + `.ac-row.expanded`; `.conn-fields` stays as a JS hook. */
 .conn-fields {
-  /* visual rules intentionally empty — see app3.css `.ac-ability-body` */
+  /* visual rules intentionally empty — see ui/shared/option-list/option-list.css `.ac-ability-body` */
 }
 
 .conn-field-label {
@@ -3471,10 +3471,10 @@ body.light-mode .lv-edit-save-btn.dirty { background: var(--bg-elev); border-col
 }
 
 /* Light mode (conn-card / conn-name / conn-fields colours now come from the
-   shared `.ac-*` light-mode rules in app3.css). */
+   shared `.ac-*` light-mode rules in ui/shared/option-list/option-list.css). */
 body.light-mode .conn-section-label { color: var(--fg-3); }
 body.light-mode .conn-section-hint  { color: var(--fg-3); }
-/* (light-mode .conn-toggle-track rules moved to app3.css with the switch) */
+/* (light-mode .conn-toggle-track rules moved to ui/shared/controls/controls.css with the switch) */
 body.light-mode .conn-field-label   { color: var(--fg-3); }
 body.light-mode .conn-field-hint    { color: var(--fg-3); }
 body.light-mode .conn-badge.coming-soon { background: var(--bg-tint); color: var(--fg-3); border-color: var(--border); }
@@ -3499,7 +3499,7 @@ body.light-mode .conn-google-account { background: var(--bg-1); border-color: va
   color: var(--fg-3);
   padding: 8px 12px;
 }
-/* ── Members loading skeleton — shape helpers only; shimmer fill from .sk-shimmer (app3.css) ── */
+/* ── Members loading skeleton — shape helpers only; shimmer fill from .sk-shimmer (ui/shared/skeleton/skeleton.css) ── */
 .members-skeleton { padding: 4px 2px; }
 .mem-sk { display: block; height: 11px; border-radius: 6px; }
 .mem-sk-head { height: 12px; margin-bottom: 12px; }

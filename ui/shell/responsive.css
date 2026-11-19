@@ -1,3 +1,5 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
 /* COLOR SCHEME → ui/shared/css/design-system.css (single source of truth).
    No raw hex/rgb here: use var(--brand) / var(--accent) / var(--accent-hover) for
    the brand accent, rgba(var(--brand-rgb), a) for any accent opacity, var(--success|
@@ -6,8 +8,7 @@
    (the dark :root block AND its body.light-mode twin), then reference it here.
    Re-theming the whole app (e.g. peach → green) is then a one-file edit. */
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-
-  /* ── Responsive ── */
+/* ── Responsive ── */
   /* Keep the desktop split until both panels reach their 250px floors plus the
      14px divider (514px). Below that, retain the established chat-only mobile
      view rather than collapsing either desktop panel. */
@@ -20,31 +21,6 @@
     body.chat-visible #main-panel { display: none !important; }
   }
 
-  /* ── Tab buttons in main header ── */
-  .tab-btn-group {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    margin-right: 8px;
-    padding-right: 12px;
-    border-right: var(--border-width) solid var(--border);
-  }
-  .tab-btn-group .tab-btn {
-    background: none;
-    border: none;
-    color: var(--fg-3);
-    padding: 3px 10px;
-    font-size: 11px;
-    cursor: pointer;
-    font-family: inherit;
-    border-radius: 4px;
-    transition: 0.15s;
-    font-weight: 500;
-  }
-  .tab-btn-group .tab-btn:hover { color: var(--fg-2); background: var(--bg-elev); }
-  .tab-btn-group .tab-btn.active {
-    color: var(--brand);
-    background: rgba(var(--brand-rgb), 0.08);
-  }
-  .tab-content { display: none; flex: 1; min-height: 0; }
-  .tab-content.active { display: flex; flex-direction: column; }
+/* ── Tab buttons in main header ── */
+.tab-content { display: none; flex: 1; min-height: 0; }
+.tab-content.active { display: flex; flex-direction: column; }

@@ -1,0 +1,17 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Unified save-status indicator — OVERLAY ON TOP of the control */
+.wa-confirm-panel {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-modal, 0 30px 80px -20px rgba(var(--shadow-rgb), 0.6));
+  padding: 20px 20px 16px;
+  transform: translateY(8px) scale(0.985);
+  transition: transform 0.16s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wa-confirm-panel { transition: none; }
+}

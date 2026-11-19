@@ -2,7 +2,7 @@
 
 // Shared configuration rows: one look and one save behaviour for every setting on a
 // config page. A row is the app's option-row frame (.ac-list / .ac-ability-row, styled in
-// ui/shared/css/app3.css) around one control from ui/shared/controls/controls.js, in the
+// ui/shared/option-list/option-list.css) around one control from ui/shared/controls/controls.js, in the
 // .ac-config-control slot. What the rows add is styled in config-rows.css.
 //
 // Saving. A row either saves as you go (pass onSave: it gets the new value and returns a

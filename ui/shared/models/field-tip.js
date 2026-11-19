@@ -8,7 +8,7 @@
 // affordance the App Settings → Deploy form grew per-field (where to find a
 // value / how to choose); factored out here so any config form can reuse it.
 //
-// The bubble's look lives in ui/shared/css/app3.css (.ac-field-tip + .ac-tip-pop
+// The bubble's look lives in ui/shared/models/field-tip.css (.ac-field-tip + .ac-tip-pop
 // + .ac-tip-gallery + .ac-tip-lightbox) — the single source of truth, themed for
 // dark + light. Don't restyle here.
 //

@@ -1,0 +1,277 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Mobile keyboard: clear the bottom clutter off a focused field */
+.ac-status {
+  font-size: 12px;
+}
+/* ── Config / settings control slot (SHARED) ──────────────────────────────────
+   The right-hand control slot for a row in the unified `.ac-config-list` — used
+   by config-setting rows AND tool rows alike (so a setting's field/menu and a
+   tool's toggles land on the same edge). Read identically by THREE sites: the
+   agent card's Config tab (tab-config.js `_cfgRow`) AND both ability tables'
+   expanded settings+tools list (agent/admin-ability-table.js → dom-utils.js
+   `_buildSettingsRowsHtml` / `_buildToolRow`). Lives here (not agents.css) so the
+   admin Agent Settings table — which doesn't load agents.css — styles its rows
+   the same neat way. Only the right-hand control needs bespoke rules; the row /
+   border / divider / name / description come from the shared `.ac-list` /
+   `.ac-ability-*` component. */
+.ac-config-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+  align-self: center;
+}
+/* Right-aligned controls keep their natural width inside the slot (the shared
+   `.ac-input` is width:100%, which would blow out the row). */
+.ac-config-control > .ac-input { width: auto; }
+/* A number stepper's width in a setting row; the stepper itself is in ui/shared/controls/controls.css. */
+.ac-config-control > .ac-num-stepper { width: 96px; }
+/* Inline config dropdown — kept COMPACT (shorter than the two-line label) so a
+   dropdown row sits at the exact same height as a toggle row. Without this the
+   default `.ac-input` (9px/13px) is taller than the label and makes choice rows
+   stand taller than on/off rows, breaking the uniform table rhythm. */
+.ac-config-control > select.ac-config-sel { min-width: 132px; padding: 5px 10px; font-size: 12px; }
+/* ── Agent Tools — compact ability rows ── */
+.ac-abilities-compact,
+.ac-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: var(--border-width) solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-elev, var(--bg-elev));
+}
+/* Hairline dividers are drawn by the CONTAINER between items — so an item can be
+   a bare row OR an expandable `.ac-row` wrapper and the dividers always line up. */
+.ac-abilities-compact > * + *,
+.ac-list > * + * {
+  border-top: var(--border-width) solid var(--border);
+}
+
+/* ── Whole-section build gate */
+.ac-ability-row {
+  display: flex;
+  /* Wrap so the description drops onto its OWN full-width line below the
+     icon · title · control line, instead of being trapped in a narrow middle
+     column that cramps on narrow screens (see `.ac-ability-label` /
+     `.ac-ability-desc` below for the rest of the stacked-row mechanism). */
+  flex-wrap: wrap;
+  align-items: flex-start;
+  column-gap: 10px;
+  row-gap: 3px;
+  padding: 8px 14px 8px 4px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.ac-ability-row:hover {
+  background: rgba(var(--brand-rgb), 0.04);
+}
+
+/* ── Chevron column slot */
+.ac-ability-label {
+  /* `display: contents` promotes the name + description to be flex children of
+     the ROW itself, so the description can drop to its own full-width line
+     below the `icon · title · control` line (rather than stacking inside a
+     narrow middle column). The two form-column variants that reuse this class
+     as a fixed-width label — `.ac-model-cfg-row` and `.ac-main-panel-item` —
+     opt back out by restoring their own `display` below. */
+  display: contents;
+  flex: 1;
+  min-width: 0;
+}
+.ac-ability-name {
+  /* Sits on the title line; the control after it is pushed to the right edge.
+     flex-basis: 0% forces the browser to size purely from available space,
+     so overflow + text-overflow: ellipsis triggers instead of wrapping. */
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-1, var(--fg-1));
+  line-height: 1.3;
+}
+.ac-ability-desc {
+  /* `order: 1` places the description after the control, and `flex-basis: 100%`
+     forces it onto its own line, full row width, below the title line. The
+     left indent lines it up under the name text. Rows with no icon reset to 0. */
+  order: 1;
+  flex: 0 1 100%;
+  margin-left: 51px;
+  font-size: 10.5px;
+  color: var(--fg-muted, var(--fg-3));
+  line-height: 1.4;
+  margin-top: 1px;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* When the row is expanded its description is no longer clamped — the title row
+   grows vertically to show the full text (admin members carry `.ac-row-open`;
+   agent cards / group heads use `.ac-row.expanded`). */
+.ac-ability-row.ac-row-open .ac-ability-desc,
+.ac-row.expanded > .ac-ability-row .ac-ability-desc {
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+/* Row-level search pruning (agent-ability-table.js `_filterCardRows`). The `hidden`
+   attribute alone is NOT enough here: its UA `display: none` loses to this sheet's
+   author `.ac-ability-row { display: flex }`, and to the inline `display` an open
+   skill body carries from its own View/Hide toggle. `data-search-hidden` therefore
+   owns the visual state, with `!important` to beat that inline display. */
+.ac-ability-body .ac-ability-row[data-search-hidden="true"],
+.ac-ability-body [data-search-row-detail][data-search-hidden="true"] {
+  display: none !important;
+}
+
+/* ── Gate parameter rows (STACKED) */
+.ac-ability-toggle-wrap {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-top: 1px;
+}
+
+/* ── Unified save-status indicator — OVERLAY ON TOP of the control */
+body.light-mode .ac-ability-row {
+  border-bottom-color: var(--border);
+}
+body.light-mode .ac-ability-row:hover {
+  background: rgba(var(--brand-rgb), 0.04);
+}
+body.light-mode .ac-ability-name {
+  color: var(--fg-1);
+}
+body.light-mode .ac-ability-desc {
+  color: var(--fg-3);
+}
+/* ── Expandable row (click-to-open info / config) ─────────────────────────
+   An item that reveals a body when clicked. Wrap the head + body in `.ac-row`
+   and JS adds `.expanded` to open it. Use `.ac-row-static` for a non-expanding
+   item. The body holds additional info and/or config fields (OAuth, scopes…). */
+.ac-row {
+  display: flex;
+  flex-direction: column;
+}
+.ac-row > .ac-ability-row {
+  cursor: pointer;
+}
+.ac-row-static > .ac-ability-row {
+  cursor: default;
+}
+.ac-ability-body {
+  display: none;
+  /* Left padding matches the member-row indent so the settings / tools line up
+     directly under the ability they belong to. */
+  padding: 8px 14px 10px 20px;
+  border-top: var(--border-width) solid var(--border);
+  background: var(--bg-1);
+}
+/* `.ac-row.expanded` opens agent-panel card bodies; `.ac-body-open` opens admin
+   member bodies (the admin member row is not wrapped in its own `.ac-row`). */
+.ac-row.expanded > .ac-ability-body,
+.ac-ability-body.ac-body-open {
+  display: block;
+}
+/* Nothing to configure → no empty padded strip. The row has still grown to show
+   its full description; only the settings/tools area is suppressed. */
+.ac-row.expanded > .ac-ability-body:empty,
+.ac-ability-body.ac-body-open:empty {
+  display: none;
+}
+.ac-row-chevron {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 8px;
+  color: var(--fg-muted, var(--fg-3));
+  transition: transform 0.2s;
+}
+.ac-row.expanded > .ac-ability-row .ac-row-chevron {
+  transform: rotate(90deg);
+}
+
+/* ── Inline roster-role prompt directives (Agent Config model table) */
+.ac-directives-section-title {
+  margin: 0 0 7px; color: var(--fg-2); font-size: 12px; font-weight: 700;
+  letter-spacing: .02em;
+}
+.ac-directive-row > .ac-ability-row { align-items: flex-start; }
+.ac-directive-hint { margin: 0; }
+
+/* ── "More" (⋯) column — mirrors the LEFT chevron column geometry */
+body.light-mode .ac-list,
+body.light-mode .ac-abilities-compact {
+  background: var(--bg-elev);
+  border-color: var(--border);
+}
+body.light-mode .ac-list > * + *,
+body.light-mode .ac-abilities-compact > * + * {
+  border-top-color: var(--border);
+}
+body.light-mode .ac-ability-body {
+  border-top-color: var(--border);
+  background: var(--bg-1);
+}
+
+/* ── Grouped abilities (Administrator / Basic / Web) */
+.ac-group-head .ac-ability-name { font-size: 13.5px; }
+/* ── 3-position toggle (Off · Mixed · On) ─────────────────────────────────
+   A wider sliding switch with three detents. The left/right halves are click
+   targets (all-off / all-on); the centre "mixed" detent is set by the code
+   when members are partially on — you reach it by toggling members, not by
+   clicking. Mirrors `.conn-toggle-track` colours so it sits with the app's
+   switches. */
+.ac-tri {
+  position: relative;
+  display: block;
+  width: 54px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  border: var(--border-width) solid var(--border);
+  background: var(--border-soft);
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+/* The ON detent mirrors `.conn-toggle-track:checked` exactly — the same green
+   track tint, green border and green knob the 2-position switch uses. */
+.ac-tri[data-state="on"] { background: var(--success-soft); border-color: var(--success); }
+/* Tri-toggle off/mixed/on colours are all design-system tokens above, so they
+   adapt to light mode — the former body.light-mode .ac-tri overrides were
+   redundant and removed. */
+/* Inactive group toggle — same footprint as `.ac-tri`, shown for groups whose
+   members are all placeholders / coming-soon (nothing to toggle). Greyed and
+   non-interactive so every group row still carries a same-size toggle. */
+.ac-tri.ac-tri-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Skeleton loading placeholders (shared) */
+/* Ability-table toggle states stay semantically legible in every theme.
+   Scope this to the Agents → Abilities table; shared toggles keep their own states.
+   (SISTER-PANEL: AGENT-ABILITY-TABLE.) */
+.ac-ability-toggle-wrap .conn-toggle-track {
+  background: var(--bg-2);
+  border-color: var(--fg-3);
+}
+.ac-ability-toggle-wrap .conn-toggle-track::after {
+  background: var(--fg-3);
+}
+.ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track {
+  background: var(--success-soft);
+  border-color: var(--success);
+}
+.ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after {
+  background: var(--success);
+}
+/* Off = neutral gray. Discoverable = normal outline + green circle. Visible = green outline + green circle. */
+.ac-ability-row[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track { background: var(--success-soft); border-color: var(--success); }
+.ac-ability-row[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after { background: var(--success); }

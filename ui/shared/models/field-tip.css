@@ -1,0 +1,99 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Inline LIVE theme switch in a category header (App Settings → Design) */
+/* Field help: a small circled "?" beside a label. CLICK / TAP opens the help
+   bubble (.ac-tip-pop below); hover also previews it on a mouse. Used by the
+   Deploy form so each field can explain where to find the value or how to
+   choose. (cursor: help = the little "?" pointer, signalling it's clickable.) */
+.ac-field-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border: var(--border-width) solid var(--border-strong, var(--border));
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--fg-3);
+  cursor: help;
+  vertical-align: middle;
+  user-select: none;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.ac-field-tip:hover,
+.ac-field-tip:focus-visible,
+.ac-field-tip.is-open {
+  color: var(--bg-0);
+  background: var(--accent);
+  border-color: var(--accent);
+  outline: none;
+}
+/* The floating help bubble itself — one shared element appended to <body> so it
+   floats above the panel and never gets clipped by a scroll box. JS positions
+   it next to the clicked "?" badge. */
+.ac-tip-pop {
+  position: fixed;
+  z-index: 9999;
+  max-width: 300px;
+  /* JS caps max-height to the room above/below the badge, so a tall image bubble
+     scrolls inside itself instead of running off the top/bottom of the screen. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 9px 11px;
+  border: var(--border-width) solid var(--border-strong, var(--border));
+  border-radius: 8px;
+  background: var(--bg-0);
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
+  pointer-events: none;          /* purely informational — clicks pass through */
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.ac-tip-pop.show { opacity: 1; transform: translateY(0); }
+.ac-tip-pop[hidden] { display: none; }
+/* Rich help bubble — carries a paragraph, an optional (project-ID-driven) link,
+   and screenshot thumbnails, not just one line of text. Made clickable (the plain
+   bubble is pointer-events:none) so the link inside can be followed. */
+.ac-tip-pop.is-rich { pointer-events: auto; }
+.ac-tip-pop .ac-tip-gallery { display: flex; flex-direction: column; gap: 8px; }
+.ac-tip-pop .ac-tip-gallery img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: var(--border-width) solid var(--border);
+  border-radius: 6px;
+  cursor: zoom-in;                /* click to open full-size in the lightbox */
+  transition: border-color .12s ease;
+}
+.ac-tip-pop .ac-tip-gallery img:hover { border-color: var(--accent); }
+/* Full-screen image viewer opened by clicking a screenshot inside a help bubble.
+   One shared element appended to <body>, above every panel and the tip bubble
+   itself (z-index over .ac-tip-pop). Click anywhere (or Escape) to close. */
+.ac-tip-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.8);
+  cursor: zoom-out;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.ac-tip-lightbox.show { opacity: 1; }
+.ac-tip-lightbox[hidden] { display: none; }
+.ac-tip-lightbox img {
+  max-width: 92vw;
+  max-height: 92vh;
+  border: var(--border-width) solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 44px rgba(0, 0, 0, 0.55);
+}

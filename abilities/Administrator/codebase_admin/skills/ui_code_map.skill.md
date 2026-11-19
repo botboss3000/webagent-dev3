@@ -46,7 +46,7 @@ search this checkout instead.
 | Scroll and drag gestures on header/footer | `core/footer-gesture-forward.js` |
 | Header chips | `controls/broker-chip.js`, `controls/session-dropdown/`, `elements/main-notes/` |
 | Transport | `core/client.js`, `core/fetch-stream.js` |
-| Styles | `chat.css`; shared app styles in `ui/shared/css/` |
+| Styles | `chat.css` plus `panel.css`, `header.css`, `composer.css`, `chat-shared.css`, `controls/footer-controls.css`, `core/messages.css`, `controls/session-dropdown/menu.css` and `session-list.css`; tokens in `ui/shared/css/design-system.css` |
 | Mobile soft keyboard | `ui/boot/viewport.js` tracks the visual viewport and sets `body.kb-open` (see `ui_design`) |
 
 Other areas: shell `ui/shell/app.js`, `ui/index.html`; main-panel pages `ui/main-panel/<id>/`

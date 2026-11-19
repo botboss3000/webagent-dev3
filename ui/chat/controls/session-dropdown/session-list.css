@@ -1,0 +1,241 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Session tabs: recency-ordered session resources ── */
+/* Keep the session-tab row available when no session resources exist.
+   The tab renderer may hide its empty content, while the anchor-navigation
+   controls remain available at the right of this row. */
+
+#chat-sub-scroll-wrap.can-scroll-right {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent 100%);
+          mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent 100%);
+}
+#chat-sub-scroll-wrap.can-scroll-left {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40px);
+          mask-image: linear-gradient(to right, transparent 0, #000 40px);
+}
+#chat-sub-scroll-wrap.can-scroll-left.can-scroll-right {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%);
+}
+/* ── TEMPORARY backward-compat copy for static DOM elements ── */
+
+/* Sessions device badge + automations "Run on" chip — shared compact look. */
+.sess-device-badge, .auto-device-chip {
+    display: inline-flex; align-items: center; gap: 4px; vertical-align: middle;
+    font-size: 11px; color: var(--fg-3); padding: 1px 7px; border-radius: 999px;
+    border: var(--border-width) solid var(--border);
+    background: color-mix(in oklab, var(--bg-elev) 70%, transparent);
+    max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+.auto-device-chip { cursor: pointer; }
+.auto-device-chip:hover { color: var(--fg-1); border-color: rgba(var(--brand-rgb), .4); }
+.auto-device-chip.targeting {
+    color: var(--brand); border-color: rgba(var(--brand-rgb), .5);
+    background: color-mix(in oklab, var(--brand) 12%, transparent);
+  }
+.auto-device-chip svg, .sess-device-badge svg { width: 11px; height: 11px; flex: 0 0 auto; }
+/* ── Chat header label rows: the dropdown flex-fills the row ── */
+  #agent-label,
+/* Session dropdown — a flex row of chevron + trigger + menu. Can shrink so the label truncates.
+   ⚠️  HEADER/FOOTER CONTROL SIZING IS GOVERNED BY data/config/chat_ui.json — NOT THIS CSS.
+   The _sizeControl() JS in chat-header-config.js / chat-controls-config.js applies
+   min_width, max_width, container_size, and element_size from that file with !important.
+   This includes ALL controls placed in the header (rows), footer, above_pill, below_pill,
+   and pill zones — session_dropdown, agent_name, changes, new_session, buttons, etc.
+   To adjust any control's dimensions, edit its entry under chat_desktop.chat_header.controls
+   (or chat_mobile / chat_common) in chat_ui.json. CSS here only provides structural defaults
+   that JS overrides at runtime. */
+#session-dropdown { display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
+/* ── Session nav arrows (prev/next pinned session) ── */
+
+.session-dropdown-status.session-status-running,
+    .agent-dropdown-status.session-status-running {
+        color: var(--brand);
+        animation: session-radial-spin 0.8s linear infinite;
+      }
+
+/* ── Session / Agent dropdown (custom) ───────────────────────── */
+body.light-mode .session-dropdown:not([data-loaded="true"]) #session-dropdown-label,
+body.light-mode .agent-dropdown:not([data-loaded="true"]) #agent-dropdown-label {
+  color: var(--fg-3);
+}
+.session-dropdown {
+      position: relative;
+      display: inline-block;
+      vertical-align: middle;
+    }
+/* ── Session dropdown merged panel ──────────────────────────────────────
+   When the menu is open the trigger chip and the list become ONE panel:
+   the chip is the panel's title row. The chip adopts the menu's solid
+   surface + border, squares the corners it shares with the list (bottom
+   normally, top when flipped up), and keeps its own border as the divider
+   between the title row and the list; the menu squares the shared corners
+   and drops the border on the shared edge. Radius unifies at 14px (the
+   menu's radius) so the whole panel reads as a single object. All layouts
+   use the same connected panel; mobile only changes the available width. */
+#session-dropdown-menu > .session-row,
+#session-dropdown-menu > .session-dropdown-empty,
+#session-dropdown-menu > .session-dropdown-loading-row,
+#session-dropdown-menu > .session-manage-row {
+    opacity: 0;
+    animation-fill-mode: forwards;
+    animation-duration: .18s;
+    animation-timing-function: ease-out;
+}
+#session-dropdown-menu.opening > .session-row,
+#session-dropdown-menu.opening > .session-dropdown-empty,
+#session-dropdown-menu.opening > .session-dropdown-loading-row,
+#session-dropdown-menu.opening > .session-manage-row {
+    animation-name: sessionDropdownRowReveal;
+}
+#session-dropdown-menu.closing > .session-row,
+#session-dropdown-menu.closing > .session-dropdown-empty,
+#session-dropdown-menu.closing > .session-dropdown-loading-row,
+#session-dropdown-menu.closing > .session-manage-row {
+    animation-name: sessionDropdownRowHide;
+}
+@keyframes sessionDropdownRowReveal {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sessionDropdownRowHide {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(-6px); }
+}
+@media (prefers-reduced-motion: reduce) {
+    #session-dropdown-menu > .session-row,
+    #session-dropdown-menu > .session-dropdown-empty,
+    #session-dropdown-menu > .session-dropdown-loading-row,
+    #session-dropdown-menu > .session-manage-row {
+        animation: none;
+        opacity: 1;
+        transform: none;
+    }
+}
+.session-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--fg-1);
+    font-size: 12px;
+    text-align: left;           /* override any center inheritance */
+  }
+body.light-mode .session-row,
+body.light-mode .agent-row-item { color: var(--fg-2); }
+.session-row:hover { background: rgba(var(--brand-rgb), 0.1); }
+.session-row.selected,
+.agent-row-item.selected { background: rgba(var(--brand-rgb), 0.16); }
+.session-status-running {
+        color: var(--brand);
+        animation: session-radial-spin 0.8s linear infinite;
+      }
+@keyframes session-radial-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+.session-row-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+/* DESIGN SYNC CONTRACT: This is the shared truncation primitive for the chat
+   session dropdown and Agents → Sessions title column. Keep the label-owned
+   ellipsis and the compact recency spacing below identical across both views. */
+.session-row-title-label {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The dropdown avatar halo intentionally paints outside its 18px icon box.
+   Move clipping to the label so the selected-row background never masks it. */
+#session-dropdown-menu .session-row-title {
+    min-width: 0;
+    overflow: visible;
+}
+/* Agent emoji icon prefix in session rows */
+.session-row-agent-icon { font-size: 14px; line-height: 1; flex-shrink: 0; display: inline-flex; align-items: center; }
+.session-row-agent-icon svg,
+.session-row-agent-icon i { display: block; }
+/* Some icon helpers retain a 24px intrinsic SVG attribute; constrain the
+   rendered glyph so every dropdown avatar is visibly 18px. */
+#session-dropdown-menu .session-row-agent-icon svg,
+#session-dropdown-menu .session-row-agent-icon i { width: 18px !important; height: 18px !important; }
+/* ── Drag-to-reorder: pinned session rows are grabable across their full width ── */
+.session-row.pinned { cursor: grab; touch-action: none; }
+.session-row.pinned:active { cursor: grabbing; }
+/* Archived rows keep the pin flag (for unarchive) but are not draggable */
+.session-row.pinned.archived,
+.session-row.pinned.archived:active { cursor: default; touch-action: auto; }
+.session-row.dragging,
+.agent-row-item.dragging {
+    opacity: 0.9;
+    background: var(--accent-soft);
+    box-shadow: 0 4px 14px rgba(var(--shadow-rgb), 0.25);
+    cursor: grabbing;
+  }
+.session-row-kebab {
+    background: none;
+    border: none;
+    color: var(--fg-3);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+.session-row-kebab:hover { background: rgba(var(--ink-rgb),0.06); color: var(--fg-1); }
+body.light-mode .session-row-kebab:hover,
+body.light-mode .agent-row-kebab:hover { color: var(--fg-2); }
+.session-manage-eye:hover { background: rgba(var(--ink-rgb),0.06); color: var(--fg-1); }
+body.light-mode .agent-row-config:hover,
+body.light-mode .session-row-visibility:hover,
+body.light-mode .session-manage-eye:hover { color: var(--fg-2); }
+/* Active manage-eye (hidden sessions revealed): tint it so the mode reads clearly.
+   Scoped under #chat-header to outrank the generic `#chat-header button` colour. */
+#chat-header .session-manage-eye[data-state="on"] { color: var(--brand); }
+/* ── Management footer row ── */
+.session-manage-row {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: 4px;
+    padding: 6px 4px 6px;
+    border-top: var(--border-width) solid var(--border);
+    background: var(--bg-elev);
+    display: flex;
+    align-items: center;
+  }
+body.light-mode .session-manage-row { border-top-color: var(--border); background: var(--bg-0); }
+.session-manage-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+  }
+/* Checkbox toggle button — always shows a square, highlights when active */
+.session-manage-checkbox-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    color: var(--fg-3);
+    transition: color .15s, background .15s;
+  }
+.session-manage-checkbox-toggle:hover { color: var(--fg-1); background: var(--bg-tint); }
+.session-manage-checkbox-toggle[data-state="on"] { color: var(--brand); }
+body.light-mode .session-manage-checkbox-toggle[data-state="on"] { color: var(--brand); }

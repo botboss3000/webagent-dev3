@@ -1,0 +1,111 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Scrollbar policy: thumb-only pills (no arrow buttons) ──────────────────
+   Every scrollbar in the app is a thin rounded pill. The tiny up/down (and
+   left/right) arrow buttons at the ends are redundant — too small to click
+   reliably — and get clipped by the app's rounded window corners, so hide
+   them app-wide. Thumb/track styling is untouched; Firefox thin scrollbars
+   never show buttons anyway. */
+::-webkit-scrollbar-button { display: none; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: var(--bg-0);
+    color: var(--fg-1);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    /* Use dynamic viewport height so mobile browser chrome (address bar,
+       bottom toolbar) doesn't cause the top or bottom of the app to be
+       clipped. --app-height is set from JS via window.visualViewport so
+       the app also shrinks when the mobile on-screen keyboard appears
+       (dvh alone does not shrink for keyboards on Android Chrome).
+       Fallback chain: 100vh → 100dvh → JS-driven --app-height. */
+    height: 100vh;
+    height: 100dvh;
+    height: var(--app-height, 100dvh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+/* ── Stage: split layout ── */
+  #stage {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+/* ── Left: Main panel ── */
+  #main-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    /* Keep the workspace usable; chat and main now share a 250px desktop floor. */
+    min-width: 250px;
+    position: relative;
+  }
+/* ── Right: Chat panel ── */
+  #chat-panel {
+    /* App Settings → Design may override this desktop default with a safe px or
+       percentage value; a user-dragged inline pixel width remains higher priority. */
+    width: var(--chat-panel-width, 380px);
+    min-width: 250px;
+    display: flex;
+    flex-direction: column;
+    border-left: var(--border-width) solid var(--border);
+    background: var(--bg-1);
+    /* Let chat yield to the workspace as the desktop viewport narrows, down
+       to its usable 250px floor. The main panel only shrinks after that. */
+    flex-shrink: 1;
+    position: relative;
+  }
+/* One header row — has three zone children (left/center/right). */
+
+/* Mobile browsers: the trigger is now a div.session-row. Keep the chip's
+   fixed cross-size so opening the menu cannot make the pill taller. */
+
+/* Below-pill controls share the composer border. This is intentionally scoped
+   to #chat-footer-row so the above-pill activity/progress row stays borderless. */
+#chat-footer-row [data-header-control],
+#chat-footer-row [data-element-origin] {
+  border: var(--border-width) solid color-mix(in oklab, var(--fg-1) 22%, transparent) !important;
+}
+@keyframes chat-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+#chat-header .sub { color: var(--fg-3); font-weight: 400; font-size: 12px; }
+/* ── Saving / checked feedback ── */
+
+@keyframes cmc-spin {
+    to { transform: rotate(360deg); }
+  }
+
+/* ── Footer drag handle */
+/* Pulse hint — subtle breathe when footer is closed */
+@keyframes footerHandlePulse {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.55; }
+  }
+/* ── Chat token bar ──────────────────────────────────────────────────────
+   Sits below the chat pill, left-aligned. Shows tokens-in, a spinning shape
+   during activity, and tokens-out. The spinner animates while the agent is
+   working (chat-activity.visible is set). */
+@keyframes tokenSpinnerSpin {
+    0%   { transform: rotate(45deg); }
+    100% { transform: rotate(405deg); }
+  }
+/* ── TEMPORARY backward-compat copy for static DOM elements ── */
+
+@keyframes chatBubbleGlow { 0%,100%{box-shadow:0 0 0 1px var(--accent-soft),0 0 7px -2px var(--accent-mid)} 50%{box-shadow:0 0 0 1px var(--accent-mid),0 0 13px 0 var(--accent-line)} }
+
+/* ── Main header ── */
+@keyframes pulse {0%,
+100% {opacity:1}50% {opacity:0.3} }
+/* ── Session / Agent dropdown (custom) ───────────────────────── */
+
+/* Loading shimmer animation for unloaded labels */
+@keyframes dropdown-label-shimmer {
+  0% { opacity: 0.3; }
+  50% { opacity: 0.8; }
+  100% { opacity: 0.3; }
+}
+
+/* ── Session dropdown merged panel */
+@keyframes sessionDropdownSkeletonShimmer {
+    from { background-position: 100% 0; }
+    to { background-position: 0 0; }
+}

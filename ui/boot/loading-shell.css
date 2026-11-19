@@ -1,3 +1,5 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
 /* ============================================================
    Stargaze background + dynamic spotlight overrides
    Loaded last so it wins the cascade.
@@ -17,7 +19,6 @@ html, body { background: var(--bg-0) !important; }
    the stage) above #stage, while staying above the z-index-1 cursor glow so
    the glow never washes over the header. */
 #main-header { position: relative; z-index: 3; }
-
 /* ── Minimal progressive-load shell ────────────────────────────────────────
    Before the saved page has mounted, #main-panel is an empty floating card.
    Keep its flex footprint so the chat column/pill cannot jump sideways when
@@ -29,7 +30,6 @@ body.is-booting #chat-resize-handle {
   visibility: hidden;
   pointer-events: none;
 }
-
 /* Desktop boot layout: keep the launch surface full-stage while its empty
    composer remains bottom-docked. The canonical #chat-input-area rule in
    ui/chat/composer.css supplies that dock, including for a brand-new session. */
@@ -38,7 +38,6 @@ body.is-booting #chat-resize-handle {
 body.is-booting:not([data-chat-ui-ready]) #chat-input-row.chat-pill-boot {
   visibility: hidden;
 }
-
 @media (min-width: 801px) {
   body.is-booting:not(.app-restricted) #chat-panel {
     position: absolute !important;
@@ -59,13 +58,11 @@ body.is-booting:not([data-chat-ui-ready]) #chat-input-row.chat-pill-boot {
     pointer-events: none;
   }
 }
-
 #chat-input-area {
   /* The composer must remain docked while sessions and footer profiles change.
      Animate internal spacing only — never its vertical position. */
   transition: padding 0.3s ease, gap 0.3s ease;
 }
-
 /* —— Chat panel: transparent — sits on the background directly —— */
 #chat-panel,
 #chat-panel > #chat-header,
@@ -256,7 +253,6 @@ body.light-mode #chat-panel .chat-pill.drag-over {
   max-width: var(--chat-surface-max-width, 1000px);
   margin-inline: auto !important;
 }
-
 /* —— Main panel: a real panel (glass) —— */
 #main-panel {
   background: color-mix(in oklab, currentColor 4%, transparent) !important;
@@ -277,7 +273,6 @@ body.light-mode #main-panel {
     0 1px 0 rgba(255,255,255,0.6) inset, /* KEEP (intentional): white inset glass top-highlight; ink-rgb is dark in light mode and would invert it */
     0 15px 50px -25px rgba(var(--shadow-rgb),0.18) !important;
 }
-
 /* Tighter on small screens — the outer margin ate too much width, squashing
    content. Pull panels closer to the screen edge and trim chat padding. */
 @media (max-width: 800px) {
@@ -285,7 +280,6 @@ body.light-mode #main-panel {
   #chat-messages-inner { padding-left: 8px; padding-right: 8px; }
   #chat-input-area { padding-left: 6px; padding-right: 6px; }
 }
-
 /* —— Main-panel horizontal overscroll: the swipe-to-flip page gesture was
    removed, so this rule now only stops an overscroll at the panel edge from
    chaining into the browser's history back/forward. Inner native scrollers
@@ -296,7 +290,6 @@ html,
 body {
   overscroll-behavior-x: none;
 }
-
 /* —— Cursor glow: a single full-viewport layer behind every panel ——
    This lives at the page-background level (below #stage), so the chat panel
    (transparent) and main panel (glass) never clip it. Its only edges are the
@@ -325,8 +318,6 @@ body {
 }
 #cursor-glow.is-on,
 #cursor-glow.boot-is-on { opacity: 1; }
-/* Glow colour follows the theme accent (var(--brand-rgb)) in both modes. */
-
 /* ── Chat pill focused: hide main app header + chat panel header ──
    When the chat pill is focused on MOBILE, the user is typing — reclaim
    vertical space by hiding the top chrome (#main-header) and the chat panel's
@@ -351,8 +342,7 @@ body {
     transition: max-height 0.15s ease, opacity 0.15s ease, padding 0.15s ease !important;
   }
 }
-
-/* Feedback styles moved to ui/shared/css/app1.css (dropdown-feedback-view).
+/* Feedback styles live with the dropdown feedback view (dropdown-feedback-view).
    All panels share the login-panel look: 360px, 12px border-radius,
    var(--bg-elev) background, var(--border) border, login-panel shadow. */
 
@@ -364,29 +354,6 @@ body[data-offline-readonly="true"] .session-dropdown[data-offline="true"][data-l
   opacity: 1;
   cursor: pointer;
 }
-
-body[data-offline-readonly="true"] .session-dropdown[data-offline="true"][data-loaded="true"] .session-radial-loader,
-body[data-offline-readonly="true"] .session-dropdown[data-offline="true"][data-loaded="true"] .session-chevron-spinner {
-  display: none;
-}
-
-body[data-offline-readonly="true"] .session-dropdown[data-offline="true"][data-loaded="true"] .session-chevron-arrow {
-  display: inline-flex;
-}
-
-body[data-offline-readonly="true"] :is(
-  #session-new-header-btn,
-  #session-dropdown-kebab,
-  #session-dropdown-delete,
-  .session-row-kebab,
-  .session-row-delete,
-  .session-row-action,
-  .session-row-visibility,
-  .session-manage-delete-selected
-) {
-  display: none !important;
-}
-
 /* Role-scoped glimmer parameters affect only chat bubbles, never other spots. */
 .chat-bubble.user { --chat-role-radius: var(--chat-user-radius,14px); --spot-radius:var(--chat-user-glimmer-radius,240px); --spot-color:var(--chat-user-glimmer-color,rgba(var(--brand-rgb),0.12)); }
 .chat-bubble.agent { --chat-role-radius: var(--chat-agent-radius,14px); --spot-radius:var(--chat-agent-glimmer-radius,240px); --spot-color:var(--chat-agent-glimmer-color,rgba(var(--brand-rgb),0.12)); }

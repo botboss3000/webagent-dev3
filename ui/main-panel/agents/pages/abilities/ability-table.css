@@ -1,0 +1,387 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* ── Agent component panel (CHAT-COMPONENT-PANEL / CHAT-COMPONENT-FULL-VIEW) ──
+   The single surface for declarative chat components (present_chat_component).
+   FULL VIEW is its only open state: the panel itself becomes a fixed,
+   panel-relative overlay anchored to the chat panel's bottom edge. It uses 75%
+   of the chat panel's measured height, as wide as the transcript content width.
+   The composer paints above this element so it remains continuously usable.
+   Geometry is measured in JS (_positionFullView in chat-components.js).
+   There is intentionally no transparent wrapper around this surface. */
+
+/* Links and collapsible notices inside bubbles keep working on click but
+   never advertise it with the link-finger cursor — hovering any chat text
+   shows the text caret instead. Real controls (action/gutter/component
+   buttons) keep their own explicit pointer cursors. */
+.ac-tool-skill-link {
+  appearance: none; border: 0; padding: 0; background: transparent; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; text-decoration: underline; text-decoration-color: transparent;
+}
+.ac-tool-skill-link:hover, .ac-tool-skill-link:focus-visible { color: var(--accent); text-decoration-color: currentColor; }
+
+/* ── Chevron column slot */
+.ac-list .ac-ability-row:has(.ac-row-chevron--left)::before {
+  display: none;
+}
+.ac-ability-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  flex-shrink: 0;
+  /* No fixed height — let it be natural so the icon aligns with the name
+     text when the row uses align-items: flex-start. */
+  padding-top: 1px;
+}
+/* Icon-less rows (e.g. the config / settings rows built by dom-utils) put the
+   description flush under the title, since there's no icon column to clear. */
+.ac-ability-row:not(:has(> .ac-ability-icon)) .ac-ability-desc { margin-left: 0; }
+/* App-admin tool descriptions have an optional edit control on the same
+   full-width line, below the tool name/state control. The text remains the only
+   clamped/expandable element; the button is a sibling, never part of its clamp. */
+.ac-tool-description-line {
+  order: 1;
+  flex: 0 1 100%;
+  min-width: 0;
+  margin-top: 1px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.ac-tool-description-line .ac-tool-description {
+  order: unset;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+/* Tool descriptions expand independently of the ability/group row. The shared
+   tool renderer adds this only after it confirms the one-line clamp overflowed. */
+.ac-tool-description-toggle {
+  cursor: pointer;
+}
+.ac-tool-description-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.ac-tool-row.ac-tool-desc-expanded .ac-tool-description {
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+/* ── Gate parameter rows (STACKED) ────────────────────────────────────────────
+   Gate params are mostly multiline guidance boxes whose hint is the only
+   explanation of what belongs in the box, so their rows read TOP-DOWN instead of
+   the horizontal `.ac-config-row` the ability tables use:
+
+     name  →  control (full column width)  →  description
+
+   In the horizontal row the name and the box fought over one line — the name
+   ellipsized to a sliver (82px for a 207px label) — while the hint was clamped to
+   one line and cut off. Built by `buildGateParamRowsHtml` and wired by
+   `wireGateParamRows` (dom-utils.js), used by BOTH the app-level Gates table
+   (agent-settings/gates-section.js) and an agent's Modes-page gate body
+   (agents/configs/content.js) so the two surfaces stay identical.
+   (GATES-PARAM-LAYOUT: app-level ⇄ agent-level stay mirrored.) */
+.ac-gate-param {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 2px;
+}
+.ac-gate-param + .ac-gate-param {
+  border-top: var(--border-width) solid var(--border-soft);
+}
+.ac-gate-param-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-1);
+  line-height: 1.35;
+  cursor: pointer;
+}
+.ac-gate-param-control { display: flex; }
+/* The shared `.ac-input` is width:auto inside the right-aligned `.ac-config-control`
+   slot; here the control owns its own line, so the box takes the full column
+   width instead of leaving dead space beside it. */
+.ac-gate-param-control > .ac-input,
+.ac-gate-param-control > .ac-num-stepper,
+.ac-gate-param-control > .ac-range-control { width: 100%; }
+/* A numeric gate param stays a compact stepper rather than a full-width field. */
+.ac-gate-param-control > .ac-num-stepper,
+.ac-gate-param-control > .ac-range-control { max-width: 130px; }
+
+/* ── Expandable row (click-to-open info / config) */
+/* Left-positioned expand chevron (sits BEFORE the icon, in the dedicated
+   ::before slot space). 13px matches the SVG width; margin-right: -10px
+   cancels the column-gap so it sits flush against the icon. */
+.ac-row-chevron.ac-row-chevron--left {
+  margin-left: 0;
+  margin-right: -10px;
+  width: 13px;
+  min-width: 13px;
+  justify-content: center;
+  display: flex;
+  align-items: center;
+  padding-top: 3px;   /* centres 13px SVG with the 18px icon */
+}
+/* ── "More" (⋯) column — mirrors the LEFT chevron column geometry ────────────
+   An ability row's control column now holds just the toggle + a ⋯ button. The
+   button's 13px slot is the exact mirror of the left chevron slot: flex-shrink
+   0, align-self flex-start, padding-top 3px, and a -10px margin that cancels
+   the flex column-gap so it sits flush against the toggle (the chevron uses
+   margin-right:-10px to sit flush against the icon). The 4px right margin
+   matches the admin group-delete button so both tables' right edges align.
+   (SISTER-PANEL: AGENT-ABILITY-TABLE.) */
+.ac-row-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  min-width: 13px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 3px 0 0;
+  margin: 0 4px 0 -10px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--fg-muted, var(--fg-3));
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.ac-row-more:hover { color: var(--fg-1); background: rgba(var(--brand-rgb), 0.08); }
+.ac-row-more:disabled { opacity: 0.4; cursor: default; }
+/* ── Per-ability tool rows (SISTER-PANEL: AGENT-ABILITY-TABLE) ──────────────
+   Tool rows now render as the SAME stacked `.ac-ability-row` as a config-setting
+   row (built by `_buildToolRow` in shared/dom-utils.js): the tool NAME + its
+   controls share the title line, and the description drops to its own full-width
+   line below. Config knobs and tools sit in ONE unified list, so they read as one
+   continuous run of rows — there is no separate boxed/flat `.agents-tool-*`
+   styling any more. The only tool-specific rule is the monospace name below; the
+   PERMISSION control is the shared `.ac-tri` (styled in the "3-position toggle"
+   block) and the row / dividers come from the shared `.ac-list` /
+   `.ac-ability-row` rules above — all theme-safe via design-system tokens. */
+.ac-tool-header {
+  /* The semantic name/chip wrapper must not create a second visual row. */
+  display: contents;
+}
+.ac-ability-name.ac-tool-name {
+  /* A tool name is an identifier, so keep it monospace + a touch smaller than a
+     human-worded config label, while the row layout stays identical. */
+  font-family: var(--font-mono, monospace);
+  font-weight: 500;
+  font-size: 12px;
+}
+/* ── Unified settings + tools list — INLINE in the expanded ability body ───────
+   The config + tool + skill rows are NOT wrapped in their own bordered
+   "sub-table" box. They flow directly inside the expanded ability body
+   (`.ac-ability-body`) as ONE `.ac-list`, so the panel never nests a box-in-a-box
+   (ability table → ability → boxed sub-table). The skill row is simply this list's
+   FIRST row, so it is bracketed by the same dividers as the rows under it. The
+   list is still built with the shared `.ac-list` class so its hairline ROW
+   DIVIDERS (and their light-mode colour) come for free; here we strip only the
+   list's FRAME — border, rounded corners, elevated fill, and corner clip — from
+   THIS inner list (`.ac-config-settings`), leaving the outer ability table's frame
+   untouched. Each row also drops its own left/right padding so its title and
+   right-aligned control line up on the body's rail (the body's own padding does
+   the inset). (SISTER-PANEL: AGENT-ABILITY-TABLE — the class lives on the shared
+   `_buildAbilitySettingsList` list, so both ability panels match automatically.) */
+.ac-list.ac-config-settings,
+body.light-mode .ac-list.ac-config-settings {
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+  /* `body.light-mode .ac-list` (above) out-specifies a bare `.ac-list` and
+     re-paints the elevated fill, so this inner list kept `--bg-elev` while the
+     expanded body around it painted `--bg-1` — a lighter band down the indent
+     rail to the left of every nested row. Naming the light-mode selector here
+     lets the stripped fill actually win, so the rail and the rows sit on ONE
+     surface in both themes. */
+  background: transparent;
+  margin-top: 4px;
+}
+.ac-config-settings > .ac-ability-row {
+  padding-left: 0;
+  padding-right: 0;
+}
+/* ── Grouped abilities (Administrator / Basic / Web) ──────────────────────
+   Each group is an expandable `.ac-row` whose head carries a 3-position
+   toggle; expanding reveals its member abilities as plain rows in `.ac-group-
+   body` (NOT a nested bordered box — the members read as continuation rows of
+   the same flush list). */
+.ac-group > .ac-ability-row.ac-group-head {
+  cursor: pointer;
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+.ac-group-body {
+  display: none;
+  /* No own background / box — the members are flush rows revealed below the
+     head. A faint inset on the left edge marks them as children. */
+  border-top: var(--border-width) solid var(--border);
+}
+.ac-group.expanded > .ac-group-body { display: block; }
+/* Hairlines between members. */
+.ac-group-body > .ac-ability-row + .ac-ability-row,
+.ac-group-body > .ac-card.ac-card-compact + .ac-ability-row,
+.ac-group-body > .ac-ability-row + .ac-card.ac-card-compact,
+.ac-group-body > .ac-card.ac-card-compact + .ac-card.ac-card-compact {
+  border-top: var(--border-width) solid var(--border);
+}
+/* Admin table: member rows have .ac-ability-body siblings between them so the
+   adjacent-sibling rule above never fires. Cover them with :not(:first-child). */
+.ac-group-body > .ac-ability-row:not(:first-child) {
+  border-top: var(--border-width) solid var(--border);
+}
+/* Agent table: member rows are wrapped in .ac-row; cover those too. */
+.ac-group-body > .ac-row + .ac-row {
+  border-top: var(--border-width) solid var(--border);
+}
+/* Member rows sit clearly indented under the group, on a faintly recessed
+   surface so the group reads as a parent without becoming a separate table.
+   The group head's content starts at 14px (its base `.ac-ability-row` pad); a
+   32px member indent is a deliberate one-level step in from that. The agent
+   table's wrapped cards (`.ac-group-body > .ac-row` below) reach the same
+   effective indent via the card wrapper instead. */
+.ac-group-body > .ac-ability-row,
+.ac-group-body > .ac-card.ac-card-compact .ac-int-row {
+  padding-left: 32px;
+  background: rgba(var(--ink-rgb), 0.12);
+}
+/* The expanded settings/tools body lines up under its (now indented) member
+   row — override the base `.ac-ability-body` 20px so admin members and their
+   bodies share the same left edge. (Agent cards indent via the wrapper, so
+   their inner body is excluded by the `> ` direct-child combinator.) */
+.ac-group-body > .ac-ability-body {
+  padding-left: 32px;
+}
+/* Agent table: each member is a `.conn-card.ac-row` wrapper holding a header
+   row + expandable body. Indent the whole wrapper so the header AND its body
+   shift right together, landing the header content at the same 32px (18px
+   wrapper + 14px base header pad) as the admin member rows above. Full-width
+   hairline dividers are unaffected (padding sits inside the card's border). */
+.ac-group-body > .ac-row {
+  padding-left: 18px;
+}
+.ac-group-body > .ac-ability-row:hover,
+.ac-group-body > .ac-card.ac-card-compact .ac-int-row:hover {
+  background: rgba(var(--brand-rgb), 0.06);
+}
+body.light-mode .ac-group-body { border-top-color: var(--border); }
+body.light-mode .ac-group-body > .ac-ability-row + .ac-ability-row,
+body.light-mode .ac-group-body > .ac-card.ac-card-compact + .ac-ability-row,
+body.light-mode .ac-group-body > .ac-ability-row + .ac-card.ac-card-compact,
+body.light-mode .ac-group-body > .ac-card.ac-card-compact + .ac-card.ac-card-compact {
+  border-top-color: var(--border);
+}
+body.light-mode .ac-group-body > .ac-ability-row:not(:first-child),
+body.light-mode .ac-group-body > .ac-row + .ac-row {
+  border-top-color: var(--border);
+}
+body.light-mode .ac-group-body > .ac-ability-row,
+body.light-mode .ac-group-body > .ac-card.ac-card-compact .ac-int-row {
+  background: var(--bg-1);
+}
+body.light-mode .ac-group-body > .ac-ability-row:hover,
+body.light-mode .ac-group-body > .ac-card.ac-card-compact .ac-int-row:hover {
+  background: rgba(var(--brand-rgb), 0.06);
+}
+
+/* ── 3-position toggle (Off · Mixed · On) */
+.ac-tri-knob {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  transition: left 0.2s, background 0.2s;
+}
+/* Detent spacing parity with the 2-position switch: a 54px track has a 52px
+   inner width, so the three 14px knobs sit at 2 / 19 / 36px — a 2px gap against
+   the border at BOTH ends, exactly like `.conn-toggle-track`'s own 2px inset.
+   (The old on-detent offset of 38px ran the knob flush into the border.) */
+.ac-tri[data-state="mixed"] .ac-tri-knob { left: 19px; background: var(--warning); }
+.ac-tri[data-state="on"] .ac-tri-knob { left: 36px; background: var(--success); }
+/* ── Tool-row 3-way PERMISSION toggle (Off · Ask · Auto) ──────────────────────
+   The tool row's ONE control, and the `.ac-tri` the row used before — now
+   DISPLAY-ONLY: the choice is made in the panel it opens (dom-utils.js,
+   `_buildToolStateControl`). The KNOBS keep the permission colours above; the
+   BORDER carries the tool's VISIBILITY instead — neutral while the tool has no
+   visibility, GREEN once it is discoverable or visible. The selector carries
+   both classes so it outranks the `[data-state="on"]` rule above. */
+.ac-tri.ac-tool-perm-tri { border-color: var(--codex-gray); }
+.ac-tri.ac-tool-perm-tri[data-vis="on_request"],
+.ac-tri.ac-tool-perm-tri[data-vis="loaded"] { border-color: var(--success); }
+/* Display-only tris only LOOK like toggles: the click belongs to the caller
+   (it opens the panel), so there are no detent zones to hint at. */
+.ac-tri.ac-tri-readonly { cursor: pointer; }
+
+/* ── Skeleton loading placeholders (shared) */
+/* Per-agent ability exposure states — mirrors the shared admin ability table. */
+.conn-card[data-exposure="off"] .ac-ability-toggle-wrap .conn-toggle-track {
+  background: var(--bg-2);
+  border-color: var(--codex-gray);
+}
+.conn-card[data-exposure="off"] .ac-ability-toggle-wrap .conn-toggle-track::after {
+  background: var(--codex-gray);
+}
+.conn-card[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle-track {
+  background: var(--success-soft);
+  border-color: var(--success);
+}
+.conn-card[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle-track::after {
+  background: var(--success);
+}
+/* The availability picker is launched by the row toggle. Retain its anchor for
+   positioning only; do not expose a duplicate row-level More control. */
+.conn-card .ac-ability-more-anchor {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+/* ── TOOL-STATE-PANEL — the tool row's control + its panel sections ────────────
+   A tool row has NO interactive toggle: its control is the 3-position
+   PERMISSION `.ac-tri` (Off · Ask · Auto — styled above), and clicking it OPENS
+   the shared body-level floating panel (`#files-floating-menu`) where the whole
+   state is chosen — Permission (Off · Ask · Auto) and Visibility (Discoverable ·
+   Visible) — one selection per section. Shared by BOTH ability tables, so the
+   tool row reads the same everywhere. The panel's shell styling lives with the
+   floating menu (admin-tools/files.css); only its two section labels are
+   defined here. */
+
+/* Section labels inside the panel ("Permission" / "Visibility"). The shared
+   info row sets min-width:248px for prose summaries; a section header must not
+   widen the panel, so it opts out. */
+/* Tool menu: the owner's tier blocks this tool; settings still save. */
+.files-tab-menu-info.v3-tier-note {
+  color: var(--danger);
+}
+/* role_access excludes the viewed level: muted, not an error. */
+.v3-role-note, .files-tab-menu-info.v3-role-note {
+  color: var(--fg-3);
+}
+.files-tab-menu-info.ac-tool-state-head {
+  min-width: 0;
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+/* Inline-SVG menu icon (used instead of a lucide name so the panel never
+   depends on a lucide pass having run on the page). */
+.files-tab-menu-item .files-tab-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}

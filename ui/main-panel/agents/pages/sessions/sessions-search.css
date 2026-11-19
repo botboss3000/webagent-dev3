@@ -1,0 +1,56 @@
+/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
+   original order; linked from index.html where that sheet loaded. */
+/* SEARCH-FIELD-INLINE-ICON — the magnifier is a SIBLING of the input in the */
+.session-manage-search-mode {
+    background: var(--bg-tint);
+    border: none;
+    border-radius: 999px;
+    color: var(--fg-2);
+    cursor: pointer;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition: color .15s, background .15s;
+  }
+.session-manage-search-mode:hover { color: var(--fg-1); background: var(--bg-tint-2); }
+/* FLAG filter chip — sits beside the search field on both footer copies (the
+   chat session dropdown and Agents → Sessions). Clicking it narrows the list to
+   sessions that carry a status flag, hiding the idle ones; `data-state="on"`
+   marks the active filter. Same pill geometry as the search-mode chip it sits
+   next to, so the two read as one row of controls. */
+.session-manage-flag-filter {
+    background: var(--bg-tint);
+    border: none;
+    border-radius: 999px;
+    color: var(--fg-2);
+    cursor: pointer;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    padding: 2px 7px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition: color .15s, background .15s;
+  }
+.session-manage-flag-filter:hover { color: var(--fg-1); background: var(--bg-tint-2); }
+.session-manage-flag-filter[data-state="on"] {
+    background: var(--bg-tint-2);
+    color: var(--brand);
+  }
+body.light-mode .session-manage-flag-filter[data-state="on"] { color: var(--brand); }
+.session-manage-archived {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    color: var(--fg-3);
+    transition: color .15s, background .15s;
+  }
+.session-manage-archived:hover { color: var(--fg-1); background: var(--bg-tint); }
+#chat-header .session-manage-archived[data-state="on"] { color: var(--brand); }

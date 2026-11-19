@@ -1,8 +1,6 @@
 /* Models pages only (agent Model page, App → Model Catalog): the rules these pages add on
-   top of ui/shared/css/app3.css, which every page already loads. Loaded after app3.css,
-   so a rule here wins over the app3.css rule with the same selector.
-   This file used to be a full copy of app3.css with these rules mixed in; the copy made
-   app3's older rules override later stylesheets on these pages only. */
+   top of ui/shared/models/model-table.css, which every page already loads. Loaded after
+   it, so a rule here wins over the model-table.css rule with the same selector. */
 .ac-model-add-control[hidden] { display: none !important; }
 .ac-model-item-selectable { cursor: pointer; }
 .ac-model-item-selectable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

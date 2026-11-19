@@ -24,7 +24,7 @@
   color: var(--fg-3);
   padding: 8px 12px;
 }
-/* Loading skeleton — shape helpers only; shimmer fill from .sk-shimmer (app3.css) */
+/* Loading skeleton — shape helpers only; shimmer fill from .sk-shimmer (ui/shared/skeleton/skeleton.css) */
 .members-skeleton { padding: 4px 2px; }
 .mem-sk { display: block; height: 11px; border-radius: 6px; }
 .mem-sk-head { height: 12px; margin-bottom: 12px; }
