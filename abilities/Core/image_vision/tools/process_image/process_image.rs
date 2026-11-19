@@ -22,6 +22,9 @@ struct Args {
     attachment_id: String,
     question: String,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!("process_image", Args)];
 
 /// Answers a question about one image attached to this conversation. Authority is checked
 /// again after the model answers, so a revocation during the call discards the answer.

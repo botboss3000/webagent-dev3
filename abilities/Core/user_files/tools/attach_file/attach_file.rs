@@ -9,7 +9,7 @@ use webagent_host_core::StoreCore;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Attach {
+pub(super) struct Attach {
     name: String,
 }
 fn stable_uuid(input: &str) -> String {

@@ -37,6 +37,13 @@ pub const TOOLS: &[&str] = &[
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Empty {}
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("reset_to_default", Empty),
+    webagent_abilities::argument_type!("set_effort", set_effort::Effort),
+    webagent_abilities::argument_type!("set_model", set_model::Model),
+    webagent_abilities::argument_type!("use_premium_model", Empty),
+];
 fn state_id(rid: &str) -> String {
     format!("core_model:{rid}")
 }

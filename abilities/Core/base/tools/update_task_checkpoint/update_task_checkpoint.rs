@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpdateArgs {
+pub(super) struct UpdateArgs {
     expected_revision: u64,
     update: Update,
 }

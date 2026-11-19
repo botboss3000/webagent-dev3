@@ -26,6 +26,12 @@ struct Args {
     #[serde(default)]
     plan: Option<Plan>,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!(
+        "set_execution_mode",
+        Args
+    )];
 /// Change the session mode at `call`'s position; a rejected change is an error result.
 ///
 /// # Errors

@@ -38,6 +38,12 @@ struct Args {
     #[serde(default)]
     offset: u64,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!(
+        "score_directory_with_jev",
+        Args
+    )];
 
 fn validate(args: &Args) -> Result<()> {
     if args.path.is_empty() || args.path.len() > 4096 || args.path.contains('\0') {

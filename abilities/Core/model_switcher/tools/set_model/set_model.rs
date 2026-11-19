@@ -7,7 +7,7 @@ use webagent_models::model_selection::Catalog;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Model {
+pub(super) struct Model {
     entry_id: String,
 }
 pub(super) async fn run(

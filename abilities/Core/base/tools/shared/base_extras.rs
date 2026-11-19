@@ -37,6 +37,13 @@ struct Args {
     comment: Option<String>,
     connection_id: Option<String>,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("manage_agent_profiles", Args),
+    webagent_abilities::argument_type!("rate_skill", Args),
+    webagent_abilities::argument_type!("register_user", Args),
+    webagent_abilities::argument_type!("request_agent_login", Args),
+];
 fn identifier(raw: Option<&str>, max: usize) -> Result<&str> {
     let raw = raw.ok_or_else(|| anyhow!("Identifier required"))?;
     if raw.is_empty()

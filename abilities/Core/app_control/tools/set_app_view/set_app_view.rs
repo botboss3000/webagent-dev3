@@ -17,6 +17,9 @@ pub const TOOLS: &[&str] = &["set_app_view"];
 struct Args {
     view: String,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!("set_app_view", Args)];
 #[must_use]
 pub fn destination(view: &str) -> Option<&'static str> {
     Some(match view {

@@ -33,6 +33,9 @@ struct Args {
     #[serde(default)]
     focus: String,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!("compact_context", Args)];
 
 /// `text` trimmed, refused when shorter than `min` or longer than `max` characters or
 /// when it spans lines.

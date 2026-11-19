@@ -476,7 +476,30 @@ pub fn schemas(names: &[&str]) -> Vec<Value> {
 /// Every argument type this crate registers; a family adds its list when it converts.
 pub fn argument_types(
 ) -> impl Iterator<Item = &'static webagent_abilities::tool_arguments::ArgumentType> {
-    [utilities::ARGUMENT_TYPES].into_iter().flatten()
+    [
+        app_control::ARGUMENT_TYPES,
+        base_extras::ARGUMENT_TYPES,
+        compaction::ARGUMENT_TYPES,
+        context_assets::ARGUMENT_TYPES,
+        decision::ARGUMENT_TYPES,
+        directory_decision::ARGUMENT_TYPES,
+        image_vision::ARGUMENT_TYPES,
+        mode::ARGUMENT_TYPES,
+        model_switcher::ARGUMENT_TYPES,
+        orchestration::ARGUMENT_TYPES,
+        prompt::ARGUMENT_TYPES,
+        recall::ARGUMENT_TYPES,
+        self_edit::ARGUMENT_TYPES,
+        session::ARGUMENT_TYPES,
+        task::ARGUMENT_TYPES,
+        user_files::ARGUMENT_TYPES,
+        utilities::ARGUMENT_TYPES,
+        vault::ARGUMENT_TYPES,
+        web_access::ARGUMENT_TYPES,
+        webhooks::ARGUMENT_TYPES,
+    ]
+    .into_iter()
+    .flatten()
 }
 
 #[cfg(test)]

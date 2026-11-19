@@ -65,6 +65,13 @@ pub(super) struct Args {
     after: Option<u64>,
     limit: Option<usize>,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("delete_webhook", Args),
+    webagent_abilities::argument_type!("get_webhook_log", Args),
+    webagent_abilities::argument_type!("list_webhooks", Args),
+    webagent_abilities::argument_type!("register_webhook", Args),
+];
 pub(super) fn public(record: &Value) -> Value {
     json!({"webhook_id":record["id"],"revision":record["revision"],"name":record["artifact"]["name"],"expires_at":record["artifact"]["expires_at"],"active":record["artifact"]["deleted"]!=true&&record["artifact"]["expires_at"].as_u64().unwrap_or(0)>now(),"setup_url":format!("/api/v3/core/webhooks/{}/setup",record["id"].as_str().unwrap_or(""))})
 }

@@ -26,6 +26,9 @@ pub const TOOLS: &[&str] = &["decide_with_jev"];
 struct Args {
     request_json: String,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!("decide_with_jev", Args)];
 
 fn valid_content(value: &Value) -> bool {
     value.is_string() || value.is_object() || value.is_array()

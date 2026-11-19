@@ -16,6 +16,12 @@ pub fn owns(name: &str) -> bool {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PromptArgs {}
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!(
+        "read_own_prompt",
+        PromptArgs
+    )];
 #[derive(Debug)]
 struct ConfigurationError(&'static str);
 impl std::fmt::Display for ConfigurationError {

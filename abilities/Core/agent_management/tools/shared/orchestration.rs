@@ -84,6 +84,16 @@ struct Args {
     description: Option<String>,
     instructions: Option<String>,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("list_delegatable_agents", Args),
+    webagent_abilities::argument_type!("list_sessions", Args),
+    webagent_abilities::argument_type!("promote_spawn", Args),
+    webagent_abilities::argument_type!("read_session", Args),
+    webagent_abilities::argument_type!("run_optimizer", Args),
+    webagent_abilities::argument_type!("search_sessions", Args),
+    webagent_abilities::argument_type!("stop_session", Args),
+];
 
 /// The access repository bound to `store`'s agent plane.
 fn access(store: &StoreCore) -> Repository<'_, StoreCore> {

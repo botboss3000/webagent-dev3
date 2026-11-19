@@ -8,7 +8,7 @@ use webagent_host_core::StoreCore;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Read {
+pub(super) struct Read {
     name: String,
     offset: Option<usize>,
     limit: Option<usize>,

@@ -13,11 +13,11 @@ mod get_date;
 mod get_time;
 
 /// Argument types of this family's tools, checked against their tool.json by the crate test.
-pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
-    &[webagent_abilities::argument_type!(
-        "calculate",
-        calculate::Arithmetic
-    )];
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("calculate", calculate::Arithmetic),
+    webagent_abilities::argument_type!("get_date", get_date::DateArgs),
+    webagent_abilities::argument_type!("get_time", get_time::TimeArgs),
+];
 
 pub fn owns(name: &str) -> bool {
     matches!(name, "get_time" | "get_date" | "calculate")

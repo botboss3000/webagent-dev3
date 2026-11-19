@@ -27,6 +27,13 @@ mod list_user_files;
 mod read_user_file;
 #[path = "../save_file/save_file.rs"]
 mod save_file;
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("attach_file", attach_file::Attach),
+    webagent_abilities::argument_type!("list_user_files", list_user_files::List),
+    webagent_abilities::argument_type!("read_user_file", read_user_file::Read),
+    webagent_abilities::argument_type!("save_file", save_file::Save),
+];
 /// Saves, lists, reads or attaches the owner's private files.
 pub async fn execute(
     host: &dyn NativeHost,

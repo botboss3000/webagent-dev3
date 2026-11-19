@@ -7,7 +7,7 @@ use webagent_host_core::StoreCore;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct List {
+pub(super) struct List {
     offset: Option<u32>,
     limit: Option<u32>,
 }

@@ -11,7 +11,7 @@ use webagent_host_core::StoreCore;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Save {
+pub(super) struct Save {
     name: String,
     media_type: Option<String>,
     text: Option<String>,

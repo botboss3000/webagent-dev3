@@ -7,7 +7,7 @@ use webagent_models::provider;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Effort {
+pub(super) struct Effort {
     effort: String,
 }
 pub(super) fn run(

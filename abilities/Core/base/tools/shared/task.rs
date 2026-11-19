@@ -14,6 +14,18 @@ mod get_task_checkpoint;
 mod present_chat_component;
 #[path = "../update_task_checkpoint/update_task_checkpoint.rs"]
 mod update_task_checkpoint;
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("get_task_checkpoint", get_task_checkpoint::CheckpointArgs),
+    webagent_abilities::argument_type!(
+        "present_chat_component",
+        present_chat_component::ComponentArgs
+    ),
+    webagent_abilities::argument_type!(
+        "update_task_checkpoint",
+        update_task_checkpoint::UpdateArgs
+    ),
+];
 
 pub use present_chat_component::answer_text;
 

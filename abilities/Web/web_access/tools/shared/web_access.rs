@@ -9,6 +9,11 @@ use tokio_util::sync::CancellationToken;
 mod get_weather;
 #[path = "../maps_geocode/maps_geocode.rs"]
 mod maps_geocode;
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("get_weather", get_weather::Weather),
+    webagent_abilities::argument_type!("maps_geocode", maps_geocode::Maps),
+];
 
 const MAX_BODY: usize = 512 * 1024;
 const USER_AGENT: &str = "WebAgent-v3/1.0 (+https://webagent.live)";

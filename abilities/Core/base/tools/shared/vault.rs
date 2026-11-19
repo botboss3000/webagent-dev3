@@ -34,6 +34,12 @@ pub(super) struct Args {
     pub(super) label: Option<String>,
     pub(super) create_url: Option<String>,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("check_credential", Args),
+    webagent_abilities::argument_type!("list_vault_keys", Args),
+    webagent_abilities::argument_type!("request_credential", Args),
+];
 pub(super) fn public(name: &str, record: &Value) -> Value {
     json!({"name":name,"configured":record["value"].as_str().is_some_and(|s|!s.is_empty()),"revision":record["revision"].as_u64().unwrap_or(0),"origin":record["origin"]})
 }

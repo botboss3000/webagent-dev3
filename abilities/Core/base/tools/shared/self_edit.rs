@@ -12,6 +12,12 @@ mod edit_own_prompt;
 mod remove_own_skill;
 #[path = "../save_own_skill/save_own_skill.rs"]
 mod save_own_skill;
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("edit_own_prompt", edit_own_prompt::PromptArgs),
+    webagent_abilities::argument_type!("remove_own_skill", remove_own_skill::RemoveArgs),
+    webagent_abilities::argument_type!("save_own_skill", save_own_skill::SaveArgs),
+];
 
 /// Whether this family executes tool `name`.
 #[must_use]

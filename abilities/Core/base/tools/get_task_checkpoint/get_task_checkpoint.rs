@@ -8,7 +8,7 @@ use webagent_host_core::key;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CheckpointArgs {
+pub(super) struct CheckpointArgs {
     #[serde(default)]
     action_id: Option<String>,
 }

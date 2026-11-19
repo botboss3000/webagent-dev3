@@ -14,6 +14,11 @@ pub fn owns(name: &str) -> bool {
 mod read_attachment;
 #[path = "../search_this_session/search_this_session.rs"]
 mod search_this_session;
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("read_attachment", read_attachment::AttachmentArgs),
+    webagent_abilities::argument_type!("search_this_session", search_this_session::SearchArgs),
+];
 async fn work(host: &dyn NativeHost, sid: &str, name: &str, args: &Value) -> Result<Value> {
     // The store is already routed to the authenticated caller. Require this
     // session to exist there before any attachment or chat record is resolved.

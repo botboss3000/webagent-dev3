@@ -41,6 +41,9 @@ struct Args {
     #[serde(default = "default_chars")]
     limit_chars: usize,
 }
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!("recall_compacted", Args)];
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
