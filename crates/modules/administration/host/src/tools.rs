@@ -120,6 +120,14 @@ pub async fn execute(
                     let job_id = job_argument(args)?;
                     stop_job(host, sid, run_id, job_id, request_id, cancel).await
                 }
+                // Notes go through the broker, which vouches for the task. When the broker cannot
+                // be reached at all, they go straight to the board service as this user.
+                Some("note" | "notes" | "note_remove") => {
+                    match broker_call(host, sid, run_id, name, &request, cancel).await {
+                        Err(error) => board_direct(host, args).await.or(Err(error)),
+                        reply => reply,
+                    }
+                }
                 _ => broker_call(host, sid, run_id, name, &request, cancel).await,
             }
         }
@@ -745,4 +753,31 @@ async fn repository_access(
         "revision":transport["revision"],"connections":rows,"mutations_performed":false,
         "credentials_exposed":false}}),
     )
+}
+
+/// One note action sent straight to the board service (the broker is unreachable). The board knows
+/// the app by its Linux user and records the signed-in user as the author, with the task unverified.
+async fn board_direct(host: &dyn AdministrationHost, args: &Value) -> Result<Value> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    let request = webagent_administration::board::request(args, host.actor())
+        .ok_or_else(|| anyhow::anyhow!("Not a board action"))?;
+    let exchange = async {
+        let mut stream =
+            tokio::net::UnixStream::connect(webagent_administration::board::socket()).await?;
+        stream
+            .write_all((request.to_string() + "\n").as_bytes())
+            .await?;
+        let mut line = String::new();
+        BufReader::new(stream)
+            .take(64 * 1024)
+            .read_line(&mut line)
+            .await?;
+        anyhow::Ok(serde_json::from_str::<Value>(&line)?)
+    };
+    let reply = tokio::time::timeout(Duration::from_secs(5), exchange).await??;
+    Ok(if reply["status"] == "success" {
+        json!({"status":"success","output":{"via":"board service (broker unreachable; task unverified)","result":reply["output"]}})
+    } else {
+        json!({"status":"error","output":reply["error"]})
+    })
 }
