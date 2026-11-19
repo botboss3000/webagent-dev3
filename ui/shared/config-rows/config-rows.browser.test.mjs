@@ -7,7 +7,7 @@ const root=path.resolve(new URL('../../../',import.meta.url).pathname);
 const server=http.createServer(async(req,res)=>{
  try{
   const u=new URL(req.url,'http://localhost').pathname;
-  if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/shared/css/design-system.css"><link rel="stylesheet" href="/ui/shared/css/app3.css"><link rel="stylesheet" href="/ui/shared/subpage-list/subpage-list.css"><main id="host" style="padding:12px;max-width:650px"></main>');return;}
+  if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/shared/css/design-system.css"><link rel="stylesheet" href="/ui/shared/css/app3.css"><link rel="stylesheet" href="/ui/shared/controls/controls.css"><link rel="stylesheet" href="/ui/shared/config-rows/config-rows.css"><link rel="stylesheet" href="/ui/shared/subpage-list/subpage-list.css"><main id="host" style="padding:12px;max-width:650px"></main>');return;}
   if(u==='/ui/vibrate.json'){res.setHeader('content-type','application/json');res.end('{"enabled":true,"impact":{"enabled":true,"duration_ms":10},"release":{"enabled":true,"duration_ms":17}}');return;}
   const file=path.resolve(root,'.'+u);
   if(!file.startsWith(path.join(root,'ui')+'/'))throw Error('outside');
@@ -52,7 +52,7 @@ try{
   await page.click('button[aria-label="Increase Limit"]');await wait(300);
   assert.deepEqual(await page.evaluate(()=>saves.at(-1)),['limit',10]);
   assert.equal(await page.locator('button[aria-label="Increase Limit"]').isDisabled(),true,'the stepper stops at max');
-  await page.locator('.cfr-choice',{hasText:'Closed'}).click();await wait(300);
+  await page.locator('.ctl-choice',{hasText:'Closed'}).click();await wait(300);
   assert.deepEqual(await page.evaluate(()=>saves.at(-1)),['access','closed']);
   const editor=page.locator('.rte-doc[aria-label="Prompt"]');
   assert.equal(await editor.getAttribute('data-placeholder'),'The default prompt','an empty field shows the default');

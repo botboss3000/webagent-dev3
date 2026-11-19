@@ -261,6 +261,8 @@ Light-mode overrides (peach tint) sit in the `body.light-mode` rules below.
 
 > **Restyle the toggle-list look in `app3.css` only.** Don't fork a per-page copy. The agent card keeps its `.conn-*` class names purely as JS/behaviour hooks.
 
+**Build new settings from the shared parts, not by hand.** Controls (switch, dropdown, text field, number stepper, choice cards) come from `ui/shared/controls/controls.js` and are styled only in `controls.css` beside it. A setting row around a control comes from `ui/shared/config-rows/config-rows.js` (`createToggleRow`, `createSelectRow`, `createTextRow`, `createNumberRow`, `createChoiceRow`, `createLongTextRow`, `createReadTextRow`, `createActionRow`, `createConfigForm`), which adds the row frame, the error line and saving; its own styles are in `config-rows.css`. Long text uses `ui/shared/rich-text-editor/`. Restyle a control in `controls.css`, a row addition in `config-rows.css`.
+
 #### It's not just for simple toggle rows — the row is a flexible shell
 
 The compact table is the right home for **any "category → list of options" surface**; the row shell accepts whatever control the option needs:
@@ -288,6 +290,6 @@ The full per-area conformance audit (status legend, exact files per surface) liv
 4. **JS-built sections ship a build gate.** `.ac-section.is-building` + one `.ac-section-loader` child hide every real child behind a spinner until reveal. Reveal **only after structure AND the first data load**; `init()` owns the whole reveal (never gate it on `load()`); clear the class directly — **no `requestAnimationFrame`**.
 5. **Sticky section navigator (shared, opt-in).** Add class `ac-stickynav` to the page's `<section class="ac-section">` and call `initStickyNav(...)`. Rules: `.ac-stickynav .ac-category-group { display: contents }`; headings are **SQUARE** (`border-radius: 0`); collapsible groups are `<div class="ac-category-group ac-collapsible">` toggled by `.ac-open` — **never `<details>`**.
 
-**Related shared controls.** The on/off switch (`.conn-toggle`) lives in global `app3.css`; its active colour is a legacy blue, a known quirk. The per-agent Abilities row uses **one** 3-position visibility tri (`.ac-tri.ac-tri-vis`: Off · Discoverable · Visible) instead of a switch + eye pair — **agent-only** (the admin table keeps its plain switch + delete button), plus an **"Available to"** dropdown (`.ac-access-select`: Everyone · Registered · Admins), a server-enforced boundary. Destructive confirmations use **`hazardConfirm(...)`** from `ui/shared/js/confirm-dialog.js` — never native `confirm()`.
+**Related shared controls.** The on/off switch (`.conn-toggle`) lives in `ui/shared/controls/controls.css`, loaded for every page. The per-agent Abilities row uses **one** 3-position visibility tri (`.ac-tri.ac-tri-vis`: Off · Discoverable · Visible) instead of a switch + eye pair — **agent-only** (the admin table keeps its plain switch + delete button), plus an **"Available to"** dropdown (`.ac-access-select`: Everyone · Registered · Admins), a server-enforced boundary. Destructive confirmations use **`hazardConfirm(...)`** from `ui/shared/js/confirm-dialog.js` — never native `confirm()`.
 
 Design history and provenance: docs/ui-toggle-list-design-history.md — not needed for operative work.

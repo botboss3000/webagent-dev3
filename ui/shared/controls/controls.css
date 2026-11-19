@@ -1,0 +1,44 @@
+/* Shared form controls, drawn by ui/shared/controls/controls.js: the switch, text field
+   and dropdown, number stepper and choice cards. Loaded once by index.html for every page.
+   Restyle a control here only; how it sits in a setting row (width, slot) is in
+   ui/shared/css/app3.css under .ac-config-control, and the row itself in config-rows.css.
+   Pages that still write this markup by hand get the same look from these class names. */
+
+/* ── Text field and dropdown ── */
+.ac-input { width: 100%; padding: 9px 12px; background: var(--bg-base, var(--bg-0)); border: var(--border-width) solid var(--border); border-radius: 6px; color: var(--fg-1, var(--fg-1)); font-size: 13px; font-family: inherit; box-sizing: border-box; transition: border-color 0.15s; }
+.ac-input:focus { outline: none; border-color: var(--accent); }
+.ac-input-sm { padding: 6px 9px; font-size: 12px; }
+body.light-mode .ac-input { background: var(--bg-1); border-color: var(--border-strong); color: var(--fg-1); }
+body.light-mode .ac-input:focus { border-color: var(--brand); }
+
+/* ── Number stepper: a back and forward arrow inside the field, the value centred between ── */
+.ac-num-stepper { position: relative; display: inline-flex; align-items: center; }
+.ac-num-stepper > input.ac-config-num { width: 100%; box-sizing: border-box; text-align: center; padding-left: 20px; padding-right: 20px; }
+/* The arrows replace the browser's own spin buttons. */
+.ac-config-num::-webkit-inner-spin-button, .ac-config-num::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+.ac-config-num { -moz-appearance: textfield; appearance: textfield; }
+.ac-num-step { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; width: 18px; padding: 0; border: none; background: transparent; color: var(--fg-3); cursor: pointer; transition: color .12s ease; }
+.ac-num-step.ac-num-down { left: 0; }
+.ac-num-step.ac-num-up { right: 0; }
+.ac-num-step:hover, .ac-num-step:active { color: var(--accent); }
+.ac-num-step:disabled { color: var(--fg-3); opacity: .3; cursor: default; }
+.ac-num-step svg { display: block; pointer-events: none; }
+.ac-num-stepper.ac-num-at-max:hover .ac-num-limit-tip, .ac-num-stepper.ac-num-at-max:focus-within .ac-num-limit-tip { opacity: 1; }
+
+/* ── On/off switch: a label wrapping a hidden checkbox and the drawn track ── */
+.conn-toggle-wrap { position: relative; display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; }
+.conn-toggle { position: absolute; opacity: 0; width: 0; height: 0; }
+.conn-toggle-track { display: block; width: 36px; height: 20px; background: var(--border-soft); border-radius: 10px; border: var(--border-width) solid var(--border); position: relative; transition: background 0.2s, border-color 0.2s; }
+.conn-toggle-track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: var(--fg-3); border-radius: 50%; transition: left 0.2s, background 0.2s; }
+.conn-toggle:checked + .conn-toggle-track { background: rgba(var(--brand-rgb), 0.4); border-color: var(--accent); }
+.conn-toggle:checked + .conn-toggle-track::after { left: 18px; background: var(--accent); }
+
+/* ── Choice cards: one bordered card per option, the picked one tinted ── */
+.ctl-choices { display: grid; gap: 6px; width: 100%; }
+.ctl-choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: var(--border-width) solid var(--border); border-radius: 10px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.ctl-choice:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.ctl-choice:has(input:disabled) { opacity: .6; cursor: default; }
+.ctl-choice input { margin-top: 2px; }
+.ctl-choice-text { display: grid; gap: 2px; min-width: 0; }
+.ctl-choice-title { font-size: 13px; font-weight: 600; color: var(--fg-1); }
+.ctl-choice-hint { font-size: 12px; color: var(--fg-3); }

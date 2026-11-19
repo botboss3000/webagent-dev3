@@ -1,8 +1,9 @@
 'use strict';
 
 // Shared configuration rows: one look and one save behaviour for every setting on a
-// config page. Rows use the app's option-row list (.ac-list / .ac-ability-row with the
-// control in .ac-config-control, styled in ui/shared/css/app3.css).
+// config page. A row is the app's option-row frame (.ac-list / .ac-ability-row, styled in
+// ui/shared/css/app3.css) around one control from ui/shared/controls/controls.js, in the
+// .ac-config-control slot. What the rows add is styled in config-rows.css.
 //
 // Saving. A row either saves as you go (pass onSave: it gets the new value and returns a
 // promise; the spinner, check and revert-on-failure come from dom-utils.js) or belongs to
@@ -13,38 +14,7 @@ import { _markSaving, _flashSaveCheck } from '../models/dom-utils.js';
 import { tipBadge } from '../models/field-tip.js';
 import { requestTouchVibration } from '../vibrate/vibrate.js';
 import { createRichTextEditor } from '../rich-text-editor/rich-text-editor.js';
-
-const STYLE_ID = 'cfr-styles';
-const CSS = `
-.cfr-stacked{flex-direction:column;align-items:stretch;gap:8px}
-.cfr-stacked>.cfr-label{display:block}
-.cfr-stacked>.cfr-field{width:100%;min-width:0}
-.cfr-choices{display:grid;gap:6px;width:100%}
-.cfr-choice{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:var(--border-width) solid var(--border);border-radius:10px;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.cfr-choice:has(input:checked){border-color:var(--accent);background:color-mix(in srgb, var(--accent) 6%, transparent)}
-.cfr-choice:has(input:disabled){opacity:.6;cursor:default}
-.cfr-choice input{margin-top:2px}
-.cfr-choice-text{display:grid;gap:2px;min-width:0}
-.cfr-choice-title{font-size:13px;font-weight:600;color:var(--fg-1)}
-.cfr-choice-hint{font-size:12px;color:var(--fg-3)}
-.cfr-error{flex-basis:100%;order:2;margin:0;font-size:12px;color:var(--danger)}
-.cfr-error:empty{display:none}
-.cfr-actions{display:flex;flex-wrap:wrap;gap:8px}
-.cfr-form-bar{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 12px}
-.cfr-form-state{margin-right:auto;font-size:12px;color:var(--fg-3)}
-.cfr-form-state[data-state="dirty"]{color:var(--warning)}
-.cfr-form-state[data-state="error"]{color:var(--danger)}
-.cfr-read{width:100%;min-width:0}
-`;
-const ARROW = d => '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + d + '"/></svg>';
-
-function styles() {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = STYLE_ID;
-  style.textContent = CSS;
-  document.head.append(style);
-}
+import { createSwitch, createSelect, createTextField, createStepper, createChoiceCards } from '../controls/controls.js';
 
 const node = (tag, className = '', text = '') => {
   const element = document.createElement(tag);
@@ -55,7 +25,6 @@ const node = (tag, className = '', text = '') => {
 
 /** The bordered list a group of rows lives in. */
 export function createConfigList(host, {label = ''} = {}) {
-  styles();
   const list = node('div', 'ac-list');
   if (label) list.setAttribute('aria-label', label);
   host.append(list);
@@ -65,7 +34,6 @@ export function createConfigList(host, {label = ''} = {}) {
 /* Row shell: title (with optional help badge) on the left, the control on the right;
    the hint drops to its own line. Stacked rows put the field under the title. */
 function shell(list, {title, hint, tip, stacked = false}) {
-  styles();
   const row = node('div', 'ac-ability-row cfr-row' + (stacked ? ' cfr-stacked' : ''));
   const label = node('div', 'ac-ability-label cfr-label');
   const name = node('div', 'ac-ability-name', title);
@@ -105,181 +73,95 @@ function saver({key, form, onSave, control, error}) {
 /** An on/off switch row. */
 export function createToggleRow(list, {title, hint, tip, value = false, disabled = false, key, form, onSave} = {}) {
   const {row, control, error} = shell(list, {title, hint, tip});
-  const wrap = node('label', 'conn-toggle-wrap');
-  // A row's switch stays in its row: a subpage only lifts an unmarked switch into its header.
-  wrap.dataset.inlineSwitch = '';
-  const input = node('input', 'conn-toggle');
-  input.type = 'checkbox';
-  input.checked = !!value;
-  input.disabled = disabled;
-  input.setAttribute('aria-label', title);
-  const track = node('span', 'conn-toggle-track');
-  track.setAttribute('aria-hidden', 'true');
-  wrap.append(input, track);
-  control.append(wrap);
   const commit = saver({key, form, onSave, control, error});
-  if (form && key) form.set(key, input.checked, true);
-  input.addEventListener('click', event => requestTouchVibration(event));
-  input.addEventListener('change', () => commit(input.checked, !input.checked, prior => { input.checked = prior; }));
-  return {row, control: input, getValue: () => input.checked,
-    setValue: next => { input.checked = !!next; }, setDisabled: off => { input.disabled = !!off; }};
+  const toggle = createSwitch({label: title, value, disabled,
+    onChange: checked => commit(checked, !checked, prior => toggle.setValue(prior))});
+  // A row's switch stays in its row: a subpage only lifts an unmarked switch into its header.
+  toggle.element.dataset.inlineSwitch = '';
+  control.append(toggle.element);
+  if (form && key) form.set(key, toggle.getValue(), true);
+  return {row, control: toggle.input, getValue: toggle.getValue, setValue: toggle.setValue, setDisabled: toggle.setDisabled};
 }
 
 /** A dropdown row; options are [value, label] pairs. */
 export function createSelectRow(list, {title, hint, tip, options = [], value = '', disabled = false, key, form, onSave} = {}) {
   const {row, control, error} = shell(list, {title, hint, tip});
-  const select = node('select', 'ac-input ac-input-sm');
-  for (const [optionValue, optionLabel] of options) {
-    const option = node('option', '', optionLabel);
-    option.value = optionValue;
-    select.append(option);
-  }
-  select.value = value;
-  select.disabled = disabled;
-  select.setAttribute('aria-label', title);
-  control.append(select);
   const commit = saver({key, form, onSave, control, error});
-  if (form && key) form.set(key, select.value, true);
-  let current = select.value;
-  select.addEventListener('change', () => {
+  let current = value;
+  const select = createSelect({label: title, options, value, disabled, onChange: next => {
     const previous = current;
-    current = select.value;
-    commit(select.value, previous, prior => { select.value = prior; current = prior; });
-  });
-  return {row, control: select, getValue: () => select.value,
-    setValue: next => { select.value = next; current = select.value; }, setDisabled: off => { select.disabled = !!off; }};
+    current = next;
+    commit(next, previous, prior => { select.setValue(prior); current = prior; });
+  }});
+  current = select.getValue();
+  control.append(select.element);
+  if (form && key) form.set(key, current, true);
+  return {row, control: select.input, getValue: select.getValue,
+    setValue: next => { select.setValue(next); current = select.getValue(); }, setDisabled: select.setDisabled};
 }
 
 /** A one-line text row; saves when the field is left, or 700 ms after typing stops. */
 export function createTextRow(list, {title, hint, tip, value = '', placeholder = '', maxLength, disabled = false,
   stacked = false, key, form, onSave} = {}) {
   const {row, control, error} = shell(list, {title, hint, tip, stacked});
-  const input = node('input', 'ac-input');
-  input.type = 'text';
-  input.value = value;
-  input.placeholder = placeholder;
-  if (maxLength) input.maxLength = maxLength;
-  input.disabled = disabled;
-  input.setAttribute('aria-label', title);
-  control.append(input);
   const commit = saver({key, form, onSave, control, error});
-  if (form && key) form.set(key, input.value, true);
-  let saved = input.value;
+  let saved = value;
   let timer = null;
   const flush = () => {
     clearTimeout(timer);
     timer = null;
-    if (input.value === saved && !form) return;
+    if (field.getValue() === saved && !form) return;
     const previous = saved;
-    saved = input.value;
-    commit(input.value, previous, prior => { input.value = prior; saved = prior; });
+    saved = field.getValue();
+    commit(saved, previous, prior => { field.setValue(prior); saved = prior; });
   };
-  input.addEventListener('input', () => {
-    if (form && key) { form.set(key, input.value); return; }
-    clearTimeout(timer);
-    timer = setTimeout(flush, 700);
-  });
-  input.addEventListener('blur', () => { if (!form) flush(); });
-  return {row, control: input, getValue: () => input.value,
-    setValue: next => { input.value = next; saved = next; }, setDisabled: off => { input.disabled = !!off; }};
+  const field = createTextField({label: title, value, placeholder, maxLength, disabled,
+    onInput: next => {
+      if (form && key) { form.set(key, next); return; }
+      clearTimeout(timer);
+      timer = setTimeout(flush, 700);
+    },
+    onChange: () => { if (!form) flush(); }});
+  control.append(field.element);
+  if (form && key) form.set(key, value, true);
+  return {row, control: field.input, getValue: field.getValue,
+    setValue: next => { field.setValue(next); saved = next; }, setDisabled: field.setDisabled};
 }
 
 /** A number row drawn as the shared stepper (arrows inside the field, clamped to min/max). */
 export function createNumberRow(list, {title, hint, tip, value = 0, min, max, step = 1, disabled = false, key, form, onSave} = {}) {
   const {row, control, error} = shell(list, {title, hint, tip});
-  const stepper = node('span', 'ac-num-stepper');
-  const input = node('input', 'ac-input ac-config-num');
-  input.type = 'number';
-  input.inputMode = 'numeric';
-  input.value = String(value);
-  if (min != null) input.min = String(min);
-  if (max != null) input.max = String(max);
-  input.step = String(step);
-  input.disabled = disabled;
-  input.setAttribute('aria-label', title);
-  const down = node('button', 'ac-num-step ac-num-down');
-  const up = node('button', 'ac-num-step ac-num-up');
-  down.type = up.type = 'button';
-  down.innerHTML = ARROW('m15 18-6-6 6-6');
-  up.innerHTML = ARROW('m9 18 6-6-6-6');
-  down.setAttribute('aria-label', 'Decrease ' + title);
-  up.setAttribute('aria-label', 'Increase ' + title);
-  stepper.append(down, input, up);
-  control.append(stepper);
   const commit = saver({key, form, onSave, control, error});
-  const clamp = number => Math.min(max ?? Infinity, Math.max(min ?? -Infinity, number));
-  let saved = Number(input.value);
+  let saved = Number(value);
+  const stepper = createStepper({label: title, value, min, max, step, disabled,
+    // In a form, typing marks the draft changed at once so Save is ready before the field is left.
+    onInput: number => { if (form && key) form.set(key, number); },
+    onChange: number => {
+      if (number === saved && !form) return;
+      const previous = saved;
+      saved = number;
+      commit(number, previous, prior => { stepper.setValue(prior); saved = prior; });
+    }});
+  control.append(stepper.element);
   if (form && key) form.set(key, saved, true);
-  const paint = () => {
-    down.disabled = disabled || (min != null && Number(input.value) <= min);
-    up.disabled = disabled || (max != null && Number(input.value) >= max);
-  };
-  const settle = () => {
-    const number = clamp(Number(input.value));
-    if (!Number.isFinite(number) || !input.checkValidity()) { input.setAttribute('aria-invalid', 'true'); return; }
-    input.removeAttribute('aria-invalid');
-    input.value = String(number);
-    paint();
-    if (number === saved && !form) return;
-    const previous = saved;
-    saved = number;
-    commit(number, previous, prior => { input.value = String(prior); saved = prior; paint(); });
-  };
-  const nudge = (event, direction) => {
-    requestTouchVibration(event);
-    input.value = String(clamp((Number(input.value) || 0) + direction * step));
-    settle();
-  };
-  // In a form, typing marks the draft changed at once so Save is ready before the field is left.
-  if (form && key) input.addEventListener('input', () => { if (input.value !== '') form.set(key, Number(input.value)); });
-  down.addEventListener('click', event => nudge(event, -1));
-  up.addEventListener('click', event => nudge(event, 1));
-  input.addEventListener('change', settle);
-  paint();
-  return {row, control: input, getValue: () => Number(input.value),
-    setValue: next => { input.value = String(next); saved = Number(next); paint(); },
-    setDisabled: off => { disabled = !!off; input.disabled = disabled; paint(); }};
+  return {row, control: stepper.input, getValue: stepper.getValue,
+    setValue: next => { stepper.setValue(next); saved = Number(next); }, setDisabled: stepper.setDisabled};
 }
 
 /** A choice row: radio cards under the title; options are {value, title, hint}. */
 export function createChoiceRow(list, {title, hint, tip, options = [], value = '', disabled = false, key, form, onSave} = {}) {
   const {row, control, error} = shell(list, {title, hint, tip, stacked: true});
-  const group = node('div', 'cfr-choices');
-  group.setAttribute('role', 'radiogroup');
-  group.setAttribute('aria-label', title);
-  const name = 'cfr-' + Math.random().toString(36).slice(2);
-  const inputs = options.map(option => {
-    const card = node('label', 'cfr-choice');
-    const input = node('input');
-    input.type = 'radio';
-    input.name = name;
-    input.value = option.value;
-    input.checked = option.value === value;
-    input.disabled = disabled;
-    const text = node('span', 'cfr-choice-text');
-    text.append(node('span', 'cfr-choice-title', option.title));
-    if (option.hint) text.append(node('span', 'cfr-choice-hint', option.hint));
-    card.append(input, text);
-    if (option.extra) card.append(option.extra);
-    group.append(card);
-    return input;
-  });
-  control.append(group);
   const commit = saver({key, form, onSave, control, error});
   let current = value;
+  const cards = createChoiceCards({label: title, options, value, disabled, onChange: next => {
+    const previous = current;
+    current = next;
+    commit(next, previous, prior => { cards.setValue(prior); current = prior; });
+  }});
+  control.append(cards.element);
   if (form && key) form.set(key, current, true);
-  const select = next => { for (const input of inputs) input.checked = input.value === next; current = next; };
-  for (const input of inputs) {
-    input.addEventListener('click', event => requestTouchVibration(event));
-    input.addEventListener('change', () => {
-      if (!input.checked) return;
-      const previous = current;
-      current = input.value;
-      commit(input.value, previous, select);
-    });
-  }
-  return {row, control: group, getValue: () => current, setValue: select,
-    setDisabled: off => { for (const input of inputs) input.disabled = !!off; }};
+  return {row, control: cards.element, getValue: cards.getValue,
+    setValue: next => { cards.setValue(next); current = next; }, setDisabled: cards.setDisabled};
 }
 
 /** A long text row: the shared Markdown editor under the title. Saves 900 ms after typing stops. */
@@ -341,7 +223,6 @@ export function createActionRow(list, {title, hint, tip, actions = []} = {}) {
 /** A form: rows that save together with one Save button, plus Reset and an unsaved-changes note.
  *  onSave(values) and onReset() return promises; values maps each row key to its draft. */
 export function createConfigForm(host, {onSave, onReset, saveLabel = 'Save', resetLabel = ''} = {}) {
-  styles();
   const values = new Map();
   const savedValues = new Map();
   const bar = node('div', 'cfr-form-bar');

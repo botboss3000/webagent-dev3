@@ -14,7 +14,7 @@ async function setMainEnabled(page,value){
 const root=path.resolve(new URL('../../../../../',import.meta.url).pathname),shared=path.join(root,'ui');
 const server=http.createServer(async(req,res)=>{try{
  const u=new URL(req.url,'http://localhost').pathname;
- if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/shared/css/design-system.css"><link rel="stylesheet" href="/shared/shared/css/app1.css"><link rel="stylesheet" href="/ui/shared/css/app3.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host"></main>');return;}
+ if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/shared/css/design-system.css"><link rel="stylesheet" href="/shared/shared/css/app1.css"><link rel="stylesheet" href="/ui/shared/css/app3.css"><link rel="stylesheet" href="/ui/shared/controls/controls.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host"></main>');return;}
  const base=u.startsWith('/shared/')?shared:root,file=path.resolve(base,'.'+(base===shared?u.slice(7):u));
  if(!file.startsWith(base+'/'))throw Error('bad');res.setHeader('content-type',file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':'text/javascript');res.end(await fs.readFile(file));
 }catch{res.statusCode=404;res.end('missing');}});

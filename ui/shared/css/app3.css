@@ -436,22 +436,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   color: var(--fg-2, var(--fg-2));
   margin-bottom: 6px;
 }
-.ac-input {
-  width: 100%;
-  padding: 9px 12px;
-  background: var(--bg-base, var(--bg-0));
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-  color: var(--fg-1, var(--fg-1));
-  font-size: 13px;
-  font-family: inherit;
-  box-sizing: border-box;
-  transition: border-color 0.15s;
-}
-.ac-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
 .ac-hint {
   margin-top: 4px;
   font-size: 11px;
@@ -929,7 +913,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   color: var(--accent);
 }
 .ac-model-cap-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ac-input-sm { padding: 6px 9px; font-size: 12px; }
 
 /* ── Config / settings control slot (SHARED) ──────────────────────────────────
    The right-hand control slot for a row in the unified `.ac-config-list` — used
@@ -953,43 +936,8 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
 /* Right-aligned controls keep their natural width inside the slot (the shared
    `.ac-input` is width:100%, which would blow out the row). */
 .ac-config-control > .ac-input { width: auto; }
-/* Number setting → a horizontal STEPPER: a back (left) + forward (right) Lucide
-   arrow sit INSIDE the field at each edge (replacing the browser's native up/down
-   spin-buttons), with the value centred between them so the arrows never overlap
-   it. Clicking an arrow steps the value by the field's `step` (clamped to min/max)
-   and fires the same input/change events, so existing autosave stays untouched.
-   Shared by the ability config rows AND the agent Config tab (wiring in
-   dom-utils.js `_wrapNumberStepper` / `_renderSettingInput`). */
-.ac-num-stepper { position: relative; display: inline-flex; align-items: center; }
+/* A number stepper's width in a setting row; the stepper itself is in ui/shared/controls/controls.css. */
 .ac-config-control > .ac-num-stepper { width: 96px; }
-.ac-num-stepper > input.ac-config-num {
-  width: 100%;
-  box-sizing: border-box;
-  text-align: center;
-  padding-left: 20px;
-  padding-right: 20px;
-}
-/* Strip the native number spin-buttons (the arrows replace them). */
-.ac-config-num::-webkit-inner-spin-button,
-.ac-config-num::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
-.ac-config-num { -moz-appearance: textfield; appearance: textfield; }
-/* The two in-field arrow buttons, pinned to the field's left / right edge. */
-.ac-num-step {
-  position: absolute; top: 0; bottom: 0;
-  display: flex; align-items: center; justify-content: center;
-  width: 18px; padding: 0;
-  border: none; background: transparent;
-  color: var(--fg-3); cursor: pointer;
-  transition: color .12s ease;
-}
-.ac-num-step.ac-num-down { left: 0; }
-.ac-num-step.ac-num-up { right: 0; }
-.ac-num-step:hover,
-.ac-num-step:active { color: var(--accent); }
-.ac-num-step:disabled { color: var(--fg-3); opacity: .3; cursor: default; }
-.ac-num-step svg { display: block; pointer-events: none; }
-.ac-num-stepper.ac-num-at-max:hover .ac-num-limit-tip,
-.ac-num-stepper.ac-num-at-max:focus-within .ac-num-limit-tip { opacity: 1; }
 /* Inline config dropdown — kept COMPACT (shorter than the two-line label) so a
    dropdown row sits at the exact same height as a toggle row. Without this the
    default `.ac-input` (9px/13px) is taller than the label and makes choice rows
@@ -1528,7 +1476,6 @@ body.light-mode .ac-section-desc { color: var(--fg-3); }
 body.light-mode .ac-card-label { color: var(--fg-2); }
 body.light-mode .ac-hint { color: var(--fg-3); }
 body.light-mode .ac-label { color: var(--fg-2); }
-body.light-mode .ac-input { background: var(--bg-1); border-color: var(--border-strong); color: var(--fg-1); }
 /* Keep the persistent catalog on the exact same surface as its search input. */
 body.light-mode .ac-model-catalog-control {
   background: var(--bg-1);
@@ -1538,7 +1485,6 @@ body.light-mode .ac-model-catalog-control .ac-model-search-field {
   border-bottom-color: var(--border-strong);
 }
 body.light-mode .ac-model-catalog-control:focus-within { border-color: var(--brand); }
-body.light-mode .ac-input:focus { border-color: var(--brand); }
 body.light-mode .ac-btn-primary { background: var(--brand); color: #fff; /* KEEP (intentional): contrast ink on the brand-filled button */ }
 body.light-mode .ac-btn-ghost { border-color: var(--fg-3); color: var(--fg-3); }
 body.light-mode .ac-seg-btn { background: var(--bg-1); border-color: var(--border-strong); color: var(--fg-1); }
@@ -2077,63 +2023,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
 @keyframes agents-spin { to { transform: rotate(360deg); } }
 .ac-ability-toggle-locked .conn-toggle { cursor: not-allowed; }
 
-/* ── Toggle switch (SISTER-PANEL: AGENT-ABILITY-TABLE) ──────────────────────
-   The on/off switch used by every ability-table row and config-list row, AND
-   by the standalone config rows on the admin config pages (App Settings →
-   Startup & Boot, etc.). Lives HERE in the globally-loaded sheet — not in the
-   per-page agents.css — because the admin App Settings / Agent Settings pages
-   don't load agents.css, so their toggles need the style from a global sheet
-   (same precedent as the `.ac-config-*` widths above). Markup: a
-   `.conn-toggle-wrap` label wrapping a visually-hidden `.conn-toggle` checkbox
-   + a `.conn-toggle-track` span. */
-.conn-toggle-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.conn-toggle {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-.conn-toggle-track {
-  display: block;
-  width: 36px;
-  height: 20px;
-  background: var(--border-soft);
-  border-radius: 10px;
-  border: var(--border-width) solid var(--border);
-  position: relative;
-  transition: background 0.2s, border-color 0.2s;
-}
-.conn-toggle-track::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  background: var(--fg-3);
-  border-radius: 50%;
-  transition: left 0.2s, background 0.2s;
-}
-.conn-toggle:checked + .conn-toggle-track {
-  background: rgba(var(--brand-rgb), 0.4);
-  border-color: var(--accent);
-}
-.conn-toggle:checked + .conn-toggle-track::after {
-  left: 18px;
-  background: var(--accent);
-}
-/* (The toggle's saving feedback is now the shared `.ac-save-overlay` centered ON
-   TOP of the toggle — see the unified save-status indicator block above — so the
-   old knob-morph spinner here was removed.) */
-/* Toggle track colours (off + checked) are now driven entirely by design-system
-   tokens in the base rules above, so they already adapt to light mode — the
-   former body.light-mode .conn-toggle-track overrides were redundant and removed. */
 
 body.light-mode .ac-abilities-compact {
   background: var(--bg-elev);
