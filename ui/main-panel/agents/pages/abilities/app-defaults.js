@@ -140,6 +140,13 @@ export function buildAppDefaultsBar(app, { onStatus }) {
       link.rel = 'noopener';
       const label = job.status === 'releasing' ? 'Releasing your last Save. ' : 'Your last Save did not release: ' + (job.reason || 'see the Broker card') + '. Drafts are kept. ';
       release.append(node('span', job.status === 'releasing' ? '' : 'adf-failed', label), link);
+      if (job.status === 'failed') {
+        const diagnose = node('button', 'ac-btn ac-btn-sm', 'Diagnose in a new chat');
+        diagnose.type = 'button';
+        diagnose.title = 'Start a chat where the agent finds why this Save failed, fixes it and releases it';
+        diagnose.onclick = () => diagnoseFailedSave(app, job, onStatus).catch(error => onStatus('Could not start the chat: ' + error.message));
+        release.append(' ', diagnose);
+      }
     }
   };
   // What Save would change: each drafted file against the checkout, as added and removed lines.
@@ -221,8 +228,9 @@ function diffView(before, after) {
   let i = 0, j = 0;
   while (i < a.length || j < b.length) {
     if (i < a.length && j < b.length && a[i] === b[j]) { lines.push([' ', a[i]]); i++; j++; }
-    else if (j < b.length && (i === a.length || table[i][j + 1] >= table[i + 1][j])) { lines.push(['+', b[j]]); j++; }
-    else { lines.push(['-', a[i]]); i++; }
+    // Removed lines come before the lines that replace them, as in a usual diff.
+    else if (i < a.length && (j === b.length || table[i + 1][j] >= table[i][j + 1])) { lines.push(['-', a[i]]); i++; }
+    else { lines.push(['+', b[j]]); j++; }
   }
   const near = lines.map((_, k) => lines.slice(Math.max(0, k - 2), k + 3).some(([mark]) => mark !== ' '));
   let skipped = false;
@@ -252,6 +260,33 @@ function panelHead(app, title, paths, reload) {
   sync();
   head.append(node('div', 'adf-panel-title', title), revert);
   return head;
+}
+
+/** Start a chat on the default agent (it has Codebase Admin) with everything a failed Save left behind:
+ *  the broker task and job, why it failed, and the drafted files, so the agent can diagnose, fix and
+ *  release the change. The drafts stay as they are; the chat opens when it has been created. */
+async function diagnoseFailedSave(app, job, onStatus) {
+  onStatus('Starting a diagnosis chat…');
+  const files = Object.entries(app.state.drafts.files || {});
+  let budget = 30000;
+  const parts = files.map(([path, { draft }]) => {
+    if (draft.delete) return '### ' + path + '\n(delete this file)';
+    const text = (draft.content || '').slice(0, Math.max(0, Math.min(8000, budget)));
+    budget -= text.length;
+    return '### ' + path + '\n```\n' + text + (text.length < (draft.content || '').length ? '\n… (truncated)' : '') + '\n```';
+  });
+  const message = ['An App Default Save failed and I need it diagnosed, fixed and released.',
+    'Broker task: ' + job.task_id + (job.job_id ? ', job ' + job.job_id : '') + '.',
+    'Reason: ' + (job.reason || 'not recorded; read the job with build_work status') + '.',
+    'Read the failed job (build_work status with its job_id) and the Broker card to find the cause. Then make the',
+    'same file changes on a new broker task (build_work, broker_id new), fix whatever made the release fail, run',
+    'the checks, finish and report the commit. The drafted files, as the administrator left them:',
+    '', ...parts].join('\n');
+  const session = await app.request('/sessions', 'POST', { agent_id: 'shared_default', client_request_id: crypto.randomUUID() });
+  const id = session.id || session.session_id || session.session?.id;
+  await app.request('/sessions/' + encodeURIComponent(id) + '/messages', 'POST',
+    { text: message, attachment_ids: [], client_message_id: crypto.randomUUID() });
+  location.assign('/app?session_id=' + encodeURIComponent(id));
 }
 
 /** Path of a tool's definition or skill file in the checkout. */
