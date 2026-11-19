@@ -1,5 +1,5 @@
 'use strict';
-import { renderAgentDirectory } from './pages/config/page.js';
+import { renderPageDirectory } from '../../shared/page-directory/page-directory.js';
 import { mountDashboard } from './pages/dashboard/page.js';
 import { loadAppPages } from './pages/catalog.js';
 import { createPagePreferences } from './pages/preferences.js';
@@ -136,18 +136,17 @@ export async function start(mount) {
   function sync() {
     for (const id of order) strip.append(tabs.get(id));
     const host=mount.querySelector('#app-config-page');
-    renderAgentDirectory(host,pages,id=>show(id),order,id=>{
+    renderPageDirectory(host,pages,id=>show(id),order,id=>{
       if(id==='dashboard'){status.textContent='Dashboard favorites need backend work.';return;}
       if(!preferences.ready()){status.textContent='App favorites are unavailable. Reload to retry.';return;}
       order=order.includes(id)?order.filter(item=>item!==id):[id,...order];
       if(selected===id&&!order.includes(id)) selected='config';
       save();
-    });
+    },{label:'App page directory',list:'App configuration pages'});
     // The persisted favorite API has a fixed page allowlist. Keep this new
     // frontend-only page navigable while its unsupported save stays disabled.
     const dashboardStar=host.querySelector('[data-favorite-page="dashboard"]');
     if(dashboardStar){dashboardStar.disabled=true;dashboardStar.title='Backend work needed: dashboard favorites';dashboardStar.style.color='var(--danger,#ef4444)';}
-    host.querySelector('.agent-config-landing').setAttribute('aria-label','App page directory');
     host.querySelector('.agent-config-settings-group-label').textContent='App pages';
     show(selected,false);
   }

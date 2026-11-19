@@ -15,9 +15,9 @@
    grow to their natural height and scroll with #main-panel. File Manager keeps its own fill layout. */
 #tab-app .agent-detail-content{height:auto}
 #tab-app .agent-detail-body:not(#app-files-page){overflow-y:visible}
-#tab-app .agent-config-topics{padding:0}
 #tab-app .agent-config-star{align-self:center;margin-right:18px;padding:0;border:0;background:transparent;color:var(--agent-config-icon);cursor:pointer}
 #tab-app .agent-config-star:focus-visible{outline:2px solid var(--agent-config-icon);outline-offset:2px}
+#tab-app .spl-trailing .agent-config-star{margin-right:0}
 /* Pin the page tab strip to the top of #main-panel while the page scrolls (as on Agents). */
 #tab-app .app-page-framework>.agent-card.active{position:sticky;top:-1px;z-index:3}
 #tab-app .agent-card-tabs{display:flex;gap:7px;overflow-x:auto}
@@ -59,4 +59,6 @@
 #app-functions-page th,#app-functions-page td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;min-width:140px}
 #app-functions-page th{color:var(--fg-1)}
 
-#tab-app .agent-card-tabs-chev,#tab-app .agent-card-tabs button,#tab-app .agent-config-topic-heading,#tab-app .agent-config-star{-webkit-tap-highlight-color:transparent}
+#tab-app .agent-card-tabs-chev,
+#tab-app .agent-card-tabs button,
+#tab-app .agent-config-star {-webkit-tap-highlight-color:transparent}

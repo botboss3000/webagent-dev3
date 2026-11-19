@@ -1273,60 +1273,8 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   letter-spacing: .01em;
 }
 .agent-config-settings-group-label svg { color: var(--agent-config-icon); }
-.agent-config-topics {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  min-width: 0;
-  padding: 5px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--bg-2) 76%, transparent);
-  box-shadow: 0 8px 20px rgba(var(--ink-rgb), .05);
-}
-.agent-config-topic { min-width: 0; }
 /* Config rows use the shared settings register, so the star sits flush in its slot. */
 #tab-agents .spl-trailing .agent-config-star { margin-right: 0; }
-.agent-config-topic + .agent-config-topic { border-top: var(--border-width) solid var(--border); }
-/* CONFIG-FAVORITE ROW: mirrors App Settings. The row button navigates; its
-   sibling star toggles permanent Agent-card header visibility without navigation. */
-.agent-config-topic-row {
-  display: flex;
-  align-items: stretch;
-  background: transparent;
-  transition: background .15s ease;
-}
-.agent-config-topic-row:hover,
-.agent-config-topic-row.is-selected,
-.agent-config-topic-row:has(.agent-config-topic-heading:focus-visible) {
-  background: rgba(var(--agent-config-icon-rgb), .09);
-}
-.agent-config-topic-row .agent-config-topic-heading { flex: 1 1 auto; width: auto; }
-.agent-config-topic-heading {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  width: 100%;
-  min-height: 74px;
-  padding: 15px 18px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: color .15s ease, transform .1s ease;
-}
-.agent-config-topic-row > .agent-config-topic-heading:hover {
-  background: transparent !important;
-}
-.agent-config-topic-heading:focus-visible {
-  position: relative;
-  z-index: 1;
-  outline: 2px solid var(--agent-config-icon);
-  outline-offset: -2px;
-}
-.agent-config-topic-heading:active { transform: translateY(1px); }
 .agent-config-topic-icon {
   flex: none;
   display: inline-flex;
@@ -1340,21 +1288,6 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   background: rgba(var(--agent-config-icon-rgb), .15);
   color: var(--agent-config-icon);
 }
-.agent-config-topic-copy { flex: 1 1 auto; min-width: 0; }
-.agent-config-topic-title {
-  display: block;
-  color: var(--fg-1);
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.3;
-}
-.agent-config-topic-description {
-  display: block;
-  margin-top: 3px;
-  color: var(--fg-3);
-  font-size: 12.5px;
-  line-height: 1.45;
-}
 .agent-config-landing {
   display: flex;
   flex-direction: column;
@@ -1364,8 +1297,6 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
 /* The landing and page shell are sibling surfaces: exactly one may occupy layout. */
 .agent-config-landing[hidden] { display: none !important; }
 @media (max-width: 640px) {
-  .agent-config-topics { border-radius: 15px; }
-  .agent-config-topic-heading { min-height: 68px; gap: 12px; padding: 13px 14px; }
   .agent-config-topic-icon { width: 38px; height: 38px; }
 }
 
