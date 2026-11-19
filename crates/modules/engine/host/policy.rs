@@ -158,6 +158,16 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
     {
         crate::main_chat::notes_context_store(store, agent, sid, requester, basis)
     }
+    fn session_tasks<'a>(
+        &'a self,
+        store: &'a Store,
+        sid: &'a str,
+        requester: &'a str,
+        basis: &'a str,
+    ) -> impl std::future::Future<Output = Result<(Vec<(String, String)>, Option<String>)>> + Send + 'a
+    {
+        store.task_list_context(sid, requester, basis)
+    }
 }
 
 impl webagent_engine::runtime::ports::ModelDiagnostics<Store> for NativePolicy {

@@ -113,6 +113,21 @@ impl NativeHost for Host<'_> {
             artifact,
         ))
     }
+    fn session_artifact<'a>(
+        &'a self,
+        sid: &'a str,
+        id: &'a str,
+    ) -> Pending<'a, Result<Option<Value>>> {
+        Box::pin(async move {
+            Ok(self
+                .0
+                .store
+                .session_artifacts(sid)
+                .await?
+                .into_iter()
+                .find(|artifact| artifact["id"] == id))
+        })
+    }
     fn write_session_artifact<'a>(
         &'a self,
         call: Call<'a>,

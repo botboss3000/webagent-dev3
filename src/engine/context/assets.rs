@@ -284,10 +284,11 @@ mod tests {
             .await
             .unwrap();
         // The ledger still records each included definition (at input 0), as bookkeeping;
-        // its body is in the instructions, not in the history.
-        assert_eq!(ledger.placements.len(), 1);
-        assert_eq!(ledger.placements[0].id, "fixture-skill");
-        assert_eq!(ledger.placements[0].after_input, 0);
+        // its body is in the instructions, not in the history. The owner's session task
+        // list snapshot is placed even while the list is empty.
+        let placed: Vec<_> = ledger.placements.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(placed, ["fixture-skill", "session-tasks-0"]);
+        assert!(ledger.placements.iter().all(|p| p.after_input == 0));
         run["input"] = json!([{"role":"assistant","content":"canonical summary"}]);
         run["compactions"] = json!(1);
         app.store.save_run(&mut run,"context_compacted",&json!({"source":original,"source_digest":crate::digest(&original),"dropped_items":original.len(),"segment_id":"assets-run-1"})).await.unwrap();

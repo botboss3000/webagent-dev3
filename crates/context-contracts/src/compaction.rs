@@ -246,9 +246,9 @@ impl Config {
     }
 }
 
-/// Drop the skill text from `load_skill` results, Main Notes changes (the server's
-/// `main_notes_read-…` rows and the agent's own `main_notes_write` results; the agent's own
-/// reads stay) and mode changes so a summary never keeps them: a fold keeps them ahead of
+/// Drop the skill text from `load_skill` results, Main Notes and task list changes (the
+/// server's `main_notes_read-…`/`task_list_read-…` rows and the agent's own writes; the
+/// agent's own reads stay) and mode changes so a summary never keeps them: a fold keeps them ahead of
 /// its new block (see `apply_summary`), and a merge leaves skills and notes to the prompt.
 pub fn omit_skill_bodies(input: &mut [Value]) {
     let loads = input
@@ -263,10 +263,15 @@ pub fn omit_skill_bodies(input: &mut [Value]) {
             item["type"] == "function_call"
                 && (matches!(
                     item["name"].as_str(),
-                    Some("main_notes_write" | "mode_guidance" | "set_execution_mode")
-                ) || item["call_id"]
-                    .as_str()
-                    .is_some_and(|id| id.starts_with("main_notes_read-")))
+                    Some(
+                        "main_notes_write"
+                            | "task_list_write"
+                            | "mode_guidance"
+                            | "set_execution_mode"
+                    )
+                ) || item["call_id"].as_str().is_some_and(|id| {
+                    id.starts_with("main_notes_read-") || id.starts_with("task_list_read-")
+                }))
         })
         .filter_map(call_id)
         .map(str::to_owned)
@@ -463,12 +468,19 @@ fn is_summary(item: &Value, config: &Config) -> bool {
 }
 
 /// Tool calls a fold keeps ahead of its new block instead of summarizing: loaded skills,
-/// Main Notes changes and the execution mode.
+/// Main Notes and task list changes and the execution mode.
 fn is_retained_call(item: &Value) -> bool {
     item["type"] == "function_call"
         && matches!(
             item["name"].as_str(),
-            Some("load_skill" | "set_execution_mode" | "main_notes_read" | "main_notes_write")
+            Some(
+                "load_skill"
+                    | "set_execution_mode"
+                    | "main_notes_read"
+                    | "main_notes_write"
+                    | "task_list_read"
+                    | "task_list_write"
+            )
         )
 }
 
@@ -1061,10 +1073,53 @@ fn is_notes_change(call: &Value) -> bool {
             && call_id(call).is_some_and(|id| id.starts_with("main_notes_read-"))
 }
 
+/// A task list change: the server's `task_list_read-…` rows (changes made outside the
+/// agent's own calls) and the agent's own `task_list_write` results.
+fn is_tasks_change(call: &Value) -> bool {
+    call["name"] == "task_list_write"
+        || call["name"] == "task_list_read"
+            && call_id(call).is_some_and(|id| id.starts_with("task_list_read-"))
+}
+
+/// Every change of one kind from a fold's range and tail combined into one `name` read
+/// exchange under `heading`, oldest first; `own` names the agent's own write tool.
+fn combined_changes(
+    changes: &[&(&Value, &Value)],
+    name: &str,
+    own: &str,
+    heading: &str,
+) -> Option<[Value; 2]> {
+    if changes.is_empty() {
+        return None;
+    }
+    let text = changes
+        .iter()
+        .map(|(call, output)| {
+            let body = output["output"]
+                .as_str()
+                .map_or_else(|| output["output"].to_string(), str::to_owned);
+            if call["name"] == own {
+                format!("This session wrote: {body}")
+            } else {
+                body
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let text = format!("{heading}\n\n{text}");
+    let id = format!("{name}-{}", &hex::encode(Sha256::digest(&text))[..16]);
+    let arguments = json!({"changed_by":"combined at compaction"}).to_string();
+    Some([
+        json!({"type":"function_call","call_id":id,"name":name,"arguments":arguments}),
+        json!({"type":"function_call_output","call_id":id,"output":text}),
+    ])
+}
+
 /// The rows a fold keeps ahead of its new block, and the tail without the ones it moved:
 /// each `load_skill` exchange still carrying its text (so the skill stays out of the
 /// prompt), the latest mode change unless the tail shows a newer one, and every Main Notes
-/// change from the range and the tail combined into one `main_notes_read` exchange.
+/// change and every task list change from the range and the tail, each kind combined into
+/// one read exchange.
 fn retained_rows(range: &[Value], tail: &[Value]) -> (Vec<Value>, Vec<Value>) {
     let in_range = exchanges(range);
     let mut kept = Vec::new();
@@ -1091,9 +1146,14 @@ fn retained_rows(range: &[Value], tail: &[Value]) -> (Vec<Value>, Vec<Value>) {
         .chain(&in_tail)
         .filter(|(call, _)| is_notes_change(call))
         .collect::<Vec<_>>();
+    let task_changes = in_range
+        .iter()
+        .chain(&in_tail)
+        .filter(|(call, _)| is_tasks_change(call))
+        .collect::<Vec<_>>();
     let moved = in_tail
         .iter()
-        .filter(|(call, _)| is_notes_change(call))
+        .filter(|(call, _)| is_notes_change(call) || is_tasks_change(call))
         .filter_map(|(call, _)| call_id(call))
         .collect::<HashSet<_>>();
     let tail = tail
@@ -1101,34 +1161,24 @@ fn retained_rows(range: &[Value], tail: &[Value]) -> (Vec<Value>, Vec<Value>) {
         .filter(|item| !call_id(item).is_some_and(|id| moved.contains(id)))
         .cloned()
         .collect();
-    if !changes.is_empty() {
-        let text = changes
-            .iter()
-            .map(|(call, output)| {
-                let body = output["output"]
-                    .as_str()
-                    .map_or_else(|| output["output"].to_string(), str::to_owned);
-                if call["name"] == "main_notes_write" {
-                    format!("This session wrote: {body}")
-                } else {
-                    body
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let text = format!(
-            "Main Notes changes after the notes in the instructions, oldest first:\n\n{text}"
-        );
-        let id = format!(
-            "main_notes_read-{}",
-            &hex::encode(Sha256::digest(&text))[..16]
-        );
-        let arguments = json!({"changed_by":"combined at compaction"}).to_string();
-        kept.push(
-            json!({"type":"function_call","call_id":id,"name":"main_notes_read",
-            "arguments":arguments}),
-        );
-        kept.push(json!({"type":"function_call_output","call_id":id,"output":text}));
+    for exchange in [
+        combined_changes(
+            &changes,
+            "main_notes_read",
+            "main_notes_write",
+            "Main Notes changes after the notes in the instructions, oldest first:",
+        ),
+        combined_changes(
+            &task_changes,
+            "task_list_read",
+            "task_list_write",
+            "Task list changes after the list in the instructions, oldest first:",
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        kept.extend(exchange);
     }
     (kept, tail)
 }
@@ -1143,9 +1193,11 @@ pub fn reorder(input: &[Value], config: &Config) -> Vec<Value> {
     let start = leading_blocks(input, config);
     let server_notes = input[start..]
         .iter()
-        .filter(|item| item["type"] == "function_call" && is_notes_change(item))
+        .filter(|item| {
+            item["type"] == "function_call" && (is_notes_change(item) || is_tasks_change(item))
+        })
         .filter_map(call_id)
-        .filter(|id| id.starts_with("main_notes_read-"))
+        .filter(|id| id.starts_with("main_notes_read-") || id.starts_with("task_list_read-"))
         .collect::<HashSet<_>>();
     input[..start]
         .iter()
@@ -1419,6 +1471,46 @@ mod tests {
         assert_eq!(&twice[..7], &once[..7]);
         assert_eq!(twice[8]["call_id"], "s2");
         assert_eq!(super::summary_blocks(&twice, &config), vec![6, 9]);
+    }
+
+    /// A fold combines the session's task list changes from its range and the tail into one
+    /// `task_list_read` exchange ahead of its block, after the Main Notes one.
+    #[test]
+    fn folds_combine_task_list_changes() {
+        let config = requested_config();
+        let pair = |id: &str, name: &str, output: &str| {
+            [
+                json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":id,"output":output}),
+            ]
+        };
+        let mut input = vec![turn(&"first task ".repeat(30))];
+        input.extend(pair("t1", "task_list_write", "s1 added: Work"));
+        input.extend(pair("w", "main_notes_write", "own: +b"));
+        input.extend(pair("r", "file_read", &"x".repeat(200)));
+        input.push(turn("second task"));
+        input.extend(pair(
+            "task_list_read-u",
+            "task_list_read",
+            "s1.2 added by the user",
+        ));
+        let plan = super::plan_until(&input, 7, &config).unwrap().unwrap();
+        let once = super::apply_summary(&input, &plan, "first task done").unwrap();
+        assert_eq!(once[0]["name"], "main_notes_read");
+        assert_eq!(once[2]["name"], "task_list_read");
+        assert!(once[2]["call_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("task_list_read-"));
+        assert_eq!(
+            once[3]["output"],
+            "Task list changes after the list in the instructions, oldest first:\n\n\
+             This session wrote: s1 added: Work\n\ns1.2 added by the user"
+        );
+        assert!(super::is_summary(&once[4], &config));
+        assert!(!once[5..].iter().any(|item| super::call_id(item)
+            .is_some_and(|id| id.starts_with("task_list_read-") && id != once[2]["call_id"])));
+        assert_eq!(super::leading_blocks(&once, &config), 5);
     }
 
     /// A major reorder keeps only the blocks at the start and drops the server's notes rows;

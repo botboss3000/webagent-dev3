@@ -1,0 +1,7 @@
+{
+  "_instructions": "Session task list texts. snapshot_heading opens the list in the instructions ({revision} is the list's revision when the snapshot was made); snapshot_rule follows it; snapshot_empty replaces the sections when there are none. step_line opens the one-line task state in each step's guidance message ({sections} lists each open section and its active step). Edited in place; no compile.",
+  "snapshot_heading": "Session tasks: this session's working list, as of revision {revision}; it ends with the session. Track each multi-step piece of work in it with task_list_write as you go; read it with task_list_read.",
+  "snapshot_rule": "If another session or a later day would need something, it belongs in Main Notes; a step of the work in front of you belongs here.",
+  "snapshot_empty": "No sections yet.",
+  "step_line": "Session tasks: {sections}."
+}

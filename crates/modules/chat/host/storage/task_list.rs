@@ -131,6 +131,47 @@ impl Store {
         tx.commit().await?;
         Ok(output)
     }
+
+    /// Task list context for one model call of `requester` in session `sid` at history
+    /// `basis`: the snapshot definition `(id, body)`, frozen until `basis` changes at a rewind
+    /// or block merge (later changes reach the history as tool results), and the current
+    /// one-line task state for the step's guidance message. Shared chat members get neither.
+    pub(crate) async fn task_list_context(
+        &self,
+        sid: &str,
+        requester: &str,
+        basis: &str,
+    ) -> Result<(Vec<(String, String)>, Option<String>)> {
+        if requester != self.current_user_id() {
+            return Ok((Vec::new(), None));
+        }
+        let key = list_key(sid)?;
+        let list: webagent_chat::task_list::List = match self.get(&key).await? {
+            Some(document) if document["session_id"] == sid => {
+                serde_json::from_value(document["list"].clone())?
+            }
+            _ => webagent_chat::task_list::List::default(),
+        };
+        let texts = webagent_chat::task_list::texts();
+        let view_key = format!("{key}:view");
+        let saved = self.get(&view_key).await?;
+        let view = match saved {
+            Some(view) if view["session_id"] == sid && view["history_basis"] == basis => view,
+            _ => {
+                let view = json!({"session_id":sid,"history_basis":basis,
+                    "revision":list.revision,
+                    "snapshot":webagent_chat::task_list::render_snapshot(&list, &texts)});
+                self.put(&view_key, &view).await?;
+                view
+            }
+        };
+        let id = format!("session-tasks-{}", view["revision"].as_u64().unwrap_or(0));
+        let snapshot = view["snapshot"].as_str().unwrap_or("").to_owned();
+        Ok((
+            vec![(id, snapshot)],
+            webagent_chat::task_list::step_line(&list, &texts),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -223,5 +264,31 @@ mod tests {
             .is_none());
         // The run belongs to another session there.
         assert!(store.task_list("foreign", "r", None).await.is_err());
+        // The snapshot stays as it was until the history basis changes.
+        let user = store.current_user_id().to_owned();
+        let (first, _) = store.task_list_context("owned", &user, "b1").await.unwrap();
+        assert_eq!(first[0].0, "session-tasks-2");
+        store
+            .put(
+                "run:r",
+                &json!({"id":"r","session_id":"owned","agent_id":"shared_default",
+                    "status":"running","generation":"g","lease_epoch":0,
+                    "pending":{"id":"call-3","state":"executing"}}),
+            )
+            .await
+            .unwrap();
+        store
+            .task_list_write("owned", "r", "call-3", "g", "tasks", 2, &list(3), &changes)
+            .await
+            .unwrap();
+        let (same, _) = store.task_list_context("owned", &user, "b1").await.unwrap();
+        assert_eq!(same, first);
+        let (rebuilt, _) = store.task_list_context("owned", &user, "b2").await.unwrap();
+        assert_eq!(rebuilt[0].0, "session-tasks-3");
+        let (member, line) = store
+            .task_list_context("owned", "someone-else", "b2")
+            .await
+            .unwrap();
+        assert!(member.is_empty() && line.is_none());
     }
 }

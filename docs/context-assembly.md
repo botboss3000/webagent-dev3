@@ -12,11 +12,11 @@ up to the first byte that changed.
 | Part | What it holds | When it changes |
 | --- | --- | --- |
 | Tool definitions | Schemas of the active abilities' tools | The user activates or removes an ability (a major reorder) |
-| Instructions | Base instructions and prompt slots, skills not in the history, the skill menu, Main Notes guidance and snapshot | A block merge or major reorder; a changed live source (prompt, skill or menu file) |
-| Retained rows R1, R2, ... | Per fold: loaded skills (`load_skill` results), the latest `set_execution_mode` result, one combined Main Notes change | Written once by their fold, then unchanged until a merge or major reorder |
+| Instructions | Base instructions and prompt slots, skills not in the history, the skill menu, Main Notes guidance and snapshot, the session task list snapshot | A block merge or major reorder; a changed live source (prompt, skill or menu file) |
+| Retained rows R1, R2, ... | Per fold: loaded skills (`load_skill` results), the latest `set_execution_mode` result, one combined Main Notes change, one combined task list change | Written once by their fold, then unchanged until a merge or major reorder |
 | Summary blocks B1, B2, ... | One summary per fold | A merge rewrites the oldest ones into one |
 | Verbatim tail | Recent turns word for word, with any skills, notes changes and mode changes made since the last fold | Grows each call; a fold summarizes its older part |
-| Per-step guidance message | The mode's turn guidance and, once per new run-health issue, a review prompt | Sent after the history for one call only, never saved, so it never breaks the cache |
+| Per-step guidance message | The mode's turn guidance, the one-line session task state and, once per new run-health issue, a review prompt | Sent after the history for one call only, never saved, so it never breaks the cache |
 
 Four events reshape the request:
 
@@ -154,6 +154,18 @@ the summarized range and in the verbatim tail, oldest first, into one
 `main_notes_read` exchange placed with the fold's other retained rows, and drops
 them from the tail. A merge or major reorder drops the diffs and rebuilds the
 snapshot from the current notes.
+
+**Session task list through its changes.** The list follows the same rules as Main
+Notes, at the same basis: the instructions carry one snapshot of the session's task list
+(`base_tasks:{sid}:view`, keyed by `notes_basis`) right after the notes, frozen between
+merges. The agent's own `task_list_write` results stay in the history; changes made
+elsewhere (the user's edits) arrive as server-added `task_list_read-<id>` rows. A fold
+combines every task list change from its range and the tail into one `task_list_read`
+exchange among its retained rows, after the Main Notes one; a merge or major reorder drops
+them and rebuilds the snapshot. The per-step guidance message adds one line naming each
+open section, its open count and its steps in progress; it carries no revision, so it
+changes only when work starts or finishes (bridge clients re-send it only then). Texts are
+in `prompts/task_list.json`. Shared chat members get neither.
 
 **Execution mode.** The mode arrives as a `set_execution_mode` result: at session
 start, when the user changes it, and when the agent changes it. A fold keeps the

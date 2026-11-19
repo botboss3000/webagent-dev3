@@ -60,9 +60,55 @@ async fn save(
             list.revision
         );
     }
+    let target = write.section.id.clone();
     let (next, changes) = rules::apply(&list, write, now_ms())?;
-    host.write_task_list(call, receipt, list.revision, &json!(next), &json!(changes))
-        .await
+    let mut output = host
+        .write_task_list(call, receipt, list.revision, &json!(next), &json!(changes))
+        .await?;
+    // A plan's section keeps the plan's checklist current; the plan seeding call has
+    // already saved the plan itself.
+    let section = match target {
+        Some(id) => rules::section(&next, &id),
+        None => next.sections.last(),
+    };
+    if let Some(section) = section.filter(|section| section.plan && receipt == "tasks") {
+        output["plan"] = json!(match update_plan(host, call, section).await {
+            Ok(()) => "The plan's checklist was updated.".to_owned(),
+            Err(error) => format!("The plan's checklist was not updated: {error}"),
+        });
+    }
+    Ok(output)
+}
+/// Rewrite the session plan's checklist from its section's steps.
+async fn update_plan(
+    host: &dyn NativeHost,
+    call: Call<'_>,
+    section: &rules::Section,
+) -> Result<()> {
+    let Some(mut plan) = host
+        .session_artifact(call.sid, crate::task::PLAN_ARTIFACT)
+        .await?
+    else {
+        bail!("The session has no plan");
+    };
+    let checklist = rules::plan_checklist(section);
+    let sections = plan["sections"]
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("The plan has no sections"))?;
+    let item = sections
+        .iter_mut()
+        .find(|item| item["label"] == "Checklist")
+        .ok_or_else(|| anyhow!("The plan has no checklist"))?;
+    item["value"] = json!(checklist);
+    let body = json!({"title":plan["title"],"sections":plan["sections"]});
+    host.write_session_artifact(
+        call,
+        crate::task::PLAN_ARTIFACT,
+        crate::task::PLAN_ARTIFACT,
+        &body,
+    )
+    .await?;
+    Ok(())
 }
 /// Seed a user-requested section from an approved plan, built on the current list.
 ///

@@ -18,6 +18,7 @@ pub(super) async fn run(host: &dyn NativeHost, call: Call<'_>, args: &Value) -> 
     let write = rules::Write {
         section: request.section,
         steps: request.steps,
+        plan: false,
     };
     save(host, call, "tasks", Some(request.expected_revision), write).await
 }

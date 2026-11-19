@@ -210,7 +210,7 @@ impl<
             .await?
             .ok_or_else(|| anyhow::anyhow!("Context session missing"))?;
         let basis = webagent_context::assets::notes_basis(&session);
-        let (notes, updates) = Box::pin(self.native.main_notes(
+        let (mut notes, updates) = Box::pin(self.native.main_notes(
             self.store.records(),
             &agent,
             &sid,
@@ -218,6 +218,26 @@ impl<
             &basis,
         ))
         .await?;
+        // The session task list follows the notes, pinned at the same basis; its one-line
+        // state joins this step's guidance message only.
+        let (tasks, task_line) =
+            Box::pin(
+                self.native
+                    .session_tasks(self.store.records(), &sid, &requester, &basis),
+            )
+            .await?;
+        notes.extend(tasks);
+        let mut contributions = contributions.to_vec();
+        if let Some(content) = task_line {
+            contributions.push(context_input::Contribution {
+                id: "session_tasks".into(),
+                source: "native_session_tasks".into(),
+                lifetime: context_input::Lifetime::Call,
+                content,
+                turn: call.turn,
+                call: call.call,
+            });
+        }
         // Another session's Main Notes changes join the history as tool-call rows, once each,
         // where they stay (and stay cached); a fold keeps them ahead of its block.
         let mut rows = Vec::new();
@@ -293,7 +313,7 @@ impl<
             profile,
             schemas,
             history,
-            contributions,
+            &contributions,
             &notes,
             call,
             ledger,

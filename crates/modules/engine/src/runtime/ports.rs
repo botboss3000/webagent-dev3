@@ -183,6 +183,15 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         requester: &'a str,
         basis: &'a str,
     ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<(u64, String)>)>> + Send + 'a;
+    /// Session task list context for one model call of `requester` in session `sid` at
+    /// history `basis`: the snapshot definition `(id, body)` and the step's one-line state.
+    fn session_tasks<'a>(
+        &'a self,
+        store: &'a S,
+        sid: &'a str,
+        requester: &'a str,
+        basis: &'a str,
+    ) -> impl Future<Output = Result<(Vec<(String, String)>, Option<String>)>> + Send + 'a;
 }
 
 pub trait ModelDiagnostics<S>: Clone + Send + Sync + 'static {

@@ -3,6 +3,12 @@
 //! content is the agent's or user's claim about the work, never verified evidence.
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// The task list's texts (`prompts/task_list.json`, read live).
+const TEXTS_FILE: &str = "crates/modules/configuration/prompts/task_list.json";
+/// The same file as built, used only when the live one is missing or invalid.
+const PACKAGED_TEXTS: &str = include_str!("../../configuration/prompts/task_list.json");
 
 /// Sections one session's list keeps.
 pub const MAX_SECTIONS: usize = 64;
@@ -80,6 +86,9 @@ pub struct Section {
     pub steps: Vec<Step>,
     /// The number the next new step gets.
     pub next_step: u32,
+    /// Whether an approved plan created it; its progress then also updates the plan.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan: bool,
 }
 
 /// A session's task list at one revision.
@@ -132,6 +141,9 @@ pub struct Write {
     pub section: SectionWrite,
     #[serde(default)]
     pub steps: Vec<StepWrite>,
+    /// Set only by the server when an approved plan seeds the section.
+    #[serde(skip)]
+    pub plan: bool,
 }
 
 fn text(value: &str, min: usize, max: usize, what: &str) -> Result<String> {
@@ -190,6 +202,7 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
                 summary: String::new(),
                 steps: Vec::new(),
                 next_step: 0,
+                plan: write.plan,
             };
             changes.push(format!("{} added: {}", section.id, section.title));
             next.sections.push(section);
@@ -344,7 +357,125 @@ pub fn plan_section(title: &str, notes: &str, labels: &[String]) -> Write {
                 ..StepWrite::default()
             })
             .collect(),
+        plan: true,
     }
+}
+
+/// The section `id` of `list`, if it has one.
+#[must_use]
+pub fn section<'a>(list: &'a List, id: &str) -> Option<&'a Section> {
+    list.sections.iter().find(|section| section.id == id)
+}
+
+/// The plan artifact's checklist text for `section`: one numbered line per step, its box
+/// showing the status (`x` done, `>` in progress, `!` blocked, `-` cancelled).
+#[must_use]
+pub fn plan_checklist(section: &Section) -> String {
+    section
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let mark = match step.status {
+                Status::Open => ' ',
+                Status::InProgress => '>',
+                Status::Blocked => '!',
+                Status::Done => 'x',
+                Status::Cancelled => '-',
+            };
+            format!("{}. [{mark}] {}", index + 1, step.label)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The task list texts, the live file's when it is valid.
+#[must_use]
+pub fn texts() -> Value {
+    webagent_configuration::live::parsed(TEXTS_FILE, 64 * 1024, |bytes| {
+        Ok(serde_json::from_slice::<Value>(bytes)?)
+    })
+    .or_else(|_| serde_json::from_str(PACKAGED_TEXTS).map_err(anyhow::Error::from))
+    .unwrap_or_default()
+}
+
+fn text_field(texts: &Value, key: &str) -> String {
+    texts[key].as_str().unwrap_or("").trim().to_owned()
+}
+
+/// The list as the instructions show it: the heading and rule, then each section with its
+/// notes, closing summary and steps (closed sections show only their summary).
+#[must_use]
+pub fn render_snapshot(list: &List, texts: &Value) -> String {
+    let mut lines = vec![
+        text_field(texts, "snapshot_heading").replace("{revision}", &list.revision.to_string()),
+        text_field(texts, "snapshot_rule"),
+    ];
+    if list.sections.is_empty() {
+        lines.push(text_field(texts, "snapshot_empty"));
+    }
+    for (section, line) in list.sections.iter().zip(overview(list)) {
+        lines.push(line);
+        if section.status != Status::Open {
+            continue;
+        }
+        if !section.notes.is_empty() {
+            lines.push(format!("  notes: {}", section.notes));
+        }
+        for step in &section.steps {
+            let mut line = format!("  {} [{}] {}", step.id, step.status.word(), step.label);
+            if !step.outcome.is_empty() {
+                line.push_str(&format!(" → {}", step.outcome));
+            }
+            lines.push(line);
+        }
+    }
+    lines.retain(|line| !line.is_empty());
+    lines.join("\n")
+}
+
+/// The one-line task state for each step's guidance message: each open section with its
+/// active steps and open count, or `None` with no open work. It carries no revision, so it
+/// changes only when a section or step starts or finishes.
+#[must_use]
+pub fn step_line(list: &List, texts: &Value) -> Option<String> {
+    let parts = list
+        .sections
+        .iter()
+        .filter(|section| section.status == Status::Open)
+        .filter_map(|section| {
+            let open = section
+                .steps
+                .iter()
+                .filter(|step| step.status.unfinished())
+                .count();
+            if open == 0 {
+                return None;
+            }
+            let active = section
+                .steps
+                .iter()
+                .filter(|step| step.status == Status::InProgress)
+                .map(|step| format!("{} \"{}\"", step.id, step.label))
+                .collect::<Vec<_>>();
+            Some(if active.is_empty() {
+                format!(
+                    "{} \"{}\", {open} open, none in progress",
+                    section.id, section.title
+                )
+            } else {
+                format!(
+                    "{} \"{}\", {open} open, active {}",
+                    section.id,
+                    section.title,
+                    active.join(", ")
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    let template = text_field(texts, "step_line");
+    (!parts.is_empty() && !template.is_empty())
+        .then(|| template.replace("{sections}", &parts.join("; ")))
 }
 
 /// One line per section: id, title, origin, status and step counts.
@@ -566,5 +697,50 @@ mod tests {
             ["s1.1 open → done", "s1.3 added: Verify (open)"]
         );
         assert_eq!(overview(&after), ["s1 Plan [user · open] 1 done, 2 open"]);
+        assert!(after.sections[0].plan);
+        assert_eq!(
+            plan_checklist(&after.sections[0]),
+            "1. [x] Reproduce\n2. [ ] Patch\n3. [ ] Verify"
+        );
+    }
+
+    #[test]
+    fn snapshot_and_step_line_follow_the_list() {
+        let texts = texts();
+        let empty = render_snapshot(&List::default(), &texts);
+        assert!(
+            empty.contains("revision 0") && empty.contains("No sections yet"),
+            "{empty}"
+        );
+        assert_eq!(step_line(&List::default(), &texts), None);
+        let (list, _) = apply(
+            &List::default(),
+            write(
+                serde_json::json!({"section":{"title":"Fix login","notes":"keep Secure"},
+                "steps":[{"label":"Reproduce","status":"done","outcome":"path /api"},
+                    {"label":"Patch","status":"in_progress"},{"label":"Verify"}]}),
+            ),
+            1,
+        )
+        .unwrap();
+        let snapshot = render_snapshot(&list, &texts);
+        assert!(snapshot.contains("  notes: keep Secure"), "{snapshot}");
+        assert!(
+            snapshot.contains("  s1.1 [done] Reproduce → path /api"),
+            "{snapshot}"
+        );
+        assert_eq!(
+            step_line(&list, &texts).unwrap(),
+            "Session tasks: s1 \"Fix login\", 2 open, active s1.2 \"Patch\"."
+        );
+        // An outcome edit changes nothing the line shows.
+        let (edited, _) = apply(
+            &list,
+            write(serde_json::json!({"section":{"id":"s1"},
+                "steps":[{"id":"s1.1","outcome":"cookie path /api"}]})),
+            2,
+        )
+        .unwrap();
+        assert_eq!(step_line(&edited, &texts), step_line(&list, &texts));
     }
 }

@@ -146,6 +146,12 @@ pub trait NativeHost: Sync {
         id: &'a str,
         body: &'a Value,
     ) -> Pending<'a, Result<Value>>;
+    /// Session `sid`'s artifact `id` (its title and sections), or `None`.
+    fn session_artifact<'a>(
+        &'a self,
+        sid: &'a str,
+        id: &'a str,
+    ) -> Pending<'a, Result<Option<Value>>>;
     /// The attachment limits of session `sid`'s agent.
     fn attachment_limits<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<AttachmentLimits>>;
     /// Attach a file to session `sid` as the actor's upload; `body` is an upload request
