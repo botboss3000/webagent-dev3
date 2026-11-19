@@ -15,6 +15,7 @@ pub mod background;
 pub mod background_compaction;
 pub mod background_followup;
 pub mod batch;
+pub mod board_delivery;
 pub mod build_tasks;
 pub mod cache_estimate;
 pub mod components;

@@ -341,6 +341,81 @@ impl<
         }
         Ok(())
     }
+    /// Show board notes on app-owned broker tasks in their owning chats, once each. An
+    /// active chat gets a background notice (at most `WAKES_PER_HOUR` wakes; later notes
+    /// wait); a chat the user stopped keeps the note for its next message; a stopped,
+    /// inactive or deleted chat is reported back so the board answers the sender.
+    async fn follow_board(app: &Self) -> Result<()> {
+        use super::board_delivery as board;
+        let Ok(waiting) = board::call(&json!({"action":"undelivered","user":"app"})).await else {
+            return Ok(()); // The board service is optional: it may be down or not installed.
+        };
+        let notes = waiting["notes"].as_array().cloned().unwrap_or_default();
+        if notes.is_empty() {
+            return Ok(());
+        }
+        let views = app.user_views(true).await?;
+        let now = now();
+        let mut marks = Vec::new();
+        let mut woken = std::collections::BTreeSet::new();
+        for note in &notes {
+            let (Some(id), Some(sid)) = (note["id"].as_str(), note["owner_session"].as_str())
+            else {
+                continue;
+            };
+            let mut owner = None;
+            for view in &views {
+                if let Some(session) = view.store.get(&crate::key("session", sid)).await? {
+                    owner = Some((view, session));
+                    break;
+                }
+            }
+            let outcome = match owner {
+                None => "gone",
+                Some((_, session)) if session["status"] != "active" => "inactive",
+                Some((view, _)) => {
+                    let stop_key = format!("session_stopped:{sid}");
+                    let stopped = view
+                        .store
+                        .get(&stop_key)
+                        .await?
+                        .filter(|r| r["delivered"] != true);
+                    if let Some(mut record) = stopped {
+                        board::hold(&mut record, note);
+                        view.store.put(&stop_key, &record).await?;
+                        "stopped"
+                    } else {
+                        // One wake per chat per pass: its notices go out as one message.
+                        if !woken.contains(sid) {
+                            let wakes_key = crate::key("board_wakes", sid);
+                            let mut wakes = view
+                                .store
+                                .get(&wakes_key)
+                                .await?
+                                .unwrap_or_else(|| json!({}));
+                            if !board::allow(&mut wakes, now) {
+                                continue;
+                            }
+                            view.store.put(&wakes_key, &wakes).await?;
+                            woken.insert(sid.to_owned());
+                        }
+                        view.stage_background_notice(
+                            sid,
+                            &format!("board:{id}"),
+                            board::notice(note),
+                        )
+                        .await?;
+                        "delivered"
+                    }
+                }
+            };
+            marks.push(json!({"id":id,"outcome":outcome}));
+        }
+        if !marks.is_empty() {
+            board::call(&json!({"action":"delivered","user":"app","notes":marks})).await?;
+        }
+        Ok(())
+    }
     /// Follow one background claim wait; its end is a background notice that wakes the agent.
     async fn follow_claim_wait(app: &Self, task: &mut Value, follow: &Value) -> Result<()> {
         let poll =
@@ -907,6 +982,9 @@ impl<
                 user_app.save_override(&mut run).await?;
             }
             Self::follow_detached_builds(&user_app).await?;
+        }
+        if let Err(error) = Self::follow_board(app).await {
+            tracing::warn!("Board note delivery deferred: {error:#}");
         }
         if startup {
             let _ = std::fs::remove_file(app.handles.control_dir.join("restart-cause.json"));

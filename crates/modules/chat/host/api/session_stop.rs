@@ -210,10 +210,26 @@ pub(crate) fn stopped_note(record: &Value) -> String {
             building.join("; ")
         )
     };
+    // Board notes that arrived while stopped wait here instead of starting a run.
+    let notes: Vec<String> = record["board_notes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(crate::session_messaging::board_notice_text)
+        .collect();
+    let notes = if notes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n[Board notes left on your broker tasks while stopped (the senders were told the chat \
+             was stopped):]\n{}",
+            notes.join("\n\n")
+        )
+    };
     format!(
         "[Host note: the user fully stopped this conversation and its background work. \
          Stopped: {stopped}.{building} Do not restart any of it on your own. If the request \
-         needs any of it, list what was stopped and ask the user which to restart.]"
+         needs any of it, list what was stopped and ask the user which to restart.]{notes}"
     )
 }
 
