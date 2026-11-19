@@ -1,4 +1,5 @@
 // MCP connections are agent-scoped. These controls do not grant tool permission.
+import { createTextRow } from '../../../../shared/config-rows/config-rows.js';
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
 };
@@ -167,11 +168,11 @@ export function buildMcpControls({ ability, request, scope, canManage, levelId, 
   const renderDiscovery = () => {
     discovery.replaceChildren();
     if (!editable || !available) return;
-    const query = input('Search MCP servers', '', 'search'); query.maxLength = 200;
+    const query = createTextRow(discovery, { title: 'Search MCP servers', maxLength: 200 });
     const search = button('Search MCP servers');
     const add = button('Add HTTPS endpoint'); add.onclick = () => openEditor();
     const results = node('div', 'ac-list');
-    search.onclick = () => act(() => request(base + '/search', 'POST', { query: query.value.trim() }), result => {
+    search.onclick = () => act(() => request(base + '/search', 'POST', { query: query.getValue().trim() }), result => {
       results.replaceChildren();
       for (const server of output(result).servers || []) {
         const row = node('div', 'conn-card'); row.style.overflowWrap = 'anywhere';
@@ -184,7 +185,7 @@ export function buildMcpControls({ ability, request, scope, canManage, levelId, 
       if (!results.childElementCount) results.append(node('p', 'ac-hint', 'No matching servers. Add a known HTTPS endpoint instead.'));
       report('Search complete. Review a server before adding it.');
     });
-    discovery.append(field('Search MCP servers', query), search, add, results);
+    discovery.append(search, add, results);
   };
   reload.onclick = load;
   // The ability body is attached synchronously after construction. All later

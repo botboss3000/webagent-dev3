@@ -1,12 +1,10 @@
 // Agent configuration is distinct from capability-level views; Rust enforces every save.
 import { buildConfigRow } from './ability-row-controls/ability-row-controls.js';
-import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
+import { createToggleRow, createSelectRow, createNumberRow, createLongTextRow } from '../../../../shared/config-rows/config-rows.js';
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
 };
-const row = (name, control, hint = '', className = '') => {
-  return buildConfigRow({ name, desc: hint, descTitle: hint, control, className });
-};
+const row = (name, control, hint = '') => buildConfigRow({ name, desc: hint, descTitle: hint, control });
 const field = (name, value = '', type = 'text', maxLength = 2048) => {
   const input = node('input', 'ac-input'); input.type = type; input.value = value;
   input.maxLength = maxLength; input.setAttribute('aria-label', name); return input;
@@ -14,70 +12,86 @@ const field = (name, value = '', type = 'text', maxLength = 2048) => {
 const message = error => error?.status === 409
   ? 'Configuration changed. Reload abilities before saving again.'
   : 'Configuration could not be saved. Check the fields and your agent authority.';
-// Save one settings change in place: spinner and check over the changed control, and the
-// returned revision kept for the next save instead of re-reading the whole page.
-async function saveSettings({ ability, data, request, scope, status, settings, changed, notice }) {
-  const box = changed?.closest?.('.ac-config-control') || changed?.parentElement;
-  _markSaving(box);
+// Save one settings change in place; the returned revision is kept for the next save
+// instead of re-reading the whole page. The row shows the spinner, check or error.
+async function saveSettings({ ability, data, request, scope, status, settings, notice }) {
   try {
     const saved = await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
       { expected_revision: data.revision, settings });
     data.revision = saved.revision;
     data.settings = saved.settings || data.settings;
     status.textContent = notice;
-    _flashSaveCheck(box, true);
   } catch (error) {
-    _flashSaveCheck(box, false, message(error));
-    throw error;
+    status.textContent = message(error);
+    throw new Error(message(error));
   }
+}
+// One revision covers a whole settings object: each change sends every value, and changes
+// queue so each save carries the revision the previous one returned.
+function wholeObjectSaver({ values, check, saving, notice, ...context }) {
+  let queue = Promise.resolve();
+  return key => value => {
+    const run = queue.then(async () => {
+      const previous = values[key];
+      values[key] = value;
+      const problem = check(values);
+      if (problem) { values[key] = previous; context.status.textContent = problem; throw new Error(problem); }
+      context.status.textContent = saving;
+      try { await saveSettings({ ...context, settings: { ...values }, notice }); }
+      catch (error) { values[key] = previous; throw error; }
+    });
+    queue = run.catch(() => {});
+    return run;
+  };
 }
 // Agent settings are edited at the agent's own (Operator) level; other levels are read-only.
 const editable = levelId => !levelId || levelId === 'operator';
 const settingsSpec = {
   git_control: ['notify_repo_changes', 'Notify repository changes'],
 };
-function buildOptimizationControls({ ability, data, request, scope, levelId, status, rerender }) {
+function buildOptimizationControls({ ability, data, request, scope, levelId, status }) {
   const panel = node('div', 'ac-list v3-administrator-settings');
   const enabled = editable(levelId);
   panel.append(node('p', 'ac-hint', enabled
     ? 'Defaults for explicit /optimize requests. Command overrides apply to that request only. Experiments produce a candidate for review.'
     : 'Optimization settings are read-only while viewing another capability level.'));
-  const help = node('details', 'v3-optimization-help');
-  help.open = true;
-  help.append(node('summary', '', 'How to use Optimization'));
-  const instructions = node('div', 'ac-list');
-  instructions.append(node('p', 'ac-hint',
+  const help = node('div', 'ac-list');
+  help.append(node('p', 'ac-ability-name', 'How to use Optimization'));
+  help.append(node('p', 'ac-hint',
     'Start a chat with this agent and send /optimize followed by a code optimization goal. The account and agent need permission for Optimization and Codebase Admin; permitted Discoverable abilities activate automatically.'));
   const example = node('pre', 'ac-hint', '/optimize Optimize for reduced RAM usage.');
   example.style.whiteSpace = 'pre-wrap'; example.style.overflowWrap = 'anywhere';
-  instructions.append(example);
-  instructions.append(node('p', 'ac-hint',
+  help.append(example);
+  help.append(node('p', 'ac-hint',
     'You can use the command without flags: it uses the saved settings on this page. Select Memory priority to favor lower peak RAM. Resource limits are the benchmark environment’s budget, not the desired resource use of the optimized code.'));
-  instructions.append(node('p', 'ac-hint',
+  help.append(node('p', 'ac-hint',
     'Cold builds may exceed the default 1024 MiB RAM budget. Use 4096 MiB for a cold build and increase Total runtime if needed. Optional flags override only one request and do not change saved settings:'));
   const override = node('pre', 'ac-hint',
     '/optimize --priority=memory --ram_mb=4096 --cpu_cores=2 --total_seconds=1800 Reduce RAM usage in the agent loop.');
   override.style.whiteSpace = 'pre-wrap'; override.style.overflowWrap = 'anywhere';
-  instructions.append(override);
-  instructions.append(node('p', 'ac-hint',
+  help.append(override);
+  help.append(node('p', 'ac-hint',
     'Each experiment runs the full correctness suite, then predefined v3 workloads: Quick measures 3 tests, Standard 6, and Extended 10. Your text describes the optimization goal; sample tasks such as “update this page” are not replayed as benchmark workloads.'));
-  instructions.append(node('p', 'ac-hint',
+  help.append(node('p', 'ac-hint',
     'Review the measured results and candidate changes before requesting a separate release. Prompt and skill optimization, and automatic candidate deployment, are excluded.'));
-  help.append(instructions); panel.append(help);
+  panel.append(help);
   const current = { priority: 'balanced', attempts: 3, total_seconds: 900, profiling: 'both',
     cpu_cores: 1, ram_mb: 1024, coverage: 'standard', max_slowdown_percent: 0,
     max_memory_regression_percent: 0, allow_dependencies: false, ...(data.settings?.[ability.id] || {}) };
-  const controls = {};
+  const numbers = new Set();
+  const values = {};
+  const save = wholeObjectSaver({ ability, data, request, scope, status, values,
+    saving: 'Saving Optimization settings…', notice: 'Optimization settings saved.',
+    check: all => [...numbers].some(key => !Number.isInteger(all[key]))
+      ? 'Enter integers within the displayed limits before saving.' : '' });
+  // Rows are direct children of the panel: the page lifts them into the ability's list.
   for (const [key, title, choices] of [
     ['priority', 'Optimization priority', ['balanced', 'speed', 'memory']],
     ['profiling', 'Profiling', ['none', 'cpu', 'allocations', 'both']],
     ['coverage', 'Workload coverage', ['quick', 'standard', 'extended']],
   ]) {
-    const input = node('select', 'ac-input ac-config-sel'); input.setAttribute('aria-label', title);
-    for (const value of choices) {
-      const option = node('option', '', value[0].toUpperCase() + value.slice(1)); option.value = value; input.append(option);
-    }
-    input.value = current[key]; input.disabled = !enabled; controls[key] = input; panel.append(row(title, input));
+    values[key] = createSelectRow(panel, { title, value: current[key], disabled: !enabled, onSave: save(key),
+      options: choices.map(value => [value, value[0].toUpperCase() + value.slice(1)]) }).getValue();
   }
   for (const [key, title, min, max] of [
     ['attempts', 'Candidate attempts', 1, 10], ['total_seconds', 'Total runtime (seconds)', 1, 1800],
@@ -85,35 +99,13 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, sta
     ['max_slowdown_percent', 'Maximum slowdown (%)', 0, 25],
     ['max_memory_regression_percent', 'Maximum memory regression (%)', 0, 25],
   ]) {
-    const input = field(title, String(current[key]), 'number');
-    input.min = String(min); input.max = String(max); input.step = '1'; input.disabled = !enabled;
-    controls[key] = input; panel.append(row(title, input));
+    numbers.add(key);
+    values[key] = createNumberRow(panel, { title, value: current[key], min, max, disabled: !enabled,
+      onSave: save(key) }).getValue();
   }
-  const dependencies = field('Allow dependency changes', '', 'checkbox');
-  dependencies.checked = current.allow_dependencies === true; dependencies.disabled = !enabled;
-  controls.allow_dependencies = dependencies;
-  panel.append(row('Dependency changes', dependencies, 'Permission and sandbox restrictions still apply.'));
-  const inputs = Object.values(controls);
-  const save = async event => {
-    if (!enabled || inputs.some(input => input.disabled)) return;
-    if (inputs.some(input => input.type === 'number' && (input.value === '' || !input.checkValidity() || !Number.isInteger(Number(input.value))))) {
-      status.textContent = 'Enter integers within the displayed limits before saving.'; return;
-    }
-    const settings = {};
-    for (const [key, input] of Object.entries(controls)) {
-      settings[key] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
-    }
-    for (const input of inputs) input.disabled = true;
-    status.textContent = 'Saving Optimization settings…';
-    try {
-      await saveSettings({ ability, data, request, scope, status, settings, changed: event?.target,
-        notice: 'Optimization settings saved.' });
-    } catch (error) {
-      status.textContent = message(error);
-    }
-    for (const input of inputs) input.disabled = false;
-  };
-  for (const input of inputs) input.onchange = save;
+  values.allow_dependencies = createToggleRow(panel, { title: 'Dependency changes',
+    hint: 'Permission and sandbox restrictions still apply.', value: current.allow_dependencies === true,
+    disabled: !enabled, onSave: save('allow_dependencies') }).getValue();
   return panel;
 }
 
@@ -121,7 +113,7 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, sta
 const manifestSettings = new Set(['agent_management', 'browser_extension', 'browser_control', 'web_search']);
 // The Default Agent reaches all owned sessions and may delegate unless its owner changes it.
 const defaultAgentSettings = { session_scope: 'owned', allow_delegation: true };
-function buildManifestSettings({ ability, data, request, scope, levelId, status, rerender }) {
+function buildManifestSettings({ ability, data, request, scope, levelId, status }) {
   const declared = Array.isArray(ability.config?.settings) ? ability.config.settings : [];
   if (!declared.length) return null;
   const panel = node('div', 'ac-list v3-administrator-settings');
@@ -132,77 +124,35 @@ function buildManifestSettings({ ability, data, request, scope, levelId, status,
   const saved = data.settings?.[ability.id] || {};
   const fallback = data.agent_id === 'shared_default' ? defaultAgentSettings : {};
   const value = item => item.key in saved ? saved[item.key] : item.key in fallback ? fallback[item.key] : item.default;
-  const controls = [];
+  const values = {};
+  const save = wholeObjectSaver({ ability, data, request, scope, status, values,
+    saving: 'Saving agent settings…', notice: 'Agent settings saved.',
+    check: all => declared.some(item => item.type === 'number' && !Number.isInteger(all[item.key]))
+      ? 'Use a whole number within each setting\'s range.' : '' });
   for (const item of declared) {
-    let control;
-    let slot = null;
+    const options = { title: item.label, hint: item.hint || '', disabled: !enabled, onSave: save(item.key) };
     if (item.type === 'boolean') {
-      // The page's shared switch: a full-size touch target, like the tool rows below.
-      control = field(item.label, '', 'checkbox'); control.className = 'conn-toggle';
-      control.checked = value(item) === true;
-      slot = node('label', 'conn-toggle-wrap ac-ability-toggle-wrap');
-      slot.append(control, node('span', 'conn-toggle-track'));
+      values[item.key] = createToggleRow(panel, { ...options, value: value(item) === true }).getValue();
     } else if (item.type === 'select') {
-      control = node('select', 'ac-input ac-config-sel'); control.setAttribute('aria-label', item.label);
-      for (const choice of item.options || []) {
-        const option = node('option', '', choice.label); option.value = choice.value; control.append(option);
-      }
-      control.value = value(item);
+      values[item.key] = createSelectRow(panel, { ...options, value: value(item),
+        options: (item.options || []).map(choice => [choice.value, choice.label]) }).getValue();
     } else if (item.type === 'text') {
-      control = node('textarea', 'ac-input'); control.setAttribute('aria-label', item.label);
-      control.rows = 3; control.maxLength = item.max_length || 2000; control.value = String(value(item) ?? '');
+      values[item.key] = String(value(item) ?? '');
+      createLongTextRow(panel, { ...options, value: values[item.key], maxLength: item.max_length || 2000 });
     } else {
-      control = field(item.label, String(value(item)), 'number');
-      if (item.min !== undefined) control.min = String(item.min);
-      if (item.max !== undefined) control.max = String(item.max);
-      control.step = String(item.step || 1);
-    }
-    control.disabled = !enabled;
-    controls.push([item, control]);
-    if (item.type === 'text') {
-      // A text box owns its own line (name, box, hint), so phones keep the label readable.
-      const stacked = node('div', 'ac-gate-param'), slot = node('div', 'ac-gate-param-control');
-      const hint = node('div', 'ac-gate-param-desc', item.hint || '');
-      hint.title = item.hint || '';
-      slot.append(control);
-      stacked.append(node('div', 'ac-gate-param-name', item.label), slot, hint);
-      panel.append(stacked);
-    } else {
-      panel.append(row(item.label, slot || control, item.hint || '', 'v3-setting-stacked'));
+      values[item.key] = createNumberRow(panel, { ...options, value: value(item), min: item.min, max: item.max,
+        step: item.step || 1 }).getValue();
     }
   }
-  const read = ([item, control]) => item.type === 'boolean' ? control.checked
-    : item.type === 'select' || item.type === 'text' ? control.value : Number(control.value);
-  // One revision covers the whole settings object; each change saves every value.
-  const save = async event => {
-    if (!enabled || controls.some(([, control]) => control.disabled)) return;
-    const settings = {};
-    for (const entry of controls) settings[entry[0].key] = read(entry);
-    if (controls.some(([item, control]) => item.type === 'number' && (control.value === '' || !Number.isInteger(Number(control.value))
-      || (item.min !== undefined && Number(control.value) < item.min) || (item.max !== undefined && Number(control.value) > item.max)))) {
-      status.textContent = 'Use a whole number within each setting\'s range.';
-      return;
-    }
-    for (const [, control] of controls) control.disabled = true;
-    status.textContent = 'Saving agent settings…';
-    try {
-      await saveSettings({ ability, data, request, scope, status, settings, changed: event?.target,
-        notice: 'Agent settings saved.' });
-    } catch (error) {
-      status.textContent = message(error);
-    }
-    for (const [, control] of controls) control.disabled = false;
-  };
-  for (const [, control] of controls) control.onchange = save;
   return panel;
 }
 export function buildAdministratorControls({ ability, data, repository, request, scope,
   levelId, status, rerender }) {
   if (manifestSettings.has(ability.id) && data.authority?.can_manage === true) {
-    return buildManifestSettings({ ability, data, request, scope, levelId, status, rerender });
+    return buildManifestSettings({ ability, data, request, scope, levelId, status });
   }
   if (ability.id === 'optimization' && data.authority?.can_manage === true) {
-    return buildOptimizationControls({ ability, data, request, scope, levelId, status, rerender });
+    return buildOptimizationControls({ ability, data, request, scope, levelId, status });
   }
   const spec = settingsSpec[ability.id];
   if (!spec || data.authority?.can_manage !== true) return null;
@@ -212,27 +162,12 @@ export function buildAdministratorControls({ ability, data, repository, request,
     ? 'Agent settings.'
     : 'Agent settings are read-only while viewing another capability level.'));
   const [key, title] = spec;
-  const current = data.settings?.[ability.id]?.[key];
-  const control = field(title, '', 'checkbox'); control.checked = current === true;
-  control.disabled = !enabled;
-  let savedValue = control.checked;
-  // Persist each setting change while its current revision is still on screen.
-  control.onchange = async () => {
-    if (!enabled || control.disabled) return;
-    control.disabled = true;
-    status.textContent = 'Saving agent settings…';
-    try {
-      await saveSettings({ ability, data, request, scope, status, changed: control,
-        settings: { [key]: control.checked },
+  createToggleRow(panel, { title, value: data.settings?.[ability.id]?.[key] === true, disabled: !enabled,
+    onSave: async next => {
+      status.textContent = 'Saving agent settings…';
+      await saveSettings({ ability, data, request, scope, status, settings: { [key]: next },
         notice: 'Agent settings saved.' });
-      savedValue = control.checked;
-    } catch (error) {
-      control.checked = savedValue;
-      status.textContent = message(error);
-    }
-    control.disabled = false;
-  };
-  panel.append(row(title, control));
+    } });
   panel.append(node('p', 'ac-hint', 'Repository connections belong to this agent. Only the connection owner can edit it. Tokens are write-only.'));
   if (repository?.load_failed || !repository || repository.agent_id !== data.agent_id) {
     panel.append(node('p', 'ac-hint', 'Repository connections unavailable. Reload abilities to retry.'));

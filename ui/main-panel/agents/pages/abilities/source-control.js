@@ -1,6 +1,6 @@
 // Remote sites belong to the signed-in user; credentials never come back from the API.
 import { buildConfigRow } from './ability-row-controls/ability-row-controls.js';
-import { requestTouchVibration } from '../../../../shared/vibrate/vibrate.js';
+import { createConfigList, createTextRow, createToggleRow, createConfigForm } from '../../../../shared/config-rows/config-rows.js';
 const node = (tag, text = '') => { const el = document.createElement(tag); el.textContent = text; return el; };
 const fields = [
   ['github_owner', 'GitHub owner', ''], ['github_repo', 'GitHub repository', ''],
@@ -15,47 +15,43 @@ export function buildSourceControlControls({ data, request, scope, enabled, stat
   if (!data || data.load_failed) { content.append(node('p', 'Remote site connections are unavailable. Reload to retry.')); return buildConfigRow({ name: 'Remote sites', control: content }); }
   const sites = data.sites || [];
   const add = site => {
-    const form = node('form'); form.className = 'ac-list';
-    const controls = {};
-    form.append(node('strong', site ? site.id : 'New remote site'));
-    const input = (key, title, value, type = 'text') => {
-      const el = node('input'); el.className = 'ac-input'; el.type = type; el.value = value;
-      el.maxLength = type === 'password' ? 4096 : 512; el.autocomplete = type === 'password' ? 'new-password' : 'off';
-      el.setAttribute('aria-label', title); el.disabled = !enabled; controls[key] = el;
-      form.append(buildConfigRow({ name: title, control: el })); return el;
-    };
-    const id = input('id', 'Site ID', site?.id || ''); id.required = true; id.disabled = !!site || !enabled;
-    for (const [key, title, fallback] of fields) { const el = input(key, title, site?.configuration?.[key] ?? fallback); el.required = true; el.readOnly = key === 'build_command' || site?.runtime?.provisioned === true; }
-    if (site) {
-      for (const entry of site.credential_requests || []) {
-        const row=node('p'); row.textContent='Vault key: '+entry.name+' · '+entry.origin;
-        form.append(row);
-      }
-      form.append(node('p','Ask the agent to call request_credential for the keys above. Enter tokens only in the private credential panel. The agent receives saved status, never values.'));
-    }
-    const revoke = input('revoked', 'Revoke connection', '', 'checkbox'); revoke.checked = !!site?.revoked;
-    const button = node('button', site ? 'Save remote site' : 'Add remote site');
-    button.type = 'submit'; button.className = 'ac-btn ac-btn-sm'; button.disabled = !enabled;
-    button.onclick = event => { if (!button.disabled) requestTouchVibration(event); };
-    form.append(button);
-    form.onsubmit = async event => {
-      event.preventDefault(); if (!enabled || button.disabled || !form.reportValidity()) return;
-      const configuration = Object.fromEntries(fields.map(([key]) => [key, controls[key].value]));
-      if (!/^[A-Za-z0-9_-]{1,80}$/.test(id.value)) { status.textContent = 'Use letters, numbers, underscore or hyphen for the site ID.'; return; }
-      button.disabled = true; for (const control of Object.values(controls)) control.disabled = true;
+    const section = node('div');
+    section.append(node('strong', site ? site.id : 'New remote site'));
+    const list = createConfigList(section, { label: site ? site.id : 'New remote site' });
+    // [row, stays disabled]: the site ID is fixed once saved; the build command and a provisioned site are read-only.
+    const rows = [];
+    const form = createConfigForm(section, { saveLabel: site ? 'Save remote site' : 'Add remote site', onSave: async values => {
+      if (!enabled) return;
+      const configuration = Object.fromEntries(fields.map(([key]) => [key, values[key]]));
+      const problem = !values.id || Object.values(configuration).some(value => !value) ? 'Fill in every field before saving.'
+        : !/^[A-Za-z0-9_-]{1,80}$/.test(values.id) ? 'Use letters, numbers, underscore or hyphen for the site ID.' : '';
+      if (problem) { status.textContent = problem; throw new Error(problem); }
+      for (const [handle] of rows) handle.setDisabled(true);
       status.textContent = 'Saving your remote site connection…';
       try {
-        await request(scope + '/source-control/sites/' + encodeURIComponent(id.value), 'PUT', {
-          expected_revision: site?.revision || 0, configuration, revoked: revoke.checked,
+        await request(scope + '/source-control/sites/' + encodeURIComponent(values.id), 'PUT', {
+          expected_revision: site?.revision || 0, configuration, revoked: values.revoked,
         });
         await rerender({ administratorNotice: 'Remote site connection saved. Ask the agent to create or connect the site.' });
       } catch (error) {
         status.textContent = error?.status === 409 ? 'Connection changed. Reload before saving again.' : 'Remote site could not be saved. Check fields and your authority.';
-        button.disabled = !enabled; for (const control of Object.values(controls)) control.disabled = !enabled;
-        id.disabled = !!site || !enabled;
+        for (const [handle, locked] of rows) handle.setDisabled(locked);
+        throw new Error(status.textContent);
       }
-    };
-    content.append(form);
+    } });
+    const text = (key, title, value, locked) => rows.push([createTextRow(list, { title, value, maxLength: 512,
+      stacked: key === 'build_command', disabled: !enabled || locked, key, form }), !enabled || locked]);
+    text('id', 'Site ID', site?.id || '', !!site);
+    for (const [key, title, fallback] of fields) text(key, title, site?.configuration?.[key] ?? fallback,
+      key === 'build_command' || site?.runtime?.provisioned === true);
+    if (site) {
+      for (const entry of site.credential_requests || []) list.append(node('p', 'Vault key: ' + entry.name + ' · ' + entry.origin));
+      list.append(node('p', 'Ask the agent to call request_credential for the keys above. Enter tokens only in the private credential panel. The agent receives saved status, never values.'));
+    }
+    rows.push([createToggleRow(list, { title: 'Revoke connection', value: !!site?.revoked, disabled: !enabled,
+      key: 'revoked', form }), !enabled]);
+    form.attach();
+    content.append(section);
   };
   for (const site of sites) add(site);
   if (sites.length < 32) add(null);
