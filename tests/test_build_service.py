@@ -2562,6 +2562,14 @@ class ObservationAuthorizationTests(MaintenanceTests):
   self.assertTrue(fixtures.host.scheduler_module.unstarted_interruption(self.broker.jobs[old['job_id']]))
   self.assertFalse(fixtures.host.scheduler_module.unstarted_interruption({**old,'execution_history':[{'phase':'build'}]}))
 
+ def test_concurrent_saves_of_one_job_never_fail(self):
+  from concurrent.futures import ThreadPoolExecutor
+  job=self.install_job()
+  with ThreadPoolExecutor(max_workers=8)as pool:
+   list(pool.map(lambda _:self.broker._save(job),range(200)))
+  self.assertEqual(json.loads((self.broker.state/(job['job_id']+'.json')).read_text())['job_id'],job['job_id'])
+  self.assertEqual(list(self.broker.state.glob(job['job_id']+'.tmp*')),[])
+
  def test_wait_state_and_expired_authority(self):
   job=self.install_job();job['status']='running';job['resource_waiting']={'state':'waiting','since':time.time(),'phase':'test'}
   result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':0})

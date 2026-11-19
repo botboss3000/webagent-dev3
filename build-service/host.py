@@ -3118,7 +3118,9 @@ class Broker:
     def _save(self, job):
         job["status_updated_at"] = time.time()
         path = self.state / (job["job_id"] + ".json")
-        temporary = self.state / (job["job_id"] + ".tmp")
+        # Phase threads can save the same job at once: each save writes its own temporary file, or
+        # the first rename would take the other's file and fail it (job left uncertain).
+        temporary = self.state / (job["job_id"] + ".tmp-" + uuid.uuid4().hex)
         for attempt in range(8):
             # An overlapping phase thread may add a key mid-serialization; retry the snapshot.
             try:
@@ -3127,12 +3129,16 @@ class Broker:
             except RuntimeError:
                 if attempt == 7:
                     raise
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
         directory = os.open(self.state, os.O_DIRECTORY)
         try:
             os.fsync(directory)
