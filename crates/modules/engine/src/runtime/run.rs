@@ -3590,13 +3590,12 @@ impl<
                     );
                 }
                 // SESSION TASKS: the reminder call is the history, which already ends with the
-                // draft reply, plus the reminder, kept out of history like the closer.
+                // draft reply, plus the reminder, kept out of history like the closer. The run
+                // is reloaded before its response, which clears `pending` there.
                 if run["task_reminder"]["pending"] == true {
                     drop_call_note(&mut projected_input);
                     projected_input
                         .push(json!({"role":"user","content":run["task_reminder"]["message"]}));
-                    run["task_reminder"]["pending"] = json!(false);
-                    run["task_reminder"]["awaiting"] = json!(true);
                 }
                 // CLOSING TURN: the same request plus a private closer message, kept out of
                 // history, so the provider can reuse its cached prefix.
@@ -4112,9 +4111,9 @@ impl<
                         };
                         // SESSION TASKS: an answer to the reminder that calls no tool is dropped,
                         // and the run publishes the reply it already wrote.
-                        let reminder_answered = run["task_reminder"]["awaiting"] == true;
+                        let reminder_answered = run["task_reminder"]["pending"] == true;
                         if reminder_answered {
-                            run["task_reminder"]["awaiting"] = json!(false);
+                            run["task_reminder"]["pending"] = json!(false);
                         }
                         let reminder_idle = reminder_answered
                             && closing_reply.is_none()
