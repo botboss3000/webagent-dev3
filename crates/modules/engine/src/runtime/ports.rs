@@ -184,14 +184,26 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         basis: &'a str,
     ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<(u64, String)>)>> + Send + 'a;
     /// Session task list context for one model call of `requester` in session `sid` at
-    /// history `basis`: the snapshot definition `(id, body)` and the step's one-line state.
+    /// history `basis`: the snapshot definition `(id, body)` and the step's guidance lines
+    /// (the one-line state, and the reminder to file work when `calls` tool calls since the
+    /// user's last message held no list write, `filed`).
     fn session_tasks<'a>(
         &'a self,
         store: &'a S,
         sid: &'a str,
         requester: &'a str,
         basis: &'a str,
-    ) -> impl Future<Output = Result<(Vec<(String, String)>, Option<String>)>> + Send + 'a;
+        calls: u64,
+        filed: bool,
+    ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<String>)>> + Send + 'a;
+    /// The reminder sent once when `requester` ends a turn of session `sid` while its task
+    /// list still has open steps, or `None`.
+    fn session_tasks_end<'a>(
+        &'a self,
+        store: &'a S,
+        sid: &'a str,
+        requester: &'a str,
+    ) -> impl Future<Output = Result<Option<String>>> + Send + 'a;
 }
 
 pub trait ModelDiagnostics<S>: Clone + Send + Sync + 'static {

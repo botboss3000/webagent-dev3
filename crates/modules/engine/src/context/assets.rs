@@ -219,18 +219,30 @@ impl<
         ))
         .await?;
         // The session task list follows the notes, pinned at the same basis; its one-line
-        // state joins this step's guidance message only.
-        let (tasks, task_line) =
-            Box::pin(
-                self.native
-                    .session_tasks(self.store.records(), &sid, &requester, &basis),
-            )
-            .await?;
+        // state, and the reminder to file tool work done since the user's last message
+        // without a list write, join this step's guidance message only.
+        let since_user = history
+            .iter()
+            .rev()
+            .take_while(|item| item["role"] != "user")
+            .filter(|item| item["type"] == "function_call");
+        let (calls, filed) = since_user.fold((0, false), |(calls, filed), item| {
+            (calls + 1, filed || item["name"] == "task_list_write")
+        });
+        let (tasks, task_lines) = Box::pin(self.native.session_tasks(
+            self.store.records(),
+            &sid,
+            &requester,
+            &basis,
+            calls,
+            filed,
+        ))
+        .await?;
         notes.extend(tasks);
         let mut contributions = contributions.to_vec();
-        if let Some(content) = task_line {
+        for (index, content) in task_lines.into_iter().enumerate() {
             contributions.push(context_input::Contribution {
-                id: "session_tasks".into(),
+                id: format!("session_tasks_{index}"),
                 source: "native_session_tasks".into(),
                 lifetime: context_input::Lifetime::Call,
                 content,

@@ -478,6 +478,42 @@ pub fn step_line(list: &List, texts: &Value) -> Option<String> {
         .then(|| template.replace("{sections}", &parts.join("; ")))
 }
 
+/// The end-of-turn reminder when open sections still have open or in-progress steps (up to
+/// eight named), or `None`.
+#[must_use]
+pub fn end_reminder(list: &List, texts: &Value) -> Option<String> {
+    let open = list
+        .sections
+        .iter()
+        .filter(|section| section.status == Status::Open)
+        .flat_map(|section| section.steps.iter())
+        .filter(|step| step.status.unfinished())
+        .collect::<Vec<_>>();
+    let template = text_field(texts, "end_reminder");
+    if open.is_empty() || template.is_empty() {
+        return None;
+    }
+    let mut steps = open
+        .iter()
+        .take(8)
+        .map(|step| format!("{} \"{}\"", step.id, step.label))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if open.len() > 8 {
+        steps.push_str(&format!(" and {} more", open.len() - 8));
+    }
+    Some(template.replace("{steps}", &steps))
+}
+
+/// The reminder to file tool work in the list, once `calls` tool calls since the user's last
+/// message reach the configured threshold without a `task_list_write` among them.
+#[must_use]
+pub fn unfiled_reminder(calls: u64, filed: bool, texts: &Value) -> Option<String> {
+    let threshold = texts["unfiled_after_calls"].as_u64().unwrap_or(0);
+    let text = text_field(texts, "unfiled_reminder");
+    (threshold > 0 && calls >= threshold && !filed && !text.is_empty()).then_some(text)
+}
+
 /// One line per section: id, title, origin, status and step counts.
 #[must_use]
 pub fn overview(list: &List) -> Vec<String> {
@@ -742,5 +778,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(step_line(&edited, &texts), step_line(&list, &texts));
+        assert_eq!(
+            end_reminder(&list, &texts).unwrap(),
+            "Before you end this turn: s1.2 \"Patch\", s1.3 \"Verify\" are still open in the \
+             session task list. Finish them, mark them blocked or cancelled with \
+             task_list_write, or reply again to end the turn as it is."
+        );
+        assert_eq!(end_reminder(&List::default(), &texts), None);
+        assert!(unfiled_reminder(8, false, &texts).is_some());
+        assert_eq!(unfiled_reminder(7, false, &texts), None);
+        assert_eq!(unfiled_reminder(9, true, &texts), None);
     }
 }

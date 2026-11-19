@@ -3589,6 +3589,16 @@ impl<
                         bridge,
                     );
                 }
+                // SESSION TASKS: the reminder call is the final request plus the draft reply
+                // and the reminder, kept out of history like the closer.
+                if run["task_reminder"]["pending"] == true {
+                    drop_call_note(&mut projected_input);
+                    projected_input
+                        .push(json!({"role":"assistant","content":run["task_reminder"]["draft"]}));
+                    projected_input
+                        .push(json!({"role":"user","content":run["task_reminder"]["message"]}));
+                    run["task_reminder"]["pending"] = json!(false);
+                }
                 // CLOSING TURN: the same request plus a private closer message, kept out of
                 // history, so the provider can reuse its cached prefix.
                 if run["closing_turn"].is_object() {
@@ -4178,6 +4188,34 @@ impl<
                                     )
                                     .await?;
                                 return Ok(());
+                            }
+                            // SESSION TASKS: the first final reply of a run while the session
+                            // task list still has open steps gets one more call with a
+                            // reminder, so the agent can finish, block or cancel them first.
+                            if run["task_reminder"].is_null() {
+                                let (task_sid, _, requester) = webagent_context::assets::identity(
+                                    &run,
+                                    app.store.current_user_id(),
+                                )?;
+                                if let Some(message) = Box::pin(app.native.session_tasks_end(
+                                    app.store.records(),
+                                    &task_sid,
+                                    &requester,
+                                ))
+                                .await?
+                                {
+                                    run["task_reminder"] =
+                                        json!({"draft":text,"message":message,"pending":true});
+                                    run["phase"] = json!("model");
+                                    app.store
+                                        .save_run_observed(
+                                            &mut run,
+                                            "model_output",
+                                            &json!({"output":output}),
+                                        )
+                                        .await?;
+                                    continue;
+                                }
                             }
                             // CLOSING TURN: the reply is final; before it publishes, one more
                             // call on this model asks for the status (see `closing_answer`).

@@ -1639,8 +1639,24 @@ async fn plan_exit_needs_a_plan_and_can_continue_in_ask_mode() {
         (&json!("plan"), &json!("plan"), &json!("Standup note"))
     );
     assert_eq!(artifacts[0]["sections"][0]["value"], "Write a daily note");
+    // The approved plan's checklist became the session task list's first section.
+    let tasks = app
+        .store
+        .get(&format!("base_tasks:{sid}"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tasks["list"]["sections"][0]["origin"], "user");
+    assert_eq!(tasks["list"]["sections"][0]["plan"], true);
     let requests = requests.lock().await;
-    assert_eq!(requests.len(), 4);
+    // The final reply left the plan's steps open, so one more call carried the reminder.
+    assert_eq!(requests.len(), 5);
+    let reminder = requests[4]["input"].as_array().unwrap().last().unwrap();
+    assert_eq!(reminder["role"], "user");
+    assert!(reminder["content"]
+        .as_str()
+        .unwrap()
+        .contains("still open in the session task list"));
     let output = |n: usize, call: &str| {
         requests[n]["input"]
             .as_array()
@@ -1653,6 +1669,11 @@ async fn plan_exit_needs_a_plan_and_can_continue_in_ask_mode() {
     assert!(output(2, "noplan").contains("plan_required"));
     assert!(
         output(3, "call").contains("chose Ask mode"),
+        "{}",
+        output(3, "call")
+    );
+    assert!(
+        output(3, "call").contains("task_list"),
         "{}",
         output(3, "call")
     );

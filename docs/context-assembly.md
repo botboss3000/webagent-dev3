@@ -164,8 +164,13 @@ combines every task list change from its range and the tail into one `task_list_
 exchange among its retained rows, after the Main Notes one; a merge or major reorder drops
 them and rebuilds the snapshot. The per-step guidance message adds one line naming each
 open section, its open count and its steps in progress; it carries no revision, so it
-changes only when work starts or finishes (bridge clients re-send it only then). Texts are
-in `prompts/task_list.json`. Shared chat members get neither.
+changes only when work starts or finishes (bridge clients re-send it only then). Two
+reminders join it: once a turn's tool calls since the user's last message reach
+`unfiled_after_calls` with no `task_list_write`, a line asks the agent to file the work;
+and the first final reply of a run while open steps remain is held for one more call (the
+request plus the draft reply and a reminder naming the open steps, kept out of history like
+the closer), after which the agent's next final reply publishes. Texts are in
+`prompts/task_list.json`. Shared chat members get none of it.
 
 **Execution mode.** The mode arrives as a `set_execution_mode` result: at session
 start, when the user changes it, and when the agent changes it. A fold keeps the

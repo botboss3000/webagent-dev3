@@ -134,16 +134,20 @@ impl Store {
 
     /// Task list context for one model call of `requester` in session `sid` at history
     /// `basis`: the snapshot definition `(id, body)`, frozen until `basis` changes at a rewind
-    /// or block merge (later changes reach the history as tool results), and the current
-    /// one-line task state for the step's guidance message. Shared chat members get neither.
+    /// or block merge (later changes reach the history as tool results), and the lines for
+    /// the step's guidance message: the current one-line task state, then the reminder to
+    /// file work when `calls` tool calls since the user's last message included no list write
+    /// (`filed`). Shared chat members get none of it.
     pub(crate) async fn task_list_context(
         &self,
         sid: &str,
         requester: &str,
         basis: &str,
-    ) -> Result<(Vec<(String, String)>, Option<String>)> {
+        calls: u64,
+        filed: bool,
+    ) -> Result<(Vec<(String, String)>, Vec<String>)> {
         if requester != self.current_user_id() {
-            return Ok((Vec::new(), None));
+            return Ok((Vec::new(), Vec::new()));
         }
         let key = list_key(sid)?;
         let list: webagent_chat::task_list::List = match self.get(&key).await? {
@@ -167,9 +171,32 @@ impl Store {
         };
         let id = format!("session-tasks-{}", view["revision"].as_u64().unwrap_or(0));
         let snapshot = view["snapshot"].as_str().unwrap_or("").to_owned();
-        Ok((
-            vec![(id, snapshot)],
+        let lines = [
             webagent_chat::task_list::step_line(&list, &texts),
+            webagent_chat::task_list::unfiled_reminder(calls, filed, &texts),
+        ];
+        Ok((vec![(id, snapshot)], lines.into_iter().flatten().collect()))
+    }
+
+    /// The end-of-turn reminder for `requester` in session `sid` when its task list still
+    /// has open steps, or `None` (also for shared chat members).
+    pub(crate) async fn task_list_end_reminder(
+        &self,
+        sid: &str,
+        requester: &str,
+    ) -> Result<Option<String>> {
+        if requester != self.current_user_id() {
+            return Ok(None);
+        }
+        let list: webagent_chat::task_list::List = match self.get(&list_key(sid)?).await? {
+            Some(document) if document["session_id"] == sid => {
+                serde_json::from_value(document["list"].clone())?
+            }
+            _ => return Ok(None),
+        };
+        Ok(webagent_chat::task_list::end_reminder(
+            &list,
+            &webagent_chat::task_list::texts(),
         ))
     }
 }
@@ -266,7 +293,10 @@ mod tests {
         assert!(store.task_list("foreign", "r", None).await.is_err());
         // The snapshot stays as it was until the history basis changes.
         let user = store.current_user_id().to_owned();
-        let (first, _) = store.task_list_context("owned", &user, "b1").await.unwrap();
+        let (first, _) = store
+            .task_list_context("owned", &user, "b1", 0, false)
+            .await
+            .unwrap();
         assert_eq!(first[0].0, "session-tasks-2");
         store
             .put(
@@ -281,14 +311,34 @@ mod tests {
             .task_list_write("owned", "r", "call-3", "g", "tasks", 2, &list(3), &changes)
             .await
             .unwrap();
-        let (same, _) = store.task_list_context("owned", &user, "b1").await.unwrap();
-        assert_eq!(same, first);
-        let (rebuilt, _) = store.task_list_context("owned", &user, "b2").await.unwrap();
-        assert_eq!(rebuilt[0].0, "session-tasks-3");
-        let (member, line) = store
-            .task_list_context("owned", "someone-else", "b2")
+        let (same, _) = store
+            .task_list_context("owned", &user, "b1", 0, false)
             .await
             .unwrap();
-        assert!(member.is_empty() && line.is_none());
+        assert_eq!(same, first);
+        let (rebuilt, _) = store
+            .task_list_context("owned", &user, "b2", 0, false)
+            .await
+            .unwrap();
+        assert_eq!(rebuilt[0].0, "session-tasks-3");
+        let (member, lines) = store
+            .task_list_context("owned", "someone-else", "b2", 9, false)
+            .await
+            .unwrap();
+        assert!(member.is_empty() && lines.is_empty());
+        let (_, lines) = store
+            .task_list_context("owned", &user, "b2", 9, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            lines.len(),
+            1,
+            "an empty list still asks to file work: {lines:?}"
+        );
+        assert!(store
+            .task_list_end_reminder("owned", &user)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

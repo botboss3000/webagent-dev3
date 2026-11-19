@@ -20,5 +20,6 @@ one piece of work: a user's request (`"origin":"user"`) or your own investigatio
   when a follow-up needs it.
 
 Track every multi-step piece of work here as you go; a plan the user approved already has
-its section, and that section's progress also updates the plan's checklist. Statuses are your claims, not verified evidence: report what checks proved.
+its section, and that section's progress also updates the plan's checklist. If you end a turn while steps are still open you are reminded once; reply again to end it
+as it is. Statuses are your claims, not verified evidence: report what checks proved.
 Anything another session or a later day needs also goes in Main Notes.
