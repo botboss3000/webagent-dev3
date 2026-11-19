@@ -1,0 +1,116 @@
+/* App Models page rules that loaded with the former app-wide app3.css. index.html links
+   this file where app3.css loaded, so the page's reference.css and models.css, loaded later,
+   still win over it as before. */
+/* ── Mobile keyboard: clear the bottom clutter off a focused field */
+/* Actions row */
+.ac-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+/* TIP-PINNED-PANEL: the info panel is pinned to the plot's top-left corner and stays */
+/* Info banner */
+.ac-info-banner {
+  padding: 12px 14px;
+  background: var(--bg-base, var(--bg-0));
+  border-radius: 8px;
+  border-left: 3px solid var(--accent);
+  font-size: 12px;
+  color: var(--fg-2, var(--fg-2));
+  line-height: 1.5;
+}
+
+/* ── Spinning loader for the models panel ── */
+body.light-mode .ac-info-banner { background: var(--bg-1); border-left-color: var(--brand); }
+/* ── Permission tri ceiling (admin global limit) ──────────────────────────────
+   The admin's per-tool global default is the LOOSEST a single agent may pick
+   (Auto < Ask < Deny); the JS clamps any looser click up to the ceiling (see
+   `_buildPermissionTri` in dom-utils.js). The tri track itself is NOT decorated —
+   it keeps the SAME graphic as every other 3-position `.ac-tri` (the old hatch
+   over the locked side is gone, by request). The limit is read in the PANEL
+   instead: `_buildToolStateControl` disables the looser-than-ceiling row (e.g.
+   Auto when the ceiling is Ask), which renders greyed via
+   `.files-tab-menu-item:disabled` — that greyed row IS the user's signal. So no
+   ceiling styling belongs on the track. */
+
+/* ╔══════════════════════════════════════════════════════════════════════╗
+   ║  SHARED COLLAPSIBLE SECTION PATTERN  —  KEEP IN SYNC ACROSS PAGES      ║
+   ╠══════════════════════════════════════════════════════════════════════╣
+   ║  `.ac-category-group` is the ONE collapsible-section look used by every ║
+   ║  Admin Config page: Agent Settings (Agent Tools / Channels / Providers ║
+   ║  groups) AND App Settings (Agent LLM Defaults / Main Panel Pages /      ║
+   ║  Startup & Boot / Remote Access), and any pages added later.            ║
+   ║                                                                        ║
+   ║  The group is a PLAIN TEXT HEADER (chevron + icon + title), collapsed   ║
+   ║  by default, that opens to reveal ONE full-width `.ac-card` (or         ║
+   ║  `.ac-abilities-compact`) of options below — never a card-within-a-     ║
+   ║  card. Page margins come from the parent panel, not these rows.         ║
+   ║                                                                        ║
+   ║  >>> If you restyle these groups, change them HERE only. Do not fork    ║
+   ║  >>> per-page copies — every page reads from this single block so the   ║
+   ║  >>> whole app stays visually coherent. The matching markup contract    ║
+   ║  >>> is documented in ui/main-panel/app/settings/pages/agent-tools.html (search   ║
+   ║  >>> "COLLAPSIBLE SECTION PATTERN").                                    ║
+   ║                                                                        ║
+   ║  STICKY-NAV PAGES (App/Agent Settings · Data Management · Features —    ║
+   ║  the `.ac-stickynav` sections, see the "ADVANCED SCROLL" block below):  ║
+   ║  there a collapsible group is a PLAIN `<div class="ac-category-group    ║
+   ║  ac-collapsible">` driven by an `.ac-open` class, NOT a native          ║
+   ║  `<details>` — display:contents (the flatten that lets headings stack)  ║
+   ║  breaks a <details>'s collapse AND its flow layout. Non-sticky pages    ║
+   ║  may still use native `<details>` here.                                 ║
+   ╚══════════════════════════════════════════════════════════════════════╝ */
+.ac-category-group {
+  margin-top: 14px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+.ac-category-group[open] {
+  background: transparent;
+}
+.ac-category-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 2px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-1, var(--fg-1));
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.ac-category-summary::-webkit-details-marker {
+  display: none;
+}
+.ac-category-summary:hover {
+  background: rgba(var(--brand-rgb), 0.05);
+}
+
+/* ── Inline LIVE theme switch in a category header (App Settings → Design) */
+.ac-category-title {
+  flex: 1;
+}
+.ac-category-body {
+  padding: 4px 0 0;
+  border-top: none;
+}
+
+/* ── ADVANCED SCROLL: sticky section navigator (opt-in via .ac-stickynav) */
+body.light-mode .ac-category-group {
+  background: transparent;
+  border-color: transparent;
+}
+body.light-mode .ac-category-summary {
+  color: var(--fg-1);
+}
+body.light-mode .ac-category-summary:hover {
+  background: rgba(var(--brand-rgb), 0.04);
+}

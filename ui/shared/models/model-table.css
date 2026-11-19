@@ -269,7 +269,6 @@
    saved-model `.ac-row` wrapper, so match any element, not just `.ac-ability-row`. */
 .ac-model-config > :first-child { border-top-left-radius: 9px; border-top-right-radius: 9px; }
 .ac-model-config > :last-child { border-bottom-left-radius: 9px; border-bottom-right-radius: 9px; }
-.ac-model-cfg-row { align-items: center; padding-top: 4px; padding-bottom: 4px; }
 /* display:block opts this label OUT of the shared `display:contents` stacked-row
    promotion — here the label is a fixed-width form column, not a title+desc. */
 .ac-model-cfg-row > .ac-ability-label { display: block; flex: 0 0 116px; }
@@ -413,7 +412,6 @@
 .ac-model-caps { display: flex; gap: 5px; margin-top: 4px; flex-wrap: nowrap; }
 /* Action row: two icon buttons pinned to the right; the row is not clickable
    (beat the generic `.ac-row > .ac-ability-row { cursor: pointer }` rule). */
-.ac-model-advanced-head { align-items: center; }
 .ac-row > .ac-ability-row.ac-model-advanced-head { cursor: default; }
 .ac-model-row-actions {
   margin-left: auto;          /* push both buttons to the right edge */
