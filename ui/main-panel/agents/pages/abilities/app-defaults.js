@@ -3,6 +3,7 @@
 // The server owns the checks, drafts and the broker task; this page only shows and edits.
 import { createRichTextEditor } from '../../../../shared/rich-text-editor/rich-text-editor.js';
 import { advanceDeleteBtn, resetDeleteBtn } from '../../../../shared/models/delete-control.js';
+import { buildConfigRow } from './ability-row-controls/ability-row-controls.js';
 
 export const APP_DEFAULT = 'app_default';
 const DRAFTS = '/admin/app-defaults/drafts';
@@ -243,23 +244,47 @@ function diffView(before, after) {
   return view;
 }
 
-/** A panel's title row with a Revert button, shown while any of `paths` has a draft. */
-function panelHead(app, title, paths, reload) {
-  const head = node('div', 'adf-panel-head');
+const CHEVRON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>';
+
+/** A row like the agent levels' rows: name and one-line description, collapsed until tapped. `load`
+ *  draws `body` the first time it opens, so the page reads no files until then. Revert sits at the
+ *  right while any of `paths` has a draft. */
+function collapsedPanel(app, { title, desc = '', paths = [], load, body }) {
+  const panel = node('div', 'adf-panel');
   const revert = node('button', 'ac-btn ac-btn-sm', 'Revert');
   revert.type = 'button';
   revert.title = 'Discard this panel\'s drafts and show the file as it is now';
+  let loaded = false;
   const sync = () => { revert.hidden = !paths.some(path => app.draftOf(path)); };
   revert.onclick = async () => {
     revert.disabled = true;
     for (const path of paths) if (app.draftOf(path)) await app.revert(path);
     revert.disabled = false;
-    reload();
+    if (loaded) load();
   };
   app.onChange(sync);
   sync();
-  head.append(node('div', 'adf-panel-title', title), revert);
-  return head;
+  const row = buildConfigRow({ name: title, desc, descTitle: desc, control: revert, className: 'adf-row' });
+  row.classList.add('conn-card-header-clickable');
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+  row.setAttribute('aria-expanded', 'false');
+  const chevron = node('span', 'ac-row-chevron ac-row-chevron--left');
+  chevron.innerHTML = CHEVRON;
+  row.insertBefore(chevron, row.firstChild);
+  body.hidden = true;
+  const toggle = () => {
+    body.hidden = !body.hidden;
+    chevron.style.transform = body.hidden ? '' : 'rotate(90deg)';
+    row.setAttribute('aria-expanded', String(!body.hidden));
+    if (!body.hidden && !loaded) { loaded = true; load(); }
+  };
+  row.addEventListener('click', event => { if (!event.target.closest('button')) toggle(); });
+  row.addEventListener('keydown', event => {
+    if ((event.key === 'Enter' || event.key === ' ') && event.target === row) { event.preventDefault(); toggle(); }
+  });
+  panel.append(row, body);
+  return panel;
 }
 
 /** Start a chat on the default agent (it has Codebase Admin) with everything a failed Save left behind:
@@ -295,7 +320,6 @@ export const toolPath = (ability, tool, kind) =>
 
 /** One tool's App Default panel: its tool.json as fields, its parameters, raw JSON and its skill. */
 export function buildToolDefaultsPanel(app, ability, tool) {
-  const panel = node('div', 'adf-panel');
   const body = node('div', 'adf-panel-body', 'Loading…');
   const definitionPath = toolPath(ability, tool.name, 'definition');
   const skillPath = toolPath(ability, tool.name, 'skill');
@@ -356,9 +380,7 @@ export function buildToolDefaultsPanel(app, ability, tool) {
   }).catch(error => {
     body.textContent = 'Could not load this tool: ' + error.message;
   }); };
-  panel.append(panelHead(app, tool.name, [definitionPath, skillPath], load), body);
-  load();
-  return panel;
+  return collapsedPanel(app, { title: tool.name, desc: tool.description || '', paths: [definitionPath, skillPath], load, body });
 }
 
 /** Fields for the parts of a tool definition people edit most; everything stays in `value`. */
@@ -466,8 +488,7 @@ export const skillPath = (ability, skillId) =>
 export const groupPath = groupId => 'abilities/' + groupId + '/_group.json';
 
 /** Read one file and draw `build(content, original)` into a panel once it arrives. */
-function filePanel(app, title, path, build, extraPaths = []) {
-  const panel = node('div', 'adf-panel');
+function filePanel(app, title, path, build, extraPaths = [], desc = '') {
   const body = node('div', 'adf-panel-body', 'Loading…');
   const load = () => { body.textContent = 'Loading…'; app.request('/admin/app-defaults/file?' + new URLSearchParams({ path })).then(file => {
     body.replaceChildren();
@@ -477,13 +498,11 @@ function filePanel(app, title, path, build, extraPaths = []) {
     }
     build(body, app.draftOf(path)?.content ?? file.content, file.content);
   }).catch(error => { body.textContent = 'Could not load ' + path.split('/').pop() + ': ' + error.message; }); };
-  panel.append(panelHead(app, title, [path, ...extraPaths], load), body);
-  load();
-  return panel;
+  return collapsedPanel(app, { title, desc, paths: [path, ...extraPaths], load, body });
 }
 
 /** A JSON manifest: named fields drawn by `fields`, plus the whole file as raw JSON. */
-function jsonPanel(app, title, path, fields, extraPaths = []) {
+function jsonPanel(app, title, path, fields, extraPaths = [], desc = '') {
   return filePanel(app, title, path, (body, content, original) => {
     let value;
     try { value = JSON.parse(content); } catch { value = null; }
@@ -507,7 +526,7 @@ function jsonPanel(app, title, path, fields, extraPaths = []) {
     box.append(node('p', 'ac-hint', 'The whole file, including fields the form does not show.'), raw, rawError);
     toggle.onclick = () => { box.hidden = !box.hidden; toggle.setAttribute('aria-expanded', String(!box.hidden)); };
     body.append(toggle, box);
-  }, extraPaths);
+  }, extraPaths, desc);
 }
 
 /** Display fields shared by group and ability manifests: name, description, icon, color, order. */
@@ -612,7 +631,8 @@ function iconPicker(current, onPick) {
 export function buildGroupDefaultsPanel(app, groupId, groupName) {
   const svgPath = 'abilities/' + groupId + '/_group.svg';
   return jsonPanel(app, groupName + ' group', groupPath(groupId), (value, changed) =>
-    displayFields(value, changed, { nameKey: 'name', descKey: 'desc', label: groupName + ' group', app, svgPath }), [svgPath]);
+    displayFields(value, changed, { nameKey: 'name', descKey: 'desc', label: groupName + ' group', app, svgPath }), [svgPath],
+    'Name, description, icon, color and order of this group');
 }
 
 /** An ability's manifest, its skills (edit, add, delete) and nothing of its tools. */
@@ -627,7 +647,7 @@ export function buildAbilityDefaultsPanels(app, ability) {
     });
     form.append(field('Skill summary', summary.element, 'Shown when the skill is offered on request.'));
     return form;
-  }, [svgPath]));
+  }, [svgPath], 'Name, description, icon, color and skill summary'));
   // general_skills carries titles; selectable_skills may list the same skills by ID only.
   const skills = new Map();
   for (const entry of [...(ability.general_skills || (ability.has_skill ? [{ skill_id: 'core', title: 'Skill' }] : [])),
@@ -676,13 +696,12 @@ function skillPanel(app, ability, skillId, title) {
     const renameRow = node('div', 'adf-bar-row');
     renameRow.append(rename, renameButton);
     body.append(remove, node('p', 'ac-hint', 'Deleting removes the file on Save; agents that load it by name lose it.'), renameRow, renameStatus);
-  });
+  }, [], skillId === 'core' ? 'The ability\'s main skill' : skillId + '.skill.md');
 }
 
 /** Start a new skill: a file name and its text become a draft that creates the file on Save. */
 function addSkillPanel(app, ability) {
-  const panel = node('div', 'adf-panel');
-  panel.append(node('div', 'adf-panel-title', 'Add a skill'));
+  const body = node('div', 'adf-panel-body');
   const name = text('', 'New skill name');
   name.placeholder = 'skill_name';
   const editor = createRichTextEditor({ value: '', label: 'New skill text', minHeight: 100, maxHeight: 300,
@@ -700,8 +719,8 @@ function addSkillPanel(app, ability) {
     name.value = '';
     editor.setValue('');
   };
-  panel.append(field('File name', name), editor.element, add, status);
-  return panel;
+  body.append(field('File name', name), editor.element, add, status);
+  return collapsedPanel(app, { title: 'Add a skill', desc: 'A new skill file for this ability, created on Save', load: () => {}, body });
 }
 
 export const APP_DEFAULTS_CSS = '.adf-bar{display:flex;flex-direction:column;gap:8px;margin-top:10px}'
@@ -709,9 +728,9 @@ export const APP_DEFAULTS_CSS = '.adf-bar{display:flex;flex-direction:column;gap
   + '.adf-list{margin:0;padding-left:18px;font-size:13px;color:var(--fg-2)}'
   + '.adf-release{font-size:13px;color:var(--fg-2)}'
   + '.adf-failed,.adf-stale{color:var(--warning)}'
-  + '.adf-panel{border:var(--border-width) solid var(--border-soft);border-radius:var(--r-md,10px);padding:10px 12px;margin:8px 0}'
-  + '.adf-panel-head{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:6px}'
-  + '.adf-panel-title{font-weight:600;overflow-wrap:anywhere;min-width:0}'
+  + '.adf-panel{border-bottom:var(--border-width) solid var(--border-soft)}'
+  + '.adf-panel>.adf-panel-body{padding:4px 0 14px 22px}'
+  + '.adf-panel>.adf-panel-body[hidden]{display:none}'
   + '.adf-diff{margin:0;max-height:320px;overflow:auto;font-family:var(--font-mono,monospace);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;border:var(--border-width) solid var(--border-soft);border-radius:8px;padding:6px}'
   + '.adf-diff .adf-add{color:var(--success)}.adf-diff .adf-del{color:var(--danger)}.adf-diff .adf-gap{color:var(--fg-3)}'
   + '.adf-form,.adf-panel-body{display:flex;flex-direction:column;gap:10px}'
