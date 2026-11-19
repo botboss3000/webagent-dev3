@@ -324,7 +324,9 @@ impl Store {
             .await?;
         let mut trimmed = 0u64;
         for key in keys {
-            let mut tx = self.pool.begin().await?;
+            // Read then write: take the write lock first so a concurrent run save makes this wait,
+            // not fail with "database is locked" on the upgrade.
+            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
                 .bind(&key)
                 .fetch_optional(&mut *tx)
@@ -432,7 +434,9 @@ impl Store {
             .await?;
         let mut refreshed = 0u64;
         for key in keys {
-            let mut tx = self.pool.begin().await?;
+            // Read then write: take the write lock first so a concurrent run save makes this wait,
+            // not fail with "database is locked" on the upgrade.
+            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
                 .bind(&key)
                 .fetch_optional(&mut *tx)
