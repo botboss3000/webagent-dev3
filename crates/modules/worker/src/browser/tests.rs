@@ -474,13 +474,13 @@ async fn optional_action_schema_defaults_preserve_boundaries() {
     let mut args = object(json!({"action":"read","selector":null,"url":null,"text":null}));
     assert_eq!(validate_args("browser_read", &mut args).ok(), Some("read"));
     assert_eq!(Value::Object(args), json!({"action":"read"}));
-    let mut zero = object(json!({"action":"read","expected_sequence":0}));
-    assert_eq!(validate_args("browser_read", &mut zero).ok(), Some("read"));
-    let mut one = object(json!({"action":"read","expected_sequence":1}));
-    assert!(matches!(
-        validate_args("browser_read", &mut one),
-        Err(Fault::Rejected(_))
-    ));
+    for sequence in [0, 1] {
+        let mut args = object(json!({"action":"read","expected_sequence":sequence}));
+        assert!(matches!(
+            validate_args("browser_read", &mut args),
+            Err(Fault::Rejected(_))
+        ));
+    }
 }
 
 #[tokio::test]

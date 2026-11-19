@@ -117,6 +117,11 @@ pub(crate) const CODEBASE_TOOLS: [&str; 11] = [
     "python",
 ];
 
+/// Session-workspace source tools handled here, defined in
+/// `abilities/Administrator/native_tools/tools/` since no ability attaches them. Without the
+/// Administrator pack their folders are absent and the tools unavailable.
+pub(crate) const WORKSPACE_TOOLS: [&str; 3] = ["workspace_seed", "source_review", "source_patch"];
+
 /// Compiled handlers whose schemas, effect and role defaults live in tool folders.
 pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
     [
@@ -172,6 +177,7 @@ pub(crate) fn definition_problems() -> Vec<String> {
     handlers.extend(pack.iter().map(String::as_str));
     if !pack.is_empty() {
         handlers.extend(CODEBASE_TOOLS);
+        handlers.extend(WORKSPACE_TOOLS);
     }
     let mut problems = definitions::problems().to_vec();
     problems.extend(
@@ -326,14 +332,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
     static SCHEMAS: OnceLock<Vec<Value>> = OnceLock::new();
     let mut schemas=SCHEMAS.get_or_init(|| {
         for problem in definition_problems() {eprintln!("{problem}");}
-        let mut schemas: Vec<Value> = [
-        ("workspace_seed", "Copy the audited WebAgent v3 source snapshot into this session workspace and create a Git baseline; policy-gated", json!({}), vec![]),
-        ("source_review", "Review tracked and new changes in the seeded v3 source without modifying its Git index", json!({}), vec![]),
-        ("source_patch", "Apply a checked text patch to the seeded v3 source; policy-gated", json!({"patch":{"type":"string"},"expected_review_sha256":{"type":"string"}}), vec!["patch","expected_review_sha256"]),
-    ].into_iter().map(|(name, description, properties, required)| json!({
-        "type":"function", "name":name, "description":description,
-        "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
-    })).collect();
+        let mut schemas = native::schemas(&WORKSPACE_TOOLS);
         schemas.extend(native::schemas(&CODEBASE_TOOLS));
         schemas.extend(native::schemas(native::web_access::TOOLS));
         schemas.extend(web_search::schemas());
@@ -426,7 +425,8 @@ pub(crate) fn normalize_native_schemas(mut schemas: Vec<Value>) -> Vec<Value> {
 mod definition_tests {
     /// Native tools still reading their arguments without a registered type. Shrinks as
     /// families convert to `webagent_abilities::tool_arguments`; never grows. "Worker
-    /// passthrough" tools go to the tool worker as raw JSON, which decodes and checks them.
+    /// passthrough" tools go to the tool worker as raw JSON, which decodes and checks them;
+    /// "broker passthrough" tools go to the build broker the same way.
     const UNREGISTERED: &[&str] = &[
         "agent_review",
         "browser_extension_action",
@@ -464,14 +464,8 @@ mod definition_tests {
         "set_agent_ability",
         "set_agent_tool",
         "shell",
-        "source_patch",
-        // Schema gap: the code and skill accept per-change attachment_id and content_base64,
-        // which tool.json's changes items forbid.
-        "source_remote_commit",
-        "source_review",
-        // Schema gap: configure accepts custom_domain and defaults the Cloudflare IDs, branch,
-        // root and build command, while tool.json forbids custom_domain and requires them.
-        "source_site_create",
+        "source_patch",  // Broker passthrough.
+        "source_review", // Broker passthrough.
         "start_tunnel",
         "terminal_close",
         "terminal_list",
@@ -484,7 +478,7 @@ mod definition_tests {
         "watch_sessions",
         "web_read",
         "web_search",
-        "workspace_seed",
+        "workspace_seed", // Broker passthrough.
     ];
 
     #[test]

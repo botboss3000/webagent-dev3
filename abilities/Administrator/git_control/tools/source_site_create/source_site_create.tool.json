@@ -52,7 +52,6 @@
           },
           "cloudflare_account_id": {
             "type": "string",
-            "minLength": 1,
             "maxLength": 32
           },
           "worker_name": {
@@ -62,7 +61,6 @@
           },
           "build_token_uuid": {
             "type": "string",
-            "minLength": 1,
             "maxLength": 36
           },
           "root_directory": {
@@ -74,17 +72,17 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 1024
+          },
+          "custom_domain": {
+            "description": "Optional hostname in a Cloudflare zone of the same account, e.g. site.example.com",
+            "type": "string",
+            "maxLength": 253
           }
         },
         "required": [
           "github_owner",
           "github_repo",
-          "production_branch",
-          "cloudflare_account_id",
-          "worker_name",
-          "build_token_uuid",
-          "root_directory",
-          "build_command"
+          "worker_name"
         ],
         "additionalProperties": false
       }

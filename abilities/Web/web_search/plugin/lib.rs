@@ -192,7 +192,7 @@ async fn search<H: Host + Sync>(
     settings: &Settings,
     arguments: &Value,
 ) -> Result<Value, Failure> {
-    let args = object(arguments, &["query", "max_results", "provider"])?;
+    let args = object(arguments, &SEARCH_ARGUMENTS)?;
     let query = text(args, "query", 512)?.ok_or_else(|| invalid("query is required"))?;
     let max = match args.get("max_results") {
         None | Some(Value::Null) => settings.max_results,
@@ -309,7 +309,7 @@ async fn read<H: Host + Sync>(
     settings: &Settings,
     arguments: &Value,
 ) -> Result<Value, Failure> {
-    let args = object(arguments, &["url", "max_chars"])?;
+    let args = object(arguments, &READ_ARGUMENTS)?;
     let url = text(args, "url", 2048)?.ok_or_else(|| invalid("url is required"))?;
     let url = safe_url(&url)
         .ok_or_else(|| invalid("url must be a public http or https address without credentials"))?;
@@ -695,6 +695,18 @@ fn encode(text: &str) -> String {
         .collect()
 }
 
+const SEARCH_ARGUMENTS: [&str; 3] = ["query", "max_results", "provider"];
+const READ_ARGUMENTS: [&str; 2] = ["url", "max_chars"];
+
+/// The argument names `tool` accepts; any other is refused like its tool.json does.
+pub fn arguments(tool: &str) -> Option<&'static [&'static str]> {
+    match tool {
+        "web_search" => Some(&SEARCH_ARGUMENTS),
+        "web_read" => Some(&READ_ARGUMENTS),
+        _ => None,
+    }
+}
+
 fn object<'a>(arguments: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, Failure> {
     let args = arguments
         .as_object()
@@ -952,5 +964,50 @@ mod tests {
         assert_eq!(decode("Caf%C3%A9_%28Paris%29", false), "Café_(Paris)");
         assert_eq!(encode("Café_(Paris)"), "Caf%C3%A9_%28Paris%29");
         assert_eq!(decode("100%", false), "100%");
+    }
+
+    /// This ability's folder, or its copy under `V3_ABILITIES_ROOT` when that is set.
+    fn ability_folder() -> std::path::PathBuf {
+        std::env::var_os("V3_ABILITIES_ROOT").map_or_else(
+            || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            |root| std::path::PathBuf::from(root).join("Web/web_search"),
+        )
+    }
+
+    /// The `parameters.properties` names of `tool`'s tool.json in [`ability_folder`].
+    fn declared(tool: &str) -> std::collections::BTreeSet<String> {
+        let path = ability_folder()
+            .join("tools")
+            .join(tool)
+            .join(format!("{tool}.tool.json"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let json: Value = serde_json::from_str(&text).expect("tool.json parses");
+        json["parameters"]["properties"]
+            .as_object()
+            .map(|properties| properties.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn tools_accept_exactly_their_declared_arguments() {
+        // A packaged plugin build carries only the plugin's source, not the ability's tools/
+        // folder; the check runs wherever the tool definitions sit next to the plugin.
+        if !ability_folder().join("tools").is_dir() {
+            eprintln!("tool definitions are not next to this build; drift check skipped");
+            return;
+        }
+        for tool in TOOLS {
+            let accepted: std::collections::BTreeSet<String> = arguments(tool)
+                .expect("every tool has an allowlist")
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect();
+            assert_eq!(
+                accepted,
+                declared(tool),
+                "{tool}: allowlist and tool.json differ"
+            );
+        }
     }
 }

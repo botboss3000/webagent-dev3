@@ -1,0 +1,16 @@
+{
+  "name": "workspace_seed",
+  "description": "Copy the audited WebAgent v3 source snapshot into this session workspace and create a Git baseline; policy-gated",
+  "effect": "write",
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

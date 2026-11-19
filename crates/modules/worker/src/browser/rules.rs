@@ -721,7 +721,7 @@ fn permitted(action: &str) -> &'static [&'static str] {
 }
 
 /// The fields one `browser_read` call accepts.
-const READ_ARGUMENTS: [&str; 21] = [
+const READ_ARGUMENTS: [&str; 20] = [
     "action",
     "url",
     "signed_in",
@@ -741,21 +741,11 @@ const READ_ARGUMENTS: [&str; 21] = [
     "reduced_motion",
     "styles",
     "points",
-    "expected_sequence",
     "label",
 ];
 /// The fields one `browser_input` call accepts.
-const INPUT_ARGUMENTS: [&str; 10] = [
-    "action",
-    "selector",
-    "text",
-    "key",
-    "vault",
-    "totp",
-    "origin",
-    "dx",
-    "dy",
-    "expected_sequence",
+const INPUT_ARGUMENTS: [&str; 9] = [
+    "action", "selector", "text", "key", "vault", "totp", "origin", "dx", "dy",
 ];
 const RECORD_ARGUMENTS: [&str; 1] = ["action"];
 
@@ -816,10 +806,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
         if key == "action" || permitted(action).contains(&key.as_str()) {
             continue;
         }
-        let value = &args[&key];
-        let zero_sequence =
-            key == "expected_sequence" && is_int(value) && value.as_i64() == Some(0);
-        if !zero_sequence && !blank(Some(value)) {
+        if !blank(args.get(&key)) {
             return Err(Fault::rejected("Arguments do not apply to this action"));
         }
         args.remove(&key);

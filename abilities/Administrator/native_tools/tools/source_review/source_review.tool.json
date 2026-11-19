@@ -1,0 +1,16 @@
+{
+  "name": "source_review",
+  "description": "Review tracked and new changes in the seeded v3 source without modifying its Git index",
+  "effect": "read",
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "source_patch",
+  "description": "Apply a checked text patch to the seeded v3 source; policy-gated",
+  "effect": "write",
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "patch": {
+        "type": "string"
+      },
+      "expected_review_sha256": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "patch",
+      "expected_review_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

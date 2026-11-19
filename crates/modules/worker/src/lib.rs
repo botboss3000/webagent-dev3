@@ -979,18 +979,7 @@ mod tests {
     ];
     /// Known differences: (tool, name, why). Each must still differ, so a fixed one is
     /// removed here.
-    const DRIFT: [(&str, &str, &str); 2] = [
-        (
-            "browser_read",
-            "expected_sequence",
-            "code-only leftover, allowed only as 0 or blank; the engine refuses it first",
-        ),
-        (
-            "browser_input",
-            "expected_sequence",
-            "code-only leftover, allowed only as 0 or blank; the engine refuses it first",
-        ),
-    ];
+    const DRIFT: [(&str, &str, &str); 0] = [];
 
     /// The `parameters.properties` names of `tool`'s tool.json under `root`.
     fn declared(root: &Path, tool: &str) -> Option<std::collections::BTreeSet<String>> {

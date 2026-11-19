@@ -501,4 +501,61 @@ mod tests {
         );
         assert_eq!(seen[1].2, json!({"patch":{"x":1},"expected_revision":4}));
     }
+
+    /// This ability's folder, or its copy under `V3_ABILITIES_ROOT` when that is set.
+    fn ability_folder() -> std::path::PathBuf {
+        std::env::var_os("V3_ABILITIES_ROOT").map_or_else(
+            || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            |root| std::path::PathBuf::from(root).join("Core/agent_management"),
+        )
+    }
+
+    /// The `parameters.properties` names of `tool`'s tool.json in [`ability_folder`].
+    fn declared(tool: &str) -> std::collections::BTreeSet<String> {
+        let path = ability_folder()
+            .join("tools")
+            .join(tool)
+            .join(format!("{tool}.tool.json"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let json: Value = serde_json::from_str(&text).expect("tool.json parses");
+        json["parameters"]["properties"]
+            .as_object()
+            .map(|properties| properties.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// One allowlist serves every tool, so each tool must accept all it declares and
+    /// every allowed name must be declared by some tool; the engine's schema check
+    /// refuses names a tool does not declare before the plugin runs.
+    #[test]
+    fn tools_accept_their_declared_arguments() {
+        // A packaged plugin build carries only the plugin's source, not the ability's tools/
+        // folder; the check runs wherever the tool definitions sit next to the plugin.
+        if !ability_folder().join("tools").is_dir() {
+            eprintln!("tool definitions are not next to this build; drift check skipped");
+            return;
+        }
+        let mut union = std::collections::BTreeSet::new();
+        for tool in TOOLS {
+            let declared = declared(tool);
+            let refused: Vec<&String> = declared
+                .iter()
+                .filter(|name| !ARGUMENTS.contains(&name.as_str()))
+                .collect();
+            assert!(
+                refused.is_empty(),
+                "{tool}: declared but refused: {refused:?}"
+            );
+            union.extend(declared);
+        }
+        let undeclared: Vec<&&str> = ARGUMENTS
+            .iter()
+            .filter(|name| !union.contains(**name))
+            .collect();
+        assert!(
+            undeclared.is_empty(),
+            "accepted but declared by no tool: {undeclared:?}"
+        );
+    }
 }

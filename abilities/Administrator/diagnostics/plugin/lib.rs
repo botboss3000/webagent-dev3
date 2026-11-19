@@ -29,8 +29,39 @@ pub struct Call<'a> {
     pub now_ms: u64,
 }
 
+/// The argument names `tool` accepts; any other is refused like its tool.json does.
+pub fn arguments(tool: &str) -> Option<&'static [&'static str]> {
+    match tool {
+        "read_diagnostics" => Some(&["run_id", "issues", "scope", "user_id", "since"]),
+        "agent_review" => Some(&[
+            "tool",
+            "class",
+            "kind",
+            "template",
+            "note",
+            "action",
+            "title",
+            "detail",
+            "severity",
+            "evidence",
+            "subject_session_id",
+            "release_id",
+        ]),
+        _ => None,
+    }
+}
+
 /// The host request one call makes: its name, params and body.
 fn route(tool: &str, arguments: &Value) -> Result<(&'static str, Value, Value), String> {
+    let allowed = self::arguments(tool).ok_or("Unknown Diagnostics tool")?;
+    if let Some(unknown) = arguments
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.keys())
+        .find(|key| !allowed.contains(&key.as_str()))
+    {
+        return Err(format!("Unknown argument: {unknown}"));
+    }
     Ok(match tool {
         "read_diagnostics" if arguments["issues"] == true => {
             ("diagnostics.issues", Value::Null, arguments.clone())
@@ -147,5 +178,50 @@ mod tests {
         let (result, seen) = run("file_read", json!({}));
         assert!(result.is_err());
         assert!(seen.is_empty());
+    }
+
+    /// This ability's folder, or its copy under `V3_ABILITIES_ROOT` when that is set.
+    fn ability_folder() -> std::path::PathBuf {
+        std::env::var_os("V3_ABILITIES_ROOT").map_or_else(
+            || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            |root| std::path::PathBuf::from(root).join("Administrator/diagnostics"),
+        )
+    }
+
+    /// The `parameters.properties` names of `tool`'s tool.json in [`ability_folder`].
+    fn declared(tool: &str) -> std::collections::BTreeSet<String> {
+        let path = ability_folder()
+            .join("tools")
+            .join(tool)
+            .join(format!("{tool}.tool.json"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let json: Value = serde_json::from_str(&text).expect("tool.json parses");
+        json["parameters"]["properties"]
+            .as_object()
+            .map(|properties| properties.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn tools_accept_exactly_their_declared_arguments() {
+        // A packaged plugin build carries only the plugin's source, not the ability's tools/
+        // folder; the check runs wherever the tool definitions sit next to the plugin.
+        if !ability_folder().join("tools").is_dir() {
+            eprintln!("tool definitions are not next to this build; drift check skipped");
+            return;
+        }
+        for tool in TOOLS {
+            let accepted: std::collections::BTreeSet<String> = arguments(tool)
+                .expect("every tool has an allowlist")
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect();
+            assert_eq!(
+                accepted,
+                declared(tool),
+                "{tool}: allowlist and tool.json differ"
+            );
+        }
     }
 }

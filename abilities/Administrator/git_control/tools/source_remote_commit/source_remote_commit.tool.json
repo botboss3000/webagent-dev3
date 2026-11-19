@@ -44,26 +44,71 @@
         "minItems": 1,
         "maxItems": 64,
         "items": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 512
-            },
-            "content": {
-              "type": [
-                "string",
-                "null"
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "content": {
+                  "description": "UTF-8 text, or null to delete the file",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 262144
+                }
+              },
+              "required": [
+                "path",
+                "content"
               ],
-              "maxLength": 262144
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "content_base64": {
+                  "description": "Base64 bytes of a small binary file",
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "content_base64"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "attachment_id": {
+                  "description": "A file the user sent in this conversation",
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "path",
+                "attachment_id"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "path",
-            "content"
-          ],
-          "additionalProperties": false
+          ]
         }
       }
     },

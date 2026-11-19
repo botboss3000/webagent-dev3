@@ -167,7 +167,8 @@ fn check_arguments(name: &str, args: &Value) -> Result<()> {
         "source_preview_stop" => read::<PreviewStopArgs>(name, args).map(drop),
         "source_publish" => read::<PublishArgs>(name, args).map(drop),
         "source_rollback" => read::<RollbackArgs>(name, args).map(drop),
-        // Schema gaps keep these on the root UNREGISTERED list; see there.
+        "source_remote_commit" => read::<RemoteCommitArgs>(name, args).map(drop),
+        "source_site_create" => read::<SiteCreateArgs>(name, args).map(drop),
         _ => Ok(()),
     }
 }
@@ -181,6 +182,8 @@ pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = 
     webagent_abilities::argument_type!("source_preview_stop", PreviewStopArgs),
     webagent_abilities::argument_type!("source_publish", PublishArgs),
     webagent_abilities::argument_type!("source_rollback", RollbackArgs),
+    webagent_abilities::argument_type!("source_remote_commit", RemoteCommitArgs),
+    webagent_abilities::argument_type!("source_site_create", SiteCreateArgs),
 ];
 // Fields are only decoded here; the operations read the same checked object.
 #[allow(dead_code)]
@@ -243,6 +246,44 @@ struct RollbackArgs {
     request_id: String,
     version_id: String,
     expected_deployment_id: String,
+}
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteCommitArgs {
+    site_id: String,
+    connection_revision: u64,
+    request_id: String,
+    branch: String,
+    expected_head: String,
+    message: String,
+    changes: Vec<ChangeArgs>,
+}
+/// tool.json allows exactly one of the three contents; null content deletes the file.
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChangeArgs {
+    path: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    content_base64: Option<String>,
+    #[serde(default)]
+    attachment_id: Option<String>,
+}
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SiteCreateArgs {
+    site_id: String,
+    connection_revision: u64,
+    request_id: String,
+    operation: String,
+    /// Left as JSON: configure decodes it into [`Configuration`] and returns a readable
+    /// failure with an example, which a decode error here would replace.
+    #[serde(default)]
+    configuration: Option<Value>,
 }
 pub async fn run_operation<T: Transport>(
     store: &Store,
