@@ -20,12 +20,44 @@
 use crate::*;
 use anyhow::bail;
 use axum::Extension;
-use webagent_abilities::scripts::{self, Script, Step};
+use serde::Deserialize;
+use webagent_abilities::scripts::{self, Param, Script, Step};
 use webagent_abilities_host::AbilitiesStore;
 
 pub fn owns(name: &str) -> bool {
     scripts::TOOLS.contains(&name)
 }
+
+/// `script_save`'s arguments: a script and where to keep it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SaveArgs {
+    #[serde(default)]
+    scope: Option<String>,
+    name: String,
+    description: String,
+    steps: Vec<Step>,
+    #[serde(default)]
+    params: Vec<Param>,
+}
+
+/// `script_run`'s arguments: the script and the text for its params.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RunArgs {
+    name: String,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    args: serde_json::Map<String, Value>,
+}
+
+/// Argument types of the script tools, checked against their tool.json by the root test.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("script_run", RunArgs),
+    webagent_abilities::argument_type!("script_save", SaveArgs),
+];
 
 /// The tree's root session: the spawn record's root, else this session.
 async fn root(app: &App, sid: &str) -> Result<String> {
@@ -111,19 +143,21 @@ async fn refusal(app: &App, sid: &str, run: &Value, step: &Step) -> Result<Optio
 }
 
 async fn save(app: &App, sid: &str, run: &Value, args: &Value) -> Result<Value> {
-    let scope = args["scope"].as_str().unwrap_or("session");
-    if !matches!(scope, "session" | "saved") {
-        return Ok(json!({"status":"error","output":"scope must be session or saved"}));
-    }
-    let mut fields = args.clone();
-    if let Some(object) = fields.as_object_mut() {
-        object.remove("scope");
-    }
-    let script: Script = match serde_json::from_value(fields) {
-        Ok(script) => script,
+    let args = match SaveArgs::deserialize(args) {
+        Ok(args) => args,
         Err(error) => {
             return Ok(json!({"status":"error","output":format!("Invalid script: {error}")}))
         }
+    };
+    let scope = args.scope.as_deref().unwrap_or("session");
+    if !matches!(scope, "session" | "saved") {
+        return Ok(json!({"status":"error","output":"scope must be session or saved"}));
+    }
+    let script = Script {
+        name: args.name,
+        description: args.description,
+        steps: args.steps,
+        params: args.params,
     };
     let limits = loop_runtime::Config::read(&app.runtime_path)?.tools.scripts;
     if let Err(error) = script.validate(limits.max_steps) {
@@ -245,8 +279,10 @@ async fn run_script(
     args: &Value,
     cancel: CancellationToken,
 ) -> Result<Value> {
-    let name = args["name"].as_str().unwrap_or("");
-    let scope = args["scope"].as_str();
+    let RunArgs { name, scope, args } =
+        webagent_abilities::tool_arguments::read("script_run", args)?;
+    let name = name.as_str();
+    let scope = scope.as_deref();
     let session = match scope {
         Some("saved") => Value::Null,
         _ => load(app, call.sid).await?.1["scripts"][name].clone(),
@@ -261,8 +297,7 @@ async fn run_script(
             json!({"status":"error","output":format!("No script named {name}; script_list shows this conversation's and this agent's scripts")}),
         );
     };
-    let empty = serde_json::Map::new();
-    let steps = match script.bind(args["args"].as_object().unwrap_or(&empty)) {
+    let steps = match script.bind(&args) {
         Ok(steps) => steps,
         Err(error) => return Ok(json!({"status":"error","output":error.to_string()})),
     };

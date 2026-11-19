@@ -2,7 +2,8 @@
 //! the calling chat, and reads their state. The helper holds every change until an
 //! administrator decides it on the Host Admin page; this tool never decides anything.
 use anyhow::{anyhow, bail, Result};
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -38,32 +39,44 @@ async fn helper(message: &Value) -> Result<Value> {
     Ok(value["output"].clone())
 }
 
+/// `host_admin`'s arguments; `host_action`/`host_args` are for `request` only and
+/// `request_id` for `check` only.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Arguments {
+    action: String,
+    #[serde(default)]
+    host_action: Option<String>,
+    #[serde(default)]
+    host_args: Option<Map<String, Value>>,
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
 /// One `host_admin` call: `status` (read host status now), `request` (file `host_action`
 /// with `host_args`) or `check` (a request's state by `request_id`). `user` and `sid` are
 /// the trusted caller, recorded as the requester so the decision wakes this chat.
 pub async fn call(args: &Value, sid: &str, user: &str) -> Result<Value> {
+    let args: Arguments = Arguments::deserialize(args)
+        .map_err(|error| anyhow!("host_admin: invalid arguments: {error}"))?;
     let requester = json!({"session": sid, "user": user});
-    let output = match args["action"].as_str().unwrap_or_default() {
+    let output = match args.action.as_str() {
         "status" => {
             helper(&json!({"op":"request","action":"host_status","args":{},"requester":requester}))
                 .await?
         }
         "request" => {
-            let action = args["host_action"]
-                .as_str()
+            let action = args
+                .host_action
                 .filter(|a| !a.is_empty())
                 .ok_or_else(|| anyhow!("request needs host_action"))?;
-            let host_args = if args["host_args"].is_null() {
-                json!({})
-            } else {
-                args["host_args"].clone()
-            };
+            let host_args = Value::Object(args.host_args.unwrap_or_default());
             helper(&json!({"op":"request","action":action,"args":host_args,"requester":requester}))
                 .await?
         }
         "check" => {
-            let id = args["request_id"]
-                .as_str()
+            let id = args
+                .request_id
                 .ok_or_else(|| anyhow!("check needs request_id"))?;
             helper(&json!({"op":"status","id":id})).await?
         }

@@ -296,6 +296,27 @@ fn advertise_repeat(schemas: &mut [Value]) {
         }
     }
 }
+/// Argument types of the tools decoded outside the native-tools crate: in root host
+/// adapters, the engine and the Administration host.
+#[cfg(test)]
+pub(crate) fn host_argument_types(
+) -> impl Iterator<Item = &'static webagent_abilities::tool_arguments::ArgumentType> {
+    [
+        administrator::ARGUMENT_TYPES,
+        core_config_controller::ARGUMENT_TYPES,
+        core_image_generation::ARGUMENT_TYPES,
+        core_scripts::ARGUMENT_TYPES,
+        core_skills::ARGUMENT_TYPES,
+        crate::api::sessions::ARGUMENT_TYPES,
+        crate::main_chat::ARGUMENT_TYPES,
+        crate::session_messaging::ARGUMENT_TYPES,
+        crate::source_control::ARGUMENT_TYPES,
+        webagent_engine::runtime::background::ARGUMENT_TYPES,
+    ]
+    .into_iter()
+    .flatten()
+}
+
 pub(crate) fn native_schemas() -> Vec<Value> {
     let mut schemas = native_schemas_without_administrator();
     schemas.extend(administrator::schemas());
@@ -404,77 +425,54 @@ pub(crate) fn normalize_native_schemas(mut schemas: Vec<Value>) -> Vec<Value> {
 #[cfg(test)]
 mod definition_tests {
     /// Native tools still reading their arguments without a registered type. Shrinks as
-    /// families convert to `webagent_abilities::tool_arguments`; never grows.
+    /// families convert to `webagent_abilities::tool_arguments`; never grows. "Worker
+    /// passthrough" tools go to the tool worker as raw JSON, which decodes and checks them.
     const UNREGISTERED: &[&str] = &[
         "agent_review",
-        "background_cancel",
-        "background_status",
         "browser_extension_action",
         "browser_extension_status",
         "browser_input",
         "browser_read",
         "browser_record",
         "build_work",
-        "change_agent_setting",
-        "change_app_setting",
-        "change_user_setting",
-        "checkout_edit",
-        "commit_and_push",
+        "checkout_edit",   // Worker passthrough.
+        "commit_and_push", // Worker passthrough.
         "create_agent",
-        "delegate_to_agent",
         "edit_agent_prompt",
         "file_edit",
         "file_list",
         "file_read",
         "file_search",
         "file_write",
-        "find_setting",
-        "generate_image",
         "get_agent",
         "get_tunnel_url",
-        "git_tool",
-        "host_admin",
+        "git_tool", // Worker passthrough.
         "knowledge_file_list",
         "list_agent_templates",
         "list_agent_tools",
         "list_models",
         "list_my_agents",
-        "list_skills",
-        "load_skill",
-        "main_notes_read",
-        "main_notes_write",
         "manage_agent_chat_config",
         "manage_agent_skills",
         "manage_session",
-        "message_session",
         "performance_work",
-        "prompt_slot_read",
-        "prompt_slot_write",
         "python",
         "read_diagnostics",
-        "repository_access",
-        "resolve_conflict",
+        "resolve_conflict", // Worker passthrough.
         "sandbox_elements",
         "script_list",
-        "script_run",
-        "script_save",
         "set_agent_ability",
         "set_agent_tool",
         "shell",
         "source_patch",
-        "source_preview_start",
-        "source_preview_stop",
-        "source_publish",
+        // Schema gap: the code and skill accept per-change attachment_id and content_base64,
+        // which tool.json's changes items forbid.
         "source_remote_commit",
-        "source_remote_read",
         "source_review",
-        "source_rollback",
+        // Schema gap: configure accepts custom_domain and defaults the Cloudflare IDs, branch,
+        // root and build command, while tool.json forbids custom_domain and requires them.
         "source_site_create",
-        "source_site_status",
-        "start_session",
-        "start_spawn",
         "start_tunnel",
-        "state_inspect",
         "terminal_close",
         "terminal_list",
         "terminal_open",
@@ -491,7 +489,12 @@ mod definition_tests {
 
     #[test]
     fn native_tools_register_their_argument_types() {
+        assert_eq!(
+            webagent_abilities::tool_arguments::registry_problems(super::host_argument_types()),
+            Vec::<String>::new()
+        );
         let registered: std::collections::BTreeSet<&str> = super::native::argument_types()
+            .chain(super::host_argument_types())
             .map(|entry| entry.tool)
             .collect();
         let mut missing = Vec::new();

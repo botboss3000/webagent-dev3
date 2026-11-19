@@ -22,6 +22,10 @@ pub fn owns(_: &str) -> bool {
     false
 }
 
+/// No Administrator tool decodes arguments in this build.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[];
+
 /// Tool folders of an installed Administrator pack, which this build has no handlers for:
 /// the definition check counts them as handled, since the catalog skips that group and
 /// they report unavailable like a missing ability.

@@ -8,6 +8,8 @@ pub use installed::*;
 
 #[cfg(not(administrator_pack))]
 pub const TOOLS: [&str; 0] = [];
+#[cfg(all(test, not(administrator_pack)))]
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[];
 #[cfg(not(administrator_pack))]
 pub fn owns(_: &str) -> bool {
     false

@@ -103,6 +103,7 @@ pub async fn execute(
     let owner = crate::shared_chat::actor(app);
     let live = crate::shared_chat::live_access(&app.store, owner, sid, &agent).await?;
     anyhow::ensure!(live.admitted(), "Source Control access revoked");
+    check_arguments(name, args)?;
     let store = app.store.for_user(owner).await?.for_agent(&agent).await?;
     if name == "source_site_status" && args["site_id"].is_null() {
         return Ok(json!({"status":"success","output":list(&store,&agent).await?}));
@@ -153,6 +154,95 @@ pub async fn execute(
     let mut result = run_operation(&store, site, &http, name, args).await?;
     provider::scrub(&mut result, &secret);
     Ok(result)
+}
+/// Decodes a call into its tool's argument type, refusing a shape its tool.json does not
+/// allow. Operations keep reading the checked object itself, because its digest is the
+/// receipt signature replays compare, and keep their own per-field checks.
+fn check_arguments(name: &str, args: &Value) -> Result<()> {
+    use webagent_abilities::tool_arguments::read;
+    match name {
+        "source_remote_read" => read::<RemoteReadArgs>(name, args).map(drop),
+        "source_site_status" => read::<SiteStatusArgs>(name, args).map(drop),
+        "source_preview_start" => read::<PreviewStartArgs>(name, args).map(drop),
+        "source_preview_stop" => read::<PreviewStopArgs>(name, args).map(drop),
+        "source_publish" => read::<PublishArgs>(name, args).map(drop),
+        "source_rollback" => read::<RollbackArgs>(name, args).map(drop),
+        // Schema gaps keep these on the root UNREGISTERED list; see there.
+        _ => Ok(()),
+    }
+}
+/// Argument types of the Source Control tools, checked against their tool.json by the root
+/// registry test.
+#[cfg(test)]
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("source_remote_read", RemoteReadArgs),
+    webagent_abilities::argument_type!("source_site_status", SiteStatusArgs),
+    webagent_abilities::argument_type!("source_preview_start", PreviewStartArgs),
+    webagent_abilities::argument_type!("source_preview_stop", PreviewStopArgs),
+    webagent_abilities::argument_type!("source_publish", PublishArgs),
+    webagent_abilities::argument_type!("source_rollback", RollbackArgs),
+];
+// Fields are only decoded here; the operations read the same checked object.
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteReadArgs {
+    site_id: String,
+    connection_revision: u64,
+    operation: String,
+    commit_sha: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    base_sha: Option<String>,
+}
+/// Without `site_id` the call lists every site.
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SiteStatusArgs {
+    #[serde(default)]
+    site_id: Option<String>,
+    #[serde(default)]
+    connection_revision: Option<u64>,
+}
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviewStartArgs {
+    site_id: String,
+    connection_revision: u64,
+    request_id: String,
+    branch: String,
+    commit_sha: String,
+}
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviewStopArgs {
+    site_id: String,
+    connection_revision: u64,
+    request_id: String,
+}
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublishArgs {
+    site_id: String,
+    connection_revision: u64,
+    request_id: String,
+    commit_sha: String,
+    expected_production_sha: String,
+}
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RollbackArgs {
+    site_id: String,
+    connection_revision: u64,
+    request_id: String,
+    version_id: String,
+    expected_deployment_id: String,
 }
 pub async fn run_operation<T: Transport>(
     store: &Store,

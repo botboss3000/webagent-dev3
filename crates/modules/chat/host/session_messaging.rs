@@ -6,6 +6,15 @@ use webagent_chat::messaging::{
     authority_changed, checked_text, stable_id, AuthorityChanged, MessageArgs, StartArgs,
 };
 pub(crate) use webagent_chat::messaging::{owns, starts};
+/// Argument types of the cross-session tools, checked against their tool.json by the root
+/// test. `notify` is declared by `start_session` only.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("delegate_to_agent", StartArgs),
+    webagent_abilities::argument_type!("message_session", MessageArgs),
+    webagent_abilities::argument_type!("start_session", StartArgs),
+    webagent_abilities::argument_type!("start_spawn", StartArgs),
+];
 /// Directory repair follows committed owner-plane admission and cannot change its outcome.
 async fn reconcile_directory(app: &App, sid: &str, agent: &str) -> Result<()> {
     if let Some(directory) = app.store.shared_directory(sid).await? {

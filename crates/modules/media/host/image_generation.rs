@@ -25,9 +25,13 @@ pub fn schemas() -> Vec<Value> {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Args {
+pub(crate) struct Args {
     prompt: String,
 }
+/// Argument types of this adapter's tools, checked against their tool.json by the root test.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!("generate_image", Args)];
 
 /// Run one `generate_image` call: authority, a durable started receipt, the provider request and
 /// attachment publication, rechecking authority after the effect.

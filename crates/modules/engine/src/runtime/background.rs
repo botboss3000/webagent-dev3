@@ -13,6 +13,19 @@ use webagent_access as access;
 pub fn owns(name: &str) -> bool {
     matches!(name, "background_status" | "background_cancel")
 }
+
+/// `background_status` and `background_cancel` arguments: the task to read or cancel.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlArgs {
+    task_id: String,
+}
+
+/// Argument types of this family's tools, checked against their tool.json by the root test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("background_cancel", ControlArgs),
+    webagent_abilities::argument_type!("background_status", ControlArgs),
+];
 fn timestamp_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -509,9 +522,8 @@ impl<
         if !owns(name) {
             return Err(anyhow!("Unknown task control"));
         }
-        let id = args["task_id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Missing task ID"))?;
+        let ControlArgs { task_id } = webagent_abilities::tool_arguments::read(name, args)?;
+        let id = task_id.as_str();
         loop {
             let mut task = app
                 .store

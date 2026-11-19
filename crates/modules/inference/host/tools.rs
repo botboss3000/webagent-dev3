@@ -7,8 +7,10 @@
 //! decide what they may see and change.
 use anyhow::{anyhow, Result};
 use axum::{Extension, Json};
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
 use tokio_util::sync::CancellationToken;
+use webagent_abilities::tool_arguments::read;
 use webagent_accounts_host::AccountsStore;
 
 use crate::{api, shared_chat, App, State};
@@ -25,6 +27,38 @@ pub const TOOLS: &[&str] = &[
 pub fn owns(name: &str) -> bool {
     TOOLS.contains(&name)
 }
+
+/// `find_setting`'s arguments.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FindArgs {
+    request: String,
+    layer: String,
+    #[serde(default)]
+    agent: Option<String>,
+}
+
+/// The `change_*_setting` arguments; `agent` is declared by `change_agent_setting` only.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChangeArgs {
+    #[serde(default)]
+    agent: Option<String>,
+    setting: String,
+    value: Value,
+    #[serde(default)]
+    params: Option<Map<String, Value>>,
+    revision: Map<String, Value>,
+}
+
+/// Argument types of this adapter's tools, checked against their tool.json by the root test.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("find_setting", FindArgs),
+    webagent_abilities::argument_type!("change_user_setting", ChangeArgs),
+    webagent_abilities::argument_type!("change_agent_setting", ChangeArgs),
+    webagent_abilities::argument_type!("change_app_setting", ChangeArgs),
+];
 
 /// Model-facing schemas for [`TOOLS`].
 pub fn schemas() -> Vec<Value> {
@@ -54,27 +88,38 @@ pub async fn execute(
     let identity = json!({"_user_id": actor, "_role": principal.role});
     let mut caller = app.clone();
     caller.store = app.store.for_user(&actor).await?;
-    let layer = match name {
-        "change_user_setting" => "user",
-        "change_agent_setting" => "agent",
-        "change_app_setting" => "app",
-        _ => args["layer"].as_str().unwrap_or_default(),
+    // The composer reads only these fields; the page is added below.
+    let (layer, agent, mut body) = if name == "find_setting" {
+        let find: FindArgs = read(name, args)?;
+        (find.layer, find.agent, json!({"text": find.request}))
+    } else {
+        let change: ChangeArgs = read(name, args)?;
+        let layer = match name {
+            "change_user_setting" => "user",
+            "change_agent_setting" => "agent",
+            "change_app_setting" => "app",
+            _ => "",
+        };
+        let mut body = json!({"setting": change.setting, "value": change.value,
+            "revision": change.revision});
+        if let Some(params) = change.params {
+            body["params"] = json!(params);
+        }
+        (layer.to_owned(), change.agent, body)
     };
     // The agent layer is this conversation's agent unless the call names another; the page
     // check still requires the user to manage it.
-    let page = match layer {
-        "agent" => match args["agent"].as_str() {
+    let page = match layer.as_str() {
+        "agent" => match agent {
             Some(agent) => format!("agent:{agent}"),
             None => format!("agent:{}", crate::session_agent_id(app, sid).await?),
         },
-        "app" | "user" => layer.to_owned(),
+        "app" | "user" => layer.clone(),
         _ => return Ok(json!({"status": "error", "output": "layer must be app, agent or user"})),
     };
-    let mut body = args.clone();
     body["page"] = json!(page);
     let answer = match name {
         "find_setting" => {
-            body["text"] = args["request"].clone();
             api::composer::propose(State(caller), Extension(identity), Json(body)).await
         }
         _ => api::composer::apply(State(caller), Extension(identity), Json(body)).await,

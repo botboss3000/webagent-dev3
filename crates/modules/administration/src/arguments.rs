@@ -2,6 +2,7 @@
 //! only the keys its action uses and rejects unknown keys, so a model cannot smuggle a
 //! field the host would otherwise trust.
 use anyhow::{anyhow, bail, Result};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use webagent_configuration::digest;
 
@@ -145,16 +146,28 @@ pub fn live_git_operation(name: &str, args: &Value) -> Result<bool> {
     Ok(true)
 }
 
+/// `repository_access`'s arguments: an optional `verify_remote` boolean, true when absent.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryAccess {
+    #[serde(default = "verify_by_default")]
+    verify_remote: bool,
+}
+
+fn verify_by_default() -> bool {
+    true
+}
+
 /// `repository_access` takes only an optional `verify_remote` boolean; returns it.
 pub fn repository_access(args: &Value) -> Result<bool> {
-    let valid = args.as_object().is_some_and(|object| {
-        object.keys().all(|key| key == "verify_remote")
-            && object.get("verify_remote").is_none_or(Value::is_boolean)
-    });
-    if !valid {
+    let decoded = args
+        .is_object()
+        .then(|| RepositoryAccess::deserialize(args).ok())
+        .flatten();
+    let Some(decoded) = decoded else {
         bail!("repository_access accepts only verify_remote boolean");
-    }
-    Ok(args["verify_remote"].as_bool().unwrap_or(true))
+    };
+    Ok(decoded.verify_remote)
 }
 
 /// Performance actions that run work and so register foreground renewal authority.
@@ -273,6 +286,7 @@ mod tests {
             Some(false)
         );
         assert!(repository_access(&json!({"verify_remote":"no"})).is_err());
+        assert!(repository_access(&json!({"verify_remote":null})).is_err());
         assert!(repository_access(&json!({"token":"x"})).is_err());
         assert!(repository_access(&json!([])).is_err());
     }

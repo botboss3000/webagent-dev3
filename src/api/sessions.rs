@@ -85,6 +85,14 @@ pub(crate) struct PromptWriteArgs {
     lock: Option<bool>,
     merge_mode: Option<String>,
 }
+/// Argument types of the state and prompt-slot tools, checked against their tool.json by
+/// the root registry test.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("state_inspect", InspectArgs),
+    webagent_abilities::argument_type!("prompt_slot_read", PromptReadArgs),
+    webagent_abilities::argument_type!("prompt_slot_write", PromptWriteArgs),
+];
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PromptSlotPutBody {

@@ -29,6 +29,20 @@ pub fn owns(name: &str) -> bool {
     webagent_administration::tools::owns(name)
 }
 
+/// Argument types of the Administrator tools decoded in the Administration module, checked
+/// against their tool.json by the root registry test.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!(
+        "host_admin",
+        webagent_administration_host::host_tool::Arguments
+    ),
+    webagent_abilities::argument_type!(
+        "repository_access",
+        webagent_administration::arguments::RepositoryAccess
+    ),
+];
+
 /// Administrator tools the definition check counts as handled: the compiled ones when the
 /// optional pack has folders in the current catalog, else none, since without the pack
 /// its compiled tools have no folders by design.

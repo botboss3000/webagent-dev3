@@ -6,7 +6,37 @@ use axum::Extension;
 pub(crate) use webagent_chat::main_chat::{
     action_intent, empty, review_id, scheduled_entry_current, Contribution, Settings,
 };
-use webagent_chat::main_chat::{public, render_notes, render_updates, request_fields, target};
+use webagent_chat::main_chat::{
+    identifier, public, render_notes, render_updates, request_fields, target,
+};
+
+/// `main_notes_read`'s arguments: one page of topics, or of one topic's entries.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReadArgs {
+    #[serde(default)]
+    offset: Option<u64>,
+    #[serde(default)]
+    limit: Option<u64>,
+    #[serde(default)]
+    topic_id: Option<String>,
+}
+
+/// `main_notes_write`'s arguments: one contribution against the expected revision.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WriteArgs {
+    request_id: String,
+    expected_revision: u64,
+    contribution: Contribution,
+}
+
+/// Argument types of the Main Notes tools, checked against their tool.json by the root test.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("main_notes_read", ReadArgs),
+    webagent_abilities::argument_type!("main_notes_write", WriteArgs),
+];
 // The Main Notes state machine is Chat-owned; the host supplies the clock.
 fn apply(state: &mut Value, c: &Contribution, origin: &str, approved: bool) -> Result<Value> {
     webagent_chat::main_chat::apply(state, c, origin, approved, now())
@@ -427,13 +457,14 @@ pub(crate) async fn tool(
         return Err(anyhow!("Main Notes access revoked"));
     }
     if name == "main_notes_read" {
+        let page: ReadArgs = webagent_abilities::tool_arguments::read(name, args)?;
         let state = store.main_chat_state().await?;
-        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
-        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let offset = page.offset.unwrap_or(0) as usize;
+        let limit = page.limit.unwrap_or(20) as usize;
         if !(1..=20).contains(&limit) || offset > 65536 {
             return Err(anyhow!("Invalid Main Notes page"));
         }
-        let (items, total) = if let Some(topic) = args["topic_id"].as_str() {
+        let (items, total) = if let Some(topic) = page.topic_id.as_deref() {
             let rows: Vec<Value> = state["topics"][topic]["entries"]
                 .as_object()
                 .into_iter()
@@ -463,8 +494,15 @@ pub(crate) async fn tool(
             json!({"status":"success","source_kind":"untrusted_main_notes","output":{"revision":state["revision"],"notes_version":state["notes_version"],"settings":state["settings"],"session_id":state["session_id"],"items":items,"total":total,"next_offset":offset+items.len(),"has_more":offset+items.len()<total}}),
         );
     }
-    let (expected, request) = request_fields(args)?;
-    let c: Contribution = serde_json::from_value(args["contribution"].clone())?;
+    let write: WriteArgs = webagent_abilities::tool_arguments::read(name, args)?;
+    if !identifier(&write.request_id) {
+        return Err(anyhow!("Stable request ID required"));
+    }
+    let (expected, request, c) = (
+        write.expected_revision,
+        write.request_id,
+        write.contribution,
+    );
     let result = store
         .main_chat_change(
             expected,

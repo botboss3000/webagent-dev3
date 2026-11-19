@@ -15,7 +15,7 @@ pub fn owns(name: &str) -> bool {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ListArgs {
+pub(crate) struct ListArgs {
     ability_id: String,
     #[serde(default)]
     query: Option<String>,
@@ -24,7 +24,7 @@ struct ListArgs {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LoadArgs {
+pub(crate) struct LoadArgs {
     #[serde(default)]
     ability_id: String,
     #[serde(default)]
@@ -37,6 +37,12 @@ struct LoadArgs {
     #[serde(default)]
     expected_catalog_version: Option<String>,
 }
+/// Argument types of the skill tools, checked against their tool.json by the root test.
+#[cfg(test)]
+pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
+    webagent_abilities::argument_type!("list_skills", ListArgs),
+    webagent_abilities::argument_type!("load_skill", LoadArgs),
+];
 /// Reject paths and accept only bounded catalog identifiers.
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
