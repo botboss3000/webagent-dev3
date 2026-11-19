@@ -126,6 +126,7 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         native::reply_buttons::TOOLS,
         native::sandbox::TOOLS,
         native::knowledge_files::TOOLS,
+        native::task_list::TOOLS,
         native::wiki::TOOLS,
         native::decision::TOOLS,
         native::directory_decision::TOOLS,
@@ -319,6 +320,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(native::schemas(native::reply_buttons::TOOLS));
         schemas.extend(native::schemas(native::sandbox::TOOLS));
         schemas.extend(native::schemas(native::knowledge_files::TOOLS));
+        schemas.extend(native::schemas(native::task_list::TOOLS));
         schemas.extend(native::schemas(native::wiki::TOOLS));
         schemas.extend(native::schemas(native::decision::TOOLS));
         schemas.extend(native::schemas(native::directory_decision::TOOLS));

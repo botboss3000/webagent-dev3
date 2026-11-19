@@ -1,6 +1,6 @@
 {
-  "name": "get_task_checkpoint",
-  "description": "Read the current session's durable task checkpoint and revision plus bounded requester-owned action statuses; optional action_id reads a saved result",
+  "name": "action_ledger_read",
+  "description": "Read the action ledger: your recorded protected actions and their status; action_id also returns that action's saved result",
   "parameters": {
     "type": "object",
     "properties": {
@@ -14,6 +14,16 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "did that protected action go through",
+      "check the saved result of an action"
+    ],
+    "keywords": [
+      "action ledger",
+      "action status"
+    ]
   },
   "effect": "read",
   "default_policy": {

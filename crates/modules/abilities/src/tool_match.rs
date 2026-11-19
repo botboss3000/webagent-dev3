@@ -358,22 +358,6 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
         &["webhook log", "webhook events"],
     ),
     (
-        "update_task_checkpoint",
-        &[
-            "save progress on this task",
-            "record a checkpoint of what is done",
-        ],
-        &["checkpoint", "progress"],
-    ),
-    (
-        "get_task_checkpoint",
-        &[
-            "where did I leave off on this task",
-            "read the saved task progress",
-        ],
-        &["checkpoint", "progress"],
-    ),
-    (
         "background_status",
         &[
             "is the background task finished",

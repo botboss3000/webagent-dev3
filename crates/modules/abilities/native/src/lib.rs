@@ -56,6 +56,8 @@ pub mod self_edit;
 pub mod session;
 #[path = "../../../../../abilities/Core/base/tools/shared/task.rs"]
 pub mod task;
+#[path = "../../../../../abilities/Memory/task_progress/tools/shared/task_list.rs"]
+pub mod task_list;
 #[path = "../../../../../abilities/Core/base/tools/shared/text_search.rs"]
 pub mod text_search;
 #[path = "../../../../../abilities/Core/user_files/tools/shared/user_files.rs"]
@@ -418,12 +420,24 @@ pub trait NativeHost: Sync {
     fn action_statuses<'a>(&'a self, run: &'a Value) -> Pending<'a, Result<Vec<Value>>>;
     /// The saved result of action `id` in `run`.
     fn action_lookup<'a>(&'a self, run: &'a Value, id: &'a str) -> Pending<'a, Result<Value>>;
-    /// Session `sid`'s Base task checkpoint in `store`, fenced to run `rid`.
-    fn task_checkpoint<'a>(
+    /// Session `sid`'s task list document in `store` at `revision` (the current one when
+    /// `None`), fenced to run `rid`; `None` before the first write or for an unknown revision.
+    fn task_list<'a>(
         &'a self,
         store: &'a StoreCore,
         sid: &'a str,
         rid: &'a str,
+        revision: Option<u64>,
+    ) -> Pending<'a, Result<Option<Value>>>;
+    /// Save `list` as the session's task list at `call`'s position under the call's
+    /// `receipt`; fails unless the stored revision is `expected_revision`.
+    fn write_task_list<'a>(
+        &'a self,
+        call: Call<'a>,
+        receipt: &'a str,
+        expected_revision: u64,
+        list: &'a Value,
+        changes: &'a Value,
     ) -> Pending<'a, Result<Value>>;
     /// `requester`'s context asset selections in session `sid` on agent store `store`'s plane.
     fn context_assets<'a>(
@@ -496,6 +510,7 @@ pub fn argument_types(
         self_edit::ARGUMENT_TYPES,
         session::ARGUMENT_TYPES,
         task::ARGUMENT_TYPES,
+        task_list::ARGUMENT_TYPES,
         user_files::ARGUMENT_TYPES,
         utilities::ARGUMENT_TYPES,
         vault::ARGUMENT_TYPES,

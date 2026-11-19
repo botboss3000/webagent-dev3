@@ -95,7 +95,7 @@ migration does not deploy or activate new functionality.
 - `managed_knowledge_files`: ability; pending. Adapt independently in a later functional wave.
 - `memory`: ability; pending. Adapt independently in a later functional wave.
 - `sql_databases`: ability; pending. Adapt independently in a later functional wave.
-- `task_progress`: virtual_core; pending. Adapt independently in a later functional wave.
+- `task_progress`: virtual_core; ready. Native session task list tools `task_list_read` and `task_list_write`.
 - `wiki_context`: ability; pending. Adapt independently in a later functional wave.
 - `workspaces_wikis`: ability; pending. Adapt independently in a later functional wave.
 
@@ -131,7 +131,7 @@ migration does not deploy or activate new functionality.
 - `message_length_cap`: service; pending. Adapt independently in a later functional wave.
 - `run_manager`: service; pending. Adapt independently in a later functional wave.
 - `scheduler`: service; pending. Adapt independently in a later functional wave.
-- `task_grouping`: service; pending. Adapt independently in a later functional wave.
+- `task_grouping`: retired; Task Progress sections replace its task classifier.
 - `watchdog`: service; pending. Adapt independently in a later functional wave.
 
 ### Web

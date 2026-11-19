@@ -1,0 +1,41 @@
+{
+  "name": "task_list_read",
+  "description": "Read this session's task list: one line per section, one section's steps, an earlier revision, or the changes between two revisions",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "section": {
+        "type": "string",
+        "maxLength": 16
+      },
+      "revision": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "compare_to": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "where did I leave off on this task",
+      "show the task list",
+      "what did we plan"
+    ],
+    "keywords": [
+      "task list",
+      "progress"
+    ]
+  },
+  "core": true,
+  "effect": "read",
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
+  }
+}

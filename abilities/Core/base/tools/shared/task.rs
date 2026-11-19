@@ -1,4 +1,4 @@
-//! Core task bookkeeping and safe declarative presentation.
+//! Plan validation, action ledger reads and safe declarative presentation.
 //! The model never selects a user, session or run: Rust supplies those identities.
 use crate::{Call, NativeHost};
 use anyhow::{anyhow, bail, Result};
@@ -8,40 +8,27 @@ use tokio_util::sync::CancellationToken;
 use webagent_access::Permission;
 use webagent_host_core::key;
 
-#[path = "../get_task_checkpoint/get_task_checkpoint.rs"]
-mod get_task_checkpoint;
+#[path = "../action_ledger_read/action_ledger_read.rs"]
+mod action_ledger_read;
 #[path = "../present_chat_component/present_chat_component.rs"]
 mod present_chat_component;
-#[path = "../update_task_checkpoint/update_task_checkpoint.rs"]
-mod update_task_checkpoint;
 /// Argument types of this family's tools, checked against their tool.json by the crate test.
 pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
-    webagent_abilities::argument_type!("get_task_checkpoint", get_task_checkpoint::CheckpointArgs),
+    webagent_abilities::argument_type!("action_ledger_read", action_ledger_read::LedgerArgs),
     webagent_abilities::argument_type!(
         "present_chat_component",
         present_chat_component::ComponentArgs
-    ),
-    webagent_abilities::argument_type!(
-        "update_task_checkpoint",
-        update_task_checkpoint::UpdateArgs
     ),
 ];
 
 pub use present_chat_component::answer_text;
 
 /// Tools this module executes; their schemas are built in below.
-pub const TOOLS: &[&str] = &[
-    "get_task_checkpoint",
-    "update_task_checkpoint",
-    "present_chat_component",
-];
+pub const TOOLS: &[&str] = &["action_ledger_read", "present_chat_component"];
 /// Whether this module executes tool `name`.
 #[must_use]
 pub fn owns(name: &str) -> bool {
-    matches!(
-        name,
-        "get_task_checkpoint" | "update_task_checkpoint" | "present_chat_component"
-    )
+    matches!(name, "action_ledger_read" | "present_chat_component")
 }
 #[derive(Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -65,6 +52,24 @@ pub struct Plan {
     #[serde(default)]
     title: String,
     checklist: Vec<Step>,
+}
+impl Plan {
+    /// The task list write that seeds a user-requested section from this plan's checklist.
+    ///
+    /// # Errors
+    /// When the title holds control characters or exceeds its limit.
+    pub fn task_section(&self) -> Result<webagent_chat::task_list::Write> {
+        let labels: Vec<String> = self
+            .checklist
+            .iter()
+            .map(|step| step.label.clone())
+            .collect();
+        Ok(webagent_chat::task_list::plan_section(
+            &short_title(&self.title, "Plan")?,
+            &self.notes,
+            &labels,
+        ))
+    }
 }
 /// Session artifact id (and kind) of a session's agreed plan.
 pub const PLAN_ARTIFACT: &str = "plan";
@@ -147,7 +152,7 @@ pub fn plan_artifact(args: &Plan) -> Result<Value> {
 }
 /// Fresh live authority for the task call `pending_id`: the run generation, or an error
 /// when the call, its recorded revisions or the caller's live access no longer admit it.
-pub(super) async fn authorize(
+pub(crate) async fn authorize(
     host: &dyn NativeHost,
     sid: &str,
     rid: &str,
@@ -219,12 +224,8 @@ async fn work(
         pending_id,
     };
     match name {
-        "get_task_checkpoint" => {
-            get_task_checkpoint::run(host, sid, rid, pending_id, name, &generation, args).await
-        }
-        "update_task_checkpoint" => {
-            update_task_checkpoint::run(host, call, sid, rid, pending_id, name, &generation, args)
-                .await
+        "action_ledger_read" => {
+            action_ledger_read::run(host, sid, rid, pending_id, name, &generation, args).await
         }
         "present_chat_component" => {
             present_chat_component::run(host, call, sid, rid, pending_id, name, &generation, args)

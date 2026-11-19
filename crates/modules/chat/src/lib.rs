@@ -10,6 +10,7 @@ pub mod messaging;
 pub mod naming;
 pub mod session;
 pub mod shared;
+pub mod task_list;
 
 use anyhow::Result;
 use serde_json::Value;

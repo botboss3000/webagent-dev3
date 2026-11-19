@@ -1,0 +1,570 @@
+//! Session task list rules: one list per session, split into sections of steps. A write
+//! adds or updates one section by id (as `main_notes_write` does for an entry); the list's
+//! content is the agent's or user's claim about the work, never verified evidence.
+use anyhow::{anyhow, bail, Result};
+use serde::{Deserialize, Serialize};
+
+/// Sections one session's list keeps.
+pub const MAX_SECTIONS: usize = 64;
+/// Steps one section keeps, cancelled ones included.
+pub const MAX_STEPS: usize = 32;
+/// Evidence result ids one step keeps.
+const MAX_EVIDENCE: usize = 16;
+
+/// Status of a section or step; the same words Main Notes uses for its entries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    #[default]
+    Open,
+    InProgress,
+    Blocked,
+    Done,
+    Cancelled,
+}
+
+impl Status {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::InProgress => "in_progress",
+            Self::Blocked => "blocked",
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+        }
+    }
+    /// Whether work on it is still expected (open or in progress).
+    #[must_use]
+    pub fn unfinished(self) -> bool {
+        matches!(self, Self::Open | Self::InProgress)
+    }
+}
+
+/// Who asked for a section's work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    User,
+    #[default]
+    Agent,
+}
+
+/// One step of a section. `started_at` and `finished_at` (milliseconds) bound the tool
+/// calls made while it was in progress, which are its evidence unless `evidence` narrows it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Step {
+    pub id: String,
+    pub label: String,
+    pub status: Status,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<u64>,
+}
+
+/// One piece of work: a user request or the agent's own investigation.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Section {
+    pub id: String,
+    pub title: String,
+    pub origin: Origin,
+    pub status: Status,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    pub steps: Vec<Step>,
+    /// The number the next new step gets.
+    pub next_step: u32,
+}
+
+/// A session's task list at one revision.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct List {
+    pub revision: u64,
+    pub sections: Vec<Section>,
+    /// The number the next new section gets.
+    pub next_section: u32,
+}
+
+/// The section part of a write: `id` names an existing section, otherwise a new one.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SectionWrite {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub origin: Option<Origin>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub status: Option<Status>,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// One step of a write: `id` names an existing step of the section, otherwise a new one.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepWrite {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub status: Option<Status>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<Vec<String>>,
+}
+
+/// One write: a section and the steps to add or change in it; steps left out are untouched.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Write {
+    pub section: SectionWrite,
+    #[serde(default)]
+    pub steps: Vec<StepWrite>,
+}
+
+fn text(value: &str, min: usize, max: usize, what: &str) -> Result<String> {
+    let value = value.trim();
+    if value.len() < min
+        || value.len() > max
+        || value
+            .chars()
+            .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
+    {
+        bail!("{what} needs {min}..{max} bytes without control characters");
+    }
+    Ok(value.to_owned())
+}
+
+fn evidence(ids: Vec<String>) -> Result<Vec<String>> {
+    if ids.len() > MAX_EVIDENCE {
+        bail!("A step keeps at most {MAX_EVIDENCE} evidence ids");
+    }
+    ids.iter()
+        .map(|id| text(id, 1, 128, "An evidence id"))
+        .collect()
+}
+
+/// Apply `write` to `list` at time `now` (milliseconds): the next revision and one line per
+/// change, or why the write is refused. Nothing changes unless every part is valid.
+pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)> {
+    let mut next = list.clone();
+    next.revision = list
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("Task list revision exhausted"))?;
+    let mut changes = Vec::new();
+    let index = match write.section.id.as_deref() {
+        Some(id) => next
+            .sections
+            .iter()
+            .position(|section| section.id == id)
+            .ok_or_else(|| anyhow!("No section {id}; read the list for current ids"))?,
+        None => {
+            if next.sections.len() >= MAX_SECTIONS {
+                bail!("This session's list already keeps {MAX_SECTIONS} sections");
+            }
+            let title = write
+                .section
+                .title
+                .as_deref()
+                .ok_or_else(|| anyhow!("A new section needs a title"))?;
+            next.next_section += 1;
+            let section = Section {
+                id: format!("s{}", next.next_section),
+                title: text(title, 3, 120, "A section title")?,
+                origin: write.section.origin.unwrap_or_default(),
+                status: Status::Open,
+                notes: String::new(),
+                summary: String::new(),
+                steps: Vec::new(),
+                next_step: 0,
+            };
+            changes.push(format!("{} added: {}", section.id, section.title));
+            next.sections.push(section);
+            next.sections.len() - 1
+        }
+    };
+    let section = &mut next.sections[index];
+    if write.section.id.is_some() {
+        if let Some(title) = write.section.title.as_deref() {
+            section.title = text(title, 3, 120, "A section title")?;
+            changes.push(format!("{} renamed: {}", section.id, section.title));
+        }
+        if write
+            .section
+            .origin
+            .is_some_and(|origin| origin != section.origin)
+        {
+            bail!("A section's origin cannot change");
+        }
+    }
+    if let Some(notes) = write.section.notes.as_deref() {
+        section.notes = text(notes, 0, 1200, "Section notes")?;
+        changes.push(format!("{} notes updated", section.id));
+    }
+    for step in write.steps {
+        changes.push(write_step(section, step, now)?);
+    }
+    if let Some(summary) = write.section.summary.as_deref() {
+        section.summary = text(summary, 20, 1200, "A section summary")?;
+    }
+    if let Some(status) = write
+        .section
+        .status
+        .filter(|status| *status != section.status)
+    {
+        set_section_status(section, status)?;
+        changes.push(format!("{} {}", section.id, status.word()));
+    } else if section.status == Status::Done && write.section.summary.is_some() {
+        changes.push(format!("{} summary updated", section.id));
+    }
+    if changes.is_empty() {
+        bail!("The write changes nothing");
+    }
+    Ok((next, changes))
+}
+
+fn set_section_status(section: &mut Section, status: Status) -> Result<()> {
+    match status {
+        Status::Done => {
+            if let Some(step) = section.steps.iter().find(|step| step.status.unfinished()) {
+                bail!(
+                    "{} is still {}: finish, block or cancel it before closing {}",
+                    step.id,
+                    step.status.word(),
+                    section.id
+                );
+            }
+            if section.summary.is_empty() {
+                bail!("Closing {} needs a summary of what was done", section.id);
+            }
+        }
+        Status::InProgress | Status::Blocked => {
+            bail!("A section is open, done or cancelled; set its steps' status instead");
+        }
+        Status::Open | Status::Cancelled => {}
+    }
+    section.status = status;
+    Ok(())
+}
+
+fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<String> {
+    if section.status != Status::Open {
+        bail!(
+            "{} is {}; reopen it before changing its steps",
+            section.id,
+            section.status.word()
+        );
+    }
+    let index = match write.id.as_deref() {
+        Some(id) => section
+            .steps
+            .iter()
+            .position(|step| step.id == id)
+            .ok_or_else(|| anyhow!("No step {id} in {}", section.id))?,
+        None => {
+            if section.steps.len() >= MAX_STEPS {
+                bail!("{} already keeps {MAX_STEPS} steps", section.id);
+            }
+            let label = write
+                .label
+                .as_deref()
+                .ok_or_else(|| anyhow!("A new step needs a label"))?;
+            section.next_step += 1;
+            section.steps.push(Step {
+                id: format!("{}.{}", section.id, section.next_step),
+                label: text(label, 3, 240, "A step label")?,
+                status: Status::Open,
+                outcome: String::new(),
+                evidence: Vec::new(),
+                started_at: None,
+                finished_at: None,
+            });
+            section.steps.len() - 1
+        }
+    };
+    let new = write.id.is_none();
+    let step = &mut section.steps[index];
+    if !new {
+        if let Some(label) = write.label.as_deref() {
+            step.label = text(label, 3, 240, "A step label")?;
+        }
+    }
+    if let Some(outcome) = write.outcome.as_deref() {
+        step.outcome = text(outcome, 0, 240, "A step outcome")?;
+    }
+    if let Some(ids) = write.evidence {
+        step.evidence = evidence(ids)?;
+    }
+    if let Some(status) = write.status {
+        if status == Status::InProgress && step.status != Status::InProgress {
+            step.started_at = Some(now);
+            step.finished_at = None;
+        } else if !status.unfinished() && step.status.unfinished() {
+            step.started_at.get_or_insert(now);
+            step.finished_at = Some(now);
+        } else if status == Status::Open {
+            step.finished_at = None;
+        }
+        step.status = status;
+    }
+    Ok(if new {
+        format!("{} added: {}", step.id, step.label)
+    } else {
+        format!("{} {}", step.id, step.status.word())
+    })
+}
+
+/// The write that seeds a user-requested section from an approved plan's checklist.
+#[must_use]
+pub fn plan_section(title: &str, notes: &str, labels: &[String]) -> Write {
+    Write {
+        section: SectionWrite {
+            title: Some(title.to_owned()),
+            origin: Some(Origin::User),
+            notes: (!notes.trim().is_empty()).then(|| notes.to_owned()),
+            ..SectionWrite::default()
+        },
+        steps: labels
+            .iter()
+            .map(|label| StepWrite {
+                label: Some(label.clone()),
+                ..StepWrite::default()
+            })
+            .collect(),
+    }
+}
+
+/// One line per section: id, title, origin, status and step counts.
+#[must_use]
+pub fn overview(list: &List) -> Vec<String> {
+    list.sections
+        .iter()
+        .map(|section| {
+            let done = section
+                .steps
+                .iter()
+                .filter(|step| step.status == Status::Done)
+                .count();
+            let open = section
+                .steps
+                .iter()
+                .filter(|step| step.status.unfinished())
+                .count();
+            let mut line = format!(
+                "{} {} [{} · {}] {done} done, {open} open",
+                section.id,
+                section.title,
+                match section.origin {
+                    Origin::User => "user",
+                    Origin::Agent => "agent",
+                },
+                section.status.word()
+            );
+            if !section.summary.is_empty() {
+                line.push_str(&format!(" · summary: {}", section.summary));
+            }
+            line
+        })
+        .collect()
+}
+
+/// One line per difference from `before` to `after`: sections and steps added, removed
+/// or changed (status, label, title, notes, summary or outcome).
+#[must_use]
+pub fn compare(before: &List, after: &List) -> Vec<String> {
+    let mut lines = Vec::new();
+    for section in &after.sections {
+        let Some(old) = before.sections.iter().find(|old| old.id == section.id) else {
+            lines.push(format!("{} added: {}", section.id, section.title));
+            for step in &section.steps {
+                lines.push(format!(
+                    "{} added: {} ({})",
+                    step.id,
+                    step.label,
+                    step.status.word()
+                ));
+            }
+            continue;
+        };
+        if old.title != section.title {
+            lines.push(format!(
+                "{} renamed: {} → {}",
+                section.id, old.title, section.title
+            ));
+        }
+        if old.status != section.status {
+            lines.push(format!(
+                "{} {} → {}",
+                section.id,
+                old.status.word(),
+                section.status.word()
+            ));
+        }
+        for (what, was, now) in [
+            ("notes", &old.notes, &section.notes),
+            ("summary", &old.summary, &section.summary),
+        ] {
+            if was != now {
+                lines.push(format!("{} {what}: {now}", section.id));
+            }
+        }
+        for step in &section.steps {
+            let Some(was) = old.steps.iter().find(|was| was.id == step.id) else {
+                lines.push(format!(
+                    "{} added: {} ({})",
+                    step.id,
+                    step.label,
+                    step.status.word()
+                ));
+                continue;
+            };
+            if was.label != step.label {
+                lines.push(format!(
+                    "{} relabelled: {} → {}",
+                    step.id, was.label, step.label
+                ));
+            }
+            if was.status != step.status {
+                lines.push(format!(
+                    "{} {} → {}",
+                    step.id,
+                    was.status.word(),
+                    step.status.word()
+                ));
+            }
+            if was.outcome != step.outcome {
+                lines.push(format!("{} outcome: {}", step.id, step.outcome));
+            }
+        }
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(value: serde_json::Value) -> Write {
+        serde_json::from_value(value).expect("test write parses")
+    }
+
+    #[test]
+    fn sections_and_steps_get_stable_ids_and_record_their_times() {
+        let (list, changes) = apply(
+            &List::default(),
+            write(serde_json::json!({"section":{"title":"Fix login"},
+                "steps":[{"label":"Reproduce"},{"label":"Patch","status":"in_progress"}]})),
+            10,
+        )
+        .unwrap();
+        assert_eq!(list.revision, 1);
+        assert_eq!(changes[0], "s1 added: Fix login");
+        assert_eq!(list.sections[0].steps[1].id, "s1.2");
+        assert_eq!(list.sections[0].steps[1].started_at, Some(10));
+        let (list, _) = apply(
+            &list,
+            write(serde_json::json!({"section":{"id":"s1"},
+                "steps":[{"id":"s1.2","status":"done","outcome":"cookie path fixed"}]})),
+            20,
+        )
+        .unwrap();
+        let step = &list.sections[0].steps[1];
+        assert_eq!((step.started_at, step.finished_at), (Some(10), Some(20)));
+        assert_eq!(step.outcome, "cookie path fixed");
+    }
+
+    #[test]
+    fn closing_needs_finished_steps_and_a_summary_and_reopening_allows_edits() {
+        let (list, _) = apply(
+            &List::default(),
+            write(serde_json::json!({"section":{"title":"Check queue"},
+                "steps":[{"label":"Read board"}]})),
+            1,
+        )
+        .unwrap();
+        let close = serde_json::json!({"section":{"id":"s1","status":"done",
+            "summary":"Queue was held by another task; released"}});
+        let refused = apply(&list, write(close.clone()), 2)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("s1.1 is still open"), "{refused}");
+        let (list, _) = apply(
+            &list,
+            write(serde_json::json!({"section":{"id":"s1"},
+                "steps":[{"id":"s1.1","status":"done"}]})),
+            3,
+        )
+        .unwrap();
+        let (closed, _) = apply(&list, write(close), 4).unwrap();
+        assert_eq!(closed.sections[0].status, Status::Done);
+        let edit = serde_json::json!({"section":{"id":"s1"},"steps":[{"label":"More"}]});
+        assert!(apply(&closed, write(edit.clone()), 5).is_err());
+        let (reopened, _) = apply(
+            &closed,
+            write(serde_json::json!({"section":{"id":"s1","status":"open"}})),
+            6,
+        )
+        .unwrap();
+        assert!(apply(&reopened, write(edit), 7).is_ok());
+    }
+
+    #[test]
+    fn bad_writes_change_nothing() {
+        let (list, _) = apply(
+            &List::default(),
+            write(serde_json::json!({"section":{"title":"Work"},"steps":[{"label":"One"}]})),
+            1,
+        )
+        .unwrap();
+        for bad in [
+            serde_json::json!({"section":{"id":"s9"}}),
+            serde_json::json!({"section":{}}),
+            serde_json::json!({"section":{"id":"s1"}}),
+            serde_json::json!({"section":{"id":"s1","origin":"user"}}),
+            serde_json::json!({"section":{"id":"s1","status":"blocked"}}),
+            serde_json::json!({"section":{"id":"s1"},"steps":[{"id":"s1.7"}]}),
+            serde_json::json!({"section":{"id":"s1"},"steps":[{"label":"no"}]}),
+        ] {
+            assert!(apply(&list, write(bad.clone()), 2).is_err(), "{bad}");
+        }
+        assert!(serde_json::from_value::<Write>(serde_json::json!({"section":{"x":1}})).is_err());
+    }
+
+    #[test]
+    fn plan_seeds_a_user_section_and_compare_names_each_change() {
+        let labels = vec!["Reproduce".to_owned(), "Patch".to_owned()];
+        let (seeded, _) = apply(
+            &List::default(),
+            plan_section("Plan", "keep v2", &labels),
+            1,
+        )
+        .unwrap();
+        assert_eq!(seeded.sections[0].origin, Origin::User);
+        assert_eq!(seeded.sections[0].notes, "keep v2");
+        let (after, _) = apply(
+            &seeded,
+            write(serde_json::json!({"section":{"id":"s1"},
+                "steps":[{"id":"s1.1","status":"done"},{"label":"Verify"}]})),
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            compare(&seeded, &after),
+            ["s1.1 open → done", "s1.3 added: Verify (open)"]
+        );
+        assert_eq!(overview(&after), ["s1 Plan [user · open] 1 done, 2 open"]);
+    }
+}

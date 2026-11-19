@@ -1,0 +1,24 @@
+# Write the session task list
+
+`task_list_write` adds or updates one section of this session's task list. A section is
+one piece of work: a user's request (`"origin":"user"`) or your own investigation
+(`"origin":"agent"`, the default). Each call names the list's current revision in
+`expected_revision`; a stale revision is refused, so read the list and write again.
+
+- New section: `{"expected_revision":4,"section":{"title":"Fix login redirect",
+  "origin":"user"},"steps":[{"label":"Reproduce on phone"},{"label":"Patch cookie path"}]}`.
+  The result gives the new revision and the section and step ids (`s3`, `s3.1`).
+- Update: give the section's `id`, and each step to change by its `id`; steps left out
+  are untouched, and steps without an `id` are added. Start a step with
+  `"status":"in_progress"` and finish it with `done`, `blocked` or `cancelled` (to drop
+  it); add a one-line `outcome` when it finishes. Tool calls made while a step is in
+  progress count as its evidence; `evidence` may narrow that to the result ids that matter.
+- `notes` keeps the section's decisions and constraints.
+- Close a finished section with `"status":"done"` and a `summary` of what was done,
+  decisions and where results live; every step must be done, blocked or cancelled first.
+  `cancelled` drops the whole section. Reopen a closed section with `"status":"open"`
+  when a follow-up needs it.
+
+Track every multi-step piece of work here as you go; a plan the user approved already has
+its section. Statuses are your claims, not verified evidence: report what checks proved.
+Anything another session or a later day needs also goes in Main Notes.

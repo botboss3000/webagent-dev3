@@ -1,6 +1,5 @@
-//! Task module tests covering the plan artifact and more than one task tool.
+//! Task module tests covering the plan artifact and chat components.
 use super::present_chat_component::{component, ComponentArgs};
-use super::update_task_checkpoint::{checkpoint, Update};
 use super::*;
 #[test]
 fn plan_artifact_holds_the_plan_and_refuses_bad_steps() {
@@ -18,12 +17,7 @@ fn plan_artifact_holds_the_plan_and_refuses_bad_steps() {
     assert!(serde_json::from_value::<Plan>(json!({"checklist":[],"expected_revision":0})).is_err());
 }
 #[test]
-fn checkpoint_and_components_are_bounded_and_declarative() {
-    let valid = json!({"summary":"Worked through implementation; next verify persistence.",
-        "steps":[{"label":"Implement storage","status":"in_progress"}]});
-    let update: Update = serde_json::from_value(valid).unwrap();
-    assert_eq!(checkpoint(update).unwrap()["provenance"], "agent_claim");
-    assert!(serde_json::from_value::<Update>(json!({"summary":"x","html":"<script>"})).is_err());
+fn components_are_bounded_and_declarative() {
     assert!(serde_json::from_value::<ComponentArgs>(json!({"type":"status","expected_revision":0,
         "data":{"sections":[{"label":"Progress","value":"Ready"}]},"lifecycle":{"script":"alert(1)"}})).is_err());
     assert!(component(

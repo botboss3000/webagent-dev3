@@ -1,0 +1,120 @@
+{
+  "name": "task_list_write",
+  "description": "Add or update one section of this session's task list and its steps; give the list's current revision",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "section": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 16
+          },
+          "title": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 120
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "user",
+              "agent"
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 1200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "done",
+              "cancelled"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 1200
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "steps": {
+        "type": "array",
+        "maxItems": 32,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 24
+            },
+            "label": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 240
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "in_progress",
+                "blocked",
+                "done",
+                "cancelled"
+              ]
+            },
+            "outcome": {
+              "type": "string",
+              "maxLength": 240
+            },
+            "evidence": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "expected_revision",
+      "section"
+    ],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "save task progress",
+      "mark this step done",
+      "add steps to the task list"
+    ],
+    "keywords": [
+      "task list",
+      "progress",
+      "checkpoint"
+    ]
+  },
+  "core": true,
+  "effect": "write",
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
+  }
+}

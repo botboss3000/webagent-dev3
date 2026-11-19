@@ -1,4 +1,4 @@
-//! User-owned Base task progress and declarative chat components.
+//! User-owned declarative chat components and Base core records.
 use super::*;
 
 const MAX_ARTIFACT_BYTES: usize = 24 * 1024;
@@ -32,7 +32,6 @@ fn artifact_key(sid: &str, kind: &str, id: &str) -> Result<String> {
         return Err(anyhow!("Invalid task artifact identifier"));
     }
     match kind {
-        "checkpoint" if id == "task" => Ok(format!("base_checkpoint:{sid}")),
         "component" => Ok(format!("base_component:{sid}:{id}")),
         "core_profile" => Ok(format!("core_profile:{id}")),
         "core_rating" => Ok(format!("core_rating:{id}")),
@@ -42,22 +41,6 @@ fn artifact_key(sid: &str, kind: &str, id: &str) -> Result<String> {
 }
 
 impl Store {
-    pub async fn base_task_checkpoint(&self, sid: &str, rid: &str) -> Result<Value> {
-        let key = artifact_key(sid, "checkpoint", "task")?;
-        let mut tx = self.pool.begin().await?;
-        self.base_run_fence(&mut tx, sid, rid, None, None).await?;
-        let raw = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-            .bind(key)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let output = match raw {
-            Some(raw) => self.unseal(&raw)?,
-            None => json!({"schema_version":1,"revision":0,"artifact":null}),
-        };
-        tx.commit().await?;
-        Ok(output)
-    }
-
     // Stable pending-call receipts make recovery retries harmless even after
     // the run completes. The receipt, artifact and event commit together.
     pub async fn base_write_artifact(
@@ -339,7 +322,8 @@ impl Store {
 
     // Safe API projection: only previously validated declarative specs.
     pub async fn base_chat_components(&self, sid: &str) -> Result<Vec<Value>> {
-        artifact_key(sid, "checkpoint", "task")?;
+        // Refuse an invalid session ID before it reaches the key pattern below.
+        artifact_key(sid, "component", "list")?;
         let mut tx = self.pool.begin().await?;
         let session_raw = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(format!("session:{sid}"))
@@ -387,7 +371,7 @@ impl Store {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn checkpoint_cas_replay_and_run_fences() {
+    async fn artifact_cas_replay_and_run_fences() {
         let (_root, app) = crate::runtime_tests::fixture_uninitialized().await;
         let store = &app.store;
         for sid in ["owned", "foreign"] {
@@ -409,15 +393,15 @@ mod tests {
             .put("run:r", &running("owned", "running"))
             .await
             .unwrap();
-        let artifact = json!({"summary":"Progress reported by agent","provenance":"agent_claim"});
+        let artifact = json!({"title":"Choose","fields":[]});
         let first = store
             .base_write_artifact(
                 "owned",
                 "r",
                 "call-1",
                 "g",
-                "checkpoint",
-                "task",
+                "component",
+                "card",
                 0,
                 &artifact,
             )
@@ -425,7 +409,11 @@ mod tests {
             .unwrap();
         assert_eq!(first["revision"], 1);
         assert_eq!(
-            store.base_task_checkpoint("owned", "r").await.unwrap()["revision"],
+            store
+                .base_component("owned", "card")
+                .await
+                .unwrap()
+                .unwrap()["revision"],
             1
         );
         assert_eq!(
@@ -435,8 +423,8 @@ mod tests {
                     "r",
                     "call-1",
                     "g",
-                    "checkpoint",
-                    "task",
+                    "component",
+                    "card",
                     0,
                     &artifact
                 )
@@ -450,8 +438,8 @@ mod tests {
                 "r",
                 "call-1",
                 "g",
-                "checkpoint",
-                "task",
+                "component",
+                "card",
                 0,
                 &json!({"different":true})
             )
@@ -467,8 +455,8 @@ mod tests {
                 "r",
                 "call-2",
                 "g",
-                "checkpoint",
-                "task",
+                "component",
+                "card",
                 0,
                 &artifact
             )
@@ -480,14 +468,13 @@ mod tests {
                 "r",
                 "call-2",
                 "old-generation",
-                "checkpoint",
-                "task",
+                "component",
+                "card",
                 1,
                 &artifact
             )
             .await
             .is_err());
-        assert!(store.base_task_checkpoint("foreign", "r").await.is_err());
         store
             .put("run:r", &running("owned", "completed"))
             .await
@@ -500,8 +487,8 @@ mod tests {
                     "r",
                     "call-1",
                     "g",
-                    "checkpoint",
-                    "task",
+                    "component",
+                    "card",
                     0,
                     &artifact
                 )
@@ -515,8 +502,8 @@ mod tests {
                 "r",
                 "call-2",
                 "g",
-                "checkpoint",
-                "task",
+                "component",
+                "card",
                 1,
                 &artifact
             )

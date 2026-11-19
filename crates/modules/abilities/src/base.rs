@@ -5,7 +5,7 @@
 
 pub const ID: &str = "base";
 pub const NAME: &str = "Base";
-pub const DESCRIPTION: &str = "Core conversation tools for bounded utilities, caller-owned session search, context compaction and recall, prompt and skill edits, task checkpoints, declarative presentation and the caller-private credential vault. Remaining declarations need separate V3 contracts.";
+pub const DESCRIPTION: &str = "Core conversation tools for bounded utilities, caller-owned session search, context compaction and recall, prompt and skill edits, action ledger reads, declarative presentation and the caller-private credential vault. Remaining declarations need separate V3 contracts.";
 pub const MIGRATION_NOTE: &str = "Native V3 Base tools include utilities, discovery, skills, private profiles and ratings, task artifacts, presentations, context controls, bounded saved functions, protected account/connection setup, the caller-private credential vault and private webhook inboxes. Live policy and exact owning API authority still apply.";
 pub const ICON: &str = "box";
 pub const COLOR: &str = "#7dcfff";
@@ -32,8 +32,7 @@ pub const TOOLS: &[&str] = &[
     "list_webhooks",
     "delete_webhook",
     "get_webhook_log",
-    "update_task_checkpoint",
-    "get_task_checkpoint",
+    "action_ledger_read",
     "background_status",
     "background_cancel",
     "present_chat_component",

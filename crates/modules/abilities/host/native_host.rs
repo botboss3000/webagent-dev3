@@ -574,13 +574,33 @@ impl NativeHost for Host<'_> {
     fn action_lookup<'a>(&'a self, run: &'a Value, id: &'a str) -> Pending<'a, Result<Value>> {
         Box::pin(crate::actions::lookup(self.0, run, id))
     }
-    fn task_checkpoint<'a>(
+    fn task_list<'a>(
         &'a self,
         store: &'a StoreCore,
         sid: &'a str,
         rid: &'a str,
+        revision: Option<u64>,
+    ) -> Pending<'a, Result<Option<Value>>> {
+        Box::pin(async move { on(self.0, store).store.task_list(sid, rid, revision).await })
+    }
+    fn write_task_list<'a>(
+        &'a self,
+        call: Call<'a>,
+        receipt: &'a str,
+        expected_revision: u64,
+        list: &'a Value,
+        changes: &'a Value,
     ) -> Pending<'a, Result<Value>> {
-        Box::pin(async move { on(self.0, store).store.base_task_checkpoint(sid, rid).await })
+        Box::pin(self.0.store.task_list_write(
+            call.sid,
+            call.run_id,
+            call.pending_id,
+            call.generation,
+            receipt,
+            expected_revision,
+            list,
+            changes,
+        ))
     }
     fn context_assets<'a>(
         &'a self,

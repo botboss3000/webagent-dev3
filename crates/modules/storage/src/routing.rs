@@ -28,7 +28,7 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("core_webhook:")
         || key.starts_with("core_webhook_log:")
         || key.starts_with("core_spawn_origin:")
-        || key.starts_with("base_checkpoint:")
+        || key.starts_with("base_tasks:")
         || key.starts_with("base_component:")
         || key.starts_with("receipt:base:")
         || key.starts_with("receipt:core_image:")

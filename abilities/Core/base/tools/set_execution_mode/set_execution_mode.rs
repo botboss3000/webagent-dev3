@@ -56,6 +56,7 @@ pub async fn execute(
         }
         // A bad plan is refused before the mode changes.
         let artifact = query.plan.as_ref().map(plan_artifact).transpose()?;
+        let section = query.plan.as_ref().map(Plan::task_section).transpose()?;
         let agent = host.session_agent_id(call.sid).await?;
         let store = host.agent_store(&agent).await?;
         // "Continue in Ask mode" approves this Auto request with Ask as the target.
@@ -94,6 +95,19 @@ pub async fn execute(
             host.write_session_artifact(call, PLAN_ARTIFACT, PLAN_ARTIFACT, &artifact)
                 .await?;
         }
+        // The plan's checklist becomes a section of the session task list. The mode has
+        // already changed, so a list that cannot take it is reported, not a failed call.
+        let tasks = match section {
+            Some(section) => Some(
+                match crate::task_list::seed_plan(host, call, section).await {
+                    Ok(saved) => saved,
+                    Err(error) => {
+                        json!({"error":format!("The plan was not added to the task list: {error}")})
+                    }
+                },
+            ),
+            None => None,
+        };
         // The result carries the new mode's guidance, so the conversation history holds it from
         // the step it changed (unless mode_guidance.json puts the guidance in each step instead).
         let now = host.session_mode(call.sid).await?;
@@ -101,6 +115,9 @@ pub async fn execute(
             "mode":now["definition"]["id"].as_str().unwrap_or(mode),"revision":now["revision"]});
         if webagent_context::defaults::mode_guidance() != "per_step" {
             result["guidance"] = json!(guidance_text(&now));
+        }
+        if let Some(tasks) = tasks {
+            result["task_list"] = tasks;
         }
         if to_ask {
             result["note"] = json!(

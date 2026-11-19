@@ -1,4 +1,4 @@
-//! get_task_checkpoint: reads the run's task checkpoint and action statuses.
+//! action_ledger_read: the run requester's recorded actions, or one action's saved result.
 use super::authorize;
 use crate::NativeHost;
 use anyhow::{anyhow, bail, Result};
@@ -8,7 +8,7 @@ use webagent_host_core::key;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct CheckpointArgs {
+pub(super) struct LedgerArgs {
     #[serde(default)]
     action_id: Option<String>,
 }
@@ -21,19 +21,18 @@ pub(super) async fn run(
     generation: &str,
     args: &Value,
 ) -> Result<Value> {
-    let query: CheckpointArgs = serde_json::from_value(args.clone())?;
-    let mut state = host.task_checkpoint(host.store(), sid, rid).await?;
+    let query: LedgerArgs = serde_json::from_value(args.clone())?;
     let run = host
         .store()
         .get(&key("run", rid))
         .await?
         .ok_or_else(|| anyhow!("Run not found"))?;
-    state["actions"] = json!(host.action_statuses(&run).await?);
+    let mut output = json!({"actions":host.action_statuses(&run).await?});
     if let Some(id) = query.action_id {
-        state["action"] = host.action_lookup(&run, &id).await?;
+        output["action"] = host.action_lookup(&run, &id).await?;
     }
     if authorize(host, sid, rid, pending_id, name).await? != generation {
         bail!("Task run generation changed");
     }
-    Ok(json!({"status":"success","output":state}))
+    Ok(json!({"status":"success","output":output}))
 }

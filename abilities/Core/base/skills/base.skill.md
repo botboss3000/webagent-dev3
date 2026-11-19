@@ -27,7 +27,8 @@ Rules for every tool call. Each tool's own skill states how it runs.
   asking.
 - Never retry an uncertain external write; inspect its result first. When a
   write's result is uncertain (for example edit_own_prompt, save_own_skill or
-  remove_own_skill after a restart), `get_task_checkpoint` shows its status.
+  remove_own_skill after a restart), read the item's current state to see whether it
+  took effect.
 - Never put passwords, device codes or tokens in tool text; credentials go
   through the protected credential card.
 

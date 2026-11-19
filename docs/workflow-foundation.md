@@ -457,7 +457,7 @@ action. Late results are attempt-fenced. Action records survive compaction,
 Undo/Fork, and conversation deletion; no automatic expiry is introduced.
 Fork inherits no executable claims. Cross-plane reads and claims recheck live
 requester, resource, policy, participation and credential-owner authority.
-Bounded action statuses and saved-result lookup use get_task_checkpoint and
+Bounded action statuses and saved-result lookup use action_ledger_read and
 call-scoped native guidance. Saved results remain untrusted evidence.
 
 ## Optional service module ownership

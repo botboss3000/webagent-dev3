@@ -136,6 +136,16 @@ impl
                     cancel,
                 ))
                 .await
+            } else if tools::native::task_list::owns(&name) {
+                // Boxed so this branch does not grow the shared dispatch future's stack frame.
+                Box::pin(tools::native::task_list::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                ))
+                .await
             } else if tools::native::wiki::owns(&name) {
                 // Boxed so this branch does not grow the shared dispatch future's stack frame.
                 Box::pin(tools::native::wiki::execute(

@@ -29,6 +29,8 @@ pub(crate) mod search;
 pub(crate) mod session;
 #[path = "../../crates/modules/chat/host/storage/session_messaging.rs"]
 mod session_messaging;
+#[path = "../../crates/modules/chat/host/storage/task_list.rs"]
+mod task_list;
 pub(crate) use webagent_notifications as notifications;
 #[path = "../../crates/modules/actions/host/storage.rs"]
 mod actions;
@@ -3963,7 +3965,7 @@ mod core_private_namespace_tests {
             "core_webhook:",
             "core_webhook_log:",
             "core_spawn_origin:",
-            "base_checkpoint:",
+            "base_tasks:",
             "base_component:",
             "receipt:base:",
         ] {
