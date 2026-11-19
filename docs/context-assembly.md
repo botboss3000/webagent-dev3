@@ -30,7 +30,8 @@ Four events reshape the request:
   activates an ability, moves every retained row into the instructions, rebuilds
   the Main Notes snapshot and summarizes only if over the trigger.
 - **Keep-alive** (experimental, off by default): resends the last request
-  before the timeout so the cache stays warm; the context does not change.
+  before the timeout so the cache stays warm; the context does not change. It
+  carries on after restarts, and opening a session earns it one ping.
 
 Details: **Compaction layout and cache reuse** below.
 
@@ -155,6 +156,14 @@ the summarized range and in the verbatim tail, oldest first, into one
 them from the tail. A merge or major reorder drops the diffs and rebuilds the
 snapshot from the current notes.
 
+Every committed Main Notes change returns the new notes `revision` (also kept in its
+request receipt), and a server-added update row names it ("Main Notes update from
+another session (v3; notes now at revision 120):"). So the agent always has the
+newest revision for `expected_revision` without a read: the snapshot header, a later
+update row or its own last write result. The write and read tool skills say to write
+directly and read only after a revision conflict or for entries not shown (commits
+c56c939, 1409289).
+
 **Session task list through its changes.** The list follows the same rules as Main
 Notes, at the same basis: the instructions carry one snapshot of the session's task list
 (`base_tasks:{sid}:view`, keyed by `notes_basis`) right after the notes, frozen between
@@ -226,22 +235,52 @@ with its reason (`idle` or `tools`).
 **Cache timeout (built).** `cache_timeout_minutes` per model or provider in
 `crates/modules/models/providers/<provider>.json` (60 minutes when absent), and
 Identity → Context compaction → Cache timeout per agent (0 uses the model's).
+The provider files are read live, so a change needs no rebuild. The OpenCode bridge
+file sets 15 minutes for its models (commit 50191a3); Claude bridge models use the
+60-minute default.
 
-**Keep-alive (experimental, off by default).** Turned on per agent under
-Identity → Context compaction. While on, each main model call's request is kept in
-the loop's memory (`crates/modules/engine/src/runtime/keep_alive.rs`, at most 32
-sessions). Two minutes before the cache timeout (at most half of it) a service
-checked every 30 s resends that request with one short user question appended, so
-every earlier byte matches what the provider cached; the answer and any tool call
-in it are dropped and nothing is saved to the history. A bridge answers from a
-fork of the chat's harness session. A forced tool call was not used: on Anthropic a
-`tool_choice` change invalidates the cached messages, and bridges do not pass it
-on. Pings stop at the limit set on Identity (default and maximum 240 minutes after
-the last real call), when the session's flag is dismissed, or when the agent turns
-keep-alive off. Each session state has a switch: on by default for completed and
-needs input or approval, off for stopped and error; a running session is skipped.
-A restart forgets the kept requests. Each ping logs `keep-alive ping` with its
-input and cached tokens.
+Measured lifetimes (2026-11-19). Each probe started its own harness session with a
+unique ~30k-token message, resumed it after a set wait and read how much came back
+from cache; a hit restarts the provider's clock, so a resumed session can be waited
+on again. Claude Code writes every cache entry with the 1-hour lifetime (1,796 of
+1,796 bridge calls), and Opus, Sonnet and Haiku hit at 56 minutes and missed at 66.
+OpenCode models differ widely: qwen3.8-flash about 5 minutes, glm-5.3 10-20,
+big-pickle inconsistent (hits at 13 and 20, misses at 8 and 30), deepseek-v4.1-flash
+on Go hit through 20 and sometimes at 45 and 62 but missed at 30 and 40,
+deepseek-v4.1-flash-free and beam-free held past 60, and kimi-k3 mostly reports no
+usage. Per-model values wait for the longer probes to finish. Real sessions cannot
+measure this: every session of an agent starts with the same instructions and tool
+definitions, so one session's call warms the cache for the others.
+
+**Keep-alive (experimental, off by default; commits f2df9cf, 2f29738, 37d78ec,
+34adcd1).** Turned on per agent under Identity → Context compaction: one expandable
+"Keep cache warm (experimental)" row whose switch turns it on and whose panel holds
+"Stop after (minutes)" and the four state switches. While it is on, each main model
+call saves its request in the session owner's database
+(`crates/modules/engine/src/runtime/keep_alive.rs`): `keep_alive:{sid}` (run, agent,
+timeout, last call, last real call, a pending visit) and `keep_alive_request:{sid}`
+(the request). Both hold `session_id`, so deleting the session erases them, and pings
+carry on after a restart. A loop service checks every account's records every 30 s.
+Two minutes before the cache timeout (at most half of it) it resends the saved
+request with one short user question appended, so every earlier byte matches what
+the provider cached; the answer and any tool call in it are dropped and nothing is
+saved to the history. A bridge answers from a fork of the chat's harness session.
+A forced tool call was not used: on Anthropic a `tool_choice` change invalidates the
+cached message blocks (Anthropic's prompt-caching documentation, "What invalidates
+the cache"), and bridges do not pass it on.
+
+Each session state has a switch: on by default for completed and for needs input or
+an approval, off for stopped and for error (a run that failed, or a closing flag of
+`failed`); a live run is skipped, since its own calls refresh the cache. Pings stop
+at the limit (default and maximum 240 minutes after the last real call). Opening a
+session in the app (`POST /api/v3/sessions/{id}/visit`, sent once per open, not on
+reconnects) writes `keep_alive_visit:{sid}`; while the cache is still warm it earns
+the next due ping even past the limit or in a state switched off. A dismissed flag
+stops pings for good, a visit included. Nothing pings once the cache is already gone
+(after a long restart, for example); stopping marks the timing record stopped and
+empties the saved request. Each ping logs `keep-alive ping` with its input and
+cached tokens and whether a visit earned it. Measured on the OpenCode bridge, pings
+read 98-99% of the request from cache.
 
 **Measurement (built, commits 9a6c1a6, eff85a9, d555f4a).** At each main model
 call the engine fingerprints the tool definitions, instructions and each history
@@ -254,7 +293,12 @@ provider's cached and cache-write tokens beside it. The composer's context
 statistics panel shows both. The OpenCode bridge reads usage from its server's
 session messages when `opencode run` prints no step totals. Each model call also
 has an activity row ("Model call · 102.0k in · 99.7% cached"), and a reply's
-activity group head sums them ("2 model calls · 49.9% cached").
+activity group head sums them ("2 model calls · 49.9% cached"). That percentage is
+the provider's reported cached tokens over its input tokens, as the bridge read them
+(OpenCode's session messages, Claude Code's session log), so it shows 0% once the
+cache has really expired. The estimate appears only in the row's copied details and
+the context statistics panel. A bridge's figures describe the bridge's own request,
+which adds its harness prompt and tools, so they can differ from the estimate.
 
 ## Provider-specific projection
 
