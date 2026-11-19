@@ -1,0 +1,220 @@
+/* The chat footer under the composer: idle footer mode, the footer row, its drag handle
+   and the token bar. */
+
+/* ── Idle footer mode (CSS-driven, no DOM rebuild) ──
+     When the textarea is empty and unfocused, .footer-mode-idle collapses
+     every element that isn't part of the ~single-row~ simplified idle pill.
+     The active layout always exists in the DOM; this class just hides parts. */
+  #chat-input-area.footer-mode-idle {
+    bottom: var(--idle-margin-bottom, 24px);
+    /* Reduce and center padding — the active 2px/8px top/bottom pushes the
+       single idle row off-center and hides text. Symmetric keeps the pill
+       vertically centered in its small idle footprint. */
+    padding: 4px 12px;
+  }
+  /* Pill width in idle mode — JS sets --idle-pill-width; fallback matches
+     chat_ui.json idle_footer.chat_pill.pill_width (500px, same as active). */
+  #chat-input-area.footer-mode-idle #chat-input-row {
+    width: var(--idle-pill-width, 500px);
+  }
+  #chat-input-area.footer-mode-idle #chat-input-row {
+    --chat-pill-current-width: var(--idle-pill-width, 500px);
+  }
+  /* Idle textarea — padding, font-size, and min/max-height are driven
+     by data/config/chat_ui.json (idle_footer → controls → textarea).
+     Only line-height:1 stays here (CSS default is 22px, too tall).
+     Also remove the center-zone left margin so the textarea sits snug
+     next to attach. */
+  #chat-input-area.footer-mode-idle .chat-pill-input {
+    line-height: 1;
+    align-self: center !important;
+  }
+  #chat-input-area.footer-mode-idle .chat-pill-layout-zone-center {
+    margin-left: 0;
+  }
+  #chat-input-area.footer-mode-idle .chat-pill-layout-row {
+    column-gap: 0;
+  }
+  /* Collapse above-pill */
+  #chat-input-area.footer-mode-idle .chat-above-pill {
+    max-height: 0;
+    opacity: 0;
+    margin: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  /* But keep the above-pill visible when it has the activity bar (all builds do) */
+  #chat-input-area.footer-mode-idle .chat-above-pill:has(#chat-activity-bar) {
+    max-height: none;
+    opacity: 1;
+    margin-bottom: 2px;
+    margin-inline: auto;
+    overflow: visible;
+    pointer-events: none;
+  }
+  /* Multi-row plan: in idle mode only the activity row stays — extra rows
+     collapse so the idle footer stays minimal (mirrors the idle-collapsed
+     class rule in the .chat-above-pill block). */
+  #chat-input-area.footer-mode-idle .chat-above-pill .chat-header-row:not(:has(#chat-activity-bar)) {
+    display: none;
+  }
+  #chat-input-area.footer-mode-idle .chat-above-pill #chat-activity-bar,
+  #chat-input-area.footer-mode-idle .chat-above-pill #chat-activity-panel {
+    pointer-events: auto;
+  }
+  /* Collapse footer row */
+  #chat-input-area.footer-mode-idle .chat-footer-row {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  /* Collapse only the stats carousel in idle — keep buttons (attach/stop/etc) visible */
+  #chat-input-area.footer-mode-idle .chat-pill-layout-row[data-pill-row="1"] .chat-pill-layout-zone-center {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    pointer-events: none;
+  }
+
+/* ── Chat footer row (token bar + mode button) ───────────────────────────
+   A single flex row below the pill that holds the token counter on the left
+   and the execution-mode button on the right. */
+  .chat-footer-row.idle-collapsed {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+
+/* ── Footer drag handle ───────────────────────────────────────────────────
+   A horizontal line just below the pill's bottom edge. Drag up to reveal
+   the abilities/device/mode chips, drag down to hide. The line follows the
+   pointer during drag and springs back on release. */
+  /* After an idle→active transition, block clicks on newly-appeared
+     buttons for a brief window so the user's finger can't hit them. */
+  #chat-input-row.spring-back {
+    transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  /* Slower overshoot for click-triggered toggles */
+  #chat-input-row.spring-back-click {
+    transition: transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .chat-footer-handle.spring-back-click {
+    transition: transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+.chat-footer-handle-line {
+    width: 32px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--fg-4);
+    opacity: 0.35;
+    transition: opacity 0.15s ease, width 0.2s ease, background 0.15s ease;
+  }
+.chat-footer-handle:hover .chat-footer-handle-line,
+.chat-footer-handle:focus-visible .chat-footer-handle-line {
+    opacity: 0.75;
+    width: 40px;
+    background: var(--fg-2);
+  }
+.chat-footer-handle:not(.expanded) .chat-footer-handle-line {
+    animation: footerHandlePulse 3s ease-in-out infinite;
+  }
+@media (prefers-reduced-motion: reduce) {
+    .chat-footer-handle:not(.expanded) .chat-footer-handle-line {
+      animation: none;
+    }
+}
+/* Spring-back transition — applied after drag release */
+.chat-footer-handle.spring-back {
+    transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+/* ── Chat token bar ──────────────────────────────────────────────────────
+   Sits below the chat pill, left-aligned. Shows tokens-in, a spinning shape
+   during activity, and tokens-out. The spinner animates while the agent is
+   working (chat-activity.visible is set). */
+.chat-token-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg-3);
+    pointer-events: none;
+    user-select: none;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+    flex-shrink: 0;
+  }
+.chat-token-bar.active {
+    opacity: 1;
+  }
+.chat-token-label {
+    color: var(--fg-4);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 10px;
+  }
+.chat-token-value {
+    color: var(--fg-3);
+    min-width: 24px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+body.light-mode .chat-activity-bar {
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 85%, transparent));
+  }
+/* Active model's context window / max output, styled like the token bar but
+   theme-aware via design-system vars and always visible (no activity gating). */
+.chat-model-ctx {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg-3, var(--fg-3));
+    user-select: none;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+/* Session cost so far — accumulated tokens × active model price. Styled like
+   the ctx indicator (theme-aware via design-system vars), sits in the footer
+   left group between the token bar and the ctx indicator. Hidden when the
+   active model has no published price. */
+.chat-cost {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--warning);
+    user-select: none;
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+.chat-cost .chat-token-label {
+    color: var(--fg-4, var(--fg-4));
+  }
+/* Spinning shape — a diamond that rotates. While the agent is active
+   (.chat-activity.visible on the sibling #chat-activity) it spins;
+   otherwise it sits still as a small dot. */
+.chat-token-spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--fg-3);
+    border-radius: 2px;
+    transform: rotate(45deg);
+    transition: border-color 0.3s ease, opacity 0.3s ease;
+    opacity: 0.4;
+  }
+.chat-token-bar.spinning .chat-token-spinner {
+    animation: tokenSpinnerSpin 1.2s linear infinite;
+    border-color: var(--brand);
+    opacity: 1;
+  }

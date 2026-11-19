@@ -1,0 +1,90 @@
+/* The floating pinch-to-zoom chip (chat-zoom.js). */
+
+/* ── Chat pinch-to-zoom chip ─────────────────────────────────────────────
+   Floating level indicator + − / + / reset controls shown while the chat
+   transcript is zoomed. Wired by ui/chat/js/chat-zoom.js (two-finger pinch
+   and Ctrl+wheel on #chat-messages scale #chat-messages-inner via CSS zoom).
+   Sits TOP-CENTRE of the chat, just below the config-driven header (JS sets
+   the exact top from the header's measured height), themed with
+   design-system tokens so it reads in dark and light mode. Auto-hides via
+   .cz-hide after a zoom pause; [hidden] is the pre-first-zoom state. ── */
+#chat-zoom-chip {
+  position: absolute;
+  left: 50%;
+  top: 48px; /* JS nudges this below the config-driven header */
+  transform: translateX(-50%);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: 0 6px 20px rgba(var(--shadow-rgb), 0.28);
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+#chat-zoom-chip[hidden] { display: none; }
+#chat-zoom-chip.cz-hide {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(4px);
+}
+#chat-zoom-chip .cz-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+#chat-zoom-chip .cz-btn:hover {
+  background: var(--bg-tint);
+  color: var(--fg-1);
+}
+#chat-zoom-chip .cz-btn i { width: 15px; height: 15px; }
+#chat-zoom-chip .cz-level {
+  min-width: 46px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-1);
+  user-select: none;
+}
+/* JSON-backed chat presentation. Controls remain available on keyboard focus. */
+.chat-bubble.user:not(.activity-group) { line-height: var(--chat-user-line-height, 1.5); }
+.chat-bubble.agent:not(.activity-group) { line-height: var(--chat-agent-line-height, 1.5); }
+.chat-bubble.user > .label { display: var(--chat-user-heading-display, none); font-size: 12px; }
+.chat-bubble.agent > .label { display: var(--chat-agent-heading-display, none); font-size: 12px; }
+.chat-bubble.user > .label::before { content: var(--chat-user-avatar-text, ''); font-size: 12px; margin-right: 4px; }
+.chat-bubble.agent > .label::before { content: var(--chat-agent-avatar-text, ''); font-size: 12px; margin-right: 4px; }
+.chat-bubble.user { margin-top: var(--chat-turn-gap-px, 0px); }
+.chat-bubble:is(.user,.agent) :is(.turn-gutter,.bubble-actions) {
+  gap: var(--chat-gutter-control-gap-px, 4px);
+  margin-top: var(--chat-content-to-gutter-px, 4px);
+  margin-bottom: 0;
+  transition: opacity var(--chat-gutter-transition-ms, 150ms) ease;
+}
+.chat-bubble :is(.turn-gutter-time,.turn-gutter-model,.bubble-time,.bubble-model) { font-size: var(--chat-gutter-font-size-px, 11px); }
+.chat-bubble :is(.turn-gutter-btn,.bubble-action-btn) svg { width: var(--chat-gutter-icon-size-px, 14px); height: var(--chat-gutter-icon-size-px, 14px); }
+[data-gutter-reveal='always'] .chat-bubble:is(.user,.agent) .turn-gutter:not([hidden]),
+[data-gutter-reveal='engagement'] .chat-bubble:is(.user,.agent):is(:hover,.spot-active,:focus-within) .turn-gutter:not([hidden]),
+[data-gutter-reveal] .chat-bubble:is(.user,.agent):focus-within .turn-gutter:not([hidden]) { display: flex; opacity: var(--chat-gutter-engaged-opacity,1); pointer-events:auto; }
+[data-gutter-reveal='engagement'] .chat-bubble:not(:hover):not(.spot-active):not(:focus-within) .bubble-actions { opacity:0; pointer-events:none; }
+[data-gutter-reveal] .chat-bubble:is(:hover,.spot-active,:focus-within,.gutters-open) :is(.bubble-actions,.turn-gutter) { opacity:var(--chat-gutter-engaged-opacity,1); }
+.chat-bubble:is(.user,.agent) .turn-gutter { margin-bottom: var(--chat-gutter-bottom-px, 6px); }
+@media (prefers-reduced-motion: reduce) {
+  .chat-bubble.spot::before, .chat-bubble :is(.turn-gutter,.bubble-actions) { transition-duration: 0ms !important; }
+}
+.chat-bubble.user { border-radius: var(--chat-user-radius,12px); }
+.chat-bubble.agent:not(.activity-group) { border-radius: var(--chat-agent-radius,12px); }
+[data-gutter-reveal='always'] .chat-bubble:is(.user,.agent):not(:hover):not(:focus-within) .turn-gutter:not([hidden]) { opacity:var(--chat-gutter-rest-opacity,0.65); }

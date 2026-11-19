@@ -1,0 +1,153 @@
+/* Model usage analytics (model-analytics.js): the chart, its menu, the focus note, the
+   history clear control and the pinned info panel. */
+
+/* ── MODEL-ANALYTICS ───────────────────────────────────────────────────────
+   Standalone Models-page comparison chart, mounted as a sibling immediately
+   before #ac-model-host. This stays outside MODEL-TABLE by design. */
+.ac-model-analytics {
+  margin: 14px 0;
+  padding: 16px;
+  border: var(--border-width) solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-1);
+}
+.ac-model-analytics-head { position: relative; display: flex; justify-content: flex-end; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+
+/* MODEL-FOCUS-NOTE: the transient "no usage yet" note the chart raises when the row
+   the user opened names a model it cannot plot. Absolutely positioned inside the
+   header, whose left side is empty (its controls sit right), so showing and hiding it
+   never reflows the chart. It fades out after 2s, or on click. */
+.ac-model-analytics-note {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  margin: 0;
+  padding: 4px 10px;
+  border: var(--border-width) solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-2, var(--bg-1));
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease;
+}
+.ac-model-analytics-note.on { opacity: 1; visibility: visible; }
+.ac-model-analytics-head h3 { margin: 0; font-size: 15px; color: var(--fg-1); }
+.ac-model-analytics-head p { margin: 3px 0 0; font-size: 12px; color: var(--fg-3); }
+.ac-model-analytics-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ac-model-analytics-toggle { display: inline-flex; gap: 3px; padding: 2px; border: var(--border-width) solid var(--border); border-radius: 7px; background: var(--bg-0); }
+.ac-model-analytics-chart { margin-top: 4px; min-height: 38px; }
+.ac-model-analytics-svg { display: block; width: 100%; height: auto; min-height: 190px; overflow: visible; }
+/* The y axis was removed from the chart, so no grid line rule remains here. */
+.ac-model-analytics-axis { fill: var(--fg-3); font-size: 10px; }
+.ac-model-analytics-legend-item { display: inline-flex; align-items: center; gap: 5px; max-width: 200px; padding: 0; overflow: hidden; border: 0; background: transparent; color: var(--fg-2); font: inherit; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ac-model-analytics-legend-item:hover { color: var(--accent); }
+.ac-model-analytics-popover { position: fixed; inset: auto; width: min(290px, calc(100vw - 32px)); margin: 0; padding: 14px; border: var(--border-width) solid var(--border-strong); border-radius: 10px; background: var(--bg-1); color: var(--fg-1); box-shadow: 0 14px 36px rgba(0, 0, 0, .2); }
+.ac-model-analytics-popover::backdrop { background: rgba(0, 0, 0, .18); }
+.ac-model-analytics-popover label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; }
+.ac-model-analytics-popover small { display: block; margin-top: 7px; color: var(--fg-3); font-size: 11px; }
+.ac-model-analytics-popover [data-model-analytics-models] { display: grid; gap: 7px; max-height: 260px; margin-top: 9px; overflow: auto; }
+.ac-model-analytics-popover [data-model-analytics-models] label { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; font-weight: 500; }
+.ac-model-analytics-model-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+
+/* SHARED-DELETE-CONTROL: model history clear uses the shared two-click state machine. */
+.ac-model-analytics-history-clear { display: inline-grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--fg-3); cursor: pointer; }
+.ac-model-analytics-history-clear svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ac-model-analytics-history-clear:hover { background: rgba(var(--danger-rgb, 220, 38, 38), .10); color: var(--danger, #dc2626); }
+.ac-model-analytics-history-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ac-model-analytics-history-clear.warning { color: var(--danger, #dc2626); background: rgba(var(--danger-rgb, 220, 38, 38), .12); }
+.ac-model-analytics-history-clear.deleting { color: var(--danger, #dc2626); cursor: wait; }
+.ac-model-analytics-bar { transition: opacity .15s ease; }
+.ac-model-analytics-bar:hover { opacity: .72; }
+.ac-model-analytics-legend { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 5px; font-size: 11px; color: var(--fg-2); }
+.ac-model-analytics-legend span { display: inline-flex; align-items: center; gap: 5px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-model-analytics-legend i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
+
+/* ── MODEL-ANALYTICS CHART MENU ─────────────────────────────────────────────
+   Metric / stacking / grouping live behind the top-right kebab so the header
+   stays quiet. The order inside the panel is fixed — metric, divider, stacked
+   checkbox, divider, group-by. Keep it in sync with model-analytics.js. */
+.ac-model-analytics-more { display: inline-grid; width: 28px; height: 28px; place-items: center; padding: 0; border: var(--border-width) solid var(--border); border-radius: 7px; background: var(--bg-0); color: var(--fg-2); cursor: pointer; }
+.ac-model-analytics-more svg { width: 15px; height: 15px; fill: currentColor; }
+.ac-model-analytics-more:hover { border-color: var(--accent); color: var(--accent); }
+.ac-model-analytics-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ac-model-analytics-menu-group { display: grid; gap: 7px; }
+.ac-model-analytics-menu-label { color: var(--fg-3); font-size: 11px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.ac-model-analytics-sep { height: 0; margin: 11px 0; border: 0; border-top: var(--border-width) solid var(--border); }
+/* The popover's generic `label` rule lays out a grid; a checkbox needs one row. */
+.ac-model-analytics-popover .ac-model-analytics-check { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 650; }
+.ac-model-analytics-check input { margin: 0; }
+/* Sessions mode replaces the legend with a count, not a list of 155 names. */
+.ac-model-analytics-legend-count { display: block; color: var(--fg-2); font-size: 12px; font-weight: 650; }
+/* Keep the trend path available for hover-node geometry, but hide its bar-top
+   overlay. Opacity preserves SVG length measurements used by the glowing node. */
+.ac-model-analytics-trend { opacity: 0; fill: none; stroke-width: 2; stroke-dasharray: 6 4; stroke-linecap: round; pointer-events: none; }
+/* The sessions tooltip is deliberately capped, so say so instead of looking cut off. */
+.ac-model-analytics-tip-note { margin-top: 4px; padding-top: 4px; border-top: var(--border-width) solid var(--border); color: var(--fg-3); font-size: 11px; font-weight: 650; }
+.ac-model-analytics-empty { margin: 13px 0; font-size: 12px; color: var(--fg-3); }
+/* Dashboard-style chart interaction layer: the overlay stays inside the SVG plot area. */
+.ac-model-analytics-plot { position: relative; }
+.ac-model-analytics-hover-layer { position: absolute; z-index: 2; cursor: crosshair; touch-action: none; }
+.ac-model-analytics-cross { position: absolute; top: 0; width: 1px; background: var(--accent); opacity: .8; pointer-events: none; }
+/* The locator's intersection with the curve: a glowing node that glides along the
+   curve. It is placed by evaluating the same spline the trend path is drawn from, so
+   it sits exactly on the line wherever the pointer goes. Its colour comes from the
+   line it is riding (--node-color), so node and curve read as one thing. */
+.ac-model-analytics-node { position: absolute; z-index: 3; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: radial-gradient(circle at 50% 50%, var(--node-color, var(--accent)) 0 52%, transparent 96%); box-shadow: 0 0 4px var(--node-color, var(--accent)), 0 0 10px 1px var(--node-color, var(--accent)); pointer-events: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ac-model-analytics-node { animation: ac-model-analytics-node-glow 2.4s ease-in-out infinite; }
+}
+/* The charge: a lit streak that travels the curve with the node, in that line's own
+   colour. Two stacked strokes — a wide soft halo behind a narrow core — give the glow
+   without an SVG filter, which would need re-rasterising on every pointer move. It
+   stays parked as a zero-length dash until the node picks a line to ride. */
+.ac-model-analytics-charge-glow,
+.ac-model-analytics-charge { fill: none; stroke: currentColor; stroke-dasharray: 0 100000; stroke-linecap: round; pointer-events: none; }
+.ac-model-analytics-charge-glow { stroke-width: 9; opacity: .18; }
+.ac-model-analytics-charge { stroke-width: 3.5; opacity: .9; }
+.ac-model-analytics-zoombox { position: absolute; top: 0; bottom: 0; border: 1px solid var(--accent); background: rgba(var(--brand-rgb), .14); pointer-events: none; }
+
+/* TIP-PINNED-PANEL: the info panel is pinned to the plot's top-left corner and stays
+   put, instead of chasing the pointer. A panel this tall can never reliably dodge a
+   trend curve that spans most of a short plot, so it stops trying: it parks in the
+   corner and is always readable. `pointer-events: none` keeps the chart beneath it
+   fully interactive, so hovering through the panel still focuses the days. */
+.ac-model-analytics-tip { position: absolute; z-index: 3; top: 8px; left: 8px; min-width: 168px; max-width: min(250px, calc(50% - 16px)); padding: 9px 10px; border: var(--border-width) solid var(--border-strong); border-radius: 8px; background: var(--bg-1); box-shadow: 0 8px 20px rgba(0, 0, 0, .18); color: var(--fg-1); font-size: 11px; line-height: 1.35; pointer-events: none; }
+.ac-model-analytics-tip-date { margin-bottom: 5px; color: var(--fg-2); font-weight: 700; }
+.ac-model-analytics-tip-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.ac-model-analytics-tip-row i { width: 8px; height: 8px; border-radius: 50%; }
+.ac-model-analytics-tip-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-model-analytics-tip-row b { font-variant-numeric: tabular-nums; }
+/* The Total row has no colour swatch, so its label starts in the label column. */
+.ac-model-analytics-tip-row.ac-model-analytics-tip-total { margin-top: 4px; padding-top: 4px; border-top: var(--border-width) solid var(--border); color: var(--fg-1); font-weight: 700; }
+/* Reset-range sits in the header to the LEFT of the chart menu and is only shown
+   while a range is selected, so the header stays quiet otherwise. */
+.ac-model-analytics-reset-range { display: inline-grid; width: 28px; height: 28px; place-items: center; padding: 0; border: var(--border-width) solid var(--border); border-radius: 7px; background: var(--bg-0); color: var(--accent); cursor: pointer; }
+/* `display: inline-grid` above would defeat the hidden attribute without this. */
+.ac-model-analytics-reset-range[hidden] { display: none; }
+/* Range zoom is confined to the band under the plot, so a drag inside the graph
+   can never reshape the axis. It sits above the date labels it covers. */
+.ac-model-analytics-axis-band { position: absolute; z-index: 3; cursor: ew-resize; touch-action: none; }
+.ac-model-analytics-reset-range svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ac-model-analytics-reset-range:hover { border-color: var(--accent); background: rgba(var(--brand-rgb), .09); }
+.ac-model-analytics-reset-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 650px) {
+  .ac-model-analytics { padding: 12px; }
+  /* The header holds only the kebab now, so keep it hard against the right edge. */
+  .ac-model-analytics-controls { width: 100%; justify-content: flex-end; }
+  .ac-model-analytics-svg { min-height: 160px; }
+  /* Keep the pinned hover panel from obscuring the shorter phone plot. */
+  .ac-model-analytics-tip { min-width: 148px; padding: 5px 6px; font-size: 10px; line-height: 1.25; }
+  .ac-model-analytics-tip-date { margin-bottom: 3px; }
+  .ac-model-analytics-tip-row { grid-template-columns: 6px minmax(0, 1fr) auto; gap: 4px; }
+  .ac-model-analytics-tip-row i { width: 6px; height: 6px; }
+  .ac-model-analytics-tip-row.ac-model-analytics-tip-total { margin-top: 3px; padding-top: 3px; }
+  .ac-model-analytics-tip-note { margin-top: 3px; padding-top: 3px; font-size: 10px; }
+}

@@ -1,0 +1,97 @@
+/* The save-status overlay drawn on top of a control (_markSaving / _flashSaveCheck in
+   dom-utils.js): spinner while saving, then a check or a warning. Used by every config row. */
+
+/* ── Unified save-status indicator — OVERLAY ON TOP of the control ────────────
+   (SISTER-PANEL: AGENT-ABILITY-TABLE) ONE save-status language for every config
+   control in the ability tree. The indicator is centered DIRECTLY OVER the
+   control it confirms (toggle / field / dropdown / permission segment), not in a
+   slot beside it: a spinner while the save is in flight, then a green check ✓
+   once the backend confirms, or an orange warning triangle ⚠ on failure (the
+   caller then reverts the control to its prior value). Driven by `_markSaving` /
+   `_flashSaveCheck` in dom-utils.js, which make the control's container
+   position:relative and drop this overlay into it. Colours come from the
+   design-system palette so it's theme-safe and matches the `.agents-autosave-check`
+   tick the model + appearance tables use. */
+.ac-save-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 6;
+}
+.ac-save-overlay.show { opacity: 1; }
+/* In-flight: a dimming backdrop (theme-aware) so the spinner reads over the
+   control underneath. */
+.ac-save-overlay:has(.agents-spinner) {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--bg-elev) 72%, transparent);
+}
+.ac-save-overlay.ok  { color: var(--success); background: var(--success-soft); }
+.ac-save-overlay.err { color: var(--warning); background: var(--warning-soft); }
+/* Over a toggle the wrap is square, so the overlay's `border-radius: inherit`
+   comes out square and its corners poke past the pill-shaped switch underneath.
+   Give it the toggle's own pill radius (matching `.conn-toggle-track`) so the
+   green/orange confirm box hugs the switch shape with no square corners showing. */
+.ac-ability-toggle-wrap .ac-save-overlay { border-radius: 10px; }
+/* Tiny 1–2 word warning popup that floats just above the ⚠ triangle on a failed
+   save, so the failure is unmissable even at a glance. Anchored to the overlay's
+   centre; small entrance lift + fade. (SISTER-PANEL: AGENT-ABILITY-TABLE.) */
+.ac-save-pop {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 50%;
+  transform: translate(-50%, 4px);
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: calc(var(--radius-sm, 6px) * 0.8);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--warning);
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--warning);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 7;
+}
+.ac-save-pop.show { opacity: 1; transform: translate(-50%, 0); }
+/* Little downward-pointing nub. */
+.ac-save-pop::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--warning);
+}
+/* In-flight control spinner — mirrors agents.css `.agents-spinner` but lives HERE
+   in the globally-loaded sheet so the ability-tree's saving spinners animate on
+   EVERY page, including the admin Agent Settings page (which doesn't load
+   agents.css). (SISTER-PANEL: AGENT-ABILITY-TABLE — toggle/eye/permission/config
+   saving feedback.) The `.ac-save-overlay` selector covers the overlay spinner on
+   controls (e.g. the toggle wrap) that aren't inside `.ac-config-control`. */
+.ac-ability-status .agents-spinner,
+.ac-config-control .agents-spinner,
+.ac-save-overlay .agents-spinner,
+.agents-eye-toggle .agents-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: agents-spin 0.6s linear infinite;
+  vertical-align: middle;
+}
+@keyframes agents-spin { to { transform: rotate(360deg); } }

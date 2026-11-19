@@ -1,0 +1,188 @@
+/* The band above the chat composer: stop and continue buttons, the above-pill row, the
+   old action row (kept for the embed widget) and the preview bar. */
+
+/* ── Stop + Continue action buttons ─────────────────────────────────────────
+   MOVED: Stop/Continue now live INSIDE the chat pill (.chat-pill-controls) as
+   small icon-only circle buttons — red octagon (stop) and brand play triangle
+   (continue). Only one is visible at a time: stop while processing, continue
+   while idle. Both hidden when no agent is selected.
+   The old .chat-action-row and .chat-stop-btn / .chat-continue-btn styles are
+   kept below for the embed chat widget, which still uses the above-pill layout. */
+
+/* CHAT-ABOVE-PILL: the band directly above the pill that holds the
+   activity bar (the "Thinking…"/tool-call chip + chevron) and the
+   scroll-to-bottom button. #chat-activity is absolutely positioned to
+   fill the band from the left; the scroll button sits on the right edge.
+   Capped to the pill width and centred per CHAT-PILL-ALIGN. pointer-events:none
+   lets the empty band pass clicks through to the messages behind; the
+   bar and panel each re-enable their own.
+   NOTE: Stop/Continue buttons have moved INSIDE the chat pill itself
+   (.chat-pill-controls) — see the block above for those styles. */
+.chat-above-pill {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 2px;
+    width: var(--chat-pill-current-width, var(--chat-pill-width, 500px));
+    max-width: 100%;
+    margin-inline: auto;
+    margin-bottom: 2px;
+    z-index: 6;
+    pointer-events: none;
+    /* Smooth transition for idle ↔ active footer mode switches */
+    transition: opacity 0.3s ease, max-height 0.3s ease, margin 0.3s ease;
+    overflow: hidden;
+    /* Room for up to five 28px rows (see above_pill.rows in chat_ui.json).
+       The expanded tool-call panel overrides this via #chat-above-pill.expanded. */
+    max-height: 200px;
+    opacity: 1;
+  }
+  /* The expanded tool-call panel (up to 240px) must never be clipped by the
+     row cap — open it fully, mirroring the idle-mode exception below. */
+  #chat-above-pill.expanded {
+    max-height: none;
+    overflow: visible;
+  }
+  .chat-above-pill.idle-collapsed {
+    max-height: 0;
+    opacity: 0;
+    margin: 0;
+    pointer-events: none;
+  }
+  /* Keep the above-pill visible when it contains the activity bar */
+  .chat-above-pill.idle-collapsed:has(#chat-activity-bar) {
+    max-height: none;
+    opacity: 1;
+    pointer-events: none;
+  }
+  /* Multi-row plan: in idle mode only the activity row stays — any other
+     rows (extra chips) collapse so the idle footer stays minimal. */
+  .chat-above-pill.idle-collapsed .chat-header-row:not(:has(#chat-activity-bar)) {
+    display: none;
+  }
+  .chat-above-pill.idle-collapsed:has(#chat-activity-bar) #chat-activity-bar,
+  .chat-above-pill.idle-collapsed:has(#chat-activity-bar) #chat-activity-panel {
+    pointer-events: auto;
+  }
+/* Hide static controls not yet placed in a row by the builder (same pattern
+   as #chat-header > [data-header-control]). Once reparented into a row they
+   are no longer direct children, so they render normally. */
+.chat-above-pill > .chat-header-row { align-self: stretch; }
+.chat-above-pill > [data-header-control] { display: none !important; }
+/* Hidden when no agent is selected (toggled by chat.js). */
+.chat-pill-stop,
+.chat-pill-continue {
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: var(--fg-3);
+    transition: color 0.15s, background 0.15s, opacity 0.15s;
+    flex-shrink: 0;
+  }
+.chat-pill-stop {
+    color: var(--danger);
+  }
+.chat-pill-stop:hover {
+    background: rgba(var(--danger-rgb), 0.12);
+    color: var(--danger);
+  }
+.chat-pill-continue {
+    color: var(--fg-3);
+  }
+.chat-pill-continue:hover {
+    background: rgba(var(--brand-rgb), 0.08);
+    color: var(--brand);
+  }
+/* Visible state: remove hidden attr so the grid cell occupies space */
+.chat-pill-stop:not([hidden]),
+.chat-pill-continue:not([hidden]) {
+    display: inline-flex;
+  }
+
+/* ── Old above-pill action row buttons — keep for embed widget compatibility ── */
+.chat-continue-btn,
+.chat-stop-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 5px 16px;
+    height: 28px;
+    border-radius: 14px;
+    cursor: pointer;
+    line-height: 1.5;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: inherit;
+    opacity: 1;
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent));
+    border: var(--border-width) solid color-mix(in oklab, currentColor 12%, transparent);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    transition: background 0.15s, border-color 0.15s, opacity 0.2s, box-shadow 0.2s;
+  }
+body.light-mode .chat-continue-btn,
+body.light-mode .chat-stop-btn {
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 85%, transparent));
+  }
+.chat-continue-btn.active,
+.chat-stop-btn.active {
+    opacity: 1;
+    box-shadow: 0 0 0 1px color-mix(in oklab, currentColor 50%, transparent),
+                0 0 10px -1px color-mix(in oklab, currentColor 60%, transparent);
+  }
+.chat-continue-btn {
+    color: var(--brand);
+  }
+.chat-continue-btn:hover {
+    color: color-mix(in srgb, var(--brand) 45%, black);
+    border-color: rgba(var(--brand-rgb), 0.45);
+  }
+.chat-continue-btn:active {
+    color: color-mix(in srgb, var(--brand) 30%, black);
+    border-color: rgba(var(--brand-rgb), 0.6);
+  }
+body.light-mode .chat-continue-btn {
+    color: var(--brand);
+  }
+body.light-mode .chat-continue-btn:hover {
+    color: color-mix(in srgb, var(--brand) 30%, black);
+    border-color: rgba(var(--brand-rgb), 0.45);
+  }
+.chat-stop-btn {
+    color: var(--danger);
+  }
+.chat-stop-btn:hover {
+    border-color: rgba(var(--danger-rgb), 0.38);
+  }
+.chat-stop-btn:active {
+    border-color: rgba(var(--danger-rgb), 0.56);
+  }
+
+/* ── Preview bar (absolute, sits above the pill, overlaps action row at higher z) ── */
+  #chat-preview-bar {
+    display: none;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 4px 2px;
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    /* Pin the bar's bottom to the pill's top edge — extends upward into the
+       action-row / activity zone. Higher z-index makes it visually overlay them. */
+    bottom: 100%;
+    z-index: 7;
+    pointer-events: none;
+  }
+#chat-preview-bar:not(:empty) {
+    display: flex;
+  }

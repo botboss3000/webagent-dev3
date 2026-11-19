@@ -1,0 +1,291 @@
+/* Chat turns: the turn anchor (user message truncation) and the sections inside an agent
+   turn bubble. */
+
+/* TURN-ANCHOR: chat_ui.json → chat_common.user_message_truncation.max_lines
+   keeps long prompts from consuming the viewport; the adjacent button reveals
+   the complete preserved DOM content. */
+.chat-bubble.user.user-message-clamped > .bubble-body,
+.chat-bubble.user.user-message-clamped > .turn-section > .bubble-body {
+  max-height: calc(var(--user-message-max-lines, 3) * 1.45em);
+  overflow: hidden;
+  position: relative;
+}
+.chat-bubble.user.user-message-expanded > .bubble-body,
+.chat-bubble.user.user-message-expanded > .turn-section > .bubble-body { max-height: none; }
+.user-message-expand {
+  align-self: flex-end;
+  margin-top: 4px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.user-message-expand:hover,
+.user-message-expand:focus-visible { text-decoration: underline; outline: none; }
+.chat-bubble.agent {
+    background: var(--bg-elev);
+    border: var(--border-width) solid var(--border);
+    color: var(--fg-2);
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+  }
+.chat-bubble.agent.streaming {
+  border-color: rgba(var(--brand-rgb), 0.31);
+  display: flex;
+  flex-direction: column;
+}
+/* Premium model bubble — fire-like glow when the agent switches to a
+   high-effort model (set by the two-phase protocol). A warm ember pulse
+   that's distinct from the cool accent glow of the thinking indicator,
+   so the user sees a live visual cue the moment premium kicks in. */
+.chat-bubble.agent.premium {
+  animation: premiumGlow 2s ease-in-out infinite;
+  border-color: rgba(var(--brand-rgb), 0.45);
+}
+@keyframes premiumGlow {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px rgba(var(--brand-rgb), 0.25),
+      0 0 8px -2px rgba(var(--brand-rgb), 0.2),
+      0 0 16px -4px rgba(var(--brand-rgb), 0.08);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(var(--brand-rgb), 0.45),
+      0 0 14px -1px rgba(var(--brand-rgb), 0.35),
+      0 0 28px -4px rgba(var(--brand-rgb), 0.18);
+  }
+}
+/* In light mode the glow is punchier — deeper shadows, more saturated. */
+body.light-mode .chat-bubble.agent.premium {
+  animation: premiumGlowLight 2s ease-in-out infinite;
+}
+@keyframes premiumGlowLight {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px rgba(var(--brand-rgb), 0.35),
+      0 0 10px -2px rgba(var(--brand-rgb), 0.25),
+      0 0 22px -6px rgba(var(--brand-rgb), 0.12);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(var(--brand-rgb), 0.55),
+      0 0 18px -1px rgba(var(--brand-rgb), 0.4),
+      0 0 36px -6px rgba(var(--brand-rgb), 0.22);
+  }
+}
+.turn-gutter-btn[data-speaking="true"] { color: var(--brand); }
+/* Floating pause/resume control for read-aloud: a circular button that floats
+   in the ~20% right band of the viewport, OUTSIDE the bubble (the bubble
+   occupies ~80% width) — horizontally just right of the bubble's right edge
+   where the gutter chevron buttons sit, vertically centered on the paragraph
+   currently being read, dropping down as the highlight advances. Toggles
+   pause ↔ play; removed when playback stops or the highlight moves on.
+   position:fixed; JS re-anchors it on scroll/resize (chat-bubble-actions.js
+   _ttsRepositionPauseBtn). */
+.tts-pause-btn {
+  position: fixed;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(var(--brand-rgb), 0.35);
+  border-radius: 50%;
+  background: rgba(var(--brand-rgb), 0.14);
+  color: inherit;
+  box-shadow: 0 1px 4px rgba(var(--ink-rgb), 0.25);
+  cursor: pointer;
+}
+.tts-pause-btn:hover {
+  background: rgba(var(--brand-rgb), 0.28);
+}
+.tts-pause-btn:active {
+  transform: scale(0.94);
+}
+.tts-pause-btn:focus-visible {
+  outline: 2px solid rgba(var(--brand-rgb), 0.5);
+  outline-offset: 1px;
+}
+.tts-pause-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.chat-bubble.error {
+    background: var(--error-bubble-bg);
+    border: 1px solid var(--error-bubble-border);
+    color: var(--danger);
+    align-self: flex-start;
+  }
+.chat-bubble .label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-3);
+    display: block;
+    margin-bottom: 5px;
+  }
+/* Sender headings stay hidden for live, reloaded, and virtualized messages. */
+.chat-bubble.user > .label,
+.chat-bubble.agent > .label {
+  display: none;
+}
+/* Collapsed bubble — hides the message body but keeps the action footer visible. */
+.chat-bubble.collapsed {
+  padding-bottom: 0;
+}
+.chat-bubble.collapsed > :not(.bubble-actions):not(.label):not(.turn-gutter):not(.chat-file-attachment),
+.chat-bubble.collapsed > .bubble-body,
+.chat-bubble.collapsed > .md-body,
+.chat-bubble.collapsed > .turn-section {
+  display: none;
+}
+.chat-bubble.collapsed > .label {
+  margin-bottom: 0;
+}
+/* When collapsed, force one gutter visible so actions are still reachable */
+.chat-bubble.collapsed .turn-gutter {
+  display: flex !important;
+  opacity: 1;
+  margin-top: 0;
+  border-top: none;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.chat-bubble.collapsed .turn-gutter[hidden] {
+  display: flex !important;
+}
+
+/* ── Turn sections — a single .chat-bubble.agent contains multiple sections ──
+   (LLM text blocks, tool-call blocks) that together form one agent turn.
+   Click an LLM section to reveal an inline gutter with time, model, and
+   action buttons between it and the next section. */
+.turn-section {
+  /* each section flows naturally inside the bubble */
+}
+.turn-section.llm-section {
+  cursor: text; /* text is selectable; gutter reveal still works on click */
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin: -4px -6px; /* pull into the bubble padding so click-area covers edge-to-edge */
+  transition: background 0.12s ease;
+}
+.turn-section.llm-section:hover {
+  background: rgba(var(--ink-rgb), 0.03);
+}
+.turn-section + .turn-section {
+  margin-top: 8px;
+}
+/* Gutter — the strip between sections that shows time/model/actions.
+   position:relative + z-index lifts the strip (and its buttons) above any
+   following sibling — e.g. a grouped bubble pulled up by margin-top:-8px — so
+   footer clicks are never swallowed by the next bubble. */
+.turn-gutter {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0 2px;
+  margin: 4px 0 6px;
+  opacity: 0.65;
+  transition: opacity 0.15s ease;
+  user-select: none;
+}
+.turn-gutter:not([hidden]) {
+  /* when visible, normal flex flow */
+}
+.turn-gutter[hidden] {
+  display: none !important;
+}
+.turn-gutter:hover {
+  opacity: 1;
+}
+/* Resting gutters occupy no layout space. Bubble clicks reveal the actions;
+   hover alone must not insert a row or move the transcript under the pointer. */
+.chat-bubble:is(.user, .agent) .turn-gutter {
+  display: none;
+}
+.chat-bubble:is(.user, .agent).gutters-open .turn-gutter:not([hidden]) {
+  display: flex;
+  opacity: 1;
+  pointer-events: auto;
+}
+.turn-gutter-time {
+  font-size: 11px;
+  color: var(--fg-3);
+  opacity: 0.7;
+  line-height: 1;
+  align-self: center;
+  /* The timestamp stays left; this auto-margin right-aligns everything else
+     (model tag, action buttons) in the gutter. */
+  margin-right: auto;
+  pointer-events: none;
+}
+.turn-gutter-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 2px 5px;
+  cursor: pointer;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  font-size: 13px;
+}
+.turn-gutter-btn:hover {
+  background: rgba(var(--ink-rgb), 0.06);
+  border-color: rgba(var(--ink-rgb), 0.12);
+}
+.turn-gutter .tier-locked,
+.turn-gutter .tier-locked:hover {
+  cursor: not-allowed;
+  opacity: 0.42;
+  color: inherit;
+  background: transparent;
+  border-color: transparent;
+}
+.chat-pill .tier-locked,
+.chat-pill .tier-locked:hover {
+  cursor: not-allowed;
+  opacity: 0.42;
+  background: transparent;
+}
+.chat-control-lock-popover {
+  position: fixed;
+  z-index: 2147482000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  box-shadow: 0 10px 28px rgba(var(--shadow-rgb), 0.24);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.chat-control-lock-popover-message {
+  min-width: 0;
+}
+.chat-control-lock-popover-line + .chat-control-lock-popover-line {
+  margin-top: 3px;
+}
+.chat-control-lock-popover-cta {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: #fff;
+  color: #000;
+  cursor: pointer;
+  font: inherit;
+}

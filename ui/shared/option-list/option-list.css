@@ -275,3 +275,21 @@ body.light-mode .ac-ability-body {
 /* Off = neutral gray. Discoverable = normal outline + green circle. Visible = green outline + green circle. */
 .ac-ability-row[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track { background: var(--success-soft); border-color: var(--success); }
 .ac-ability-row[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after { background: var(--success); }
+
+/* ── Chevron column slot ─────────────────────────────────────────────────────
+   Every .ac-list row has a 13px-wide slot before the icon (matching the SVG
+   chevron width). The margin-right: -10px cancels the flex column-gap so the
+   chevron sits flush against the icon with zero extra padding. Rows WITHOUT a
+   chevron keep the empty slot (invisible), so icons stay aligned. The real
+   chevron element replaces this pseudo when present. */
+.ac-list .ac-ability-row:not(.ac-saved-row)::before {
+  content: '';
+  display: flex;
+  align-items: center;
+  width: 13px;
+  min-width: 13px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding-top: 3px;   /* centres 13px SVG with the 18px icon below */
+  margin-right: -10px;
+}

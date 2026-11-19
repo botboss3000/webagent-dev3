@@ -1,0 +1,236 @@
+/* Rendered Markdown inside agent bubbles (message-view.js). */
+
+/* ── Rendered Markdown inside agent bubbles ───────────────────────────────
+   Agent replies render as Markdown into a `.md-body` (see
+   ui/chat/js/chat-bubble.js _renderMarkdownBody). The bubble keeps
+   its own bg/text colour; these rules
+   only lay out the block elements. Theme-safe by design: structural surfaces
+   (code, tables, rules) use design-system tokens, while text inherits the
+   bubble colour, so dark + light both work without per-theme overrides. */
+.chat-bubble.md { white-space: normal; }
+/* Fenced code block */
+.md-code-block {
+  position: relative;
+  margin: 0 0 8px;
+}
+.md-code-block pre {
+  margin: 0;
+  padding: 10px 48px 10px 12px;
+  background: var(--bg-0);
+  border: var(--border-width) solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.md-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--fg-3);
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.md-code-copy:hover,
+.md-code-copy:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  outline: none;
+}
+.md-code-copy.is-copied { color: var(--success); }
+.md-code-copy.is-failed { color: var(--danger); }
+.md-code-copy svg { width: 15px; height: 15px; }
+
+/* chat-activity — canonical source: ui/chat/elements/activity/index.css */
+/* The static activity element is a fallback until chat_ui.json places it
+   into a configured row. Never let the unplaced fallback render at the
+   composer edge during asynchronous control hydration. */
+#chat-above-pill > #chat-activity-bar,
+#chat-above-pill > #chat-activity-panel,
+#chat-above-pill > .chat-activity-wrapper {
+  display: none !important;
+}
+#chat-activity-bar {
+    opacity: 0; transform: translateY(3px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+#chat-above-pill.visible #chat-activity-bar,
+#chat-above-pill.resting #chat-activity-bar {
+    opacity: 1; transform: translateY(0);
+  }
+.chat-header-zone > #chat-activity-bar {
+    position: relative !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    background: none !important;
+    border: none !important;
+    padding: 2px 10px !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+.chat-activity-bar {
+    pointer-events: auto; max-width: 100%;
+    display: inline-flex; align-items: center; gap: 6px; margin: 0;
+    padding: 5px 16px; border-radius: 14px;
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent));
+    border: var(--border-width) solid color-mix(in oklab, currentColor 12%, transparent);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+            backdrop-filter: blur(12px) saturate(140%);
+    color: inherit; font: inherit; font-size: 13px; line-height: 1.5;
+    text-align: left; user-select: none; -webkit-user-select: none;
+    cursor: default; transition: background 0.15s ease, border-color 0.15s ease;
+  }
+.chat-activity-bar.has-tools { cursor: pointer; }
+.chat-activity-bar.has-tools:hover {
+    background: color-mix(in oklab, currentColor 11%, transparent);
+    border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  }
+.chat-activity-bar:not(.has-tools):has(.chat-activity-text:empty) { display: none; }
+.chat-activity-text { font-size: 12px; font-weight: 500; color: var(--fg-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.01em; }
+.chat-activity-chevron { flex: 0 0 auto; font-size: 12px; line-height: 1; color: var(--fg-3); transition: transform 0.18s ease; display: none; }
+.chat-activity-bar.has-tools .chat-activity-chevron { display: inline-block; }
+#chat-above-pill.expanded .chat-activity-chevron { transform: rotate(90deg); }
+.chat-pill.thinking .chat-activity-bar { animation: chatBubbleGlow 1.8s ease-in-out infinite; }
+.chat-activity-wrapper { display: contents; }
+.chat-activity-panel {
+    align-self: stretch;
+    pointer-events: auto; width: 100%; box-sizing: border-box; max-height: 240px; overflow-y: auto;
+    /* Cap the gesture at the panel's edge — don't chain the swipe into the
+       chat transcript scroller when the panel hits top/bottom. */
+    overscroll-behavior: contain;
+    padding: 4px; border-radius: 11px;
+    background: color-mix(in oklab, var(--bg-elev) 96%, transparent);
+    border: var(--border-width) solid var(--border);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    box-shadow: 0 8px 24px -12px rgba(var(--shadow-rgb), 0.35);
+    display: flex; flex-direction: column; gap: 2px;
+  }
+.chat-activity-panel[hidden] { display: none; }
+.chat-element-full-view-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(var(--shadow-rgb), 0.48);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.chat-element-full-view {
+  display: flex;
+  flex-direction: column;
+  width: min(820px, calc(100vw - 32px));
+  max-height: min(85vh, 900px);
+  overflow: hidden;
+  border: var(--border-width) solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-elev);
+  color: var(--fg-1);
+  box-shadow: var(--shadow-float);
+}
+.chat-element-full-view-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 10px 12px 9px 16px;
+  border-bottom: var(--border-width) solid var(--border);
+}
+.chat-element-full-view-head h2 {
+  flex: 1 1 auto;
+  margin: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+}
+.chat-element-full-view-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.chat-element-full-view-close:hover,
+.chat-element-full-view-close:focus-visible {
+  background: color-mix(in srgb, var(--fg-1) 9%, transparent);
+  color: var(--fg-1);
+  outline: none;
+}
+.chat-element-full-view-message {
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 20px 22px;
+  border-radius: 0;
+  color: var(--fg-2);
+}
+/* Bring the activity line closer to the preceding bubble's gutter without
+   changing the transcript gap between unrelated messages. */
+.chat-bubble:is(.user, .agent):not(.activity-group) + .chat-bubble.agent.activity-group {
+  margin-top: var(--chat-activity-offset-px, -8px);
+}
+.chat-bubble.agent.activity-group {
+  /* The run shell sits directly on the transcript backdrop. Its update,
+     response, and tool rows retain their own nested surfaces below. */
+  --chat-bubble-bg: transparent;
+  /* JS updates this only after a shorter collapsed-preview replacement. Because
+     it is bottom padding on the group, it follows the live progress note. */
+  --activity-preview-tail-reserve: 0px;
+  padding: 0 0 var(--activity-preview-tail-reserve);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  width: fit-content;
+  box-sizing: border-box;
+}
+.ca-activity-entry-footer {
+  margin: 6px 0 0;
+  padding: 2px 0 0;
+}
+/* Deleted section within a merged agent turn — strike through just that section */
+.turn-section.llm-section.deleted {
+  text-decoration: line-through;
+  text-decoration-color: var(--danger);
+  opacity: 0.5;
+  filter: grayscale(0.5);
+}
+.turn-section.llm-section.deleted .chat-bubble-text,
+.turn-section.llm-section.deleted .md-body {
+  pointer-events: none;
+}
+/* Section-deleted gutter: hide original buttons, show restore/perm-delete */
+.turn-gutter.deleted > .turn-gutter-time,
+.turn-gutter.deleted > .turn-gutter-model,
+.turn-gutter.deleted > .turn-gutter-btn {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .chat-pill.thinking .chat-activity-bar {
+      animation: none;
+      box-shadow: 0 0 0 1px var(--accent-mid), 0 0 10px -2px var(--accent-mid);
+    }
+    .chat-pill-stop:not([hidden]),
+    .chat-pill-continue:not([hidden]) {
+      animation: none;
+    }
+}
