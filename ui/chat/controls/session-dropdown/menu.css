@@ -1,0 +1,339 @@
+/* Chat styles moved out of ui/shared/css/app1.css, in their original order. Linked from
+   index.html right after app1.css so the cascade order is unchanged. */
+
+/* ── Session / Agent dropdown (custom) ───────────────────────── */
+/* When the dropdown is NOT yet loaded, show a shimmer on the label
+   and disable the trigger so the user can't open an empty menu. */
+.session-dropdown:not([data-loaded="true"]) #session-dropdown-label {
+  animation: dropdown-label-shimmer 1.2s ease-in-out infinite;
+  color: var(--fg-3);
+}
+.session-dropdown[data-offline="true"] .session-dropdown-trigger {
+  pointer-events: none;
+  opacity: 0.5;
+  cursor: default;
+}
+/* The session-dropdown trigger is a simple inline flex row inside the chip:
+   icon + title (left), status + kebab + delete (right). No table-row styling —
+   the glass-chip wrapper provides the pill background/border/radius. */
+#chat-header .session-dropdown-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1 1 auto;
+    min-width: 0;
+    cursor: pointer;
+    font-size: 18px;
+    height: 100%;
+    min-height: 0;
+    box-sizing: border-box;
+  }
+/* Kebab / delete buttons inside the trigger — same look as menu rows but
+   no extra hover background (the whole row is clickable). */
+#session-dropdown-trigger .session-row-kebab,
+#session-dropdown-trigger .session-row-delete {
+    position: relative;
+    z-index: 1;  /* clickable above the row's own click target */
+  }
+/* Icons inside the trigger and row buttons must not swallow clicks (lucide SVG quirk). */
+.session-row-kebab > *,
+.session-row-delete > * {
+    pointer-events: none;
+  }
+.session-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    /* Wider than the trigger chip so session names are readable.
+       On narrow viewports it overflows right, which is fine. */
+    width: 100%;
+    min-width: 420px;
+    max-width: none;
+    max-height: min(480px, 60vh);
+    overflow-y: auto;
+    background: var(--bg-elev);
+    border: var(--border-width) solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(var(--shadow-rgb),0.4);
+    z-index: 1001;
+    padding: 4px;
+    box-sizing: border-box;
+    text-align: left;           /* prevent center inheritance from header zone */
+  }
+@media (max-width: 514px) {
+    .session-dropdown-menu:not(#session-dropdown-menu) {
+      position: fixed;
+      left: 0;
+      right: 0;
+      width: auto;
+      top: 56px;
+      min-width: 0;
+      max-width: none;
+      max-height: calc(100vh - 64px);
+      border-radius: 0;
+      border-left: none;
+      border-right: none;
+    }
+}
+body.light-mode .session-dropdown-menu {
+    background: var(--bg-0);
+    border-color: var(--border);
+    box-shadow: 0 8px 24px rgba(var(--shadow-rgb),0.1);
+  }
+/* Thin scrollbar for the session dropdown (Chrome/Safari) */
+.session-dropdown-menu::-webkit-scrollbar {
+    width: 4px;
+}
+.session-dropdown-menu::-webkit-scrollbar-track {
+    background: transparent;
+}
+.session-dropdown-menu::-webkit-scrollbar-thumb {
+    background: var(--bg-tint);
+    border-radius: 2px;
+}
+body.light-mode .session-dropdown-menu::-webkit-scrollbar-thumb {
+    background: var(--bg-tint);
+}
+/* Session list disclosure — mirrors the measured-height + staggered-row
+   expansion used by the "N tool calls" disclosure inside chat bubbles. */
+#session-dropdown-menu {
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(-4px);
+    transform-origin: top center;
+    will-change: max-height, transform, opacity;
+    transition: max-height .32s ease, opacity .2s ease, transform .2s ease;
+}
+#session-dropdown-menu.flip-up {
+    transform: translateY(4px);
+    transform-origin: bottom center;
+}
+#session-dropdown-menu[data-state] { display: block; }
+#session-dropdown-menu[data-state="open"] {
+    max-height: var(--session-menu-open-height, min(480px, 60vh));
+    opacity: 1;
+    transform: translateY(0);
+    overflow-y: auto;
+    transition: max-height .38s ease, opacity .2s ease, transform .2s ease;
+    padding-bottom: 0;
+}
+#session-dropdown-menu[data-state="open"].opening { overflow: hidden; }
+#session-dropdown-menu[data-state="closing"] {
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+    overflow: hidden;
+    transition-duration: .32s, .2s, .2s;
+}
+
+/* ── Session dropdown merged panel ──────────────────────────────────────
+  .chat-header-zone > [data-header-control="session_dropdown"].open {
+      background: var(--bg-elev) !important;
+      border-color: var(--border) !important;
+      /* The title row and list share one uninterrupted surface. */
+      border-bottom-color: transparent !important;
+      border-radius: var(--session-selector-radius, 14px) var(--session-selector-radius, 14px) 0 0 !important;
+      transition: none !important;
+  }
+  .chat-header-zone > [data-header-control="session_dropdown"].open:hover {
+      border-color: var(--border) !important;
+  }
+  /* Menu flipped above the chip: the chip is the panel's bottom row. */
+  .chat-header-zone > [data-header-control="session_dropdown"].open.flip-up {
+      border-radius: 0 0 var(--session-selector-radius, 14px) var(--session-selector-radius, 14px) !important;
+  }
+  #session-dropdown-menu[data-state="opening"],
+  #session-dropdown-menu[data-state="open"] {
+      border-radius: 0 0 var(--session-selector-radius, 14px) var(--session-selector-radius, 14px);
+      border-top: none;
+  }
+  #session-dropdown-menu[data-state="opening"].flip-up,
+  #session-dropdown-menu[data-state="open"].flip-up {
+      border-radius: var(--session-selector-radius, 14px) var(--session-selector-radius, 14px) 0 0;
+      border-top: var(--border-width) solid var(--border);
+      border-bottom: none;
+  }
+#session-dropdown-menu[data-state="open"]:not(.opening):not(.closing) > * {
+    opacity: 1;
+    transform: none;
+}
+.session-dropdown-loading-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 6px 8px;
+    box-sizing: border-box;
+}
+.session-dropdown-loading-icon,
+.session-dropdown-loading-line {
+    background: linear-gradient(90deg, var(--bg-elev) 25%, var(--bg-elev-2) 37%, var(--bg-elev) 63%);
+    background-size: 400% 100%;
+    animation: sessionDropdownSkeletonShimmer 1.2s ease-in-out infinite;
+}
+.session-dropdown-loading-icon {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    flex: 0 0 auto;
+}
+.session-dropdown-loading-line {
+    flex: 1;
+    height: 8px;
+    border-radius: 999px;
+}
+@media (prefers-reduced-motion: reduce) {
+    #session-dropdown-menu { transition: none; }
+    .session-dropdown-loading-icon,
+    .session-dropdown-loading-line { animation: none; }
+}
+/* Pinned sessions reuse the Sessions-page warning halo around their agent
+   avatar; no separate pin glyph occupies a column in the dropdown. */
+.session-row-agent-warning {
+    border-radius: 50%;
+    box-shadow: 0 0 0 1.25px var(--warning),
+                0 0 4px rgba(var(--warning-rgb), 0.55);
+}
+/* Status icon inside a dropdown row title — sits after the label text and
+   stays visible even when the title text truncates (flex-shrink: 0). */
+#session-dropdown-menu .session-row-kebab + .session-row-delete {
+    margin-left: -4px;
+}
+
+/* ── Session-list group tree (orchestrator → spawns, Planner → closer) ──
+.session-child-row {
+    padding-left: 22px;
+    font-size: 11.5px;
+    color: var(--fg-2);
+  }
+.session-row-child-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--accent);
+    opacity: 0.85;
+  }
+
+/* ── Drag-to-reorder: pinned session rows are grabable across their full width ── */
+.session-row-title-input {
+    flex: 1;
+    background: var(--bg-0);
+    border: 1px solid var(--brand);
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+
+    padding: 2px 6px;
+    outline: none;
+  }
+/* Per-row action buttons (delete on every row; config on agent rows). Share the
+   muted kebab look; delete brightens to the danger hue on hover. */
+.session-row-delete,
+.session-manage-eye,
+.session-manage-delete-selected {
+    background: none;
+    border: none;
+    color: var(--fg-3);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+.session-row-delete:hover,
+.session-manage-delete-selected:hover { background: rgba(var(--danger-rgb), 0.12); color: var(--danger); }
+.session-row-delete.warning,
+.session-manage-delete-selected.warning { color: var(--warning); }
+.session-row-delete.warning:hover,
+.session-manage-delete-selected.warning:hover { background: rgba(var(--warning-rgb), 0.15); color: var(--warning); }
+
+/* ── Dropdown search bar + archived-view toggle (footer) ── */
+.session-manage-search:has(> .ui-icon) > .session-manage-search-input { padding-left: 24px; }
+.session-manage-search-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: var(--bg-0);
+    border: var(--border-width) solid var(--border);
+    border-radius: 6px;
+    color: var(--fg-1);
+    font-size: 12px;
+    padding: 3px 6px;
+    outline: none;
+    transition: border-color .15s;
+  }
+body.light-mode .session-manage-search-input { background: var(--bg-2); }
+.session-manage-search-input:focus { border-color: var(--brand); }
+.session-manage-search-input::placeholder { color: var(--fg-3); }
+.session-row-archived {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    flex-shrink: 0;
+    color: var(--danger);
+    background: var(--danger-soft, rgba(var(--danger-rgb), 0.08));
+    border: var(--border-width) solid var(--danger-mid, rgba(var(--danger-rgb), 0.25));
+    cursor: pointer;
+    transition: color .12s ease, background .12s ease, border-color .12s ease;
+  }
+.session-row-archived:hover {
+    color: var(--danger);
+    background: var(--danger-mid, rgba(var(--danger-rgb), 0.25));
+    border-color: var(--danger);
+  }
+.session-row-archived.armed,
+.session-row-archived.armed:hover {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+/* Message-content match chip (content search mode) */
+.session-row-msg-hit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 6px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    flex-shrink: 0;
+    color: var(--brand);
+    background: rgba(var(--brand-rgb), 0.1);
+    border: var(--border-width) solid rgba(var(--brand-rgb), 0.22);
+  }
+/* Row checkbox in checkbox mode */
+.session-row-checkbox {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    color: var(--fg-3);
+    flex-shrink: 0;
+    transition: color .15s, background .15s;
+  }
+.session-row-checkbox:hover { color: var(--fg-1); background: var(--bg-tint); }
+.session-row-checkbox[data-checked="1"] { color: var(--brand); }
+body.light-mode .session-row-checkbox[data-checked="1"] { color: var(--brand); }
+.session-dropdown-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--fg-3);
+    font-size: 12px;
+  }

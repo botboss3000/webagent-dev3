@@ -1,0 +1,424 @@
+/* Chat styles moved out of ui/shared/css/app1.css, in their original order. Linked from
+   index.html right after app1.css so the cascade order is unchanged. */
+
+/* ── Model changer — canonical source: ui/chat/elements/model-changer/index.css ── */
+.chat-model-changer {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: var(--fg-2);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    position: relative;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: color 0.15s;
+  }
+.chat-model-changer:hover { color: var(--fg-1); }
+.chat-model-changer .cmc-chev {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.5;
+    pointer-events: all; /* override SVG default visiblePainted so the whole 14×14 box is clickable */
+    transition: opacity 0.15s, transform 0.12s;
+  }
+.chat-model-changer:hover .cmc-chev { opacity: 0.9; }
+.chat-model-changer .cmc-chev-left:active { transform: translateX(-1px); }
+.chat-model-changer .cmc-chev-right:active { transform: translateX(1px); }
+.chat-model-changer .cmc-name {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1;
+  }
+
+/* ── Saving / checked feedback ── */
+.chat-model-changer .cmc-status {
+    display: none;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+.chat-model-changer.saving .cmc-chev {
+    opacity: 0.15;
+    pointer-events: none;
+  }
+.chat-model-changer.saving .cmc-name { display: none; }
+.chat-model-changer.saving .cmc-status {
+    display: block;
+    border: 2px solid var(--fg-4);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: cmc-spin 0.6s linear infinite;
+  }
+.chat-model-changer.checked .cmc-chev {
+    opacity: 0.15;
+    pointer-events: none;
+  }
+.chat-model-changer.checked .cmc-name { display: none; }
+.chat-model-changer.checked .cmc-status {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--success);
+    border: none;
+    animation: none;
+  }
+.chat-model-changer.checked .cmc-status::after {
+    content: '✓';
+  }
+.cmc-toast {
+    position: fixed;
+    z-index: 1001;
+    pointer-events: none;
+    background: var(--bg-elev);
+    border: var(--border-width) solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--fg-1);
+    box-shadow: var(--shadow-float);
+    white-space: nowrap;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transform: translateY(6px) scale(0.95);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+.cmc-toast.visible { opacity: 1; transform: translateY(0) scale(1); }
+.cmc-toast.hiding { opacity: 0; transform: translateY(-4px) scale(0.95); transition: opacity 0.2s ease, transform 0.2s ease; }
+
+/* ── Footer context panel (click the token/ctx footer) ────────────────────
+.chat-model-picker {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    box-sizing: border-box;
+    background: var(--bg-elev);
+    border: var(--border-width) solid var(--border);
+    border-radius: 8px;
+    padding: 6px;
+    min-width: 280px;
+    max-width: 380px;
+    box-shadow: var(--shadow-md);
+  }
+
+/* ── Context-compaction section (the panel's only content) ─────────────────
+.chat-model-picker .cmp-compact {
+    padding-top: 2px;
+  }
+.chat-model-picker .cmp-cc-head {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--fg-3);
+    margin-bottom: 8px;
+  }
+.chat-model-picker .cmp-cc-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 3px;
+  }
+.chat-model-picker .cmp-cc-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 2px;
+    padding: 7px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: var(--border-width) solid var(--accent-line);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+.chat-model-picker .cmp-cc-btn:hover { background: var(--accent-mid); color: var(--fg-1); }
+.chat-model-picker .cmp-cx-title { font-size: 12px; color: var(--fg-1); font-weight: 500; }
+.chat-model-picker .cmp-cx-bar {
+    display: flex;
+    box-sizing: border-box;
+    width: 100%;
+    height: 6px;
+    border: var(--border-width) solid var(--border-soft);
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--accent-soft);
+  }
+.chat-model-picker .cmp-cx-seg { display: block; flex: 0 0 auto; min-width: 0; }
+.chat-model-picker .cmp-cx-hint {
+    font-size: 10px;
+    line-height: 1.35;
+    color: var(--fg-3);
+    margin-top: 2px;
+  }
+
+/* ── Footer skill-selector panel (right-aligned, mirrors model picker) ─────
+.chat-skill-picker {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    box-sizing: border-box;
+    background: var(--bg-elev);
+    border: var(--border-width) solid var(--border);
+    border-radius: 8px;
+    padding: 6px;
+    min-width: 220px;
+    max-width: 300px;
+    box-shadow: var(--shadow-md);
+  }
+.chat-skill-picker .csp-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fg-2);
+    border-bottom: var(--border-width) solid var(--border-soft);
+  }
+.chat-skill-picker .csp-header svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+.chat-skill-picker .csp-list {
+    max-height: 360px;
+    overflow-y: auto;
+    margin-top: 4px;
+  }
+.chat-skill-picker .csp-empty {
+    padding: 12px 8px;
+    color: var(--fg-3);
+    font-size: 11px;
+    text-align: center;
+  }
+
+/* ── Model list panel (footer model button) ─────────────────────────────
+.chat-model-list-panel .cml-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--fg-1);
+    transition: background 0.1s;
+    border-left: 3px solid transparent;
+  }
+.chat-model-list-panel .cml-item:hover { filter: brightness(1.3); }
+.chat-model-list-panel .cml-active {
+    background: var(--accent-soft);
+    border-left-color: var(--accent);
+  }
+.chat-model-list-panel .cml-item.csp-active { background: var(--accent-mid); }
+.chat-model-list-panel .cml-name {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+.chat-model-list-panel .cml-role-icons {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+.chat-model-list-panel .cml-role-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--accent-mid);
+  border-radius: 50%;
+  color: var(--fg-2);
+  font-size: 9px;
+  line-height: 1;
+}
+
+/* ── Persistent effort slider (footer model picker) ─────────────────────
+.chat-model-list-panel .csp-list {
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+/* ── Skill toggle button — canonical source: ui/chat/elements/abilities/index.css ── */
+.chat-skills-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: var(--border-width) solid transparent;
+    border-radius: 14px;
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent));
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    color: var(--fg-2);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+  }
+.chat-skills-btn svg { width: 20px; height: 20px; }
+.chat-skills-btn > * { pointer-events: none; }
+body.light-mode .chat-skills-btn {
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 85%, transparent));
+  }
+.chat-skills-btn:hover {
+    border-color: rgba(var(--brand-rgb), 0.25);
+    color: var(--fg-1);
+  }
+.chat-skills-btn .csp-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    background: var(--accent);
+    color: #fff;
+    pointer-events: none;
+    user-select: none;
+    transition: opacity 0.2s;
+    opacity: 0;
+  }
+.chat-skills-btn .csp-badge.visible { opacity: 1; }
+
+/* ── Mode button — canonical source: ui/chat/elements/mode/index.css ── */
+.chat-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent));
+    border: var(--border-width) solid transparent;
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    color: var(--fg-2);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 5px 16px;
+    height: 28px;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    line-height: 1.5;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: inherit;
+  }
+.chat-mode-btn:hover { border-color: rgba(var(--brand-rgb), 0.25); color: var(--fg-1); }
+.chat-mode-btn:active { border-color: rgba(var(--brand-rgb), 0.35); }
+body.light-mode .chat-mode-btn {
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 85%, transparent));
+    color: var(--fg-2);
+  }
+body.light-mode .chat-mode-btn:hover { border-color: rgba(var(--brand-rgb), 0.25); color: var(--fg-1); }
+
+/* ── Chat target-device — canonical source: ui/chat/elements/target/index.css ── */
+.chat-target-btn {
+    display: inline-flex; align-items: center; justify-content: center; align-self: center;
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent));
+    border: var(--border-width) solid transparent;
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    color: var(--fg-2); font-size: 13px; font-weight: 600;
+    width: 28px; height: 28px; border-radius: 14px; cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+    line-height: 1.5; user-select: none; -webkit-user-select: none; font-family: inherit;
+  }
+.chat-target-btn:hover { border-color: rgba(var(--brand-rgb), 0.25); color: var(--fg-1); }
+.chat-target-btn svg { width: 20px; height: 20px; }
+.chat-target-btn .chat-target-label {
+    display: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+.chat-target-btn.targeting {
+    color: var(--brand); border-color: rgba(var(--brand-rgb), 0.5);
+    background: color-mix(in oklab, var(--brand) 12%, var(--chat-pill-bg, transparent));
+    width: auto; gap: 6px; padding: 5px 16px;
+  }
+.chat-target-btn.targeting .chat-target-label { display: inline; }
+/* Chat messages container — drop target with overlay */
+  #chat-messages {
+    /* Configuration insets the viewport, not history that scrolls away. */
+    margin-top: var(--chat-transcript-padding-top, 0px);
+    margin-bottom: var(--chat-transcript-padding-bottom, 0px);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    position: relative;
+    overflow: hidden auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    /* Fade mask — sizes controlled by JS from chat_ui.json fade config.
+       A zero top fade uses one opaque stop: transparent + opaque at the same
+       coordinate anti-aliases into a visible full-width seam. */
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      var(--chat-fade-top-stops, #000 0),
+      #000 calc(100% - var(--chat-fade-bottom, 0px)),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      var(--chat-fade-top-stops, #000 0),
+      #000 calc(100% - var(--chat-fade-bottom, 0px)),
+      transparent 100%
+    );
+    -webkit-mask-composite: content-box;
+    mask-composite: content-box;
+  }
+#chat-messages-inner {
+    flex: 1;
+    overflow-y: visible;
+    /* Bottom padding = tail clearance. The composer (#chat-input-area) is an
+       absolute overlay on the scroller's bottom, so the
+       transcript needs bottom padding for the last line to stop ABOVE the
+       pill instead of behind it. 100px floor (user-visible stop point); the
+       ResizeObserver in chat-ui.js raises it live to the pill's actual
+       height + gap. */
+    padding: 12px 8px 100px 15px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--chat-message-gap-px, 12px);
+  }
+/* Mock progress note (“Assessing…”) shown while a cached transcript re-syncs.
+   It is NOT a transcript row: it rides the footer activity element
+   (chat-activity.js mockActivityNote → .chat-activity-bar.ambient), so it takes
+   the chip's own look and ticks alongside the run notes. There is no tool panel
+   to open for a mock note, so the affordance is overridden — never clickable. */
+.chat-activity-bar.ambient {
+  cursor: default;
+}

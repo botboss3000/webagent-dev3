@@ -142,7 +142,7 @@
    page-background gradient shows through the breathing-room gap around the pill
    (no opaque fill needed). It is capped to the same 750px column as the tables
    and centred to share their left/right edges. Geometry + the floating-glass
-   skin come from the shared .chat-pill* classes (app1.css + the glass re-skin in
+   skin come from the shared .chat-pill* classes (ui/chat/composer.css + the glass re-skin in
    index.css).
 
    SCOPED TO APP SETTINGS: the pill lives at the container level (always in the

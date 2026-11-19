@@ -1,0 +1,203 @@
+/* Chat styles moved out of ui/shared/css/app1.css, in their original order. Linked from
+   index.html right after app1.css so the cascade order is unchanged. */
+
+/* ── Session tabs: recency-ordered session resources ── */
+#chat-sub-header {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 2px 0 4px;
+  border-bottom: var(--border-width) solid var(--border);
+  flex-shrink: 0;
+  min-height: 0;
+  font-size: 12px;
+  position: relative;
+  width: 100%;
+  z-index: 999;
+}
+/* When reparented into a header zone (third row via sub_agent_tabs control),
+   it becomes part of the flex flow and must not be absolutely positioned.
+   Also strip the glass-chip pill styling that .chat-header-zone > [data-header-control]
+   applies — this is a full-width carousel container, not a button.
+   Top-align it so short chips sit flush with the top of the row. */
+#chat-header .chat-header-zone:has(#chat-sub-header) {
+  align-items: flex-start;
+}
+#chat-header .chat-header-zone #chat-sub-header {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  z-index: auto;
+  border-bottom: none;
+  width: 100% !important;
+  padding: 0 !important;
+  /* Keep this full-width carousel container borderless; each sub-agent tab
+     carries the composer-matched border independently. */
+  background: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  min-height: 0 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 0 !important;
+  flex-shrink: 0 !important;
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
+}
+/* The scroll wrap — holds the chip groups in a single nowrap row with overflow-x
+   auto. The chevrons overlay the edges; the edge-fade mask blends the overflow
+   into the background without a scrollbar cluttering the header. */
+#chat-sub-header #chat-sub-scroll-wrap {
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--chat-tabs-size, 26px);
+  padding: 0 14px;
+  gap: 1px;
+  -webkit-overflow-scrolling: touch;
+  -webkit-tap-highlight-color: transparent;
+}
+#chat-sub-header #chat-sub-scroll-wrap::-webkit-scrollbar { display: none; }
+/* The chips inside the scroll-wrap are buttons; each is its own interactive
+   element with independent tap-highlight, like other header controls. */
+#chat-sub-header #chat-sub-scroll-wrap > .sub-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+#chat-sub-header .sub-chip {
+      display: inline-flex;
+      align-items: stretch;
+      gap: 4px;
+      padding: 2px 10px;
+      min-height: var(--chat-tabs-size, 26px);
+      border-radius: 14px;
+      background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent));
+      /* Match the chat composer’s visible pill border on each individual tab. */
+      border: var(--border-width) solid color-mix(in oklab, var(--fg-1) 22%, transparent);
+      backdrop-filter: blur(12px) saturate(140%);
+      -webkit-backdrop-filter: blur(12px) saturate(140%);
+      color: var(--fg-2);
+      font: inherit;
+      font-size: var(--chat-tabs-font-size, 12px);
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+      flex-shrink: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      outline: none;
+    }
+    #chat-sub-header .sub-chip:hover {
+          background: color-mix(in oklab, var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent)) 82%, var(--fg-1));
+          color: var(--fg-1);
+          border-color: rgba(var(--brand-rgb), 0.25);
+        }
+    #chat-sub-header .sub-chip:active {
+          background: rgba(var(--brand-rgb), 0.12);
+          border-color: rgba(var(--brand-rgb), 0.30);
+          transition: none;
+        }
+    #chat-sub-header .sub-chip .chip-status {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+#chat-sub-header .sub-chip .chip-status svg {
+  width: 10px;
+  height: 10px;
+}
+/* Chip "more" menu — body-mounted popup mirroring .session-row-actions
+   (same surface, same design-system variables, both themes). */
+.sub-chip-menu {
+  position: fixed;
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(var(--shadow-rgb), 0.4);
+  z-index: 2000;
+  min-width: 150px;
+  padding: 4px;
+  font-size: 12px;
+}
+body.light-mode .sub-chip-menu {
+  background: var(--bg-0);
+  border-color: var(--border);
+}
+/* Consolidated spawned-helper menu. The header owns one "Spawns (n)" chip;
+   this body-mounted popup keeps Main first and each helper selectable. */
+.family-spawn-menu {
+  min-width: min(300px, calc(100vw - 16px));
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+}
+/* The grouped-elements trigger mirrors the Spawns trigger: accent icon, and its
+   status icon never spins — a group of chat elements has no running state. */
+.family-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  gap: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+.family-menu-item:hover { background: rgba(var(--brand-rgb), 0.1); color: var(--fg-1); }
+.family-menu-item.selected { background: rgba(var(--brand-rgb), 0.16); color: var(--fg-1); }
+.family-menu-item .chip-status { display: inline-flex; flex: 0 0 auto; align-items: center; }
+.family-menu-root .chip-status { color: var(--brand); }
+.family-menu-text { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; gap: 1px; }
+.family-menu-text > span, .family-menu-text > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.family-menu-text > small { color: var(--fg-3); font-size: 10px; font-weight: 500; }
+.sub-chip.chip-spawn-menu .chip-status svg { animation: none; }
+body.light-mode #chat-sub-header { border-bottom-color: var(--border); }
+
+/* ── Session nav arrows (prev/next pinned session) ── */
+.session-nav-btn {
+  background: none;
+  border: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 6px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.session-nav-btn:hover {
+  color: var(--brand);
+  background: rgba(var(--ink-rgb),0.06);
+}
+body.light-mode .session-nav-btn { color: var(--fg-3); }
+/* Status icon inside the trigger buttons */
+.session-dropdown-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    margin-left: 4px;
+  }

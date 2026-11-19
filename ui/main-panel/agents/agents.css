@@ -1672,7 +1672,7 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
 /* (The page-level "Agent Manager" floating chat bar (#agent-builder-bar) was
    removed. Its hybrid replacement — live ability search + chat-to-WebAgent — now
    sits inline above the ability table inside each agent's Abilities tab. The pill
-   geometry still comes from the shared .chat-pill* block in app1.css and its
+   geometry still comes from the shared .chat-pill* block in ui/chat/composer.css and its
    floating-glass skin (.ability-search-pill) from index.css.) */
 
 /* ── Config fields ── */

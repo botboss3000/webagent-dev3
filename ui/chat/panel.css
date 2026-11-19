@@ -1,0 +1,204 @@
+/* Chat styles moved out of ui/shared/css/app1.css, in their original order. Linked from
+   index.html right after app1.css so the cascade order is unchanged. */
+
+/* ── Right: Chat panel ── */
+/* ZONE-BASED HEADER — #chat-header is a flex COLUMN of rows built dynamically
+   by chat-header-config.js from chat_ui.json. Each row has three zone containers
+   (left/center/right) that position controls per the config. */
+#chat-header {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 4px 2px 0;
+    border-bottom: none;
+    background: transparent;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--fg-1);
+    flex-shrink: 0;
+    gap: 4px;
+    z-index: 1000;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    max-width: var(--chat-header-max-width, var(--chat-surface-max-width, 1000px));
+    margin-inline: auto;
+  }
+/* The chat partial initially supplies a flat pool of header controls. The
+   control builder reparents that pool into horizontal rows, but before then
+   #chat-header is a column and the raw icons would visibly stack. Keep only
+   those direct, unbuilt controls out of layout. Once a control is in its row
+   it is no longer a direct child, so it renders normally. This also protects
+   the boot-curtain safety net from exposing an intermediate layout. */
+#chat-header > [data-header-control] { display: none !important; }
+.chat-header-row { display: flex; flex-direction: row; align-items: stretch; gap: 2px; width: 100%; min-width: 0; }
+/* Zone containers — each holds its assigned controls. */
+.chat-header-zone { display: flex; flex-direction: row; align-items: center; gap: 2px; }
+.chat-header-zone:empty { display: none; }
+.chat-header-zone-left   { flex: 0 0 auto; justify-content: flex-start; }
+.chat-header-zone-center { flex: 1 1 auto; min-width: 0; overflow: visible; justify-content: center; }
+.chat-header-zone-right  { margin-left: auto; flex: 0 0 auto; justify-content: flex-end; }
+/* Glass chip styling for every header control placed inside a zone —
+   each control becomes a floating glass pill, matching the footer
+   ability/mode and stop/continue buttons. Messages pass 'behind' the
+   header since the header itself has a transparent background and no border.
+   The chip border deliberately matches the composer pill; above-pill activity
+   and progress controls are excluded because they do not live in these zones.
+   !important on glass properties to override #chat-header button defaults. */
+.chat-header-zone > [data-header-control] {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent)) !important;
+    border: var(--border-width) solid color-mix(in oklab, var(--fg-1) 22%, transparent) !important;
+    backdrop-filter: blur(12px) saturate(140%) !important;
+    -webkit-backdrop-filter: blur(12px) saturate(140%) !important;
+    border-radius: 20px !important;
+    padding: 2px 10px !important;
+    min-height: 40px !important;
+    box-sizing: border-box !important;
+    transition: background 0.15s, border-color 0.15s, color 0.15s !important;
+    /* Allow absolutely-positioned children (dropdown menus) to pop out */
+    position: relative;
+    /* Same text/icon color as the main app header tabs (.main-tab). */
+    color: var(--fg-2);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+body.light-mode .chat-header-zone > [data-header-control] {
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 85%, transparent)) !important;
+  }
+.chat-header-zone > [data-header-control]:hover {
+    border-color: rgba(var(--brand-rgb), 0.25) !important;
+    color: var(--fg-1) !important;
+  }
+/* Content-bearing controls — agent name, session dropdown, title — stretch
+   to fill their zone and shrink with ellipsis, matching the mode button look.
+   overflow: visible so their absolutely-positioned dropdown menus pop out. */
+.chat-header-zone > [data-header-control="agent_name"],
+.chat-header-zone > [data-header-control="session_dropdown"],
+.chat-header-zone > [data-header-control="title"] {
+    flex: 1 1 auto !important;
+    flex-shrink: 1 !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+  }
+/* Icon-only header controls (square chip) — buttons with no text label
+   get a compact square chip, the same style as footer icon buttons. */
+.chat-header-zone > [data-header-control]:has(> svg:only-child),
+.chat-header-zone > [data-header-control]:has(> i:only-child) {
+    padding: 2px !important;
+    width: 40px !important;
+    height: 40px !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
+  }
+/* Size SVGs inside header controls — broad rule that catches ALL controls
+   in zones, including ones with badges/labels (changes, abilities, target).
+   The 28px boot glyph fills the default 40px primary chip. Controls that
+   have explicit element_size via JS config override this with !important. */
+.chat-header-zone > [data-header-control]:not([data-header-control="sub_agent_tabs"]) svg {
+    width: 28px !important;
+    height: 28px !important;
+  }
+    /* The "more" (⋯) kebab is a wrapper span containing a button + menu, so
+   :has(svg:only-child) doesn't match. Give it the same compact icon-only
+   treatment so it sits flush with the edge like other icon buttons. */
+.chat-header-zone > [data-header-control="more"] {
+    padding: 2px !important;
+    width: 40px !important;
+    height: 40px !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
+  }
+/* Size the "more" kebab icon inside the button within the wrapper. */
+.chat-header-zone > [data-header-control="more"] svg {
+    width: 28px !important;
+    height: 28px !important;
+  }
+/* Session-dropdown inside a chip: the trigger (now a full session-row)
+   sits inside the glass chip normally, but the dropdown menu (position: absolute)
+   needs to pop out visually — reset the overflow on its parent to allow this. */
+.chat-header-zone > .session-dropdown[data-header-control],
+.chat-header-zone > .agent-dropdown[data-header-control] {
+    overflow: visible !important;
+  }
+@media (max-width: 800px) {
+  .chat-header-zone > [data-header-control="session_dropdown"] {
+    display: flex !important;
+    justify-content: flex-start !important;
+    /* Height comes from chat_ui.json; do not clamp the mobile title chip. */
+    min-height: 0 !important;
+    max-height: none !important;
+    padding: 2px 12px !important;
+    margin: 0 4px !important;
+  }
+  #chat-header .session-dropdown-trigger {
+    align-self: stretch;
+    min-height: 0;
+    margin: 0;
+    min-width: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border: 0;
+    outline: 0;
+    box-sizing: border-box;
+  }
+}
+@media (max-width: 800px) and (hover: none) and (pointer: coarse) {
+  .chat-header-zone > [data-header-control="session_dropdown"]:hover {
+    border-color: transparent !important;
+  }
+}
+/* Agent-name wrapper (inside any zone) — sized to content, shrinks with ellipsis. */
+.chat-header-name-row { display: flex; flex-direction: row; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; }
+.chat-header-agent-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-2);
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;            /* allow ellipsis inside the flex row */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.chat-header-agent-name:hover { color: var(--brand); }
+#chat-header .actions { display: flex; gap: 8px; }
+#chat-header button {
+    background: none; border: none; color: var(--fg-3); cursor: pointer; font-size: 14px;
+  }
+#chat-header button:hover { color: var(--brand); }
+/* New-session (+) button — sits in the row-1 LEFT cluster, immediately RIGHT of the
+   refresh button (more (⋯) · name · refresh · new (+)), so it's no longer pinned to the
+   far edge. Shares the compact transparent icon-button look of its neighbours (refresh /
+   more); its configured glyph matches them. Single-click → new session / agent picker,
+   middle-click → new browser tab, both wired in ui/chat/js/session-init.js. */
+#chat-header .session-new-header-btn {
+  background: none;
+  border: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 1px 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  /* Background-only transition (no `color`): a color transition makes the glyph
+     lag the live --fg-3 during a theme switch, since the value arrives via a
+     custom property — its sibling refresh/delete buttons have no color
+     transition and snap instantly, so this matches them. */
+  transition: background 0.15s;
+}
+#chat-header .session-new-header-btn > * { pointer-events: none; }
+#chat-header .session-new-header-btn:hover { color: var(--brand); }
+#chat-header .session-new-header-btn:active { background: rgba(var(--brand-rgb),0.15); }

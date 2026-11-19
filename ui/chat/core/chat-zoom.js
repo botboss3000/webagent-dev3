@@ -2,7 +2,7 @@
 // (trackpad pinch / desktop Ctrl+scroll) over the transcript scale only message content, never the app.
 // CSS zoom is applied to #chat-messages-inner children through --v3-chat-zoom (chat.css), so header/footer
 // clearance padding stays unscaled while scroll geometry follows the content. The level persists in
-// localStorage; the floating − / % / + / reset chip is styled by bundled shared ui/shared/css/app1.css.
+// localStorage; the floating − / % / + / reset chip is styled in ui/chat/core/messages.css.
 const ZOOM_KEY='chatZoomLevel',MIN_ZOOM=0.7,MAX_ZOOM=2.5,CHIP_HIDE_MS=2000;
 // Heavily damped like v2: a 2x finger spread zooms 1.12x; a ~100px trackpad notch about 10%.
 const PINCH_SENSITIVITY=0.12,WHEEL_SENSITIVITY=0.001;

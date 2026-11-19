@@ -32,7 +32,7 @@ body.is-booting #chat-resize-handle {
 
 /* Desktop boot layout: keep the launch surface full-stage while its empty
    composer remains bottom-docked. The canonical #chat-input-area rule in
-   app1.css supplies that dock, including for a brand-new session. */
+   ui/chat/composer.css supplies that dock, including for a brand-new session. */
 /* Avoid showing a narrow intrinsic boot pill while chat_ui.json is resolving.
    app-prompts.js supplies the resolved idle-footer geometry, then marks it ready. */
 body.is-booting:not([data-chat-ui-ready]) #chat-input-row.chat-pill-boot {

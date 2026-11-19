@@ -1,0 +1,934 @@
+/* Chat styles moved out of ui/shared/css/app1.css, in their original order. Linked from
+   index.html right after app1.css so the cascade order is unchanged. */
+
+/* ── Idle footer mode (CSS-driven, no DOM rebuild) ──
+  #chat-input-area.footer-mode-idle {
+    bottom: var(--idle-margin-bottom, 24px);
+    /* Reduce and center padding — the active 2px/8px top/bottom pushes the
+       single idle row off-center and hides text. Symmetric keeps the pill
+       vertically centered in its small idle footprint. */
+    padding: 4px 12px;
+  }
+  /* Pill width in idle mode — JS sets --idle-pill-width; fallback matches
+     chat_ui.json idle_footer.chat_pill.pill_width (500px, same as active). */
+  #chat-input-area.footer-mode-idle #chat-input-row {
+    width: var(--idle-pill-width, 500px);
+  }
+  #chat-input-area.footer-mode-idle #chat-input-row {
+    --chat-pill-current-width: var(--idle-pill-width, 500px);
+  }
+  /* Idle textarea — padding, font-size, and min/max-height are driven
+     by data/config/chat_ui.json (idle_footer → controls → textarea).
+     Only line-height:1 stays here (CSS default is 22px, too tall).
+     Also remove the center-zone left margin so the textarea sits snug
+     next to attach. */
+  #chat-input-area.footer-mode-idle .chat-pill-input {
+    line-height: 1;
+    align-self: center !important;
+  }
+  #chat-input-area.footer-mode-idle .chat-pill-layout-zone-center {
+    margin-left: 0;
+  }
+  #chat-input-area.footer-mode-idle .chat-pill-layout-row {
+    column-gap: 0;
+  }
+  /* Collapse above-pill */
+  #chat-input-area.footer-mode-idle .chat-above-pill {
+    max-height: 0;
+    opacity: 0;
+    margin: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  /* But keep the above-pill visible when it has the activity bar (all builds do) */
+  #chat-input-area.footer-mode-idle .chat-above-pill:has(#chat-activity-bar) {
+    max-height: none;
+    opacity: 1;
+    margin-bottom: 2px;
+    margin-inline: auto;
+    overflow: visible;
+    pointer-events: none;
+  }
+  /* Multi-row plan: in idle mode only the activity row stays — extra rows
+     collapse so the idle footer stays minimal (mirrors the idle-collapsed
+     class rule in the .chat-above-pill block). */
+  #chat-input-area.footer-mode-idle .chat-above-pill .chat-header-row:not(:has(#chat-activity-bar)) {
+    display: none;
+  }
+  #chat-input-area.footer-mode-idle .chat-above-pill #chat-activity-bar,
+  #chat-input-area.footer-mode-idle .chat-above-pill #chat-activity-panel {
+    pointer-events: auto;
+  }
+  /* Collapse footer row */
+  #chat-input-area.footer-mode-idle .chat-footer-row {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  /* Collapse only the stats carousel in idle — keep buttons (attach/stop/etc) visible */
+  #chat-input-area.footer-mode-idle .chat-pill-layout-row[data-pill-row="1"] .chat-pill-layout-zone-center {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    pointer-events: none;
+  }
+
+/* ── Chat footer row (token bar + mode button) ───────────────────────────
+  .chat-footer-row.idle-collapsed {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+
+/* ── Footer drag handle ───────────────────────────────────────────────────
+  /* After an idle→active transition, block clicks on newly-appeared
+     buttons for a brief window so the user's finger can't hit them. */
+  #chat-input-row.spring-back {
+    transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  /* Slower overshoot for click-triggered toggles */
+  #chat-input-row.spring-back-click {
+    transition: transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .chat-footer-handle.spring-back-click {
+    transition: transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+.chat-footer-handle-line {
+    width: 32px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--fg-4);
+    opacity: 0.35;
+    transition: opacity 0.15s ease, width 0.2s ease, background 0.15s ease;
+  }
+.chat-footer-handle:hover .chat-footer-handle-line,
+.chat-footer-handle:focus-visible .chat-footer-handle-line {
+    opacity: 0.75;
+    width: 40px;
+    background: var(--fg-2);
+  }
+.chat-footer-handle:not(.expanded) .chat-footer-handle-line {
+    animation: footerHandlePulse 3s ease-in-out infinite;
+  }
+@media (prefers-reduced-motion: reduce) {
+    .chat-footer-handle:not(.expanded) .chat-footer-handle-line {
+      animation: none;
+    }
+}
+/* Spring-back transition — applied after drag release */
+.chat-footer-handle.spring-back {
+    transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+/* ── Pill zone rows (rows inside the pill, same model as header) ── */
+/* Canonical two-row pill layout. Empty zones collapse, center owns all
+   remaining width, and right is exactly as wide as its controls. */
+.chat-pill.chat-pill-row-layout,
+#chat-input-row.chat-pill.chat-pill-row-layout {
+  display: block;
+}
+.chat-pill-layout-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+.chat-pill-layout-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  column-gap: 6px;
+  width: 100%;
+  min-width: 0;
+  /* Smooth collapse for idle footer mode */
+  transition: max-height 0.25s ease, opacity 0.2s ease, margin 0.25s ease, padding 0.25s ease;
+}
+.chat-pill-layout-row[data-pill-row="0"] {
+  overflow: hidden;
+  /* Fade mask on the stationary row — text rubberbands behind it */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--chat-pill-fade-top, 8px),
+    #000 calc(100% - var(--chat-pill-fade-bottom, 10px) - var(--chat-pill-fade-bottom-offset, 0px)),
+    transparent calc(100% - var(--chat-pill-fade-bottom-offset, 0px))
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--chat-pill-fade-top, 8px),
+    #000 calc(100% - var(--chat-pill-fade-bottom, 10px) - var(--chat-pill-fade-bottom-offset, 0px)),
+    transparent calc(100% - var(--chat-pill-fade-bottom-offset, 0px))
+  );
+}
+.chat-pill-layout-zone {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+/* Buttons inside zones inherit the zone's vertical alignment instead of
+   their legacy grid align-self values (which differ left vs right). */
+.chat-pill-layout-zone > .chat-pill-attach,
+.chat-pill-layout-zone > .chat-pill-send,
+.chat-pill-layout-zone > .chat-pill-voice { align-self: unset; }
+.chat-pill-layout-zone:empty { display: none; }
+.chat-pill-layout-zone-left { flex: 0 0 auto; justify-content: flex-start; }
+.chat-pill-layout-zone-center { flex: 1 1 auto; margin-left: 10px; justify-content: center; }
+.chat-pill-layout-zone-right {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+.chat-pill-layout-zone-center > .chat-pill-input,
+.chat-pill-layout-zone-center > .chat-pill-stats-row,
+.chat-pill-layout-zone-center > .chat-pill-stats {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
+}
+/* Zone-level carousel strip inside pill rows */
+.chat-pill-layout-zone.chat-pill-zone-carousel {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  min-height: 28px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+.chat-pill-zone-carousel-strip {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 2px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.chat-pill-zone-carousel-strip::-webkit-scrollbar { display: none; }
+.chat-pill-zone-chev {
+  display: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  align-items: center;
+  border: none;
+  background: none;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  z-index: 1;
+}
+.chat-pill-zone-chev.left  { left: 0;  justify-content: flex-start; }
+.chat-pill-zone-chev.right { right: 0; justify-content: flex-end; }
+.chat-pill-zone-chev.visible { display: flex; }
+.chat-pill-zone-chev:hover { color: var(--fg-1); }
+.chat-pill-layout-zone.chat-pill-zone-carousel:has(.chat-pill-zone-chev.right.visible) .chat-pill-zone-carousel-strip {
+  margin-right: 20px;
+}
+
+/* ── Chat token bar ──────────────────────────────────────────────────────
+.chat-token-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg-3);
+    pointer-events: none;
+    user-select: none;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+    flex-shrink: 0;
+  }
+.chat-token-bar.active {
+    opacity: 1;
+  }
+.chat-token-label {
+    color: var(--fg-4);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 10px;
+  }
+.chat-token-value {
+    color: var(--fg-3);
+    min-width: 24px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+body.light-mode .chat-activity-bar {
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 85%, transparent));
+  }
+/* Active model's context window / max output, styled like the token bar but
+   theme-aware via design-system vars and always visible (no activity gating). */
+.chat-model-ctx {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg-3, var(--fg-3));
+    user-select: none;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+/* Session cost so far — accumulated tokens × active model price. Styled like
+   the ctx indicator (theme-aware via design-system vars), sits in the footer
+   left group between the token bar and the ctx indicator. Hidden when the
+   active model has no published price. */
+.chat-cost {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--warning);
+    user-select: none;
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+.chat-cost .chat-token-label {
+    color: var(--fg-4, var(--fg-4));
+  }
+/* Spinning shape — a diamond that rotates. While the agent is active
+   (.chat-activity.visible on the sibling #chat-activity) it spins;
+   otherwise it sits still as a small dot. */
+.chat-token-spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--fg-3);
+    border-radius: 2px;
+    transform: rotate(45deg);
+    transition: border-color 0.3s ease, opacity 0.3s ease;
+    opacity: 0.4;
+  }
+.chat-token-bar.spinning .chat-token-spinner {
+    animation: tokenSpinnerSpin 1.2s linear infinite;
+    border-color: var(--brand);
+    opacity: 1;
+  }
+
+/* ── Stop + Continue action buttons ─────────────────────────────────────────
+/* CHAT-ABOVE-PILL: the band directly above the pill that holds the
+   activity bar (the "Thinking…"/tool-call chip + chevron) and the
+   scroll-to-bottom button. #chat-activity is absolutely positioned to
+   fill the band from the left; the scroll button sits on the right edge.
+   Capped to the pill width and centred per CHAT-PILL-ALIGN. pointer-events:none
+   lets the empty band pass clicks through to the messages behind; the
+   bar and panel each re-enable their own.
+   NOTE: Stop/Continue buttons have moved INSIDE the chat pill itself
+   (.chat-pill-controls) — see the block above for those styles. */
+.chat-above-pill {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 2px;
+    width: var(--chat-pill-current-width, var(--chat-pill-width, 500px));
+    max-width: 100%;
+    margin-inline: auto;
+    margin-bottom: 2px;
+    z-index: 6;
+    pointer-events: none;
+    /* Smooth transition for idle ↔ active footer mode switches */
+    transition: opacity 0.3s ease, max-height 0.3s ease, margin 0.3s ease;
+    overflow: hidden;
+    /* Room for up to five 28px rows (see above_pill.rows in chat_ui.json).
+       The expanded tool-call panel overrides this via #chat-above-pill.expanded. */
+    max-height: 200px;
+    opacity: 1;
+  }
+  /* The expanded tool-call panel (up to 240px) must never be clipped by the
+     row cap — open it fully, mirroring the idle-mode exception below. */
+  #chat-above-pill.expanded {
+    max-height: none;
+    overflow: visible;
+  }
+  .chat-above-pill.idle-collapsed {
+    max-height: 0;
+    opacity: 0;
+    margin: 0;
+    pointer-events: none;
+  }
+  /* Keep the above-pill visible when it contains the activity bar */
+  .chat-above-pill.idle-collapsed:has(#chat-activity-bar) {
+    max-height: none;
+    opacity: 1;
+    pointer-events: none;
+  }
+  /* Multi-row plan: in idle mode only the activity row stays — any other
+     rows (extra chips) collapse so the idle footer stays minimal. */
+  .chat-above-pill.idle-collapsed .chat-header-row:not(:has(#chat-activity-bar)) {
+    display: none;
+  }
+  .chat-above-pill.idle-collapsed:has(#chat-activity-bar) #chat-activity-bar,
+  .chat-above-pill.idle-collapsed:has(#chat-activity-bar) #chat-activity-panel {
+    pointer-events: auto;
+  }
+/* Hide static controls not yet placed in a row by the builder (same pattern
+   as #chat-header > [data-header-control]). Once reparented into a row they
+   are no longer direct children, so they render normally. */
+.chat-above-pill > .chat-header-row { align-self: stretch; }
+.chat-above-pill > [data-header-control] { display: none !important; }
+/* Hidden when no agent is selected (toggled by chat.js). */
+.chat-pill-stop,
+.chat-pill-continue {
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: var(--fg-3);
+    transition: color 0.15s, background 0.15s, opacity 0.15s;
+    flex-shrink: 0;
+  }
+.chat-pill-stop {
+    color: var(--danger);
+  }
+.chat-pill-stop:hover {
+    background: rgba(var(--danger-rgb), 0.12);
+    color: var(--danger);
+  }
+.chat-pill-continue {
+    color: var(--fg-3);
+  }
+.chat-pill-continue:hover {
+    background: rgba(var(--brand-rgb), 0.08);
+    color: var(--brand);
+  }
+/* Visible state: remove hidden attr so the grid cell occupies space */
+.chat-pill-stop:not([hidden]),
+.chat-pill-continue:not([hidden]) {
+    display: inline-flex;
+  }
+
+/* ── Old above-pill action row buttons — keep for embed widget compatibility ── */
+.chat-continue-btn,
+.chat-stop-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 5px 16px;
+    height: 28px;
+    border-radius: 14px;
+    cursor: pointer;
+    line-height: 1.5;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: inherit;
+    opacity: 1;
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 82%, transparent));
+    border: var(--border-width) solid color-mix(in oklab, currentColor 12%, transparent);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    transition: background 0.15s, border-color 0.15s, opacity 0.2s, box-shadow 0.2s;
+  }
+body.light-mode .chat-continue-btn,
+body.light-mode .chat-stop-btn {
+    background: var(--chat-pill-bg, color-mix(in oklab, var(--bg-elev) 85%, transparent));
+  }
+.chat-continue-btn.active,
+.chat-stop-btn.active {
+    opacity: 1;
+    box-shadow: 0 0 0 1px color-mix(in oklab, currentColor 50%, transparent),
+                0 0 10px -1px color-mix(in oklab, currentColor 60%, transparent);
+  }
+.chat-continue-btn {
+    color: var(--brand);
+  }
+.chat-continue-btn:hover {
+    color: color-mix(in srgb, var(--brand) 45%, black);
+    border-color: rgba(var(--brand-rgb), 0.45);
+  }
+.chat-continue-btn:active {
+    color: color-mix(in srgb, var(--brand) 30%, black);
+    border-color: rgba(var(--brand-rgb), 0.6);
+  }
+body.light-mode .chat-continue-btn {
+    color: var(--brand);
+  }
+body.light-mode .chat-continue-btn:hover {
+    color: color-mix(in srgb, var(--brand) 30%, black);
+    border-color: rgba(var(--brand-rgb), 0.45);
+  }
+.chat-stop-btn {
+    color: var(--danger);
+  }
+.chat-stop-btn:hover {
+    border-color: rgba(var(--danger-rgb), 0.38);
+  }
+.chat-stop-btn:active {
+    border-color: rgba(var(--danger-rgb), 0.56);
+  }
+
+/* ── Chat input primitives ─────────────────────────────────────────────
+.chat-pill {
+    /* 3×2 grid layout:
+       (1,1) empty — future left-column buttons,
+       (1,2) textarea — stretches to fill,
+       (1,3) voice/send buttons — right column,
+       (2,1) empty — future left-column buttons,
+       (2,2) stat row (token/ctx/cost),
+       (2,3) attach button.
+       Columns 1 & 3 are auto-width (tight around content).
+       Column 2 is 1fr (stretched).
+       Empty columns collapse to 0 width naturally. */
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    column-gap: 6px;
+    row-gap: 0;
+    align-items: start;
+    position: relative;
+    width: 100%;
+    background: var(--bg-0);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--chat-pill-radius, 41px);
+    /* Symmetric padding — columns 1 & 3 get equal inset from the pill edge. */
+    padding: var(--chat-pill-padding, 4px 4px 0px 4px);
+    transition: border-color 0.15s;
+  }
+
+/* ── Boot-state pill ─────────────────────────────────────────────────
+#chat-input-row.chat-pill-boot {
+    /* Match chat_ui.json's active-footer radius even before appearance/config
+       variables have finished hydrating. */
+    border-radius: 41px;
+  }
+#chat-input-row.chat-pill-boot .chat-pill-input {
+    min-height: 88px;
+    max-height: 180px;
+    padding: 28px 20px 13px 20px;
+    /* The placeholder has its own font-size rule driven by this variable.
+       Set both so the boot text exactly matches the hydrated active profile. */
+    --chat-pill-font-size: 16px;
+    font-size: var(--chat-pill-font-size);
+    font-family: inherit;
+    font-weight: 400;
+    line-height: 22px;
+  }
+  .chat-pill-layout-zone-center {
+    display: flex;
+    flex: 1 1 auto;
+  }
+#chat-input-row.chat-pill-boot .chat-pill-attach,
+#chat-input-row.chat-pill-boot .chat-pill-send {
+    width: 42px;
+    height: 42px;
+    color: var(--fg-4);
+    opacity: 0.4;
+    cursor: default;
+    pointer-events: none;
+  }
+#chat-input-row.chat-pill-boot .chat-pill-attach svg,
+#chat-input-row.chat-pill-boot .chat-pill-send svg {
+    width: 36px !important;
+    height: 36px !important;
+  }
+#chat-input-row.chat-pill-boot .chat-pill-voice,
+#chat-input-row.chat-pill-boot .chat-pill-stats-row,
+#chat-input-row.chat-pill-boot .chat-pill-stop,
+#chat-input-row.chat-pill-boot .chat-pill-continue {
+    display: none !important;
+  }
+/* CHAT-PILL-VARS: every geometry + button dimension of the TALL composer
+   (#chat-input-row) is admin-configurable from app-settings.json. Each
+   `chat_pill_*` key is injected app-wide as the matching `--chat-pill-*` CSS
+   variable by ui/shared/js/appearance.js; the fallback after each `var()` here
+   mirrors the JSON default, so every value holds even before the override
+   stylesheet lands. The knobs (key → variable → what it sets):
+     chat_pill_max_width   → --chat-pill-max-width   composer width cap
+     chat_pill_radius      → --chat-pill-radius      corner roundness
+     chat_pill_padding     → --chat-pill-padding     outer padding (shorthand)
+     chat_pill_min_height  → --chat-pill-min-height  resting text-area height
+     chat_pill_max_height  → --chat-pill-max-height  grow cap before scrolling
+     chat_pill_font_size   → --chat-pill-font-size   input + placeholder text
+     chat_pill_attach_size → --chat-pill-attach-size attach (+) button box
+     chat_pill_attach_icon → --chat-pill-attach-icon attach (+) glyph
+     chat_pill_button_size → --chat-pill-button-size mic / send button box
+     chat_pill_button_icon → --chat-pill-button-icon mic / send glyph
+   These drive only the TALL composer — the compact 1-line bars
+   (search/builder/genui/browser) keep their own fixed sizing via the more
+   specific `.chat-pill-1line *` rules further down, which override these. */
+.chat-pill:not(.chat-pill-1line) {
+    max-width: var(--chat-pill-max-width, 500px);
+    margin-inline: auto;
+  }
+/* Vertical position indicator — a 2x6px dot on the left edge that slides
+   between the top and bottom padding to show the user's scroll position
+   within an overflowed textarea. JS (chat.js _updateScrollIndicator)
+   writes --scroll-pct (0..1) and --indicator-opacity (0 when content
+   fits, 1 when it overflows) onto the pill element. */
+.chat-pill::before { display: none; }
+.chat-pill:focus-within { border-color: var(--brand); }
+.chat-pill-input {
+        /* Cell (1,2) — first row, middle column (stretched) */
+        grid-column: 2;
+        grid-row: 1;
+    min-width: 0;
+    /* Keep chat_ui.json textarea padding inside the flex allocation so the
+       configured right inset matches the visible left inset. */
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 8px 8px 2px 0;
+    color: var(--fg-1);
+    font-size: var(--chat-pill-font-size, 14px);
+    font-weight: 400;
+    /* Explicit line-height so the JS auto-resize and the min/max heights
+       below all line up. 1 line of content = 18px. */
+    line-height: 22px;
+    /* Default pill is a 1-row textarea: 22*1 content + 8+2 padding = 32px. */
+    min-height: var(--chat-pill-min-height, 32px);
+    /* 6 visible content lines: 22px * 6 = 132px, plus 14px+14px vertical
+       padding = 160px. JS toggles overflow-y to 'auto' when content
+       exceeds this. */
+    max-height: var(--chat-pill-max-height, 160px);
+    overflow-y: hidden;
+    outline: none;
+    font-family: inherit;
+    resize: none;
+    -webkit-appearance: none;
+            appearance: none;
+    box-shadow: none;
+    /* Hide the native scrollbar entirely. When content overflows past the
+       6-line cap the textarea is still scrollable via wheel/keyboard, but
+       no visual bar takes space from the text column. */
+    scrollbar-width: none;
+  }
+.chat-pill-input::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.chat-pill-input:focus { border: none; outline: none; box-shadow: none; }
+.chat-pill-input::placeholder { color: var(--fg-4); font-size: var(--chat-pill-font-size, 14px); }
+
+/* ── Horizontal-expanding composer (#chat-input-row) ─────────────────────
+#chat-input-row.chat-pill {
+    /* Columns: empty · textarea (fills remaining) · buttons */
+    grid-template-columns: auto 1fr auto;
+    box-sizing: border-box;
+    padding: 0;
+    /* Match the footer/chevron/suggest rows exactly. JS updates their shared
+       live width and caps it at the configured surface content width. */
+    width: var(--chat-pill-current-width, var(--chat-pill-width, 500px));
+    max-width: 100%;
+    margin-inline: auto;
+    min-width: 0;
+    /* Smooth grow/shrink — width driven by JS inline style */
+    transition: width 0.15s ease;
+  }
+#chat-input-row .chat-pill-input {
+    /* No wrapping — text never wraps at the container edge. The JS toggles
+       pre-wrap only when the pill is already at its max width. This prevents
+       the text from jumping to line 2 before the pill has a chance to widen. */
+    white-space: pre;
+    /* overflow-wrap and word-break are set inline by JS when wrapping is on */
+    /* Height managed by JS, width auto-fills via 1fr grid column */
+    scrollbar-width: none;
+    /* Smooth grow/shrink — height driven by JS inline style */
+    transition: height 0.15s ease;
+    position: relative;
+    z-index: 2;
+  }
+#chat-input-row .chat-pill-input::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+/* Send / mic swap driven by .has-text on the row */
+.chat-pill .chat-pill-send  { display: none; }
+.chat-pill.has-text .chat-pill-send  { display: inline-flex; }
+.chat-pill.has-text .chat-pill-voice { display: none; }
+.chat-pill.dictating .chat-pill-voice { display: inline-flex !important; }
+.chat-pill.dictating .chat-pill-send  { display: none !important; }
+/* Configurable composer action modes. mic_send keeps the stateful swap above;
+   distinct mic/send controls stay side by side, while the single-action modes
+   keep their selected control visible regardless of input contents. */
+.chat-pill.chat-pill-distinct-buttons .chat-pill-voice,
+.chat-pill.chat-pill-distinct-buttons .chat-pill-send {
+    display: inline-flex !important;
+  }
+.chat-pill.chat-pill-mic-only .chat-pill-voice {
+    display: inline-flex !important;
+  }
+.chat-pill.chat-pill-mic-only .chat-pill-send,
+.chat-pill.chat-pill-send-only .chat-pill-voice,
+.chat-pill.chat-pill-no-action .chat-pill-voice,
+.chat-pill.chat-pill-no-action .chat-pill-send {
+    display: none !important;
+  }
+.chat-pill.chat-pill-send-only .chat-pill-send {
+    display: inline-flex !important;
+  }
+/* Cell (1,3) — buttons container: stacks voice/send vertically, top-aligned. */
+.chat-pill-buttons {
+    grid-column: 3;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-end;
+  }
+/* Cell (2,2) — row: stats on the left, stop/continue controls on the right. */
+.chat-pill-stats-row {
+    grid-column: 2;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    align-self: end;
+    overflow: hidden;
+  }
+/* The stats content row itself — inline flex, with hover highlight. */
+.chat-pill-stats {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    cursor: pointer;
+    transition: color 0.15s;
+    flex-shrink: 1;
+    position: relative;
+  }
+.chat-pill-stats:hover {
+    color: var(--brand);
+  }
+.chat-pill-stats-strip {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    overscroll-behavior-x: none;
+  }
+.chat-pill-stats-strip::-webkit-scrollbar { display: none; }
+.chat-stats-chev {
+    display: none;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 16px;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--fg-2);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0;
+    z-index: 2;
+    flex-shrink: 0;
+  }
+.chat-stats-chev.left { left: 0;  justify-content: flex-start; }
+.chat-stats-chev.right { right: 0; justify-content: flex-end; }
+.chat-stats-chev.visible { display: flex; background: none; }
+.chat-stats-chev:hover { color: var(--fg-1); }
+/* Edge-fade mask (same pattern as chat-header-carousel) */
+#chat-pill-stats:has(.chat-stats-chev.left.visible) .chat-pill-stats-strip {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
+            mask-image: linear-gradient(to right, transparent 0, #000 16px);
+  }
+#chat-pill-stats:has(.chat-stats-chev.right.visible) .chat-pill-stats-strip {
+    -webkit-mask-image: linear-gradient(to left, transparent 0, #000 16px);
+            mask-image: linear-gradient(to left, transparent 0, #000 16px);
+  }
+#chat-pill-stats:has(.chat-stats-chev.left.visible):has(.chat-stats-chev.right.visible) .chat-pill-stats-strip {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+            mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+  }
+.chat-pill-stats .chat-token-bar {
+    opacity: 0.6;
+    pointer-events: none;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg-3);
+    flex-shrink: 0;
+  }
+.chat-pill-stats .chat-token-bar.active {
+    opacity: 1;
+  }
+.chat-pill-stats .chat-token-label {
+    color: var(--fg-4);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 10px;
+  }
+.chat-pill-stats .chat-token-value {
+    color: var(--fg-3);
+    min-width: 24px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+.chat-pill-stats .chat-model-ctx {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg-3);
+    user-select: none;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+.chat-pill-stats .chat-cost {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--warning);
+    user-select: none;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+/* Unified icon-button styling: attach, voice, AND send share the same
+   transparent-circle look; only the icon glyph differentiates them. */
+.chat-pill-attach {
+    background: none;
+    border: none;
+    color: var(--fg-3);
+    cursor: pointer;
+    width: var(--chat-pill-attach-size, 38px);
+    height: var(--chat-pill-attach-size, 38px);
+    padding: 0;
+    border-radius: 50%;
+    transition: 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+.chat-pill-voice,
+.chat-pill-send {
+    background: none;
+    border: none;
+    color: var(--fg-3);
+    cursor: pointer;
+    width: var(--chat-pill-button-size, 62px);
+    height: var(--chat-pill-button-size, 62px);
+    padding: 0;
+    border-radius: 50%;
+    transition: 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+/* Cell (1,3): voice/send buttons sit in the first row, third column,
+       anchored at the top-right so the textarea grows independently. */
+.chat-pill-voice,
+.chat-pill-send {
+        grid-column: 3;
+        grid-row: 1;
+    align-self: start;
+    justify-self: end;
+  }
+/* Cell (2,3): attach button sits in the second row, third column,
+       aligned so it's centered under the send button above. Match the
+       send button's box size so both columns align perfectly. */
+.chat-pill-attach {
+        grid-column: 3;
+        grid-row: 2;
+    align-self: end;
+    justify-self: center;
+  }
+/* In the tall composer, match the attach button dimensions to the send button
+   so both cells in column 2 are visually aligned. */
+#chat-input-row .chat-pill-attach {
+    width: var(--chat-pill-attach-size, 38px);
+    height: var(--chat-pill-attach-size, 38px);
+  }
+#chat-input-row .chat-pill-attach svg {
+    width: var(--chat-pill-attach-icon, 24px) !important;
+    height: var(--chat-pill-attach-icon, 24px) !important;
+  }
+.chat-pill-attach:hover,
+.chat-pill-voice:hover,
+.chat-pill-send:hover {
+    color: var(--brand);
+    background: rgba(var(--brand-rgb), 0.08);
+  }
+.chat-pill-attach svg,
+.chat-pill-voice svg,
+.chat-pill-send svg { pointer-events: none; }
+/* Icons inside the pill buttons — sized to fill the button comfortably.
+   Targets <svg> because Lucide replaces <i data-lucide> with an inline SVG
+   and copies the inline style attribute to it. !important beats that. */
+.chat-pill-attach svg {
+    width: var(--chat-pill-attach-icon, 24px) !important;
+    height: var(--chat-pill-attach-icon, 24px) !important;
+  }
+.chat-pill-voice svg,
+.chat-pill-send svg {
+    width: var(--chat-pill-button-icon, 44px) !important;
+    height: var(--chat-pill-button-icon, 44px) !important;
+  }
+.chat-pill-send:disabled { opacity: 0.4; cursor: default; }
+.chat-pill-voice.recording {
+    color: var(--danger);
+    background: rgba(var(--danger-rgb), 0.08);
+    animation: pulse 1s infinite;
+  }
+.chat-pill-voice.transcribing {
+    opacity: 0.72;
+    cursor: wait;
+  }
+.chat-pill-voice.transcribing svg {
+    animation: chat-refresh-spin 0.7s linear infinite;
+  }
+
+/* ── Preview bar (absolute, sits above the pill, overlaps action row at higher z) ── */
+  #chat-preview-bar {
+    display: none;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 4px 2px;
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    /* Pin the bar's bottom to the pill's top edge — extends upward into the
+       action-row / activity zone. Higher z-index makes it visually overlay them. */
+    bottom: 100%;
+    z-index: 7;
+    pointer-events: none;
+  }
+#chat-preview-bar:not(:empty) {
+    display: flex;
+  }
