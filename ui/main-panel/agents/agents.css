@@ -216,7 +216,6 @@ body.light-mode .agents-clones-group-heading { color: var(--fg-3); }
 }
 body.light-mode .agent-clones-status { background: rgba(60, 44, 46, 0.08); color: var(--fg-3); }
 
-
 /* ── Card grid ──
    Outer shell: a flex column holding the squares strip and (when an agent is
    open) the expanded detail region below it.
@@ -1194,16 +1193,11 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
 .agent-mock-create-header .agent-card-meta { flex: 1; min-width: 0; }
 .agent-mock-create-header .agent-card-name-row { display: flex; min-width: 0; }
 .agent-mock-create-header .agent-card-badge-wrap { margin-left: auto; }
-.conn-draft-hint,
-.agent-config-draft-lock-notice {
+.conn-draft-hint {
   margin: 0 0 10px;
   color: var(--fg-3);
   font-size: 12px;
   font-style: italic;
-}
-.agent-config-topic--draft-locked {
-  opacity: 0.55;
-  pointer-events: none;
 }
 
 .agents-btn {
@@ -1323,9 +1317,7 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   cursor: pointer;
   transition: color .15s ease, transform .1s ease;
 }
-.agent-config-topic-row > .agent-config-topic-heading:hover,
-.agent-config-topic-row > .agent-config-topic-favorite:hover,
-.agent-config-topic-row > .agent-config-topic-favorite[aria-pressed="true"] {
+.agent-config-topic-row > .agent-config-topic-heading:hover {
   background: transparent !important;
 }
 .agent-config-topic-heading:focus-visible {
@@ -1335,41 +1327,7 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   outline-offset: -2px;
 }
 .agent-config-topic-heading:active { transform: translateY(1px); }
-.agent-config-topic-favorite {
-  flex: 0 0 46px;
-  border: 0;
-  background: transparent;
-  color: var(--fg-3);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: color .16s ease, background .16s ease;
-}
-.agent-config-topic-favorite:hover {
-  background: transparent !important;
-  color: var(--fg-3);
-}
-.agent-config-topic-favorite:focus-visible {
-  background: transparent !important;
-  color: var(--fg-3);
-  outline: 2px solid var(--agent-config-icon);
-  outline-offset: -2px;
-}
-.agent-config-topic-favorite svg {
-  fill: transparent;
-  transition: color .16s ease, fill .16s ease, transform .16s ease;
-}
-/* Icon hydration may replace the SVG, so the durable ARIA state—not a class on
-   that replaceable child—is the source of truth for the filled favorite visual. */
-.agent-config-topic-favorite[aria-pressed="true"] svg {
-  /* Icon hydration/global ui-icon styles may set color later; this interaction
-     needs the user's theme text color to remain the final visible state. */
-  color: var(--fg-1) !important;
-  fill: currentColor !important;
-}
-.agent-config-topic-favorite:active svg { transform: scale(.92); }
-.agent-config-topic-icon,
-.agent-config-topic-chevron {
+.agent-config-topic-icon {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -1397,15 +1355,6 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   font-size: 12.5px;
   line-height: 1.45;
 }
-.agent-config-topic-chevron {
-  color: var(--fg-4);
-  opacity: .72;
-  transition: color .15s ease, opacity .15s ease, transform .18s ease;
-}
-.agent-config-topic-heading:hover .agent-config-topic-chevron {
-  color: var(--agent-config-icon);
-  opacity: 1;
-}
 .agent-config-landing {
   display: flex;
   flex-direction: column;
@@ -1414,183 +1363,16 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
 }
 /* The landing and page shell are sibling surfaces: exactly one may occupy layout. */
 .agent-config-landing[hidden] { display: none !important; }
-.agent-config-page-shell {
-  min-width: 0;
-  padding: 0 5px 18px;
-}
-.agent-config-page-shell[hidden] { display: none !important; }
-.agent-config-page-topbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  margin: 0;
-  padding: 10px 0 12px;
-  box-sizing: border-box;
-}
-.agent-config-page-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
-  background: color-mix(in srgb, var(--bg-2) 60%, transparent);
-  color: var(--fg-2);
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background .15s ease, color .15s ease, border-color .15s ease;
-}
-.agent-config-page-back:hover {
-  background: var(--bg-2);
-  color: var(--fg-1);
-  border-color: var(--accent);
-}
-.agent-config-page-back:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.agent-config-page-title {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--fg-1);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-config-page-host {
-  min-width: 0;
-}
-/* Topic bodies are plain by default. Individual surfaces opt into card chrome
-   with --card rather than every Config section inheriting a visible container. */
-.agent-config-topic-content {
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-.agent-config-topic-content--card {
-  overflow: hidden;
-  border: var(--border-width) solid var(--border);
-  border-radius: 14px;
-  background: var(--bg-elev);
-}
-.agent-config-topic-content[hidden] {
-  display: none;
-}
-.agent-config-topic-content--plain > div:not([class]) {
-  padding: 0;
-}
-/* MODEL-COLUMN-WIDTH: the model-table card spans the Model topic's full content
-   column — the same edges as the model analytics card above it and as the
-   All-Agents → Available models table (SISTER-PANEL: MODEL-TABLE). The old 16px
-   side inset made the table card narrower per side than its own chart. */
-.agent-config-topic-content--plain .mt-root {
-  margin: 0;
-  overflow: hidden;
-  border: var(--border-width) solid var(--border);
-  border-radius: 14px;
-  background: var(--bg-elev);
-}
-.agent-config-topic-content--plain > div:not([class]) > .ac-directives-section {
-  /* Follow the roster card's column edges without adding chrome. */
-  margin: 18px 0 14px;
-  padding: 0;
-}
-.agent-config-topic-content > .agent-identity-settings--embedded {
-  padding: 16px;
-}
-.agent-config-topic-content > .ac-category-group {
-  margin: 0;
-  border-top: var(--border-width) solid var(--border-soft);
-}
-.agent-config-topic-content > .ac-category-group:first-child {
-  border-top: 0;
-}
-.agent-config-topic-content > .agent-identity-settings--embedded + .ac-category-group {
-  border-top: var(--border-width) solid var(--border-soft);
-}
-/* Prompt injections lives below the model-table card inside Model. Keep the
-   flow inset but frameless—no separate topic, border, or background. */
-.agent-config-topic-content > .ac-directives-section {
-  margin-top: 18px;
-  padding: 0 16px 14px;
-}
-.agent-config-topic-content > .ac-category-group > .ac-category-summary {
-  padding: 13px 16px 7px;
-  border-radius: 0;
-  cursor: default;
-  font-size: 12px;
-  color: var(--fg-2);
-}
-.agent-config-topic-content > .ac-category-group > .ac-category-summary:hover {
-  background: transparent;
-}
-.agent-config-topic-content > .ac-category-group > .ac-category-body {
-  padding: 0 16px 14px;
-}
-.agent-config-topic-content .ac-list {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-.agent-config-topic-content > div:not([class]),
-.agent-config-topic-content > .agent-model-settings {
-  padding: 14px 16px;
-}
-/* Override the generic mount inset above: Model's mt-root and plain prompt
-   flow own their individual spacing so the topic itself stays unframed. */
-.agent-config-topic-content.agent-config-topic-content--plain > div:not([class]) {
-  padding: 0;
-}
-/* The model mount adds an internal wrapper. The prompt-injection block shares the
-   model card's column edges at any depth (MODEL-COLUMN-WIDTH) — no side inset. */
-.agent-config-topic-content--plain .ac-directives-section {
-  margin-left: 0;
-  margin-right: 0;
-}
-.agent-config-advanced-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 4px 0;
-  color: var(--fg-2);
-  cursor: pointer;
-}
-.agent-config-advanced-toggle-text {
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--fg-1);
-}
 @media (max-width: 640px) {
-  .agent-config-page-shell { padding-bottom: 14px; }
-  .agent-config-page-topbar { padding-top: 8px; padding-bottom: 10px; }
-  .agent-config-page-back { padding: 5px 8px; }
   .agent-config-topics { border-radius: 15px; }
   .agent-config-topic-heading { min-height: 68px; gap: 12px; padding: 13px 14px; }
   .agent-config-topic-icon { width: 38px; height: 38px; }
-  .agent-config-topic-content--card { border-radius: 11px; }
-  .agent-config-topic-content > .agent-identity-settings--embedded { padding: 13px; }
-  .agent-config-topic-content > .ac-category-group > .ac-category-summary { padding-inline: 13px; }
-  .agent-config-topic-content > .ac-category-group > .ac-category-body { padding-inline: 13px; }
 }
 
 /* Config → Identity replaces the old expanded-card header. */
 .agent-identity-settings .ac-category-summary > svg {
   color: var(--accent);
   flex: none;
-}
-/* Unify sub-headings inside the Identity topic: groups (Template, Danger zone)
-   use the same 13px fg-1 heading style as the inline section headings so every
-   heading in the section is aligned and identically styled. */
-.agent-config-topic:has(.agent-identity-settings) > .agent-config-topic-content > .ac-category-group > .ac-category-summary,
-.agent-config-page-host:has(.agent-identity-settings) > .agent-config-topic-content > .ac-category-group > .ac-category-summary {
-  font-size: 13px;
-  color: var(--fg-1);
 }
 .agent-identity-icon-row {
   display: flex;
@@ -1746,50 +1528,6 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   color: var(--fg-1);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-/* Horizontal rule separating the Chat design section from the danger zone.
-   A sibling of both anchors (NOT a descendant of either), so the layout
-   assertion can prove it sits after Chat design and before the danger zone. */
-.agent-config-divider {
-  border: none;
-  border-top: var(--border-width) solid var(--border-soft);
-  margin: 18px 0 0;
-}
-/* Info tooltip shown after a config heading: carries the guidance that used
-   to be a visible paragraph (now collapsed into a hover/focus bubble). Shared
-   by the "Chat design" and "Danger zone" sections. Surfaced on hover AND
-   keyboard focus (tabindex 0) for accessibility. */
-.agent-config-info-tip {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  margin-left: 6px;
-  color: var(--fg-2);
-  cursor: help;
-}
-.agent-config-info-tip::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  width: max-content;
-  max-width: min(260px, 70vw);
-  padding: 8px 10px;
-  background: var(--bg-1);
-  border: var(--border-width) solid var(--border-soft);
-  border-radius: 8px;
-  box-shadow: var(--shadow-float);
-  color: var(--fg-1);
-  font-size: 12px;
-  line-height: 1.45;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .15s ease;
-  z-index: 10;
-}
-.agent-config-info-tip:hover::after,
-.agent-config-info-tip:focus::after {
-  opacity: 1;
 }
 @media (max-width: 640px) {
   .agent-design-settings-submit {
@@ -2140,40 +1878,6 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
 }
 .agent-public-link-action.is-copied {
   color: var(--success);
-}
-.agent-config-action-notices {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 24px;
-  z-index: 10000;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  pointer-events: none;
-}
-.agent-config-action-notice {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--bg-elev);
-  color: var(--fg-1);
-  box-shadow: var(--shadow-md);
-  font-size: 12px;
-  font-weight: 600;
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity .18s ease, transform .18s ease;
-}
-.agent-config-action-notice > svg { color: var(--success); }
-.agent-config-action-notice.is-error > svg { color: var(--danger); }
-.agent-config-action-notice.is-visible {
-  opacity: 1;
-  transform: translateY(0);
 }
 .agent-public-link-action > * { pointer-events: none; }
 
@@ -2838,7 +2542,6 @@ body.light-mode .agents-textarea:focus { border-color: var(--brand); }
 body.light-mode .agents-input         { background: var(--bg-0); border-color: var(--border); color: var(--fg-1); }
 body.light-mode .agents-save-bar      { background: var(--bg-elev); border-top-color: var(--border); }
 
-
 /* Icon wrap – pastel tints per color */
 body.light-mode .agent-card-icon-wrap.color-teal   { background: #e0f5f0; }
 body.light-mode .agent-card-icon-wrap.color-purple  { background: #f0e8f8; }
@@ -2865,7 +2568,6 @@ body.light-mode .agents-llm-model-item:hover        { background: var(--bg-tint)
 
 /* Prompt slot cards (inline styles use CSS vars — override the fallback colours) */
 body.light-mode .agents-slot-card                   { background: var(--bg-0) !important; border-color: var(--border) !important; }
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Interactive loop-diagram edit panel
@@ -3336,7 +3038,6 @@ body.light-mode .lv-edit-save-btn.dirty { background: var(--bg-elev); border-col
   font: inherit;
   line-height: 1.35;
 }
-
 
 .conn-banner-notice {
   font-size: 12px;
@@ -4260,7 +3961,6 @@ body.light-mode .members-level-card { background: var(--bg-elev); border-color: 
   .member-policy-select { width: 100%; }
 }
 
-
 /* Member status + actions */
 .members-status {
   display: inline-block;
@@ -4304,7 +4004,6 @@ body.light-mode .members-level-card { background: var(--bg-elev); border-color: 
   border-color: rgba(var(--danger-rgb),0.4);
 }
 .members-btn.restrict:hover { background: rgba(var(--danger-rgb),0.12); }
-
 
 /* ── Mock agent card ──────────────────────────────────────────────────── */
 .agent-card-mock .agent-card-name {
@@ -4869,8 +4568,6 @@ body.light-mode .agent-card-mock .agent-card-name {
   .ac-manager-field-number { grid-column:1/-1; }
 }
 
-
-
 /* ── List view ─────────────────────────────────────────────────────────────── */
 #agents-grid.agents-list-view {
   overflow-y: auto;
@@ -5250,7 +4947,6 @@ body.light-mode .agent-card-mock .agent-card-name {
 #agents-grid.agents-list-view .agents-list-tab-carousel .agent-card-tabs {
   padding-inline: 8px;
 }
-
 
 /* Identity: V2 compact visibility row; feedback stays in the expanded body. */
 .agent-message-visibility-route > .ac-ability-row { cursor: pointer; background: var(--bg-1); }

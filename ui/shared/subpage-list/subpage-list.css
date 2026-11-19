@@ -200,6 +200,10 @@
   transform: translateX(24px);
   pointer-events: none;
 }
+/* a page pushed inside a page slides in from the right; leaving it, the outer one returns from the left */
+.spl-detail-body { transition: opacity .2s ease, transform .2s ease; }
+.spl-detail-body.is-in-right { opacity: 0; transform: translateX(24px); }
+.spl-detail-body.is-in-left { opacity: 0; transform: translateX(-24px); }
 
 /* the rows arrive once, staggered, when the page first paints */
 @keyframes spl-row-in {
@@ -243,6 +247,7 @@
 @media (prefers-reduced-motion: reduce) {
   .spl-menu,
   .spl-detail,
+  .spl-detail-body,
   .spl-chev-back {
     transition: none;
   }

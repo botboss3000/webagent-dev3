@@ -154,16 +154,38 @@ export function createSubpageList(host, {label = 'Settings', categories = []}) {
   const pages = new Map();
   let currentId = null;
   let animating = false;
-  let releaseBack = null;
-  /* The phone's back button returns to the list instead of leaving the page. */
-  const handleBack = () => {
-    if (detail.hidden || !shell.getClientRects().length) return false;
-    releaseBack = null;
-    close({align: true});
-    return true;
+  // The open pages, outermost first: a category's page, then any page pushed inside it.
+  // Each level holds its own phone back entry, so back leaves one level at a time.
+  const levels = [];
+  const phone = () => !!window.matchMedia?.('(max-width: 800px)').matches;
+  const claimBack = level => {
+    if (!phone()) return;
+    level.release = pushBackHandler(() => {
+      if (detail.hidden || !shell.getClientRects().length) return false;
+      level.release = null;
+      if (levels.length > 1) pop(); else close({align: true});
+      return true;
+    });
   };
+  const dropBack = level => {
+    if (!level.release) return;
+    const release = level.release;
+    level.release = null;
+    release();
+  };
+  function render() {
+    const top = levels[levels.length - 1];
+    back.querySelector('.spl-back-title').textContent = top.title;
+    detailBody.replaceChildren(top.body);
+    slot.replaceChildren(top.toggleWrap || '');
+  }
+  function slide(direction) {
+    detailBody.classList.add(direction);
+    void detailBody.offsetWidth;
+    requestAnimationFrame(() => detailBody.classList.remove(direction));
+  }
 
-  const api = {stage, open, close, present};
+  const api = {stage, open, close, present, push, pop, depth: () => levels.length};
   stage.__settingsRegister = api;
 
   function pin() {
@@ -265,9 +287,9 @@ export function createSubpageList(host, {label = 'Settings', categories = []}) {
     // A section that asks to open while its own page is showing only needs the focus kept.
     if (currentId === id && !detail.hidden) return;
     currentId = id;
-    back.querySelector('.spl-back-title').textContent = entry.title;
-    detailBody.replaceChildren(entry.body);
-    slot.replaceChildren(entry.toggleWrap || '');
+    while (levels.length) dropBack(levels.pop());
+    levels.push({title: entry.title, body: entry.body, toggleWrap: entry.toggleWrap, release: null});
+    render();
     animating = true;
     menu.classList.add('is-out-left');
     detail.hidden = false;
@@ -275,7 +297,7 @@ export function createSubpageList(host, {label = 'Settings', categories = []}) {
     void detail.offsetWidth;
     if (align) alignPageTop();
     // On a phone the back press returns to the list here instead of reloading the page.
-    if (!releaseBack && window.matchMedia?.('(max-width: 800px)').matches) releaseBack = pushBackHandler(handleBack);
+    claimBack(levels[0]);
     requestAnimationFrame(() => detail.classList.remove('is-in-right'));
     setTimeout(() => {
       menu.hidden = true;
@@ -287,8 +309,9 @@ export function createSubpageList(host, {label = 'Settings', categories = []}) {
 
   function close({align = false} = {}) {
     if (animating || detail.hidden) return;
-    // The list is back, so the history entry this page claimed is no longer needed.
-    if (releaseBack) { const release = releaseBack; releaseBack = null; release(); }
+    // The list is back, so the history entries these pages claimed are no longer needed.
+    while (levels.length > 1) { const level = levels.pop(); dropBack(level); level.onPop?.(); }
+    if (levels[0]) dropBack(levels[0]);
     animating = true;
     detail.classList.add('is-out-right');
     menu.hidden = false;
@@ -305,9 +328,34 @@ export function createSubpageList(host, {label = 'Settings', categories = []}) {
     }, 220);
   }
 
-  back.addEventListener('click', event => { requestTouchVibration(event); close({align: true}); });
+  /** Open a page inside the current one (one level deeper), under the same back header.
+   *  Returns false when no category page is open. onPop runs when the page is left. */
+  function push({title, body, toggleWrap = null, onPop = null}) {
+    if (detail.hidden || animating || !levels.length) return false;
+    const level = {title, body, toggleWrap, onPop, release: null};
+    levels.push(level);
+    render();
+    slide('is-in-right');
+    claimBack(level);
+    alignPageTop();
+    back.focus({preventScroll: true});
+    return true;
+  }
+
+  /** Leave the innermost pushed page; at the category page this returns to the list. */
+  function pop() {
+    if (levels.length <= 1) { close({align: true}); return; }
+    const level = levels.pop();
+    dropBack(level);
+    level.onPop?.();
+    render();
+    slide('is-in-left');
+    back.focus({preventScroll: true});
+  }
+
+  back.addEventListener('click', event => { requestTouchVibration(event); pop(); });
   detail.addEventListener('keydown', event => {
-    if (event.key === 'Escape') { event.preventDefault(); close({align: true}); }
+    if (event.key === 'Escape') { event.preventDefault(); pop(); }
   });
 
   return api;

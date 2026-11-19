@@ -20,6 +20,9 @@ const CSS = `
 .rte-doc:empty::before{content:attr(data-placeholder);color:var(--fg-3);-webkit-text-fill-color:currentColor;pointer-events:none}
 .rte[data-readonly] .rte-bar{display:none}
 .rte[data-readonly] .rte-doc{color:var(--fg-2)}
+.rte[data-disabled]{opacity:.6}
+.rte[data-disabled] .rte-bar{pointer-events:none}
+.rte-count{align-self:flex-end;padding:0 10px 6px;font-size:11px;color:var(--fg-3)}
 `;
 
 const ICONS = {
@@ -70,9 +73,12 @@ const TOOLS = [
   { id: 'redo', label: 'Redo', html: ICONS.redo, run: doc => { doc.focus(); document.execCommand('redo'); } },
 ];
 
-/** Mount a Markdown editor; returns the frame plus read and write helpers. */
-export function createRichTextEditor({ value = '', label = 'Editor', placeholder = 'Write something\u2026',
-  readOnly = false, minHeight = 120, maxHeight = 340, onChange = null } = {}) {
+/** Mount a Markdown editor; returns the frame plus read and write helpers.
+ *  defaultText shows (greyed) while the field is empty: what applies when nothing is written.
+ *  maxLength stops typing and pasting past that many characters and shows a counter.
+ *  disabled keeps the text visible but not editable (readOnly also hides the toolbar). */
+export function createRichTextEditor({ value = '', label = 'Editor', placeholder, defaultText = '',
+  maxLength = 0, readOnly = false, disabled = false, minHeight = 120, maxHeight = 340, onChange = null } = {}) {
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
     style.id = STYLE_ID;
@@ -93,7 +99,7 @@ export function createRichTextEditor({ value = '', label = 'Editor', placeholder
   doc.setAttribute('role', 'textbox');
   doc.setAttribute('aria-multiline', 'true');
   doc.setAttribute('aria-label', label);
-  doc.dataset.placeholder = placeholder;
+  doc.dataset.placeholder = placeholder ?? (defaultText || 'Write something\u2026');
   doc.style.minHeight = minHeight + 'px';
   doc.style.maxHeight = maxHeight + 'px';
   doc.textContent = value;
@@ -118,13 +124,34 @@ export function createRichTextEditor({ value = '', label = 'Editor', placeholder
     button.addEventListener('click', () => tool.run(doc));
     bar.append(button);
   }
+  const count = maxLength ? document.createElement('span') : null;
+  const paintCount = () => { if (count) count.textContent = doc.innerText.replace(/\n$/, '').length + ' / ' + maxLength; };
+  if (maxLength) {
+    count.className = 'rte-count';
+    doc.addEventListener('beforeinput', event => {
+      if (!event.inputType.startsWith('insert')) return;
+      const picked = window.getSelection()?.toString().length || 0;
+      const adding = (event.data ?? event.dataTransfer?.getData('text/plain') ?? '').length || 1;
+      if (doc.innerText.replace(/\n$/, '').length - picked + adding > maxLength) event.preventDefault();
+    });
+    doc.addEventListener('input', paintCount);
+  }
   if (onChange) doc.addEventListener('input', () => onChange(doc.innerText));
-  frame.append(bar, doc);
+  const setDisabled = off => {
+    if (readOnly) return;
+    doc.contentEditable = off ? 'false' : 'true';
+    if (off) frame.dataset.disabled = ''; else delete frame.dataset.disabled;
+    for (const button of bar.querySelectorAll('button')) button.disabled = !!off;
+  };
+  setDisabled(disabled);
+  frame.append(bar, doc, ...(count ? [count] : []));
+  paintCount();
   return {
     element: frame,
     area: doc,
     getValue: () => doc.innerText.replace(/\n$/, ''),
-    setValue: next => { doc.textContent = next; },
+    setValue: next => { doc.textContent = next; paintCount(); },
+    setDisabled,
     focus: () => doc.focus(),
   };
 }
