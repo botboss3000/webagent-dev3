@@ -17,7 +17,7 @@ const server=http.createServer(async(req,res)=>{
  }
  if(url.pathname==='/api/v3/file-manager'){res.end('{}');return;}
  if(url.pathname==='/stubs.js'){res.setHeader('content-type','text/javascript');res.end(stubs);return;}
- if(url.pathname==='/app'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/main-panel/app/app-page.css"><style>.agent-detail-content{display:flex;flex-direction:column;height:520px;min-height:0}.agent-detail-body{flex:1;min-height:0;overflow-y:auto}</style><main id="tab-app"></main><script type="module">import {start} from "/ui/main-panel/app/app-page.js";await start(document.getElementById("tab-app"));</script>');return;}
+ if(url.pathname==='/app'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/main-panel/app/app-page.css"><style>.agent-detail-content{display:flex;flex-direction:column;height:520px;min-height:0}.agent-detail-body{flex:1;min-height:0;overflow-y:auto}.agent-detail-body > :not(#sessions-section):not(#automations-section){box-sizing:border-box;width:min(100%,750px);margin-inline:auto}</style><main id="tab-app"></main><script type="module">import {start} from "/ui/main-panel/app/app-page.js";await start(document.getElementById("tab-app"));</script>');return;}
  try{const asset=path.resolve(root,'.'+url.pathname.replace(/^\/ui\//,'/ui/'));if(!asset.startsWith(root+'/'))throw Error('outside');res.setHeader('content-type',asset.endsWith('.js')?'text/javascript':asset.endsWith('.css')?'text/css':asset.endsWith('.json')?'application/json':'text/html');res.end(asset.endsWith('/app/app-page.js')?adapted:await fs.readFile(asset));}catch{res.statusCode=404;res.end('{}');}
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -48,6 +48,10 @@ try{
   await page.reload();await page.locator('#app-tab-files').waitFor({state:'visible'});
   assert.equal(await page.locator('[role=tablist] > button:not([hidden])').last().getAttribute('id'),'app-tab-files');
   await page.locator('#app-tab-files').click();await page.locator('#file-manager').waitFor({state:'visible'});
+  // File Manager fills the main panel; the shared 750px sub-page column must not
+  // leave dead space beside the tree/editor workspace.
+  const filesLayout=await page.evaluate(()=>{const host=document.querySelector('#app-files-page'),fm=document.querySelector('#file-manager');return {host:host.clientWidth,fm:Math.round(fm.getBoundingClientRect().width)};});
+  assert.ok(Math.abs(filesLayout.fm-filesLayout.host)<=1,'File Manager width '+filesLayout.fm+' != page width '+filesLayout.host);
   assert.equal(await page.locator('#app-files-page').evaluate(el=>getComputedStyle(el).overflowY),'hidden');
   assert.equal(new URL(page.url()).searchParams.get('appView'),'files');
   await page.locator('#app-tab-config').click();await page.getByRole('button',{name:'Star File Manager',exact:true}).click();

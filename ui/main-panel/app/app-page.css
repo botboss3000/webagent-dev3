@@ -34,6 +34,10 @@
 #tab-app:has(#app-files-page:not([hidden])) .agent-detail-content{height:auto;flex:1;min-height:0;overflow:hidden}
 #app-files-page{padding:0;color:var(--fg-2);min-height:0;min-width:0;overflow:hidden}
 #app-files-page:not([hidden]){display:flex;flex-direction:column;flex:1}
+/* File Manager is a full-width workspace. The shared agent sub-page column in
+   agents.css (750px, centred) otherwise caps the tree/editor and leaves dead
+   space on both sides of the main panel. */
+#tab-app #app-files-page > #file-manager{width:100%;margin-inline:0}
 #app-files-page > #file-manager{height:auto;flex:1;min-height:0}
 #app-files-page .lucide-icon,#app-files-page i[data-lucide],#app-files-page svg{pointer-events:none}
 @media(max-width:800px){#tab-app .agent-config-star{margin-right:14px}}
