@@ -2,8 +2,6 @@
    Stargaze background + dynamic spotlight overrides
    Loaded last so it wins the cascade.
    ============================================================ */
-/* Light mode only differs in strength — the colour auto-switches via --bg-0-rgb. */
-body.light-mode .stargaze-overlay { opacity: 0.45; }
 
 /* —— Page background: the "Background" palette swatch (--bg-0). Solid (not the
    design-system gradient) so the animated genui shows through cleanly; tracks
@@ -167,34 +165,6 @@ body.light-mode #chat-panel .chat-bubble.agent:not(.activity-group) {
   -webkit-backdrop-filter: none !important;
   overflow: visible !important;
 }
-/* Grouped agent bubbles — consecutive prose from one reply "joins up" into a
-   single glass stack: the touching corners square off so the run reads as one
-   block (the tight gap comes from the .grouped-cont margin in app1.css; the
-   rounded tail survives only at the very bottom of the run). Toggled by
-   _applyGrouping in chat-bubble.js. Needs !important here to beat the 14px glass
-   radius above. */
-#chat-panel .chat-bubble.grouped-cont {
-  border-top-left-radius: 5px !important;
-  border-top-right-radius: 5px !important;
-}
-#chat-panel .chat-bubble.grouped-open {
-  border-bottom-left-radius: 5px !important;
-  border-bottom-right-radius: 5px !important;
-}
-/* Schema inspect panel ("Sent to LLM") — the raw-payload overlay inserted
-   above an agent bubble. Overrides the glass bubble treatment above so it
-   reads as a SOLID, contained technical panel (opaque surface, no backdrop
-   blur, crisp border). The panel's own structural sizing/scroll lives in
-   app1.css (.schema-inspect-*); this block only wins the surface props that
-   the glass rules force with !important. */
-#chat-panel .chat-bubble.schema-inspect-bubble {
-  --chat-bubble-bg: var(--bg-elev);
-  background: var(--bg-elev) !important;
-  border: var(--border-width) solid var(--border-strong) !important;
-  border-radius: 10px !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
 /* Input row sits directly on the page background — no wrapping glass surface */
 #chat-input-area {
   background: transparent !important;
@@ -232,16 +202,6 @@ body.light-mode #chat-panel .chat-bubble.agent:not(.activity-group) {
   border-color: color-mix(in oklab, currentColor 22%, transparent) !important;
   background: color-mix(in oklab, currentColor 9%, transparent) !important;
 }
-.chat-surface .chat-pill.drag-over,
-#chat-panel .chat-pill.drag-over,
-.ability-search-pill.chat-pill.drag-over,
-#genui-prompt-row.chat-pill.drag-over,
-.browser-prompt-row.chat-pill.drag-over,
-#ac-pa-bar-row.chat-pill.drag-over,
-#ac-ds-pa-bar-row.chat-pill.drag-over {
-  border: 1px dashed color-mix(in oklab, currentColor 25%, transparent) !important;
-  background: color-mix(in oklab, currentColor 10%, transparent) !important;
-}
 /* Chat composer pill — its OWN customisable background (Appearance → "Chat pill",
    --chat-pill-bg), independent of the other floating pills above. Left UNSET by
    default so it falls back to the SAME theme-derived panel tint as the message
@@ -276,30 +236,6 @@ body.light-mode #chat-panel .chat-pill.drag-over {
 #chat-panel .chat-pill:focus-within,
 #chat-panel .chat-pill.drag-over {
   border: var(--border-width) solid var(--chat-pill-border) !important;
-}
-/* App Settings page-assistant pill — unlike the other floating-glass pills (which
-   sit over sparse or blurred content), this one floats over the busy admin
-   settings tables, so the rows must NOT read through it. Override the glass tint
-   with the OPAQUE panel surface so content behind is fully blocked; the shared
-   rules above still give it the border + blur + focus/drag feedback. --bg-elev is
-   theme-aware, so one rule covers light + dark. */
-#ac-pa-bar-row.chat-pill,
-#ac-pa-bar-row.chat-pill:focus-within,
-#ac-pa-bar-row.chat-pill.drag-over,
-#ac-ds-pa-bar-row.chat-pill,
-#ac-ds-pa-bar-row.chat-pill:focus-within,
-#ac-ds-pa-bar-row.chat-pill.drag-over {
-  background: var(--bg-elev) !important;
-}
-/* Agent Settings page-assistant bar reuses the shared ability search/chat pill
-   (.ability-search-pill). At the BOTTOM of that page it floats over the busy Agent
-   Tools / Models tables, so give THIS placement the same opaque panel surface as
-   #ac-pa-bar-row — scoped to #ac-as-pa-bar so the agent-card pill (over its sparse
-   tab) stays translucent glass. */
-#ac-as-pa-bar .ability-search-pill.chat-pill,
-#ac-as-pa-bar .ability-search-pill.chat-pill:focus-within,
-#ac-as-pa-bar .ability-search-pill.chat-pill.drag-over {
-  background: var(--bg-elev) !important;
 }
 .chat-surface .chat-pill-input,
 #chat-panel .chat-pill-input,
@@ -342,12 +278,6 @@ body.light-mode #main-panel {
     0 15px 50px -25px rgba(var(--shadow-rgb),0.18) !important;
 }
 
-/* Route error — normal app shell retained for a failed public-agent route.
-   The isolated panel deliberately hides regular page content without changing
-   the header, account state, or independently mounted chat panel. */
-body.route-error-active #main-panel > .tab-content {
-  display: none !important;
-}
 /* Tighter on small screens — the outer margin ate too much width, squashing
    content. Pull panels closer to the screen edge and trim chat padding. */
 @media (max-width: 800px) {
@@ -366,8 +296,6 @@ html,
 body {
   overscroll-behavior-x: none;
 }
-.main-tab.spot         { --spot-radius: 140px; }
-.chat-bubble.spot      { --spot-radius: 240px; }
 
 /* —— Cursor glow: a single full-viewport layer behind every panel ——
    This lives at the page-background level (below #stage), so the chat panel
@@ -398,11 +326,6 @@ body {
 #cursor-glow.is-on,
 #cursor-glow.boot-is-on { opacity: 1; }
 /* Glow colour follows the theme accent (var(--brand-rgb)) in both modes. */
-@media (prefers-reduced-motion: reduce) { #cursor-glow { display: none; } }
-body.light-mode .load-earlier-btn:hover {
-  background: rgba(var(--ink-rgb),0.04);
-  color: var(--fg-1);
-}
 
 /* ── Chat pill focused: hide main app header + chat panel header ──
    When the chat pill is focused on MOBILE, the user is typing — reclaim
@@ -432,24 +355,6 @@ body.light-mode .load-earlier-btn:hover {
 /* Feedback styles moved to ui/shared/css/app1.css (dropdown-feedback-view).
    All panels share the login-panel look: 360px, 12px border-radius,
    var(--bg-elev) background, var(--border) border, login-panel shadow. */
-/* Cached-reader mode: keep navigation/transcripts and the composer interactive.
-   Messages entered here are written to the tenant outbox and sent only after
-   confirmed reconnection; session/configuration mutation controls stay hidden. */
-#offline-reader-composer-notice {
-  display: none;
-}
-
-body[data-offline-readonly="true"] #offline-reader-composer-notice {
-  display: block;
-  margin: 6px 12px 10px;
-  padding: 8px 12px;
-  border: var(--border-width) solid var(--border-soft);
-  border-radius: 10px;
-  color: var(--fg-3);
-  background: var(--bg-1);
-  font-size: 12px;
-  text-align: center;
-}
 
 /* app1 normally disables the session trigger whenever the server is offline.
    Cached-reader mode is the exception: once IndexedDB has painted the list,
@@ -485,5 +390,3 @@ body[data-offline-readonly="true"] :is(
 /* Role-scoped glimmer parameters affect only chat bubbles, never other spots. */
 .chat-bubble.user { --chat-role-radius: var(--chat-user-radius,14px); --spot-radius:var(--chat-user-glimmer-radius,240px); --spot-color:var(--chat-user-glimmer-color,rgba(var(--brand-rgb),0.12)); }
 .chat-bubble.agent { --chat-role-radius: var(--chat-agent-radius,14px); --spot-radius:var(--chat-agent-glimmer-radius,240px); --spot-color:var(--chat-agent-glimmer-color,rgba(var(--brand-rgb),0.12)); }
-.chat-bubble.user.spot::before { display:var(--chat-user-glimmer-enabled,block); transition-duration:var(--chat-user-glimmer-transition,250ms); }
-.chat-bubble.agent.spot::before { display:var(--chat-agent-glimmer-enabled,block); transition-duration:var(--chat-agent-glimmer-transition,250ms); }

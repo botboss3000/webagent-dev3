@@ -5,26 +5,7 @@
    Need a colour that doesn't exist yet? Add a token to the palette in design-system.css
    (the dark :root block AND its body.light-mode twin), then reference it here.
    Re-theming the whole app (e.g. peach → green) is then a one-file edit. */
-  #user-label, #session-label, #agent-label { display: flex; align-items: center; gap: 4px; color: var(--fg-3); font-size: 11px; }
-  .status-btn.restarting { opacity: 0.5; pointer-events: none; }
-#btn-restart.restarting { animation: spin 1s linear infinite; opacity: 0.6; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-
-  /* Cloud / Local — UI only (no backend routing) */
-  #control-host-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-right: 8px;
-    padding-right: 12px;
-    border-right: var(--border-width) solid var(--border);
-    flex-shrink: 0;
-  }
-  #control-host-toggle .segment-track button:hover:not(.active) { color: var(--fg-2); }
-  #control-host-toggle .segment-track button.active {
-    background: var(--bg-tint);
-    color: var(--fg-1);
-  }
 
   /* ── Responsive ── */
   /* Keep the desktop split until both panels reach their 250px floors plus the
@@ -67,84 +48,3 @@
   }
   .tab-content { display: none; flex: 1; min-height: 0; }
   .tab-content.active { display: flex; flex-direction: column; }
-  /* ── Database viewer ── */
-  #db-toolbar {
-    display: flex;
-    gap: 8px;
-    padding: 8px 12px;
-    border-bottom: var(--border-width) solid var(--border);
-    align-items: center;
-    flex-shrink: 0;
-  }
-  #db-toolbar select {
-    background: var(--bg-elev);
-    border: var(--border-width) solid var(--border);
-    color: var(--fg-1);
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    outline: none;
-    font-family: inherit;
-  }
-  #db-toolbar select:focus { border-color: var(--accent); }
-  #db-refresh {
-    background: var(--bg-elev);
-    border: var(--border-width) solid var(--border);
-    color: var(--fg-1);
-    padding: 4px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    font-family: inherit;
-  }
-  #db-refresh:hover { border-color: var(--accent); color: var(--accent); }
-  #db-table-list {
-    width: 180px;
-    min-width: 140px;
-    border-right: var(--border-width) solid var(--border);
-    overflow-y: auto;
-    padding: 4px 0;
-    flex-shrink: 0;
-  }
-  .db-table-item.active { background: var(--accent-soft); color: var(--accent); }
-  .db-table-item .count {
-    color: var(--fg-3);
-    font-size: 11px;
-  }
-  #db-table-view {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-    position: relative;
-  }
-  #db-table-footer {
-    padding: 6px 12px;
-    background: var(--files-bg-sidebar);
-    border-top: var(--border-width) solid var(--files-border-strong);
-    color: var(--files-text-muted);
-    font-size: 11px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    min-height: 36px;
-    flex-shrink: 0;
-    box-sizing: border-box;
-  }
-  #db-table-footer #db-page-info {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-  }
-  #db-table-data {
-    flex: 1;
-    overflow: auto;
-    padding: 0;
-  }
-  .db-pick-row.selected { background: var(--files-row-selected); color: var(--files-text-strong); }
-  .db-pick-row.selected:hover { background: var(--files-row-selected-hov); }
-  .db-pick-action.danger { color: var(--files-danger); }
-  .db-pick-action.danger:hover { background: var(--files-danger-hov); }

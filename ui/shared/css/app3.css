@@ -1,139 +1,13 @@
-/* COLOR SCHEME → ui/shared/css/design-system.css (single source of truth).
-   No raw hex/rgb here: use var(--brand) / var(--accent) / var(--accent-hover) for
-   the brand accent, rgba(var(--brand-rgb), a) for any accent opacity, var(--success|
-   warning|danger) (or rgba(var(--*-rgb), a)) for status, var(--purple) for the 2nd hue.
-   Need a colour that doesn't exist yet? Add a token to the palette in design-system.css
-   (the dark :root block AND its body.light-mode twin), then reference it here.
-   Re-theming the whole app (e.g. peach → green) is then a one-file edit. */
-.th-resize.resizing { background: rgba(var(--brand-rgb), 0.33); }
 
-/* ── JSON editor modal ── */
-  #cell-modal { display: none; position: fixed; inset: 0; z-index: 999; }
-#cell-modal.open { display: flex; align-items: center; justify-content: center; }
-#cell-modal-backdrop {
-    position: absolute; inset: 0;
-    background: rgba(var(--shadow-rgb), 0.6);
-    backdrop-filter: blur(4px);
-  }
-#cell-modal-panel {
-    position: relative;
-    width: 80vw;
-    max-width: 900px;
-    height: 70vh;
-    background: var(--bg-0);
-    border: var(--border-width) solid var(--border);
-    border-radius: 10px;
-    display: flex;
-    flex-direction: column;
-    z-index: 10;
-    overflow: hidden;
-    box-shadow: 0 10px 40px rgba(var(--shadow-rgb), 0.5);
-  }
-#cell-modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 16px;
-    border-bottom: var(--border-width) solid var(--border);
-    flex-shrink: 0;
-  }
-#cell-modal-title {
-    color: var(--brand);
-    font-size: 13px;
-    font-weight: 600;
-  }
-#cell-modal-close {
-    background: none;
-    border: none;
-    color: var(--fg-3);
-    font-size: 20px;
-    cursor: pointer;
-    line-height: 1;
-  }
-#cell-modal-close:hover { color: var(--danger); }
-#cell-modal-editor {
-    flex: 1;
-    background: var(--bg-0);
-    border: none;
-    border-bottom: var(--border-width) solid var(--border);
-    color: var(--fg-1);
-    font-family: 'Fira Code', Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    padding: 14px 16px;
-    resize: none;
-    outline: none;
-    tab-size: 2;
-    white-space: pre-wrap;
-    word-break: break-word;
-    overflow: auto;
-  }
-#cell-modal-editor:focus { border-bottom-color: var(--brand); }
-#cell-modal-viewer {
-    flex: 1;
-    overflow: auto;
-    padding: 16px;
-    font-family: 'Fira Code', Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    background: var(--bg-0);
-  }
-body.light-mode .th-text:hover {
-  background: var(--bg-elev-2);
-}
-body.light-mode .th-hide-btn {
-  color: var(--fg-4);
-}
-body.light-mode .th-hide-btn:hover {
-  color: var(--fg-1);
-}
-body.light-mode .th-hide-btn.hidden-col {
-  color: var(--danger);
-}
-body.light-mode #cell-modal-backdrop {
-  background: rgba(255, 250, 245, 0.7); /* KEEP (intentional): light-mode warm-white veil scrim — deliberately lightens, no neutral/shadow token fits */
-  backdrop-filter: blur(3px);
-}
-body.light-mode #cell-modal-close {
-  color: var(--fg-4);
-}
-body.light-mode #cell-modal-close:hover {
-  color: var(--danger);
-}
-body.light-mode .th-funnel {
-  color: var(--brand);
-}
 
 /* ═══════════════════════════════════════════
    App Config UI — hosted inside Admin Tools' Settings view
 ═══════════════════════════════════════════ */
 
-#app-config-container {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  /* Single source of truth for the scroll-area side inset (the gap between the
-     panel edge and the settings content column). Used by the scroller's side
-     margins AND the debug corner-frame below so they can never drift apart.
-     Narrowed to 10px on mobile via the @media (max-width: 800px) override near
-     the bottom of this block. */
-  --ac-content-inset: 20px;
-  /* Transparent so the host admin-tools panes (made transparent while the
-     settings view is active — see "App Config transparency" block below) let
-     the floating #main-panel's dynamic glass + spotlight show through, exactly
-     like the Agents page. No solid fill of our own. */
-  background: transparent;
-}
-#app-config-container[hidden] { display: none; }
 /* Mobile / narrow screens: halve the App Settings side inset (20px → 10px) so the
    settings column gets back ~20px of width on small viewports. One override drives
    both the scroller margins and the debug corner-frame (both read
    --ac-content-inset). 800px matches the app-wide mobile breakpoint. */
-@media (max-width: 800px) {
-  #app-config-container { --ac-content-inset: 10px; }
-}
 
 /* ── App Config transparency ──
    The App Configuration page lives inside the Admin-Tools "Files" workspace,
@@ -143,77 +17,6 @@ body.light-mode .th-funnel {
    Configuration page the same living background as the Agents page, instead of a
    flat fill. Scoped via :has() to the settings pane being visible, so the Files
    editor, terminal, git, etc. keep their grey. */
-
-/* Top header */
-#app-config-header {
-	  flex-shrink: 0;
-	  padding: 18px 20px 12px;
-	  background: transparent;
-	}
-
-/* Tab strip with chevron-scroll carousel (mirrors agent-detail-tabs)
-   Hidden: using unified sub-header instead */
-#app-config-tabs-wrap {
-	  position: relative;
-	  display: none;
-	}
-#app-config-tabs {
-  display: flex;
-  min-width: 0;
-  padding: 0 18px;
-  overflow-x: auto;
-  scroll-behavior: smooth;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  overscroll-behavior-x: none;
-}
-#app-config-tabs::-webkit-scrollbar { display: none; }
-.ac-tab.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-  font-size: 14px;
-}
-.ac-tab.active .ac-tab-count-badge {
-  background: var(--fg-4);
-  color: var(--fg-1);
-}
-body.light-mode .ac-tab-count-badge {
-  background: var(--bg-tint);
-  color: var(--fg-2);
-}
-body.light-mode .ac-tab.active .ac-tab-count-badge {
-  background: var(--border);
-  color: var(--fg-1);
-}
-/* Masked edge-fade carousel — same technique as the agents carousel
-   (.agents-carousel-chev / .agent-card-tabs-chev in ui/main-panel/agents/agents.css):
-   never paint a colour to fake an edge fade. The scroller (#app-config-tabs) gets
-   an alpha mask that fades the tabs to transparent at a scrollable edge, so it
-   blends into whatever panel background sits behind it in either theme; the
-   chevron button itself is transparent and just sits over the faded edge. */
-#app-config-tabs-wrap.can-scroll-right #app-config-tabs {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent 100%);
-          mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent 100%);
-}
-#app-config-tabs-wrap.can-scroll-left #app-config-tabs {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 44px);
-          mask-image: linear-gradient(to right, transparent 0, #000 44px);
-}
-#app-config-tabs-wrap.can-scroll-left.can-scroll-right #app-config-tabs {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 44px, #000 calc(100% - 44px), transparent 100%);
-          mask-image: linear-gradient(to right, transparent 0, #000 44px, #000 calc(100% - 44px), transparent 100%);
-}
-.ac-tabs-chev.left {
-	  left: 0;
-	  justify-content: flex-start;
-	  padding-left: 4px;
-	}
-	.ac-tabs-chev.right {
-	  right: 0;
-	  justify-content: flex-end;
-	  padding-right: 4px;
-	}
-.ac-tabs-chev.visible { display: flex; }
 
 /* Right scrollable content */
 #app-config-content {
@@ -363,42 +166,12 @@ body.light-mode .ac-tab.active .ac-tab-count-badge {
   padding: 12px 20px 14px;
   background: transparent;
 }
-/* Unified page-assistant chat pill - shown on the single scrollable page */
-#ac-unified-pa-bar {
-  display: flex;
-  flex-direction: column;
-}
-#ac-unified-pa-bar > .chat-pill { width: 100%; }
-#ac-unified-pa-input {
-  max-height: 132px;
-}
-/* Context suggestions can be long, but an idle search pill stays one line.
-   Once the user types, page-assistant.js sizes the textarea up to six lines. */
-#ac-unified-pa-input:placeholder-shown {
-  height: 38px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-#ac-unified-pa-input:not(:placeholder-shown) {
-  white-space: pre-wrap;
-}
-#ac-unified-pa-preview-bar {
-  pointer-events: auto;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-}
 
 /* Unified App Config pill: typing filters the page; Enter/send still chats.
    Attribute hiding wins over the many row/group display modes used by these
    three live-loaded settings sections. */
 #app-config-content [data-ac-search-hidden="true"] {
   display: none !important;
-}
-#app-config-content.ac-searching .ac-row[data-ac-search-descendant="true"] > .ac-group-body,
-#app-config-content.ac-searching .ac-category-group:not([data-ac-search-hidden="true"]) > .ac-category-body {
-  display: block !important;
 }
 
 /* ── Mobile keyboard: clear the bottom clutter off a focused field ───────────
@@ -428,7 +201,6 @@ body.kb-open .ac-stickynav .ac-category-summary { position: relative; }
   gap: 12px;
 }
 /* Hide everything that is not the summary when collapsed, restore when open. */
-details.ac-card:not([open]) > *:not(summary) { display: none; }
 .ac-label {
   display: block;
   font-size: 12px;
@@ -624,14 +396,12 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   transition: opacity 0.18s ease;
 }
 .ac-model-analytics-note.on { opacity: 1; visibility: visible; }
-@media (prefers-reduced-motion: reduce) { .ac-model-analytics-note { transition: none; } }
 .ac-model-analytics-head h3 { margin: 0; font-size: 15px; color: var(--fg-1); }
 .ac-model-analytics-head p { margin: 3px 0 0; font-size: 12px; color: var(--fg-3); }
 .ac-model-analytics-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ac-model-analytics-toggle { display: inline-flex; gap: 3px; padding: 2px; border: var(--border-width) solid var(--border); border-radius: 7px; background: var(--bg-0); }
 .ac-model-analytics-toggle .ac-btn { border-color: transparent; }
 .ac-model-analytics-toggle .ac-btn.active { background: rgba(var(--brand-rgb), 0.13); border-color: var(--accent); color: var(--accent); }
-.ac-model-analytics-scale .ac-input { width: 96px; }
 .ac-model-analytics-chart { margin-top: 4px; min-height: 38px; }
 .ac-model-analytics-svg { display: block; width: 100%; height: auto; min-height: 190px; overflow: visible; }
 /* The y axis was removed from the chart, so no grid line rule remains here. */
@@ -741,12 +511,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   .ac-model-analytics-tip-row.ac-model-analytics-tip-total { margin-top: 3px; padding-top: 3px; }
   .ac-model-analytics-tip-note { margin-top: 3px; padding-top: 3px; font-size: 10px; }
 }
-.ac-seg-btn.active {
-  border-color: var(--accent);
-  background: rgba(var(--brand-rgb),0.08);
-  color: var(--accent);
-}
-.ac-seg-btn.active .ac-seg-sub { color: var(--accent); opacity: 0.7; }
 
 /* Info banner */
 .ac-info-banner {
@@ -758,50 +522,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   color: var(--fg-2, var(--fg-2));
   line-height: 1.5;
 }
-.ac-opt-run-row.open td { background: rgba(var(--brand-rgb), 0.07); }
-.ac-opt-delta.good { color: var(--success); }
-.ac-opt-delta.bad  { color: var(--danger); }
-.ac-um-radio input[type=radio] {
-  margin-top: 3px;
-  accent-color: var(--accent);
-  flex-shrink: 0;
-}
-.ac-um-radio:has(input[type=radio]:checked) {
-  border-color: var(--accent);
-  background: rgba(var(--brand-rgb), 0.06);
-}
-.ac-dz-hold.holding .ac-dz-fill {
-  transform: scaleX(1);
-  transition: transform var(--dz-hold, 1500ms) linear;   /* == the JS fire timer */
-}
-/* Armed (past the arm threshold): intensify the danger tint so it reads as "committed". */
-.ac-dz-hold.warning {
-  color: var(--danger);
-  border-color: rgba(var(--danger-rgb, 220, 80, 80), 0.75);
-}
-
-/* ── App Access · Social sign-in (data-settings.html) ──
-   The social providers live in the SAME `.ac-list` tree as the access-mode
-   radios, styled like the ability tree: a "Sign in with" group-header row over
-   individual ability-style provider rows. The list itself draws the radio↔header
-   and header↔first-provider hairlines; only the provider↔provider hairlines need
-   a rule (the providers are wrapped in the `#ac-social-list` block). */
-#ac-social-list > * + * { border-top: var(--border-width) solid var(--border); }
-/* Collapse the provider list under the "Sign in options" head; the adjacent
-   sibling reveal opens it when the head carries `.expanded` (comments between
-   the two elements are ignored by the sibling combinator). */
-#ac-social-list { display: none; }
-.ac-access-subhead.expanded + #ac-social-list { display: block; }
-.ac-access-subhead.expanded .ac-row-chevron--left { transform: rotate(90deg); }
-.ac-um-action-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
-
-/* Social Sign-In providers (drop-in) — the expandable body content. The rows
-   themselves reuse the shared ability-row / `.conn-toggle` look (see the App
-   Access · Social sign-in block above); these rules only style what's INSIDE an
-   expanded provider's `.ac-ability-body`: the keys form, redirect URI + save.
-   Theme via tokens only (dark + light correct). */
-.ac-social-check.saved { color: var(--success); }
-.ac-social-check.error { color: var(--danger); }
 
 /* ══ Models — configurator table (4 rows, each field auto-saves) ══════════════
    A flush `.ac-list` table where each row is a label + its input/select on the
@@ -943,7 +663,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
    default `.ac-input` (9px/13px) is taller than the label and makes choice rows
    stand taller than on/off rows, breaking the uniform table rhythm. */
 .ac-config-control > select.ac-config-sel { min-width: 132px; padding: 5px 10px; font-size: 12px; }
-.ac-config-control > input.ac-config-key { width: 168px; }
 /* The transient auto-save check OVERLAYS the control's right edge rather than
    reserving layout width — so the Provider / Base URL / API Key inputs and the
    Add / Clear buttons all reach the same full-width right edge as the model
@@ -1035,8 +754,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   0%, 100% { box-shadow: none; background: transparent; }
   50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 }
-/* Advanced button reads as "on" while its options body is open. */
-.ac-row.expanded > .ac-ability-row #ac-model-advanced-toggle { color: var(--accent); }
 
 /* ══ Skeleton loading state for the model table ──────────────────────────
    Shown while saved-models data loads so the user sees table structure
@@ -1205,25 +922,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   height: 18px;
   transform: translate(-50%, -50%);
   border-radius: 4px;
-}
-.ac-sr-check-cell.checked {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.ac-sr-check-cell.checked::after {
-  content: '\2713';
-  font-size: 12px;
-  line-height: 1;
-  color: #fff;
-}
-.ac-sr-check-cell.disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-.ac-sr-check-cell.disabled:hover {
-  border-color: var(--border);
-  background: transparent;
 }
 
 /* ── Roles more-button + floating popover ─────────────────────────────────
@@ -1455,25 +1153,9 @@ body.light-mode .ac-model-badge {
 .ac-model-add-toggle.loading > svg { display: none; }
 .ac-model-add-toggle.loading > .ac-model-add-spinner { display: block; }
 
-/* ── Light mode overrides ── */
-body.light-mode #app-config-header { background: transparent; }
-body.light-mode .ac-page-title { color: var(--fg-1); }
-body.light-mode #app-config-tabs-wrap {
-	  background: transparent;
-	  border-bottom-color: var(--border);
-	}
-body.light-mode .ac-tab { color: var(--fg-3); }
-body.light-mode .ac-tab:hover { color: var(--fg-2); }
-body.light-mode .ac-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
 /* Edge fade comes from the alpha mask on #app-config-tabs (theme-agnostic), so
    the chevron stays a transparent button in light mode too — only its glyph
    colour changes. */
-body.light-mode .ac-tabs-chev { color: var(--brand); }
-body.light-mode .ac-tabs-chev:hover { color: var(--brand); }
-body.light-mode .ac-card { background: var(--bg-elev); border-color: var(--border); }
-body.light-mode .ac-section-title { color: var(--fg-1); }
-body.light-mode .ac-section-desc { color: var(--fg-3); }
-body.light-mode .ac-card-label { color: var(--fg-2); }
 body.light-mode .ac-hint { color: var(--fg-3); }
 body.light-mode .ac-label { color: var(--fg-2); }
 /* Keep the persistent catalog on the exact same surface as its search input. */
@@ -1487,40 +1169,7 @@ body.light-mode .ac-model-catalog-control .ac-model-search-field {
 body.light-mode .ac-model-catalog-control:focus-within { border-color: var(--brand); }
 body.light-mode .ac-btn-primary { background: var(--brand); color: #fff; /* KEEP (intentional): contrast ink on the brand-filled button */ }
 body.light-mode .ac-btn-ghost { border-color: var(--fg-3); color: var(--fg-3); }
-body.light-mode .ac-seg-btn { background: var(--bg-1); border-color: var(--border-strong); color: var(--fg-1); }
-body.light-mode .ac-seg-btn.active { border-color: var(--brand); background: rgba(var(--brand-rgb),0.06); color: var(--brand); }
 body.light-mode .ac-info-banner { background: var(--bg-1); border-left-color: var(--brand); }
-body.light-mode .ac-stats-table th { background: var(--bg-1); color: var(--fg-2); border-bottom-color: var(--border); }
-body.light-mode .ac-stats-table td { color: var(--fg-1); border-bottom-color: var(--border-soft); }
-body.light-mode .ac-table-empty { color: var(--fg-3); }
-body.light-mode .ac-int-badge-on { background: rgba(var(--success-rgb), 0.12); color: var(--success); }
-body.light-mode .ac-int-badge-off { background: rgba(var(--ink-rgb), 0.08); color: var(--fg-3); }
-body.light-mode .ac-int-badge-soon { background: rgba(var(--warning-rgb), 0.12); color: var(--warning); }
-body.light-mode .ac-int-account-info { background: var(--bg-1); border-color: var(--border-strong); }
-body.light-mode .ac-provider-row { background: var(--bg-1); border-color: var(--border-strong); }
-.ac-comm-toggle-btn.open { background: rgba(var(--brand-rgb),0.1); border-color: var(--accent); }
-.ac-comm-panel.open { display: block; }
-
-/* Light mode overrides for comm grid */
-body.light-mode .ac-comm-card { background: var(--bg-elev); border-color: var(--border); }
-body.light-mode .ac-comm-card:hover { border-color: rgba(var(--brand-rgb),0.4); }
-body.light-mode .ac-comm-name { color: var(--fg-1); }
-body.light-mode .ac-comm-desc { color: var(--fg-3); }
-body.light-mode .ac-comm-toggle-btn { border-color: var(--border-strong); color: var(--brand); }
-body.light-mode .ac-comm-toggle-btn:hover { background: rgba(var(--brand-rgb),0.06); border-color: var(--brand); }
-body.light-mode .ac-comm-panel { background: var(--bg-elev); border-color: var(--brand); box-shadow: 0 12px 32px rgba(var(--shadow-rgb), 0.12); }
-body.light-mode .ac-comm-webhook-url { background: var(--bg-1); border-color: var(--border-strong); }
-body.light-mode .ac-comm-badge-active { background: rgba(var(--success-rgb),0.12); color: var(--success); }
-body.light-mode .ac-comm-badge-inactive { background: rgba(var(--danger-rgb),0.1); color: var(--danger); }
-body.light-mode .ac-comm-badge-unconfigured { background: rgba(var(--ink-rgb),0.08); color: var(--fg-3); }
-
-/* ── Inline dropdown login form (light mode) ── */
-body.light-mode #dd-login-email,
-body.light-mode #dd-login-pass { background: var(--bg-1) !important; border-color: var(--border-strong) !important; color: var(--fg-1) !important; }
-body.light-mode #dd-login-email:focus,
-body.light-mode #dd-login-pass:focus { border-color: var(--brand) !important; }
-body.light-mode #dd-login-remember { accent-color: var(--brand) !important; }
-body.light-mode #dd-login-btn { background: var(--brand) !important; color: #ffffff !important; /* KEEP (intentional): contrast ink on the brand-filled button */ }
 
 /* ── Admin Tools restricted overlay (light mode) ── */
 body.light-mode #files-restricted-overlay { background: var(--bg-0) !important; }
@@ -1635,9 +1284,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
 .ac-ability-row:hover {
   background: rgba(var(--brand-rgb), 0.04);
 }
-.ac-ability-row.ac-ability-enabled {
-  background: rgba(var(--brand-rgb), 0.06);
-}
 /* ── Chevron column slot ─────────────────────────────────────────────────────
    Every .ac-list row has a 13px-wide slot before the icon (matching the SVG
    chevron width). The margin-right: -10px cancels the flex column-gap so the
@@ -1709,17 +1355,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-/* Claude target-device readiness warning (claude-agent.js `_deviceRow`): the pinned
-   device can't run a Claude agent (no `claude` CLI). Coloured with the theme-aware
-   --warning token (reads in both themes) and un-clamped so the full notice shows —
-   the base desc clamps to one line, which would truncate this. */
-.ac-ability-desc.ac-desc-warn {
-  color: var(--warning);
-  font-weight: 500;
-  display: block;
-  -webkit-line-clamp: unset;
-  overflow: visible;
-}
 /* Icon-less rows (e.g. the config / settings rows built by dom-utils) put the
    description flush under the title, since there's no icon column to clear. */
 .ac-ability-row:not(:has(> .ac-ability-icon)) .ac-ability-desc { margin-left: 0; }
@@ -1772,14 +1407,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   -webkit-line-clamp: unset;
   overflow: visible;
 }
-/* Diagnostics Logs app-function row (simple row with no expandable body): its
-   description carries the full config-options summary, so un-clamp it — the
-   base desc clamps to one line, which would hide the summary. Row id is
-   `ac-appfn-` + ability id (app-functions.js). */
-#ac-appfn-diagnostics_recorder .ac-ability-desc {
-  -webkit-line-clamp: unset;
-  overflow: visible;
-}
 /* NOTE: there used to be a `@media (max-width: 640px)` block here that un-clamped
    the description on mobile, because the OLD layout crammed it into a narrow
    middle column where one line showed only a few words. The stacked-row layout
@@ -1826,19 +1453,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
 /* A numeric gate param stays a compact stepper rather than a full-width field. */
 .ac-gate-param-control > .ac-num-stepper,
 .ac-gate-param-control > .ac-range-control { max-width: 130px; }
-.ac-gate-param-desc {
-  font-size: 11.5px;
-  color: var(--fg-3);
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.ac-gate-param-desc.is-open {
-  -webkit-line-clamp: unset;
-  overflow: visible;
-}
 .ac-ability-toggle-wrap {
   flex-shrink: 0;
   margin-left: auto;
@@ -1861,8 +1475,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   white-space: nowrap;
   flex-shrink: 0;
 }
-.ac-ability-status.tone-ok { color: var(--success); }
-.ac-ability-status.tone-warn { color: var(--warning); }
 .ac-ability-status + .ac-ability-toggle-wrap { margin-left: 8px; }
 
 /* ── "Available to" caller-access dropdown (PER-AGENT ability table only) ──────
@@ -1983,7 +1595,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   border: 4px solid transparent;
   border-top-color: var(--warning);
 }
-.wa-confirm-overlay.show { opacity: 1; }
 .wa-confirm-panel {
   width: 100%;
   max-width: 420px;
@@ -1995,8 +1606,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   transform: translateY(8px) scale(0.985);
   transition: transform 0.16s ease;
 }
-.wa-confirm-overlay.show .wa-confirm-panel { transform: translateY(0) scale(1); }
-.wa-confirm-actions .ac-btn { padding: 7px 16px; }
 @media (prefers-reduced-motion: reduce) {
   .wa-confirm-panel { transition: none; }
 }
@@ -2021,8 +1630,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   vertical-align: middle;
 }
 @keyframes agents-spin { to { transform: rotate(360deg); } }
-.ac-ability-toggle-locked .conn-toggle { cursor: not-allowed; }
-
 
 body.light-mode .ac-abilities-compact {
   background: var(--bg-elev);
@@ -2033,9 +1640,6 @@ body.light-mode .ac-ability-row {
 }
 body.light-mode .ac-ability-row:hover {
   background: rgba(var(--brand-rgb), 0.04);
-}
-body.light-mode .ac-ability-row.ac-ability-enabled {
-  background: rgba(var(--brand-rgb), 0.06);
 }
 body.light-mode .ac-ability-name {
   color: var(--fg-1);
@@ -2077,41 +1681,6 @@ body.light-mode .ac-ability-desc {
 .ac-row.expanded > .ac-ability-body:empty,
 .ac-ability-body.ac-body-open:empty {
   display: none;
-}
-/* Theme rows (Light / Dark mode) are populated async by _buildThemeCard, so the
-   body starts empty. Override the :empty hide so clicking the row immediately
-   shows visual feedback before the content loads. */
-#ac-theme-row-light.expanded > #ac-theme-body-light:empty,
-#ac-theme-row-dark.expanded > #ac-theme-body-dark:empty {
-  display: block;
-  min-height: 30px;
-}
-/* ── App Functions rows (App Settings) — smooth expand/collapse ───────────
-   The app-functions list animates row opening: the 1-line clamped description
-   expands to its full text, and the settings body (if any) slides open. JS
-   (app-functions.js `_toggleRow`) measures each row's exact heights via
-   scrollHeight and drives max-height; these rules supply the transition and
-   the clipping. The desc keeps `overflow: hidden` while expanded (overriding
-   the shared `visible` above) so the max-height transition reveals/clips the
-   text instead of snapping. */
-#ac-app-functions-list .ac-ability-desc {
-  max-height: 1.4em; /* one clamped line (10.5px font × 1.4 line-height) */
-  overflow: hidden;
-  transition: max-height 0.24s ease;
-}
-#ac-app-functions-list .ac-row.expanded > .ac-ability-row .ac-ability-desc {
-  -webkit-line-clamp: unset;
-  overflow: hidden; /* clip during the reveal (shared rule uses `visible`) */
-}
-#ac-app-functions-list .ac-ability-body {
-  overflow: hidden; /* clip while max-height animates (0 → content height) */
-  transition: max-height 0.24s ease;
-}
-@media (prefers-reduced-motion: reduce) {
-  #ac-app-functions-list .ac-ability-desc,
-  #ac-app-functions-list .ac-ability-body {
-    transition: none;
-  }
 }
 .ac-row-chevron {
   display: flex;
@@ -2349,36 +1918,6 @@ body.light-mode .ac-list.ac-config-settings {
   background: var(--border);
   pointer-events: none;
 }
-/* The visibility blurb (`.ability-vis-info`, built by agent-ability-table.js)
-   only types a message in just after a visibility toggle, then erases it and
-   vanishes. It must NOT reserve a line while empty — that reserved strip was the
-   blank band above the first row — so it claims the line (14px + 6px margin) only
-   while it actually holds text. */
-.conn-fields.ac-ability-body > .ability-vis-info:empty {
-  min-height: 0;
-  margin-bottom: 0;
-}
-.conn-fields.ac-ability-body > .ability-vis-info:not(:empty) {
-  min-height: 14px;
-  margin-bottom: 6px;
-}
-/* With the blurb collapsed, the settings list IS the body's first visible row, so
-   drop the 4px it normally keeps above itself (`.ac-list.ac-config-settings`
-   margin-top) — the first row then sits exactly flush with the body's top edge. */
-.conn-fields.ac-ability-body > .ability-vis-info:empty + .ac-list {
-  margin-top: 0;
-}
-.conn-fields.ac-ability-body .ac-list > .ac-ability-row:not(:has(> .ac-ability-icon))::before {
-  display: none;
-}
-/* A nested section's heading row (which carries its guidance line) and its EMPTY
-   row (no credential / connection / file yet) hold PROSE, not a one-line hint, so
-   waive the shared single-line description clamp for those two row kinds. */
-.ac-config-settings > .ac-ability-row.ac-config-head .ac-ability-desc,
-.ac-config-settings > .ac-ability-row.ac-config-empty .ac-ability-desc {
-  -webkit-line-clamp: unset;
-  overflow: visible;
-}
 
 /* ── Grouped abilities (Administrator / Basic / Web) ──────────────────────
    Each group is an expandable `.ac-row` whose head carries a 3-position
@@ -2444,15 +1983,6 @@ body.light-mode .ac-list.ac-config-settings {
 .ac-group-body > .ac-card.ac-card-compact .ac-int-row:hover {
   background: rgba(var(--brand-rgb), 0.06);
 }
-/* Credential cards (Web Scraper / Browser Cookies) relocated into the Web
-   group shed their own box so they line up with the toggle rows. */
-.ac-group-body > .ac-card.ac-card-compact {
-  margin: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-}
-.ac-group-body > .ac-card.ac-card-compact > div[id$="-body"] { padding-left: 32px; }
 body.light-mode .ac-group-body { border-top-color: var(--border); }
 body.light-mode .ac-group-body > .ac-ability-row + .ac-ability-row,
 body.light-mode .ac-group-body > .ac-card.ac-card-compact + .ac-ability-row,
@@ -2548,37 +2078,6 @@ body.light-mode .ac-group-body > .ac-card.ac-card-compact .ac-int-row:hover {
    `.files-tab-menu-item:disabled` — that greyed row IS the user's signal. So no
    ceiling styling belongs on the track. */
 
-/* ── Group head delete button (admin) ────────────────────────────────────────
-   The group row's trash button sits as the LAST child of the head, mirroring
-   the per-ability delete button (`.ac-ability-delete-btn`) so the two line up
-   on the same right edge. Both share the same inline style set in JS; this rule
-   only guarantees the group head reserves room for it at the same offset. */
-.ac-group-head .ac-ability-delete-btn { margin-left: 0; }
-.ac-int-row .ac-ability-toggle-wrap { margin-left: auto; }
-
-/* Integration cards grouped into ONE flush `.ac-list` (see _groupIntegrationLists
-   in app-config.js). The list draws the border / radius / dividers; each card
-   sheds its own box so the section reads as a single compact option-table —
-   the same look as the Agent Tools reference. */
-.ac-list > .ac-card.ac-card-compact {
-  margin: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-}
-/* Divider between cards — needs higher specificity than the `border:none` above,
-   so the generic `.ac-list > * + *` rule (lower specificity) can't supply it. */
-.ac-list > .ac-card.ac-card-compact + .ac-card.ac-card-compact {
-  border-top: var(--border-width) solid var(--border);
-}
-body.light-mode .ac-list > .ac-card.ac-card-compact + .ac-card.ac-card-compact {
-  border-top-color: var(--border);
-}
-.ac-soon-row .ac-ability-icon { color: var(--fg-muted); }
-body.light-mode .ac-card.ac-card-compact { background: var(--bg-elev); border-color: var(--border); }
-body.light-mode .ac-card-compact > div[id$="-body"] { border-top-color: var(--border); }
-body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-color: var(--border); }
-
 /* ╔══════════════════════════════════════════════════════════════════════╗
    ║  SHARED COLLAPSIBLE SECTION PATTERN  —  KEEP IN SYNC ACROSS PAGES      ║
    ╠══════════════════════════════════════════════════════════════════════╣
@@ -2668,23 +2167,6 @@ body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-c
   padding: 3px 8px;
   font-size: 13px;
 }
-.ac-ra-icon-btn .lucide-icon { width: 15px; height: 15px; }
-@keyframes ac-deploy-spin { to { transform: rotate(360deg); } }
-.qr-pop-close > .lucide-icon { width: 12px; height: 12px; }
-/* Deploy card — the local-deployments list (this app + sibling checkouts),
-   deploy.js `_renderInstances`. Each instance is an expandable `.ac-row` inside
-   #ac-deploy-instances; the list reuses the shared `.ac-ability-row` /
-   `.ac-ability-body` look, so these rules only add the status dot, badges, the
-   "Port N · folder" meta line and the sibling action buttons. Theme-safe. */
-.ac-deploy-insts > .ac-row + .ac-row {
-  border-top: var(--border-width) solid var(--border);
-}
-.ac-deploy-reset-btn.warning { color: var(--danger); border-color: rgba(var(--danger-rgb, 220, 80, 80), 0.6); }
-.ac-deploy-reset-btn.holding .ac-deploy-reset-fill {
-  transform: scaleX(1);
-  transition: transform 1200ms linear; /* == _RESET_HOLD_MS in deploy.js */
-}
-.ac-boot-pw-row .ac-input { flex: 1 1 auto; min-width: 0; }
 
 /* Field help: a small circled "?" beside a label. CLICK / TAP opens the help
    bubble (.ac-tip-pop below); hover also previews it on a mouse. Used by the
@@ -2747,16 +2229,6 @@ body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-c
    and screenshot thumbnails, not just one line of text. Made clickable (the plain
    bubble is pointer-events:none) so the link inside can be followed. */
 .ac-tip-pop.is-rich { pointer-events: auto; }
-.ac-tip-pop .ac-tip-text { margin-bottom: 8px; }
-.ac-tip-pop .ac-tip-link {
-  display: inline-block;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: var(--accent);
-  text-decoration: none;
-  word-break: break-all;
-}
-.ac-tip-pop .ac-tip-link:hover { text-decoration: underline; }
 .ac-tip-pop .ac-tip-gallery { display: flex; flex-direction: column; gap: 8px; }
 .ac-tip-pop .ac-tip-gallery img {
   display: block;
@@ -2795,17 +2267,6 @@ body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-c
   box-shadow: 0 10px 44px rgba(0, 0, 0, 0.55);
 }
 
-/* Drag-and-drop affordance on the Service-account JSON box: dropping the
-   downloaded key file fills the box as if pasted (deploy.js _wireDropzone). */
-textarea.ac-dropzone.is-dragover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: 0 0 0 2px var(--accent-line);
-}
-.ac-ra-subhead .lucide-icon { width: 14px; height: 14px; color: var(--accent); flex-shrink: 0; }
-.ac-category-group[open] .ac-category-chevron {
-  transform: rotate(90deg);
-}
 .ac-category-title {
   flex: 1;
 }
@@ -2936,20 +2397,6 @@ textarea.ac-dropzone.is-dragover {
   background-color: var(--ac-head-base);
   background-image: var(--ac-head-bg);
 }
-/* Cursor-follow spotlight on the headings — the SAME `.spot` system the cards /
-   bubbles / main panel use (cursor-effects.js adds the `.spot` class and tracks
-   --mx/--my as the pointer moves over the heading; the glow shows while hovered).
-   Tuned for a thin wide bar: a tighter radius + a slightly stronger brand tint
-   than the default since it sits on the opaque dark bar. The shared .spot::before
-   paints at z-index:0, which on a heading would land the glow OVER the inline
-   label text — so we drop it to z-index:-1 so the glow rides over the opaque
-   background but UNDER the text. (position:sticky on the heading makes its own
-   stacking context, so -1 stays above the bar's own background, not behind it.) */
-.ac-stickynav .ac-category-summary.spot {
-  --spot-radius: 260px;
-  --spot-color: rgba(var(--brand-rgb), 0.16);
-}
-.ac-stickynav .ac-category-summary.spot::before { z-index: -1; }
 /* The heading whose table you're currently reading. */
 .ac-stickynav .ac-category-summary.ac-navh-active {
   color: var(--accent);
@@ -2970,7 +2417,6 @@ textarea.ac-dropzone.is-dragover {
    `.ac-collapsible`, opened via `.ac-open`): hide the body unless `.ac-open`,
    and rotate the chevron when open. A group WITHOUT `.ac-collapsible` is never
    hidden, so it stays always-open. */
-.ac-stickynav .ac-category-group.ac-collapsible:not(.ac-open) > .ac-category-body { display: none; }
 .ac-stickynav .ac-category-group.ac-collapsible.ac-open > .ac-category-summary .ac-category-chevron { transform: rotate(90deg); }
 .ac-category-desc {
   font-size: 11px;
@@ -2996,9 +2442,6 @@ body.light-mode .ac-stickynav .ac-category-summary:hover {
   background-color: var(--ac-head-base);
   background-image: var(--ac-head-bg);
 }
-body.light-mode .ac-category-chevron {
-  color: var(--fg-3);
-}
 body.light-mode .ac-category-desc {
   color: var(--fg-3);
 }
@@ -3016,31 +2459,7 @@ body.light-mode .ac-category-desc {
    view. The section's own headings stay (just un-stuck with position: relative)
    so each block is still labelled as you scroll. */
 
-/* The sub-header host: now the main navigation bar (replacing tab strip).
-   Always shown when it has content. */
-#app-config-subnav:not(:empty) {
-  display: block;
-  flex-shrink: 0;
-  border-bottom: var(--border-width) solid var(--border);
-}
-
-/* Un-stack the in-flow headings for a carousel section so they scroll naturally
-   instead of pinning top/bottom. Higher specificity than the base
-   `.ac-stickynav .ac-category-summary { position: sticky }`.
-   `relative` (not `static`) so the row still un-sticks BUT stays a containing
-   block for the absolutely-positioned `.ac-theme-switch` in the Design header —
-   `static` here let the switch escape to the viewport and float loose over the
-   mobile page instead of pinning to the right of its heading row. */
-.ac-section.ac-mnav-on .ac-category-summary { position: relative; }
-.ac-mnav-chip.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-  font-size: 14px;
-}
 /* Light-mode mirror of `body.light-mode .ac-tab*` (active uses --brand there). */
-body.light-mode .ac-mnav-chip { color: var(--fg-3); }
-body.light-mode .ac-mnav-chip:hover { color: var(--fg-2); }
-body.light-mode .ac-mnav-chip.active { color: var(--brand); border-bottom-color: var(--brand); }
 .ac-main-panel-item {
   cursor: grab;
   user-select: none;
@@ -3048,24 +2467,6 @@ body.light-mode .ac-mnav-chip.active { color: var(--brand); border-bottom-color:
 .ac-main-panel-item.dragging {
   opacity: 0.5;
   cursor: grabbing;
-}
-.ac-main-panel-item.drag-over {
-  box-shadow: inset 0 2px 0 0 var(--accent);
-  background: rgba(var(--brand-rgb), 0.08);
-}
-.ac-main-panel-item .ac-mp-drag-handle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  color: var(--fg-3, var(--fg-3));
-  flex-shrink: 0;
-  cursor: grab;
-}
-.ac-main-panel-item .ac-mp-drag-handle svg {
-  width: 14px;
-  height: 14px;
 }
 /* 3-state page-visibility toggle (Off · Signed-in only · Always visible). Mirrors
    the abilities table's `.ac-tri` (same 54px footprint, knob positions and token
@@ -3088,28 +2489,10 @@ body.light-mode .ac-mnav-chip.active { color: var(--brand); border-bottom-color:
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
 }
-.ac-main-panel-item .ac-mp-tri-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--fg-3);
-  transition: left 0.2s, background 0.2s;
-}
-.ac-main-panel-item .ac-mp-tri[data-state="auth"] .ac-mp-tri-knob {
-  left: 20px;
-  background: var(--warning);
-}
 .ac-main-panel-item .ac-mp-tri[data-state="all"] {
   /* brand fill marks the active state; the outer border stays the neutral 1px
      var(--border) from the base rule — no teal ring around the pill. */
   background: rgba(var(--brand-rgb), 0.4);
-}
-.ac-main-panel-item .ac-mp-tri[data-state="all"] .ac-mp-tri-knob {
-  left: 38px;
-  background: var(--accent);
 }
 .ac-main-panel-item .ac-mp-tri:disabled {
   opacity: 0.5;
@@ -3144,40 +2527,6 @@ body.light-mode .ac-mnav-chip.active { color: var(--brand); border-bottom-color:
               transparent 9px, var(--bg-1) 11px);
   pointer-events: none;
 }
-.ac-main-panel-item.ac-mp-locked {
-  cursor: default;
-  background: rgba(var(--brand-rgb), 0.06);
-}
-.ac-main-panel-item.ac-mp-locked .ac-ability-name {
-  color: var(--accent);
-}
-body.light-mode .ac-main-panel-item.ac-mp-locked {
-  background: rgba(var(--brand-rgb), 0.08);
-}
-
-/* Icon button — opens the shared searchable icon picker to change a page icon. */
-.ac-main-panel-item .ac-mp-icon-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  width: 26px;
-  height: 26px;
-  cursor: pointer;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--fg-2, var(--fg-2));
-  transition: background 0.15s, color 0.15s;
-}
-.ac-main-panel-item .ac-mp-icon-btn:hover {
-  background: var(--bg-2);
-  color: var(--accent);
-}
-body.light-mode .ac-main-panel-item .ac-mp-icon-btn:hover {
-  background: var(--bg-2);
-}
 
 /* Editable page-name field — reads as plain text until hovered/focused.
    display:block opts out of the shared `display:contents` stacked-row promotion
@@ -3186,46 +2535,6 @@ body.light-mode .ac-main-panel-item .ac-mp-icon-btn:hover {
   display: block;
   flex: 1;
   min-width: 0;
-}
-.ac-main-panel-item .ac-mp-name-input {
-  width: 100%;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--fg-1, var(--fg-1));
-  font: inherit;
-  font-size: 13.5px;
-  padding: 3px 6px;
-  cursor: text;
-  transition: border-color 0.15s, background 0.15s;
-}
-.ac-main-panel-item .ac-mp-name-input:hover {
-  border-color: var(--border);
-}
-.ac-main-panel-item .ac-mp-name-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: var(--bg-1);
-}
-.ac-main-panel-item.ac-mp-locked .ac-mp-name-input {
-  color: var(--accent);
-}
-body.light-mode .ac-main-panel-item .ac-mp-name-input:focus {
-  background: var(--bg-1);
-}
-.chat-tunnel-overlay .xterm { padding: 8px; height: 100%; }
-#chat-terminal-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  background: var(--bg-0);
-  border-top: var(--border-width) solid var(--border);
-  overflow: hidden;
-}
-#chat-terminal-overlay .xterm { padding: 8px; height: 100%; }
-@keyframes chat-tunnel-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.7); }
 }
 
 /* ── Debug Console Log Panel ─────────────────────────────────────────────── */
@@ -3240,200 +2549,6 @@ body {
 }
 #main-header { flex-shrink: 0; }
 #stage { flex: 1 1 0; min-height: 0; }
-.debug-console-drag-handle.resizing {
-  background: rgba(var(--brand-rgb), 0.08);
-}
-.debug-console-drag-handle.resizing .debug-console-drag-line {
-  opacity: 0.8;
-  background: var(--accent);
-  width: 50px;
-}
-.debug-console-panel.open {
-  display: flex;
-}
-.debug-console-chev.left  { left: 0;  justify-content: flex-start; }
-.debug-console-chev.right { right: 0; justify-content: flex-end; }
-.debug-console-chev.visible { display: flex; }
-
-/* Edge-fade mask — same pattern as main-tabs / chat-header carousel */
-.debug-console-header-actions-wrap:has(.debug-console-chev.left.visible) .debug-console-header-actions {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--dc-fade));
-          mask-image: linear-gradient(to right, transparent 0, #000 var(--dc-fade));
-  padding-left: 22px;  /* push buttons clear of the absolutely-positioned left chevron */
-}
-.debug-console-header-actions-wrap:has(.debug-console-chev.right.visible) .debug-console-header-actions {
-  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 var(--dc-fade));
-          mask-image: linear-gradient(to left, transparent 0, #000 var(--dc-fade));
-  padding-right: 22px;  /* push buttons clear of the absolutely-positioned right chevron */
-}
-.debug-console-header-actions-wrap:has(.debug-console-chev.left.visible):has(.debug-console-chev.right.visible) .debug-console-header-actions {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--dc-fade), #000 calc(100% - var(--dc-fade)), transparent 100%);
-          mask-image: linear-gradient(to right, transparent 0, #000 var(--dc-fade), #000 calc(100% - var(--dc-fade)), transparent 100%);
-}
-.debug-console-commit-btn.is-working,
-.debug-console-commit-btn.is-done {
-  position: relative;
-  color: transparent;
-  pointer-events: none;
-}
-.debug-console-commit-btn.is-working .lucide-icon,
-.debug-console-commit-btn.is-done .lucide-icon {
-  opacity: 0;
-}
-.debug-console-commit-btn.is-working:disabled,
-.debug-console-commit-btn.is-done:disabled {
-  opacity: 1;
-}
-.debug-console-commit-btn.is-working::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 12px;
-  height: 12px;
-  border: 2px solid rgba(26,26,46,0.3);
-  border-top-color: #1a1a2e;
-  border-radius: 50%;
-  animation: dc-spin 0.7s linear infinite;
-}
-.debug-console-commit-btn.is-done::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 5px;
-  height: 9px;
-  border: solid #1a1a2e;
-  border-width: 0 2px 2px 0;
-  transform: translateY(-1px) rotate(45deg);
-}
-@keyframes dc-spin {
-  to { transform: rotate(360deg); }
-}
-#debug-console-panel .debug-console-kill-switch-btn.active,
-#debug-console-panel .debug-console-kill-switch-btn.is-armed {
-  color: var(--danger);
-  border-color: rgba(var(--danger-rgb), 0.6);
-}
-#debug-console-panel .debug-console-kill-switch-btn.active { background: rgba(var(--danger-rgb), 0.14); }
-#debug-console-panel .debug-console-kill-switch-btn.is-armed { background: rgba(var(--danger-rgb), 0.22); }
-#debug-console-panel .debug-console-kill-switch-btn.is-busy { cursor: wait; opacity: 0.78; }
-/* Armed (first tap) — danger styling with hazard icon */
-.debug-console-restart-btn.is-armed {
-  background: rgba(var(--danger-rgb), 0.15);
-  border-color: var(--danger);
-  color: var(--danger);
-  animation: dc-restart-pulse 0.8s ease-in-out infinite alternate;
-}
-.debug-console-restart-btn.is-armed:hover:not(:disabled) {
-  filter: brightness(1.2);
-  border-color: var(--danger);
-}
-@keyframes dc-restart-pulse {
-  from { box-shadow: 0 0 0 rgba(var(--danger-rgb), 0); }
-  to   { box-shadow: 0 0 6px rgba(var(--danger-rgb), 0.4); }
-}
-.debug-console-filter-toggle-btn.is-open {
-  background: rgba(var(--brand-rgb),0.12);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.debug-console-filter-popover.is-open {
-  display: flex;
-}
-.debug-console-filter-popover .debug-console-filter-btn.active {
-  background: rgba(var(--brand-rgb),0.15);
-  color: var(--accent);
-}
-.debug-console-filter-popover .debug-console-filter-btn.active::before {
-  content: '✓';
-  margin-right: 5px;
-  font-size: 10px;
-}
-.debug-console-copy-all-btn.copied {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: rgba(var(--brand-rgb), 0.15);
-}
-.debug-console-copy-all-btn.copied i {
-  display: none;
-}
-.debug-console-copy-all-btn.copied::after {
-  content: "✓";
-  font-size: 13px;
-  line-height: 1;
-}
-.dc-entry .dc-tag.log { color: var(--accent); background: rgba(var(--brand-rgb),0.12); }
-.dc-entry .dc-tag.warn { color: var(--warning); background: rgba(var(--warning-rgb),0.12); }
-.dc-entry .dc-tag.error { color: var(--danger); background: rgba(var(--danger-rgb),0.12); }
-.dc-entry .dc-tag.debug { color: #73daca; background: rgba(115,218,202,0.12); }
-.dc-entry.warn .dc-msg { color: var(--warning); }
-.dc-entry.error .dc-msg { color: var(--danger); }
-.dc-entry .dc-stack.expanded {
-  max-height: none;
-}
-#debug-console-input {
-  flex: 1;
-  background: var(--bg-1);
-  border: var(--border-width) solid var(--border);
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--fg-1);
-  outline: none;
-  min-width: 0;
-}
-#debug-console-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(var(--brand-rgb), 0.2);
-}
-#debug-console-input::placeholder {
-  color: var(--fg-4);
-  font-style: italic;
-}
-.debug-console-toggle-btn.active {
-  color: var(--accent);
-  background: rgba(var(--brand-rgb),0.12);
-}
-.kill-switch-toggle-btn.active {
-  color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.14);
-}
-.kill-switch-toggle-btn.active:hover {
-  color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.2);
-}
-.kill-switch-toggle-btn.is-armed {
-  color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.22);
-  animation: kill-switch-arm-pulse 0.8s ease-in-out infinite;
-}
-.kill-switch-toggle-btn.is-busy {
-  cursor:wait;
-  opacity:0.78;
-}
-@keyframes kill-switch-arm-pulse {
-  0%, 100% { background: rgba(var(--danger-rgb), 0.22); }
-  50% { background: rgba(var(--danger-rgb), 0.4); }
-}
-.ac-preset-chip.active {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.ac-swatch::-moz-color-swatch { border: none; border-radius: 5px; }
-.ac-swatch-alpha::-moz-range-thumb {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--bg-elev);
-  cursor: pointer;
-}
-/* The select inside a theme row (e.g. the in-body Background select) sizes itself;
-   cap it so the row breathes. */
-.ac-theme-row .ac-input { max-width: 190px; width: 100%; }
 
 /* ── Skeleton loading placeholders (shared) ─────────────────────────────────
    Phantom "shimmer" shapes shown while a page's data loads, so the layout has
@@ -3471,31 +2586,12 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .sk-shimmer { animation: none; }
 }
-.ac-free-ranking-credential.is-connected { color:var(--accent); }
-.ac-free-ranking-cadence .ac-input { width:66px; }
-/* CAPABILITY-FLAGS: the free catalog shows the FULL capability option set per model
-   (Text · Vision · Image · Voice) — capable squares in the success colour, the rest
-   muted — using the same 16×16 square as the primary model table's flags column
-   (.ac-role-flag, see ui/shared/js/model-table.js). Scoped here so the primary
-   table's role-flag styling is untouched. */
-.ac-free-ranking-caps .ac-role-flag { background:var(--success-soft); border-color:var(--success-mid); color:var(--success); }
-.ac-free-ranking-caps .ac-role-flag.off { background:var(--bg-tint); border-color:var(--border); color:var(--fg-4); opacity:.55; }
-/* A search-only sub-view turns this same slot into a CLEAR control (see _applyMode
-   in page-chat-launcher.js). The red is the point: beside a label that says search
-   it has to read as "clear", never as "send". Shared danger tokens, both themes. */
-.page-chat-launcher-send.is-clear { color: var(--danger); }
-.page-chat-launcher-send.is-clear:hover,
-.page-chat-launcher-send.is-clear:focus-visible {
-  background: rgba(var(--danger-rgb), 0.12);
-  color: var(--danger);
-}
 
 /* Settings mounts the pill once, into the panel box, so a single copy serves the
    route. It may only show while BOTH the App tab is the active pane AND the
    Settings host is mounted — a settings host left behind in the hidden pane must
    not keep the pill on screen after leaving Settings. */
 #settings-page-chat-launcher { display: none; z-index: 60; }
-body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-chat-launcher { display: block; }
 
 /* Ability-table toggle states stay semantically legible in every theme.
    Scope this to the Agents → Abilities table; shared toggles keep their own states.
@@ -3514,15 +2610,7 @@ body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-
 .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after {
   background: var(--success);
 }
-.ac-ability-exposure-choice.is-selected[data-exposure-choice="discoverable"] { border-color: var(--border); }
-.ac-ability-exposure-choice.is-selected[data-exposure-choice="discoverable"] .ac-ability-exposure-dot { background: var(--success); }
-.ac-ability-exposure-choice.is-selected[data-exposure-choice="loaded"] { border-color: var(--success); }
-.ac-ability-exposure-choice.is-selected[data-exposure-choice="loaded"] .ac-ability-exposure-dot { border-color: var(--success); background: var(--success); }
 /* Off = neutral gray. Discoverable = normal outline + green circle. Visible = green outline + green circle. */
-.ac-ability-row[data-exposure="off"] .ac-ability-toggle-wrap .conn-toggle + .conn-toggle-track { background: var(--bg-2); border-color: var(--codex-gray); }
-.ac-ability-row[data-exposure="off"] .ac-ability-toggle-wrap .conn-toggle + .conn-toggle-track::after { background: var(--codex-gray); }
-.ac-ability-row[data-exposure="discoverable"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track { background: var(--bg-1); border-color: var(--border); }
-.ac-ability-row[data-exposure="discoverable"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after { background: var(--success); }
 .ac-ability-row[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track { background: var(--success-soft); border-color: var(--success); }
 .ac-ability-row[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after { background: var(--success); }
 
@@ -3533,13 +2621,6 @@ body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-
 }
 .conn-card[data-exposure="off"] .ac-ability-toggle-wrap .conn-toggle-track::after {
   background: var(--codex-gray);
-}
-.conn-card[data-exposure="discoverable"] .ac-ability-toggle-wrap .conn-toggle-track {
-  background: var(--bg-1);
-  border-color: var(--border);
-}
-.conn-card[data-exposure="discoverable"] .ac-ability-toggle-wrap .conn-toggle-track::after {
-  background: var(--success);
 }
 .conn-card[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle-track {
   background: var(--success-soft);
