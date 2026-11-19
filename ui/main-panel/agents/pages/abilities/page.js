@@ -509,7 +509,9 @@ export async function renderAbilities(host, request, options) {
   let promptsSection = null;
   if (prompts) {
     promptsSection = createSubpage(register.stage, {id: 'prompts', title: 'Prompts'});
-    prompts.classList.add('expanded', 'v3-register-prompts');
+    // The subpage replaces the group's head, whose click was the only other loader.
+    prompts.classList.add('v3-register-prompts');
+    prompts._setExpanded(true);
     prompts.querySelector('.ac-group-head')?.remove();
   }
   const matchesAbility = ability => [ability.name, ability.description, ability.skill_summary,
