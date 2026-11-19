@@ -1136,6 +1136,7 @@ def opencode_turn_once(command, prompt, work, model):
     the session with the tool's real result."""
     # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
     # `opencode run` takes its directory from PWD, not the process cwd; without it every chat is /home/ar.
+    started_ms = time.time() * 1000
     process = start_harness(command, cwd=work, env={**os.environ, "PWD": str(work), "OPENCODE_SERVER_PASSWORD": server_password()})
     stop = lambda: interrupt(process)
     timer = threading.Timer(HARNESS_SECS, stop)
@@ -1183,9 +1184,34 @@ def opencode_turn_once(command, prompt, work, model):
         raise watch.failure
     if errors or not session or (process.returncode and not stopped):
         raise harness_failure(errors, process.returncode, "".join(stderr))
+    if server and not (usage["input"] or usage["output"]):
+        usage = session_usage(server, session, work, started_ms) or usage
     # Every assistant message of the turn reaches WebAgent: a sentence written before the tool
     # calls is the agent's progress note.
     return session, "\n\n".join("".join(parts) for parts in texts.values() if "".join(parts).strip()), usage
+
+
+def session_usage(server, session, work, since_ms):
+    """Token usage of the session's model replies since `since_ms`, read from its server. `opencode run
+    --format json` often prints no step_finish event (2.0.32 printed only text), which lost most calls'
+    usage. The newest reply gives the prompt and cache counts (earlier steps repeat it); outputs are summed."""
+    try:
+        messages = server_request(server, "/api/session/" + urllib.parse.quote(session) + "/message", work)["data"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return steps_usage(messages, since_ms)
+
+
+def steps_usage(messages, since_ms):
+    """Usage in `session_usage`'s shape from server messages listed newest first; None when none qualify."""
+    steps = [m["tokens"] for m in messages
+             if isinstance(m.get("tokens"), dict) and (m.get("time") or {}).get("created", 0) >= since_ms]
+    if not steps:
+        return None
+    cache = steps[0].get("cache") or {}
+    return {"input": steps[0].get("input", 0) + cache.get("read", 0) + cache.get("write", 0),
+            "output": sum(step.get("output", 0) for step in steps),
+            "cached": cache.get("read", 0), "cache_write": cache.get("write", 0)}
 
 
 def opencode_usage(usage):
@@ -1749,6 +1775,13 @@ def selftest():
     assert claude_usage({"usage": {"input_tokens": 1, "cache_read_input_tokens": 10, "output_tokens": 2}}) == \
         {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13, "prompt_tokens_details": {"cached_tokens": 10, "cache_write_tokens": 0}}
     assert opencode_usage({"input": 0, "output": 0, "cached": 0}) is None
+    # Usage read back from the server: only this run's replies, newest one's prompt, outputs summed.
+    listed = [{"time": {"created": 300}, "tokens": {"input": 10, "output": 4, "cache": {"read": 90, "write": 2}}},
+              {"time": {"created": 250}, "type": "user"},
+              {"time": {"created": 200}, "tokens": {"input": 12, "output": 5, "cache": {"read": 80}}},
+              {"time": {"created": 100}, "tokens": {"input": 99, "output": 99}}]
+    assert steps_usage(listed, 150) == {"input": 102, "output": 9, "cached": 90, "cache_write": 2}
+    assert steps_usage(listed, 400) is None
     # Old fork and checkpoint sessions go; the live session, the checkpoint and recent ones stay.
     project = folder / "claude-project"
     project.mkdir()
