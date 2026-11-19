@@ -62,8 +62,16 @@ async fn save(
     }
     let target = write.section.id.clone();
     let (next, changes) = rules::apply(&list, write, now_ms())?;
+    let marks = rules::marks(&list, &next);
     let mut output = host
-        .write_task_list(call, receipt, list.revision, &json!(next), &json!(changes))
+        .write_task_list(
+            call,
+            receipt,
+            list.revision,
+            &json!(next),
+            &json!(changes),
+            &marks,
+        )
         .await?;
     // A plan's section keeps the plan's checklist current; the plan seeding call has
     // already saved the plan itself.

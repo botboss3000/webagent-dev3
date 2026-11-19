@@ -62,6 +62,7 @@ impl Store {
         expected_revision: u64,
         list: &Value,
         changes: &Value,
+        marks: &Value,
     ) -> Result<Value> {
         list_key(sid)?;
         if generation.is_empty()
@@ -79,7 +80,7 @@ impl Store {
             return Err(anyhow!("Invalid task list write"));
         }
         let receipt_key = format!("receipt:base:{sid}:{rid}:{pending_id}:{receipt}");
-        let fingerprint = crate::digest(&json!([expected_revision, list, changes]));
+        let fingerprint = crate::digest(&json!([expected_revision, list, changes, marks]));
         let _guard = self.context_gate.write().await;
         let mut tx = self.pool.begin().await?;
         if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
@@ -105,6 +106,7 @@ impl Store {
                 json!({"run":rid}),
                 list,
                 changes,
+                marks,
             )
             .await?;
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
@@ -126,6 +128,7 @@ impl Store {
         expected_revision: u64,
         list: &Value,
         changes: &Value,
+        marks: &Value,
     ) -> Result<Value> {
         list_key(sid)?;
         if request_id.is_empty()
@@ -137,7 +140,7 @@ impl Store {
             return Err(anyhow!("Invalid task list request"));
         }
         let receipt_key = format!("receipt:base:{sid}:user:{request_id}:tasks");
-        let fingerprint = crate::digest(&json!([expected_revision, list, changes]));
+        let fingerprint = crate::digest(&json!([expected_revision, list, changes, marks]));
         let _guard = self.context_gate.write().await;
         let mut tx = self.pool.begin().await?;
         if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
@@ -170,6 +173,7 @@ impl Store {
                 json!("user"),
                 list,
                 changes,
+                marks,
             )
             .await?;
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
@@ -192,6 +196,7 @@ impl Store {
         by: Value,
         list: &Value,
         changes: &Value,
+        marks: &Value,
     ) -> Result<Value> {
         let key = list_key(sid)?;
         let revision = expected_revision
@@ -222,7 +227,7 @@ impl Store {
         let waiting: Vec<Value> = waiting.into_iter().skip(skip).collect();
         let updated_at = crate::now();
         let history = json!({"schema_version":1,"session_id":sid,"revision":revision,
-            "updated_by":by,"updated_at":updated_at,"changes":changes,"list":list});
+            "updated_by":by,"updated_at":updated_at,"changes":changes,"marks":marks,"list":list});
         let mut document = history.clone();
         document["user_changes"] = json!(waiting);
         for (key, document) in [
@@ -245,7 +250,13 @@ impl Store {
             .bind(self.encode_user_record(&json!({"kind":"tasks","revision":revision}))?)
             .execute(&mut **tx)
             .await?;
-        Ok(json!({"revision":revision,"changes":changes}))
+        // The sections this write created, started or closed travel with its result, so
+        // compaction finds task boundaries in the history itself.
+        let mut output = json!({"revision":revision,"changes":changes});
+        for (key, ids) in marks.as_object().into_iter().flatten() {
+            output[key] = ids.clone();
+        }
+        Ok(output)
     }
 
     /// Session `sid`'s current task list document, or `None` before the first write.
@@ -397,13 +408,33 @@ mod tests {
         let list = |revision: u64| json!({"revision":revision,"sections":[],"next_section":0});
         let changes = json!(["s1 added: Work"]);
         let first = store
-            .task_list_write("owned", "r", "call-1", "g", "tasks", 0, &list(1), &changes)
+            .task_list_write(
+                "owned",
+                "r",
+                "call-1",
+                "g",
+                "tasks",
+                0,
+                &list(1),
+                &changes,
+                &json!({}),
+            )
             .await
             .unwrap();
         assert_eq!(first["revision"], 1);
         // A retry of the same call replays its result; different input under it is refused.
         let replay = store
-            .task_list_write("owned", "r", "call-1", "g", "tasks", 0, &list(1), &changes)
+            .task_list_write(
+                "owned",
+                "r",
+                "call-1",
+                "g",
+                "tasks",
+                0,
+                &list(1),
+                &changes,
+                &json!({}),
+            )
             .await
             .unwrap();
         assert_eq!(replay, first);
@@ -416,7 +447,8 @@ mod tests {
                 "tasks",
                 0,
                 &list(1),
-                &json!([])
+                &json!([]),
+                &json!({})
             )
             .await
             .is_err());
@@ -431,12 +463,32 @@ mod tests {
             .await
             .unwrap();
         let stale = store
-            .task_list_write("owned", "r", "call-2", "g", "tasks", 0, &list(1), &changes)
+            .task_list_write(
+                "owned",
+                "r",
+                "call-2",
+                "g",
+                "tasks",
+                0,
+                &list(1),
+                &changes,
+                &json!({}),
+            )
             .await
             .unwrap_err();
         assert!(stale.to_string().contains("now revision 1"), "{stale}");
         store
-            .task_list_write("owned", "r", "call-2", "g", "tasks", 1, &list(2), &changes)
+            .task_list_write(
+                "owned",
+                "r",
+                "call-2",
+                "g",
+                "tasks",
+                1,
+                &list(2),
+                &changes,
+                &json!({}),
+            )
             .await
             .unwrap();
         let current = store.task_list("owned", "r", None).await.unwrap().unwrap();
@@ -473,7 +525,17 @@ mod tests {
             .await
             .unwrap();
         store
-            .task_list_write("owned", "r", "call-3", "g", "tasks", 2, &list(3), &changes)
+            .task_list_write(
+                "owned",
+                "r",
+                "call-3",
+                "g",
+                "tasks",
+                2,
+                &list(3),
+                &changes,
+                &json!({}),
+            )
             .await
             .unwrap();
         let (same, _, _) = store
@@ -497,11 +559,25 @@ mod tests {
         );
         // A user edit is fenced like the agent's, kept in history and delivered once.
         assert!(store
-            .task_list_user_write("owned", "edit-1", 2, &list(4), &json!(["s1.2 added"]))
+            .task_list_user_write(
+                "owned",
+                "edit-1",
+                2,
+                &list(4),
+                &json!(["s1.2 added"]),
+                &json!({})
+            )
             .await
             .is_err());
         let edit = store
-            .task_list_user_write("owned", "edit-1", 3, &list(4), &json!(["s1.2 added"]))
+            .task_list_user_write(
+                "owned",
+                "edit-1",
+                3,
+                &list(4),
+                &json!(["s1.2 added"]),
+                &json!({}),
+            )
             .await
             .unwrap();
         assert_eq!(edit["revision"], 4);

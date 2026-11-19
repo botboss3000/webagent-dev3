@@ -2516,6 +2516,12 @@ impl<
                     .and_then(Option::as_ref)
                     .and_then(|settings| settings.keep_alive)
                     .is_some_and(|settings| settings.enabled);
+                // Fold by tasks (Identity): how many finished tasks stay verbatim.
+                let fold_tasks = thresholds
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .and_then(|settings| settings.fold_tasks_retained);
                 let mut compaction_config = match thresholds.and_then(|settings| match settings {
                     Some(settings) => settings.apply(&defaults),
                     None => Ok(defaults),
@@ -3433,6 +3439,19 @@ impl<
                         focus.as_deref(),
                     );
                     Some((plan, message, "requested", focus))
+                } else if let Some(plan) = fold_tasks.filter(|_| job_free).and_then(|retained| {
+                    // A task fold is a nicety: a planning error leaves the size rule below.
+                    context_compaction::plan_tasks(envelope.input, retained, &compaction_config)
+                        .ok()
+                        .flatten()
+                }) {
+                    // TASK FOLD: a newly started task folds the finished tasks beyond those kept.
+                    let message = background_compaction::fork_message(
+                        &plan,
+                        envelope.input,
+                        &compaction_config,
+                    );
+                    Some((plan, message, "task", None))
                 } else if (background || hard_limit_fork) && job_free {
                     let planned = context_compaction::plan_trigger(
                         envelope.input,

@@ -62,6 +62,8 @@ export function renderCompaction(host, agent, persist, request) {
   // An absent ceiling means the trigger.
   const saved = (key) => agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ?? agent.compaction_thresholds.trigger_tokens;
   const summarizerValue = () => agent.compaction_thresholds.summarizer || agent.compaction_defaults.summarizer || 'system';
+  // Fold by tasks: 'verbatim' folds by the verbatim tail; a number keeps that many finished tasks.
+  const foldValue = () => agent.compaction_thresholds.fold_tasks_retained == null ? 'verbatim' : String(agent.compaction_thresholds.fold_tasks_retained);
   // Which session states keep pinging, with their defaults; dismissing a session's flag stops it.
   const keepStates = [
     ['completed', 'While completed', 'The last run finished normally.', true],
@@ -91,6 +93,7 @@ export function renderCompaction(host, agent, persist, request) {
         thresholds[key] = value;
       }
       thresholds.summarizer = values.summarizer;
+      if (values.fold_boundary !== 'verbatim') thresholds.fold_tasks_retained = Number(values.fold_boundary);
       const timeout = Number(values.cache_timeout_minutes);
       if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 1440) throw Error('Enter a cache timeout from 0 to 1,440 minutes.');
       if (timeout > 0) thresholds.cache_timeout_minutes = timeout;
@@ -120,7 +123,7 @@ export function renderCompaction(host, agent, persist, request) {
         reset.disabled = !agent.compaction_overridden;
         throw Error('Reset failed: ' + error.message);
       }
-      for (const [key, row] of rows) { row.setValue(key === 'summarizer' ? summarizerValue() : key === 'cache_timeout_minutes' ? 0 : key.startsWith('keep_alive_') ? keepValue(key) : saved(key)); form.set(key, row.getValue(), true); }
+      for (const [key, row] of rows) { row.setValue(key === 'summarizer' ? summarizerValue() : key === 'fold_boundary' ? 'verbatim' : key === 'cache_timeout_minutes' ? 0 : key.startsWith('keep_alive_') ? keepValue(key) : saved(key)); form.set(key, row.getValue(), true); }
       describe();
       checkRoom();
       reset.disabled = !agent.compaction_overridden;
@@ -139,6 +142,12 @@ export function renderCompaction(host, agent, persist, request) {
   rows.set('summarizer', createSelectRow(list, {title:'Summarizer', options:[['self', 'Same model'], ['system', 'System model']],
     value:summarizerValue(), disabled:!manage, key:'summarizer', form,
     hint:'Same model writes the summary from the agent’s own request, which reuses its provider cache. Claude and OpenCode bridges answer from a fork of the chat’s session when their client supports it; Muse, and any summary that fails, use the System model.'}));
+  // Fold by tasks: a task starting folds the finished tasks behind those kept verbatim.
+  rows.set('fold_boundary', createSelectRow(list, {title:'Fold boundary', options:[
+    ['verbatim', 'Verbatim limit'], ['0', 'Tasks: current task'], ['1', 'Tasks: current + 1'],
+    ['2', 'Tasks: current + 2'], ['3', 'Tasks: current + 3']],
+    value:foldValue(), disabled:!manage, key:'fold_boundary', form,
+    hint:'Verbatim limit folds the oldest history once the request reaches the trigger, keeping the verbatim tail. Tasks folds whole finished tasks from the session task list: when a new task starts (its first step begins), the finished tasks behind the ones kept are summarized, cut at the first message after each was closed. A task still being discussed or planned does not fold the one before it. The trigger and ceiling still apply as a safety limit.'}));
   // Zero leaves the timeout to each model's provider file (60 minutes unless it sets one).
   rows.set('cache_timeout_minutes', createNumberRow(list, {title:'Cache timeout (minutes)',
     hint:'How long the model provider keeps this agent’s prompt cache. After this much idle time the next call reorders the context first: skills and Main Notes changes kept beside summary blocks move into the instructions. 0 uses each model’s own setting (60 minutes unless its provider file sets one).',

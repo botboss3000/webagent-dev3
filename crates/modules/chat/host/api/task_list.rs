@@ -50,7 +50,14 @@ pub(crate) async fn write(app: &App, sid: &str, body: &Value) -> Api {
     let (next, changes) = rules::apply(&list, write, now).map_err(invalid)?;
     let mut saved = app
         .store
-        .task_list_user_write(sid, request, expected, &json!(next), &json!(changes))
+        .task_list_user_write(
+            sid,
+            request,
+            expected,
+            &json!(next),
+            &json!(changes),
+            &rules::marks(&list, &next),
+        )
         .await
         .map_err(|error| conflict(&error.to_string()))?;
     // A plan's section keeps the plan's checklist current for the user's edits too.

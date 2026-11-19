@@ -25,6 +25,10 @@ pub struct AgentThresholds {
     /// Experimental: keep the provider cache warm between calls; absent means off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_alive: Option<KeepAlive>,
+    /// Fold by tasks: once a task starts, fold the finished tasks beyond this many behind
+    /// the current one (0 keeps only the current task). Absent folds by the verbatim tail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold_tasks_retained: Option<usize>,
 }
 
 /// Experimental keep-alive: shortly before the cache timeout, resend the session's last
@@ -59,6 +63,9 @@ impl KeepAlive {
 }
 
 impl AgentThresholds {
+    /// Most finished tasks task mode keeps verbatim behind the current one.
+    pub const MAX_TASKS_RETAINED: usize = 9;
+
     /// Restrict agent overrides to history thresholds while retaining app-wide summary safety limits.
     pub fn apply(&self, defaults: &Config) -> Result<Config> {
         let mut effective = defaults.clone();
@@ -69,6 +76,15 @@ impl AgentThresholds {
         }
         if let Some(summarizer) = self.summarizer {
             effective.summarizer = summarizer;
+        }
+        if self
+            .fold_tasks_retained
+            .is_some_and(|retained| retained > Self::MAX_TASKS_RETAINED)
+        {
+            return Err(anyhow!(
+                "Fold by tasks keeps at most {} finished tasks",
+                Self::MAX_TASKS_RETAINED
+            ));
         }
         effective.validate()?;
         Ok(effective)
@@ -582,6 +598,7 @@ mod tests {
             summarizer: Some(Summarizer::System),
             cache_timeout_minutes: None,
             keep_alive: None,
+            fold_tasks_retained: None,
         };
         let applied = thresholds.apply(&c).unwrap();
         assert_eq!(

@@ -183,6 +183,16 @@ one that calls tools continues the run, and its later final reply publishes. Tex
 `prompts/task_list.json`. The list is the session's: every participant's runs get it,
 everyone in the chat sees its progress, and anyone who can send in the chat edits it.
 
+**Fold by tasks (Identity "Fold boundary").** An agent can fold whole tasks instead of
+by the verbatim tail (`compaction_thresholds.fold_tasks_retained`, 0 to 9; absent is the
+verbatim limit). Each `task_list_write` result names the sections it `created`, `started`
+(first step began) and `closed`. Once a task starts, `plan_tasks` folds the task
+`retained + 1` behind it, and everything before, in the background: the cut is the first
+user message after that task closed, but never past the turn that created the oldest task
+kept, so a task still being discussed or planned keeps its predecessor verbatim. The
+trigger and ceiling still fold by size as a safety limit. Panel edits and plan seeding
+carry no marks; a section an approved plan created starts when its first step does.
+
 **Execution mode.** The mode arrives as a `set_execution_mode` result: at session
 start, when the user changes it, and when the agent changes it. A fold keeps the
 latest one from its range unless the verbatim tail already has a newer one; the

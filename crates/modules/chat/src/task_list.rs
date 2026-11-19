@@ -361,6 +361,40 @@ pub fn plan_section(title: &str, notes: &str, labels: &[String]) -> Write {
     }
 }
 
+/// Whether a section's execution has begun: one of its steps has started.
+fn started(section: &Section) -> bool {
+    section.steps.iter().any(|step| step.started_at.is_some())
+}
+
+/// The sections a write from `before` to `after` created, started (its first step began)
+/// and closed (done or cancelled), as `{"created":[..],"started":[..],"closed":[..]}` with
+/// empty lists left out. Compaction finds task boundaries in the history by these marks.
+#[must_use]
+pub fn marks(before: &List, after: &List) -> Value {
+    let (mut created, mut begun, mut closed) = (Vec::new(), Vec::new(), Vec::new());
+    for section in &after.sections {
+        let old = before.sections.iter().find(|old| old.id == section.id);
+        if old.is_none() {
+            created.push(section.id.clone());
+        }
+        if started(section) && !old.is_some_and(started) {
+            begun.push(section.id.clone());
+        }
+        if matches!(section.status, Status::Done | Status::Cancelled)
+            && old.is_none_or(|old| old.status == Status::Open)
+        {
+            closed.push(section.id.clone());
+        }
+    }
+    let mut marks = serde_json::Map::new();
+    for (key, ids) in [("created", created), ("started", begun), ("closed", closed)] {
+        if !ids.is_empty() {
+            marks.insert(key.to_owned(), serde_json::json!(ids));
+        }
+    }
+    Value::Object(marks)
+}
+
 /// The section `id` of `list`, if it has one.
 #[must_use]
 pub fn section<'a>(list: &'a List, id: &str) -> Option<&'a Section> {
@@ -753,6 +787,38 @@ mod tests {
             plan_checklist(&after.sections[0]),
             "1. [x] Reproduce\n2. [ ] Patch\n3. [ ] Verify"
         );
+    }
+
+    #[test]
+    fn marks_name_created_started_and_closed_sections() {
+        let (one, _) = apply(
+            &List::default(),
+            write(serde_json::json!({"section":{"title":"Plan work"},
+                "steps":[{"label":"First"}]})),
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            marks(&List::default(), &one),
+            serde_json::json!({"created":["s1"]})
+        );
+        let (two, _) = apply(
+            &one,
+            write(serde_json::json!({"section":{"id":"s1"},
+                "steps":[{"id":"s1.1","status":"in_progress"}]})),
+            2,
+        )
+        .unwrap();
+        assert_eq!(marks(&one, &two), serde_json::json!({"started":["s1"]}));
+        let (three, _) = apply(
+            &two,
+            write(serde_json::json!({"section":{"id":"s1","status":"done",
+                "summary":"First step finished and checked"},
+                "steps":[{"id":"s1.1","status":"done"}]})),
+            3,
+        )
+        .unwrap();
+        assert_eq!(marks(&two, &three), serde_json::json!({"closed":["s1"]}));
     }
 
     #[test]

@@ -152,6 +152,7 @@ async fn identity_get(
                 summarizer: None,
                 cache_timeout_minutes: None,
                 keep_alive: None,
+                fold_tasks_retained: None,
             });
     // Absent agent ceiling or summarizer means the app's.
     let ceiling = effective.ceiling_tokens.unwrap_or(defaults.ceiling());
@@ -437,6 +438,7 @@ pub(crate) async fn raise_compaction_trigger(
             summarizer: None,
             cache_timeout_minutes: None,
             keep_alive: None,
+            fold_tasks_retained: None,
         }
     };
     thresholds.trigger_tokens = thresholds.trigger_tokens.max(tokens);
@@ -1252,6 +1254,7 @@ mod tests {
                 summarizer: None,
                 cache_timeout_minutes: None,
                 keep_alive: None,
+                fold_tasks_retained: None,
             }),
             tool_output_policy: None,
             reset_tool_output_policy: None,

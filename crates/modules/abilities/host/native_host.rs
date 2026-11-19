@@ -605,6 +605,7 @@ impl NativeHost for Host<'_> {
         expected_revision: u64,
         list: &'a Value,
         changes: &'a Value,
+        marks: &'a Value,
     ) -> Pending<'a, Result<Value>> {
         Box::pin(self.0.store.task_list_write(
             call.sid,
@@ -615,6 +616,7 @@ impl NativeHost for Host<'_> {
             expected_revision,
             list,
             changes,
+            marks,
         ))
     }
     fn context_assets<'a>(

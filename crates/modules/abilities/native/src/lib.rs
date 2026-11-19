@@ -436,7 +436,8 @@ pub trait NativeHost: Sync {
         revision: Option<u64>,
     ) -> Pending<'a, Result<Option<Value>>>;
     /// Save `list` as the session's task list at `call`'s position under the call's
-    /// `receipt`; fails unless the stored revision is `expected_revision`.
+    /// `receipt`, with the sections the write created, started or closed (`marks`); fails
+    /// unless the stored revision is `expected_revision`.
     fn write_task_list<'a>(
         &'a self,
         call: Call<'a>,
@@ -444,6 +445,7 @@ pub trait NativeHost: Sync {
         expected_revision: u64,
         list: &'a Value,
         changes: &'a Value,
+        marks: &'a Value,
     ) -> Pending<'a, Result<Value>>;
     /// `requester`'s context asset selections in session `sid` on agent store `store`'s plane.
     fn context_assets<'a>(

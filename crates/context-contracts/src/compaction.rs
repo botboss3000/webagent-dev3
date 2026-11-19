@@ -715,6 +715,90 @@ pub fn plan_until(input: &[Value], until: usize, config: &Config) -> Result<Opti
     requested_plan(input, blocks, until, Boundary::PriorTurn, config)
 }
 
+/// The section marks the agent's `task_list_write` results carry after `from`, in history
+/// order: `(index of the result, mark kind, section id)`, where the kind is `created`,
+/// `started` or `closed`.
+fn task_marks(input: &[Value], from: usize) -> Vec<(usize, &'static str, String)> {
+    let writes = input
+        .iter()
+        .filter(|item| item["type"] == "function_call" && item["name"] == "task_list_write")
+        .filter_map(call_id)
+        .collect::<HashSet<_>>();
+    let mut marks = Vec::new();
+    for (index, item) in input.iter().enumerate().skip(from) {
+        if item["type"] != "function_call_output"
+            || !call_id(item).is_some_and(|id| writes.contains(id))
+        {
+            continue;
+        }
+        let Some(result) = item["output"]
+            .as_str()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        else {
+            continue;
+        };
+        for kind in ["created", "started", "closed"] {
+            for id in result["output"][kind].as_array().into_iter().flatten() {
+                if let Some(id) = id.as_str() {
+                    marks.push((index, kind, id.to_owned()));
+                }
+            }
+        }
+    }
+    marks
+}
+
+/// Task mode: once a task starts (its first step begins), fold the task `retained + 1`
+/// behind it, with everything before. The cut is the first user message after that task's
+/// section closed, but never past the turn that created (else started) the oldest task kept;
+/// so a task being discussed or planned keeps its predecessor verbatim. `None` when fewer
+/// tasks have started since the last block, the history has a malformed exchange, or the
+/// fold would be smaller than `min_fold_tokens` or larger than one summary source.
+pub fn plan_tasks(input: &[Value], retained: usize, config: &Config) -> Result<Option<Plan>> {
+    config.validate()?;
+    let blocks = leading_blocks(input, config);
+    let Some(boundaries) = requested_boundaries(input, blocks) else {
+        return Ok(None);
+    };
+    let turns = boundaries
+        .iter()
+        .filter(|&&(_, kind)| kind == Boundary::PriorTurn)
+        .map(|&(index, _)| index)
+        .collect::<Vec<_>>();
+    let marks = task_marks(input, blocks);
+    let mut starts: Vec<(usize, &str)> = Vec::new();
+    for (index, kind, id) in &marks {
+        if *kind == "started" && !starts.iter().any(|(_, seen)| seen == id) {
+            starts.push((*index, id));
+        }
+    }
+    let Some(folded) = starts.len().checked_sub(retained + 2) else {
+        return Ok(None);
+    };
+    let (folded_start, folded_id) = starts[folded];
+    let (kept_start, kept_id) = starts[folded + 1];
+    // The kept task begins at the turn that created its section, else the turn it started.
+    let kept_from = marks
+        .iter()
+        .find(|(_, kind, id)| *kind == "created" && id == kept_id)
+        .map_or(kept_start, |(index, _, _)| *index);
+    let Some(&limit) = turns.iter().rev().find(|&&turn| turn <= kept_from) else {
+        return Ok(None);
+    };
+    let after_close = marks
+        .iter()
+        .find(|(index, kind, id)| *kind == "closed" && id == folded_id && *index > folded_start)
+        .and_then(|(closed, _, _)| turns.iter().copied().find(|&turn| turn > *closed));
+    let cut = after_close.map_or(limit, |turn| turn.min(limit));
+    if cut <= blocks {
+        return Ok(None);
+    }
+    if config.summary_source(&input[blocks..cut])?.len() > config.max_source_bytes {
+        return Ok(None);
+    }
+    requested_plan(input, blocks, cut, Boundary::PriorTurn, config)
+}
+
 /// `/compact`: fold the oldest history after the earlier blocks and keep the agent's tail
 /// (`tail_tokens`) verbatim, at the earliest completed boundary whose tail fits it, else
 /// at the last one. A source too large for one summary folds its oldest part first.
@@ -1471,6 +1555,46 @@ mod tests {
         assert_eq!(&twice[..7], &once[..7]);
         assert_eq!(twice[8]["call_id"], "s2");
         assert_eq!(super::summary_blocks(&twice, &config), vec![6, 9]);
+    }
+
+    /// Task mode folds a finished task once the task after it starts, cutting at the first
+    /// user message after it closed; a task only being discussed keeps its predecessor, and
+    /// `retained` keeps that many finished tasks behind the current one.
+    #[test]
+    fn task_mode_folds_finished_tasks_once_the_next_one_starts() {
+        let config = requested_config();
+        let write = |id: &str, marks: Value| {
+            let output = json!({"status":"success","output":marks}).to_string();
+            [
+                json!({"type":"function_call","call_id":id,"name":"task_list_write",
+                    "arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":id,"output":output}),
+            ]
+        };
+        let work = |id: &str| {
+            [
+                json!({"type":"function_call","call_id":id,"name":"file_read","arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":id,"output":"x".repeat(300)}),
+            ]
+        };
+        let mut input = vec![turn("first task")];
+        input.extend(write("a1", json!({"created":["s1"],"started":["s1"]})));
+        input.extend(work("r1"));
+        input.extend(write("a2", json!({"closed":["s1"]})));
+        input.push(turn("let us discuss a second task"));
+        let discussing = input.len() - 1;
+        input.extend(write("b1", json!({"created":["s2"]})));
+        // Only one task has started: nothing folds while the next is discussed.
+        assert!(super::plan_tasks(&input, 0, &config).unwrap().is_none());
+        input.push(turn("go ahead"));
+        input.extend(write("b2", json!({"started":["s2"]})));
+        input.extend(work("r2"));
+        let plan = super::plan_tasks(&input, 0, &config).unwrap().unwrap();
+        // The cut is the first user message after s1 closed, so the discussion stays.
+        assert_eq!((plan.first, plan.drop_until), (0, discussing));
+        assert_eq!(plan.boundary, super::Boundary::PriorTurn);
+        // Keeping one finished task behind the current one folds nothing yet.
+        assert!(super::plan_tasks(&input, 1, &config).unwrap().is_none());
     }
 
     /// A fold combines the session's task list changes from its range and the tail into one
