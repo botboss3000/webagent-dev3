@@ -1,6 +1,6 @@
 'use strict';
 import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
-import {createConfigForm, createConfigList, createNumberRow, createSelectRow} from '../../../../shared/config-rows/config-rows.js';
+import {createConfigForm, createConfigList, createNumberRow, createSelectRow, createToggleRow} from '../../../../shared/config-rows/config-rows.js';
 
 // Identity owns agent thresholds; the app-wide JSON retains hard safety limits.
 export function renderCompaction(host, agent, persist, request) {
@@ -62,6 +62,20 @@ export function renderCompaction(host, agent, persist, request) {
   // An absent ceiling means the trigger.
   const saved = (key) => agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ?? agent.compaction_thresholds.trigger_tokens;
   const summarizerValue = () => agent.compaction_thresholds.summarizer || agent.compaction_defaults.summarizer || 'system';
+  // Which session states keep pinging, with their defaults; dismissing a session's flag stops it.
+  const keepStates = [
+    ['completed', 'While completed', 'The last run finished normally.', true],
+    ['needs_input', 'While waiting for you', 'The agent asked for input or an approval.', true],
+    ['stopped', 'While stopped', 'The run was stopped.', false],
+    ['error', 'After an error', 'The run failed or paused on an error.', false],
+  ];
+  const keepValue = (key) => {
+    const keep = agent.compaction_thresholds.keep_alive;
+    if (key === 'keep_alive_enabled') return Boolean(keep?.enabled);
+    if (key === 'keep_alive_limit_minutes') return keep?.limit_minutes ?? 240;
+    const state = keepStates.find(([name]) => 'keep_alive_' + name === key);
+    return keep ? Boolean(keep[state[0]]) : state[3];
+  };
   // Managers save the thresholds together with one explicit Save; others see them read-only.
   const manage = agent.can_manage;
   const status = document.createElement('p');
@@ -80,6 +94,13 @@ export function renderCompaction(host, agent, persist, request) {
       const timeout = Number(values.cache_timeout_minutes);
       if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 1440) throw Error('Enter a cache timeout from 0 to 1,440 minutes.');
       if (timeout > 0) thresholds.cache_timeout_minutes = timeout;
+      // Absent keep-alive means off, so only a switched-on one is saved.
+      if (values.keep_alive_enabled) {
+        const limit = Number(values.keep_alive_limit_minutes);
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 240) throw Error('Enter a keep-alive limit from 1 to 240 minutes.');
+        thresholds.keep_alive = {enabled:true, limit_minutes:limit};
+        for (const [key] of keepStates) thresholds.keep_alive[key] = Boolean(values['keep_alive_' + key]);
+      }
       if (thresholds.tail_tokens + agent.compaction_defaults.summary_tokens >= thresholds.trigger_tokens) {
         throw Error('Trigger must exceed the tail plus the summary target (' +
           agent.compaction_defaults.summary_tokens.toLocaleString() + ').');
@@ -99,7 +120,7 @@ export function renderCompaction(host, agent, persist, request) {
         reset.disabled = !agent.compaction_overridden;
         throw Error('Reset failed: ' + error.message);
       }
-      for (const [key, row] of rows) { row.setValue(key === 'summarizer' ? summarizerValue() : key === 'cache_timeout_minutes' ? 0 : saved(key)); form.set(key, row.getValue(), true); }
+      for (const [key, row] of rows) { row.setValue(key === 'summarizer' ? summarizerValue() : key === 'cache_timeout_minutes' ? 0 : key.startsWith('keep_alive_') ? keepValue(key) : saved(key)); form.set(key, row.getValue(), true); }
       describe();
       checkRoom();
       reset.disabled = !agent.compaction_overridden;
@@ -122,6 +143,18 @@ export function renderCompaction(host, agent, persist, request) {
   rows.set('cache_timeout_minutes', createNumberRow(list, {title:'Cache timeout (minutes)',
     hint:'How long the model provider keeps this agent’s prompt cache. After this much idle time the next call reorders the context first: skills and Main Notes changes kept beside summary blocks move into the instructions. 0 uses each model’s own setting (60 minutes unless its provider file sets one).',
     value:agent.compaction_thresholds.cache_timeout_minutes ?? 0, min:0, max:1440, disabled:!manage, key:'cache_timeout_minutes', form}));
+  // Experimental keep-alive: pings resend the last request shortly before the cache timeout.
+  const keepList = createConfigList(host, {label:'Cache keep-alive (experimental)'});
+  rows.set('keep_alive_enabled', createToggleRow(keepList, {title:'Keep cache warm',
+    hint:'Shortly before the cache timeout, resend the session’s last request with a one-word question so the provider keeps it cached. Each ping is a small extra model call; its answer is not saved. Claude and OpenCode bridges answer from a fork of the chat’s session.',
+    value:keepValue('keep_alive_enabled'), disabled:!manage, key:'keep_alive_enabled', form}));
+  rows.set('keep_alive_limit_minutes', createNumberRow(keepList, {title:'Stop after (minutes)',
+    hint:'Stop pinging this long after the session’s last real model call (at most 240).',
+    value:keepValue('keep_alive_limit_minutes'), min:1, max:240, disabled:!manage, key:'keep_alive_limit_minutes', form}));
+  for (const [key, title, hint] of keepStates) {
+    rows.set('keep_alive_' + key, createToggleRow(keepList, {title, hint,
+      value:keepValue('keep_alive_' + key), disabled:!manage, key:'keep_alive_' + key, form}));
+  }
   const inherited = document.createElement('p');
   inherited.className = 'ac-hint';
   const describe = () => {

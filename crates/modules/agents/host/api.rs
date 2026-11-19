@@ -151,6 +151,7 @@ async fn identity_get(
                 ceiling_tokens: None,
                 summarizer: None,
                 cache_timeout_minutes: None,
+                keep_alive: None,
             });
     // Absent agent ceiling or summarizer means the app's.
     let ceiling = effective.ceiling_tokens.unwrap_or(defaults.ceiling());
@@ -174,7 +175,7 @@ async fn identity_get(
     // The default publishing guidance, which an agent's own guidance replaces.
     Ok(Json(
         json!({"member_access":store.access_repository().member_access(&id).await?,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"voice_output":voice_output.to_value(),"voice_catalog":webagent_media::speech::voice_catalog(),"closing_protocol":{"flags":closing_protocol.agent_flags(),"notification_target_words":closing_protocol.notification.target_words},"message_visibility":{"mode":settings.mode},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
-        "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens,"ceiling_tokens":ceiling,"summarizer":summarizer,"cache_timeout_minutes":effective.cache_timeout_minutes},
+        "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens,"ceiling_tokens":ceiling,"summarizer":summarizer,"cache_timeout_minutes":effective.cache_timeout_minutes,"keep_alive":effective.keep_alive},
         "compaction_defaults":{"trigger_tokens":defaults.trigger_tokens,"tail_tokens":defaults.tail_tokens,"summary_tokens":defaults.summary_tokens,"ceiling_tokens":defaults.ceiling(),"summarizer":defaults.summarizer},
         "tool_result_deduplication":crate::tool_output::dedup_policy(&store,&id).await?,"tool_output_policy":tool_output_policy,"tool_output_defaults":tool_output_defaults,
         "tool_output_overridden":tool_output_overridden,"tool_output_eligible_tools":tool_output_eligible_tools,
@@ -435,6 +436,7 @@ pub(crate) async fn raise_compaction_trigger(
             ceiling_tokens: None,
             summarizer: None,
             cache_timeout_minutes: None,
+            keep_alive: None,
         }
     };
     thresholds.trigger_tokens = thresholds.trigger_tokens.max(tokens);
@@ -1249,6 +1251,7 @@ mod tests {
                 ceiling_tokens: None,
                 summarizer: None,
                 cache_timeout_minutes: None,
+                keep_alive: None,
             }),
             tool_output_policy: None,
             reset_tool_output_policy: None,

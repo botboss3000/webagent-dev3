@@ -23,6 +23,7 @@ pub mod failure;
 pub mod followup;
 pub mod health;
 pub mod images;
+pub mod keep_alive;
 pub mod lane;
 pub mod models;
 pub mod native;

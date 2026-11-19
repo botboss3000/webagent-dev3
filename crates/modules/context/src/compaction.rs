@@ -22,6 +22,40 @@ pub struct AgentThresholds {
     /// absent uses each model's provider setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_timeout_minutes: Option<u64>,
+    /// Experimental: keep the provider cache warm between calls; absent means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_alive: Option<KeepAlive>,
+}
+
+/// Experimental keep-alive: shortly before the cache timeout, resend the session's last
+/// request with a tiny question so the provider keeps its cached start. Each switch names a
+/// session state that keeps pinging; dismissing the session's flag stops it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeepAlive {
+    pub enabled: bool,
+    /// Stop pinging this many minutes after the last real model call.
+    #[serde(default = "KeepAlive::default_limit")]
+    pub limit_minutes: u64,
+    #[serde(default = "KeepAlive::on")]
+    pub completed: bool,
+    /// Needs input or waits for an approval.
+    #[serde(default = "KeepAlive::on")]
+    pub needs_input: bool,
+    #[serde(default)]
+    pub stopped: bool,
+    #[serde(default)]
+    pub error: bool,
+}
+
+impl KeepAlive {
+    pub const MAX_LIMIT_MINUTES: u64 = 240;
+    fn default_limit() -> u64 {
+        Self::MAX_LIMIT_MINUTES
+    }
+    fn on() -> bool {
+        true
+    }
 }
 
 impl AgentThresholds {
@@ -547,6 +581,7 @@ mod tests {
             ceiling_tokens: Some(300),
             summarizer: Some(Summarizer::System),
             cache_timeout_minutes: None,
+            keep_alive: None,
         };
         let applied = thresholds.apply(&c).unwrap();
         assert_eq!(

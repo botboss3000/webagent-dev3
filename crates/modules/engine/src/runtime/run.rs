@@ -2510,6 +2510,12 @@ impl<
                     .ok()
                     .and_then(Option::as_ref)
                     .and_then(|settings| settings.cache_timeout_minutes);
+                let keep_alive = thresholds
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .and_then(|settings| settings.keep_alive)
+                    .is_some_and(|settings| settings.enabled);
                 let mut compaction_config = match thresholds.and_then(|settings| match settings {
                     Some(settings) => settings.apply(&defaults),
                     None => Ok(defaults),
@@ -3744,6 +3750,24 @@ impl<
                     &instructions,
                     &projected_input,
                 );
+                // Experimental keep-alive keeps this request to resend shortly before the
+                // cache timeout; nothing is kept while the agent has it off.
+                if keep_alive {
+                    super::keep_alive::record(
+                        &sid,
+                        super::keep_alive::Request {
+                            run_id: id.to_string(),
+                            agent_id: agent_id.to_string(),
+                            selection: selection.clone(),
+                            input: projected_input.clone(),
+                            tools: schemas.clone(),
+                            instructions: instructions.to_string(),
+                            effort: core_effort.clone(),
+                            token_run: run.clone(),
+                            timeout,
+                        },
+                    );
+                }
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,
                     projected_input,

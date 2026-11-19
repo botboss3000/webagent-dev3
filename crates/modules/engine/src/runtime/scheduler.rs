@@ -235,6 +235,7 @@ impl<
                 .await
             });
             let background = tokio::spawn(app.clone().background_service());
+            let keep_alive = tokio::spawn(app.clone().keep_alive_service());
             let owner = uuid();
             let heartbeat_app = app.clone();
             let heartbeat_owner = owner.clone();
@@ -569,6 +570,7 @@ impl<
             cleanup.abort();
             manager.abort();
             background.abort();
+            keep_alive.abort();
             modules.abort();
             heartbeat.abort();
         }

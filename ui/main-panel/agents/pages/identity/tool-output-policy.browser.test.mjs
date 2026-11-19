@@ -47,7 +47,9 @@ try {
   await page.goto('http://127.0.0.1:'+server.address().port+'/');await setup();
   // The register owns the disclosure now: these rows render their fields openly and rendering never saves.
   assert.deepEqual(await page.evaluate(()=>fixture.writes),[]);
-  assert.equal(await page.locator('[data-register-section=context-compaction] input[type=checkbox]').count(),0);
+  // Only the keep-alive rows have switches: the main one and four session states.
+  assert.equal(await page.locator('[data-register-section=context-compaction] input[type=checkbox]').count(),5);
+  assert.equal(await page.getByLabel('Keep cache warm',{exact:true}).isChecked(),false);
   await page.getByLabel('Summary trigger',{exact:true}).fill('10000');
   await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).click();
   await page.getByText('Trigger must exceed the tail plus the summary target (5,000).',{exact:true}).waitFor();

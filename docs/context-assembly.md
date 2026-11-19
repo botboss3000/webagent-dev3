@@ -29,7 +29,7 @@ Four events reshape the request:
 - **Major reorder** (agreed, not built): after the cache timeout or when the user
   activates an ability, moves every retained row into the instructions, rebuilds
   the Main Notes snapshot and summarizes only if over the trigger.
-- **Keep-alive** (agreed, experimental, not built): resends the last request
+- **Keep-alive** (experimental, off by default): resends the last request
   before the timeout so the cache stays warm; the context does not change.
 
 Details: **Compaction layout and cache reuse** below.
@@ -205,13 +205,21 @@ new tools, pausing only when a summary is needed.
 `crates/modules/models/providers/<provider>.json` (about one hour), adjustable on
 the Identity page.
 
-**Keep-alive (agreed, experimental, off by default, not built).** Shortly before
-the timeout, resend the session's last request with a forced no-op tool call (a
-tiny text answer where forcing is unsupported); nothing is saved to the history.
-It stops after a maximum time set on Identity (default 4 hours). Each session
-state has its own switch, on by default for completed and needs input or
-approval, off for stopped and error; dismissing a session from its menu stops
-its timer.
+**Keep-alive (experimental, off by default).** Turned on per agent under
+Identity → Context compaction. While on, each main model call's request is kept in
+the loop's memory (`crates/modules/engine/src/runtime/keep_alive.rs`, at most 32
+sessions). Two minutes before the cache timeout (at most half of it) a service
+checked every 30 s resends that request with one short user question appended, so
+every earlier byte matches what the provider cached; the answer and any tool call
+in it are dropped and nothing is saved to the history. A bridge answers from a
+fork of the chat's harness session. A forced tool call was not used: on Anthropic a
+`tool_choice` change invalidates the cached messages, and bridges do not pass it
+on. Pings stop at the limit set on Identity (default and maximum 240 minutes after
+the last real call), when the session's flag is dismissed, or when the agent turns
+keep-alive off. Each session state has a switch: on by default for completed and
+needs input or approval, off for stopped and error; a running session is skipped.
+A restart forgets the kept requests. Each ping logs `keep-alive ping` with its
+input and cached tokens.
 
 **Measurement (built, commits 9a6c1a6, eff85a9, d555f4a).** At each main model
 call the engine fingerprints the tool definitions, instructions and each history
