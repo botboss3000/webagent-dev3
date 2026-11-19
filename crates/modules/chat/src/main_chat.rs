@@ -539,8 +539,12 @@ pub fn render_updates(state: &Value, after: u64, sid: &str) -> Vec<(u64, String)
     versions
         .into_iter()
         .filter_map(|(version, change)| {
-            let mut text =
-                self::text(state, "update_heading").replace("{version}", &version.to_string());
+            let mut text = self::text(state, "update_heading")
+                .replace("{version}", &version.to_string())
+                .replace(
+                    "{revision}",
+                    &state["revision"].as_u64().unwrap_or(0).to_string(),
+                );
             // A deleted topic: its title and every entry it held.
             if let Some(title) = change["deleted_topic"].as_str() {
                 text.push_str(&format!("\n## {title}"));

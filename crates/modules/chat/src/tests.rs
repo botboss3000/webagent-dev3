@@ -805,7 +805,7 @@ mod main_chat {
             vec![3, 4]
         );
         assert!(
-            updates[0].1.contains("(v3)")
+            updates[0].1.contains("(v3;")
                 && updates[0].1.contains("Removed: Review the blocker")
                 && updates[0].1.contains("Added: Review the second blocker")
         );
@@ -819,7 +819,7 @@ mod main_chat {
         );
         assert!(updates[0]
             .1
-            .starts_with("Main Notes update from another session (v3):\n## "));
+            .starts_with("Main Notes update from another session (v3; notes now at revision "));
         // Deleting a topic reaches other sessions as removed lines.
         state["topics"]["plans"]["entries"]["next"]["timing"] = serde_json::Value::Null;
         let topic = target(&state, &c);

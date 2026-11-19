@@ -297,6 +297,11 @@ impl Store {
         state["revision"] = json!(expected
             .checked_add(1)
             .ok_or_else(|| anyhow!("Revision exhausted"))?);
+        // The new revision is the next write's expected_revision, so no reread is needed.
+        let mut result = result;
+        if let Some(fields) = result.as_object_mut() {
+            fields.insert("revision".into(), state["revision"].clone());
+        }
         state["receipts"][request] = json!({"digest":fingerprint,"result":result});
         if serde_json::to_vec(&state)?.len() > 3 * 1024 * 1024 {
             return Err(anyhow!("Main Notes capacity reached"));

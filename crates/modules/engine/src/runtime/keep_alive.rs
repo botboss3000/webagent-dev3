@@ -155,7 +155,10 @@ pub fn log_ping(session: &str, run_id: &str, response: &anyhow::Result<Value>) {
             tracing::info!(
                 session_id = %session,
                 run_id = %run_id,
-                input_tokens = usage["input_tokens"].as_u64().unwrap_or(0),
+                input_tokens = usage["input_tokens"]
+                    .as_u64()
+                    .or_else(|| usage["prompt_tokens"].as_u64())
+                    .unwrap_or(0),
                 cached_tokens = super::background_compaction::cached_tokens(value).unwrap_or(0),
                 "keep-alive ping"
             );
