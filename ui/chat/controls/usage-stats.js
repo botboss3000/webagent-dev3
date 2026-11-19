@@ -58,12 +58,17 @@ export function mountUsageStats({root,client,note,issues}) {
       row(content,'Bytes per token',Number.isFinite(ratio) ? ratio.toFixed(2) : num(run?.context_controls?.characters_per_token)+' (default)');
     }
     const caption=document.createElement('p'); caption.className='cmp-cx-hint';
-    caption.textContent='Context sizes are estimated tokens: the request bytes measured at dispatch, divided by bytes per token. That ratio comes from the previous call’s provider-reported usage when there is one, otherwise from the model’s estimate. Totals cover recorded calls; usage from older, unrecorded calls cannot be recovered.';
+    caption.textContent='Context sizes are estimated tokens: the request bytes measured at dispatch, divided by bytes per token. That ratio comes from the previous call’s provider-reported usage when there is one, otherwise from the model’s estimate. Totals cover recorded calls; usage from older, unrecorded calls cannot be recovered. The cache estimate counts the start of the request that is unchanged since the previous call; the provider figure is what it actually reused.';
     content.append(caption);
     row(content,'Recorded session input / output tokens',usage?.reported_calls ? num(usage.input_tokens)+' / '+num(usage.output_tokens) : 'Not reported yet');
     row(content,'Cached input tokens',usage?.reported_calls && !usage.unknown_cache_calls ? num(usage.cached_input_tokens) : 'Not fully reported');
     row(content,'Cache write tokens',usage?.reported_calls && !usage.unknown_cache_calls ? num(usage.cache_write_tokens||0) : 'Not fully reported');
     row(content,'Last call input / output',run?.usage?.latest ? num(run.usage.latest.input_tokens)+' / '+num(run.usage.latest.output_tokens) : 'Not reported');
+    const latest=run?.usage?.latest, estimate=run?.usage?.cache_estimate;
+    row(content,'Last call cached (provider)',Number.isFinite(latest?.cached_input_tokens) ? num(latest.cached_input_tokens)+' of '+num(latest.input_tokens)+' tokens' : 'Not reported');
+    row(content,'Last call cached (estimate)',estimate ? tokens(estimate.matched_bytes)+' of '+tokens(estimate.sent_bytes) : 'Not measured yet');
+    const changes={no_previous_call:'No previous call to compare',tools:'Tool definitions',instructions:'Instructions',appended:'None, only new history added'};
+    if(estimate)row(content,'First change from previous call',estimate.first_change==='history' ? 'History entry '+num(estimate.first_change_entry) : changes[estimate.first_change]);
     row(content,'Reported / unreported calls',num(usage?.reported_calls)+' / '+num(usage?.unreported_calls));
     const known=usage?.known_cost_usd;
     row(content,'Session cost',usage && !usage.unknown_cost_calls ? '$'+Number(known||0).toFixed(4) : 'Not fully reported');

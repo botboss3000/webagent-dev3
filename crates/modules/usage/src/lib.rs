@@ -111,7 +111,27 @@ pub fn public(value: &Value) -> Value {
     if let Some(sample) = reported(&json!({"usage":value["latest"]})) {
         result.insert("latest".into(), sample);
     }
+    if let Some(estimate) = cache_estimate(&value["cache_estimate"]) {
+        result.insert("cache_estimate".into(), estimate);
+    }
     Value::Object(result)
+}
+
+/// The last call's prefix-match estimate, limited to its numbers and a fixed set of labels.
+fn cache_estimate(value: &Value) -> Option<Value> {
+    let first_change = value["first_change"].as_str().filter(|label| {
+        [
+            "no_previous_call",
+            "tools",
+            "instructions",
+            "history",
+            "appended",
+        ]
+        .contains(label)
+    })?;
+    Some(json!({"matched_bytes":value["matched_bytes"].as_u64()?,
+        "sent_bytes":value["sent_bytes"].as_u64()?,"first_change":first_change,
+        "first_change_entry":value["first_change_entry"].as_u64()}))
 }
 
 /// Sealed session-total records inside the caller's transaction.
@@ -256,6 +276,19 @@ mod tests {
         assert_eq!(out["unknown_cost_calls"], 2);
         assert!(!out.to_string().contains("secret"));
         assert!(reported(&json!({"usage":{"input_tokens":-1,"output_tokens":4}})).is_none());
+    }
+    /// The prefix-match estimate passes through as numbers and a known label only.
+    #[test]
+    fn cache_estimate_is_projected_with_known_labels() {
+        let run = json!({"usage":{"cache_estimate":{"matched_bytes":90,"sent_bytes":100,
+            "first_change":"history","first_change_entry":3,"extra":"secret"}}});
+        let out = public(&run["usage"]);
+        assert_eq!(out["cache_estimate"]["matched_bytes"], 90);
+        assert_eq!(out["cache_estimate"]["first_change_entry"], 3);
+        assert!(!out.to_string().contains("secret"));
+        let unknown =
+            json!({"cache_estimate":{"matched_bytes":1,"sent_bytes":2,"first_change":"<b>"}});
+        assert!(public(&unknown)["cache_estimate"].is_null());
     }
     struct Docs {
         invalidated: AtomicUsize,

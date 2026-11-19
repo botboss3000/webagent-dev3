@@ -16,6 +16,7 @@ pub mod background_compaction;
 pub mod background_followup;
 pub mod batch;
 pub mod build_tasks;
+pub mod cache_estimate;
 pub mod components;
 pub mod config;
 pub mod failure;

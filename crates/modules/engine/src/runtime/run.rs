@@ -3695,6 +3695,11 @@ impl<
                         Err(error) => return Err(error),
                     }
                 }
+                let fingerprint = super::cache_estimate::Fingerprint::of(
+                    &schemas,
+                    &instructions,
+                    &projected_input,
+                );
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,
                     projected_input,
@@ -3851,6 +3856,9 @@ impl<
                 // Pin publication routing to the call whose text will return. A
                 // later settings edit changes the next call, not this response.
                 current["promotion_mode"] = json!(promotion_mode);
+                // Recorded at dispatch so the response's provider cache figures sit beside it.
+                current["usage"]["cache_estimate"] =
+                    super::cache_estimate::observe(&sid, fingerprint);
                 app.save(&mut current).await?;
                 if !app
                     .source_fence()
@@ -3975,6 +3983,14 @@ impl<
                     }
                     Ok(response) => {
                         X::record_usage(&mut run, &response);
+                        let (latest, estimate) =
+                            (&run["usage"]["latest"], &run["usage"]["cache_estimate"]);
+                        tracing::info!(session_id=%sid, run_id=%id,
+                            input_tokens=latest["input_tokens"].as_u64(), cached_tokens=latest["cached_input_tokens"].as_u64(),
+                            cache_write_tokens=latest["cache_write_tokens"].as_u64(),
+                            matched_bytes=estimate["matched_bytes"].as_u64(), sent_bytes=estimate["sent_bytes"].as_u64(),
+                            first_change=estimate["first_change"].as_str().unwrap_or(""),
+                            compactions=run["compactions"].as_u64().unwrap_or(0), "model call cache");
                         // A completed reply ends this call's failover attempt: the next
                         // call starts with a fresh retry budget and no carried-over
                         // response or tool-effect flags. The pinned candidate and its

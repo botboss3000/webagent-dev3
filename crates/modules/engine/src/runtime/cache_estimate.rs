@@ -1,0 +1,167 @@
+//! Estimate how much of a model request repeats the start of the session's previous one.
+//! Providers cache a request's leading bytes, so this shows what could have been cached;
+//! compared with the provider's reported cached tokens it tells a request that changed
+//! early apart from a provider that dropped its cache.
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Mutex, OnceLock};
+
+/// Sessions whose last request fingerprints are kept in memory; older ones are dropped.
+const MAX_SESSIONS: usize = 256;
+
+/// One request part: a short content digest and its serialized size in bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Part {
+    digest: [u8; 8],
+    bytes: usize,
+}
+
+/// Fingerprints of one request in the order providers read it.
+#[derive(Debug, Clone, Default)]
+pub struct Fingerprint {
+    tools: Option<Part>,
+    instructions: Option<Part>,
+    history: Vec<Part>,
+}
+
+/// Digest and size of one serialized part.
+fn part(bytes: &[u8]) -> Part {
+    let hash = Sha256::digest(bytes);
+    let mut digest = [0u8; 8];
+    digest.copy_from_slice(&hash[..8]);
+    Part {
+        digest,
+        bytes: bytes.len(),
+    }
+}
+
+/// Serialized JSON bytes of a value; serde_json cannot fail on a `Value`.
+fn encoded(value: &impl serde::Serialize) -> Vec<u8> {
+    serde_json::to_vec(value).unwrap_or_default()
+}
+
+impl Fingerprint {
+    /// Fingerprint a request: tool definitions, then instructions, then each history entry.
+    pub fn of(schemas: &[Value], instructions: &str, input: &[Value]) -> Self {
+        Self {
+            tools: Some(part(&encoded(&schemas))),
+            instructions: Some(part(&encoded(&instructions))),
+            history: input.iter().map(|item| part(&encoded(item))).collect(),
+        }
+    }
+
+    fn sent_bytes(&self) -> usize {
+        self.tools.as_ref().map_or(0, |p| p.bytes)
+            + self.instructions.as_ref().map_or(0, |p| p.bytes)
+            + self.history.iter().map(|p| p.bytes).sum::<usize>()
+    }
+
+    /// Compare with the previous request: bytes of the unchanged leading parts, bytes sent,
+    /// and the first part that differs (`appended` when every earlier part is unchanged).
+    pub fn estimate(&self, previous: Option<&Fingerprint>) -> Value {
+        let sent = self.sent_bytes();
+        let Some(previous) = previous else {
+            return json!({"matched_bytes":0,"sent_bytes":sent,"first_change":"no_previous_call",
+                "first_change_entry":null});
+        };
+        let mut matched = 0;
+        for (label, now, before) in [
+            ("tools", &self.tools, &previous.tools),
+            ("instructions", &self.instructions, &previous.instructions),
+        ] {
+            match (now, before) {
+                (Some(now), Some(before)) if now == before => matched += now.bytes,
+                _ => {
+                    return json!({"matched_bytes":matched,"sent_bytes":sent,
+                        "first_change":label,"first_change_entry":null})
+                }
+            }
+        }
+        for (index, before) in previous.history.iter().enumerate() {
+            if self.history.get(index) != Some(before) {
+                return json!({"matched_bytes":matched,"sent_bytes":sent,"first_change":"history",
+                    "first_change_entry":index});
+            }
+            matched += before.bytes;
+        }
+        json!({"matched_bytes":matched,"sent_bytes":sent,"first_change":"appended",
+            "first_change_entry":null})
+    }
+}
+
+/// The last dispatched request's fingerprints per session, oldest session first.
+fn last_requests() -> &'static Mutex<(HashMap<String, Fingerprint>, VecDeque<String>)> {
+    static LAST: OnceLock<Mutex<(HashMap<String, Fingerprint>, VecDeque<String>)>> =
+        OnceLock::new();
+    LAST.get_or_init(Default::default)
+}
+
+/// Estimate this session's request against its previous one and remember it for the next.
+pub fn observe(session: &str, current: Fingerprint) -> Value {
+    let mut guard = last_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (requests, order) = &mut *guard;
+    let estimate = current.estimate(requests.get(session));
+    if requests.insert(session.to_owned(), current).is_none() {
+        order.push_back(session.to_owned());
+        while order.len() > MAX_SESSIONS {
+            if let Some(oldest) = order.pop_front() {
+                requests.remove(&oldest);
+            }
+        }
+    }
+    estimate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(instructions: &str, history: &[&str]) -> Fingerprint {
+        let input: Vec<Value> = history
+            .iter()
+            .map(|text| json!({"role":"user","content":text}))
+            .collect();
+        Fingerprint::of(&[json!({"name":"file_read"})], instructions, &input)
+    }
+
+    #[test]
+    fn appended_history_matches_the_whole_previous_request() {
+        let before = request("prompt", &["a", "b"]);
+        let now = request("prompt", &["a", "b", "c"]);
+        let estimate = now.estimate(Some(&before));
+        assert_eq!(estimate["first_change"], "appended");
+        assert_eq!(estimate["matched_bytes"], before.sent_bytes());
+        assert_eq!(estimate["sent_bytes"], now.sent_bytes());
+    }
+
+    #[test]
+    fn first_change_names_the_part_that_differs() {
+        let before = request("prompt", &["a", "b"]);
+        let changed_history = request("prompt", &["a", "summary"]).estimate(Some(&before));
+        assert_eq!(changed_history["first_change"], "history");
+        assert_eq!(changed_history["first_change_entry"], 1);
+        let changed_prompt = request("new prompt", &["a", "b"]).estimate(Some(&before));
+        assert_eq!(changed_prompt["first_change"], "instructions");
+        assert!(changed_prompt["matched_bytes"].as_u64().unwrap() > 0);
+        assert_eq!(
+            request("prompt", &[]).estimate(None)["first_change"],
+            "no_previous_call"
+        );
+    }
+
+    #[test]
+    fn observe_remembers_each_session_separately() {
+        let session = format!("cache-estimate-test-{}", uuid::Uuid::new_v4());
+        assert_eq!(
+            observe(&session, request("p", &["a"]))["first_change"],
+            "no_previous_call"
+        );
+        assert_eq!(
+            observe(&session, request("p", &["a", "b"]))["first_change"],
+            "appended"
+        );
+    }
+}
