@@ -18,6 +18,10 @@ pub struct AgentThresholds {
     /// Absent keeps the app's summarizer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summarizer: Option<Summarizer>,
+    /// How long the provider keeps the prompt cache, in minutes, for this agent's calls;
+    /// absent uses each model's provider setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_timeout_minutes: Option<u64>,
 }
 
 impl AgentThresholds {
@@ -542,6 +546,7 @@ mod tests {
             tail_tokens: 40,
             ceiling_tokens: Some(300),
             summarizer: Some(Summarizer::System),
+            cache_timeout_minutes: None,
         };
         let applied = thresholds.apply(&c).unwrap();
         assert_eq!(

@@ -39,8 +39,16 @@ export function chipCounts(counts={}) {
     .filter(Boolean).join(', ');
 }
 /** Paint a header's count and status spans, keeping its chevron; extra parts follow the counts. Returns whether it has text. */
+/** Model calls and their combined cache share, for a group head: "2 model calls · 99.7% cached". */
+export function modelCallsText(counts={},cache={}) {
+  const calls=counts.models||0;
+  if(!calls)return '';
+  const share=cache.input>0?' · '+(Math.floor(1000*(cache.cached||0)/cache.input)/10)+'% cached':'';
+  return calls+(calls===1?' model call':' model calls')+share;
+}
 export function paintActivityHead(summary,group,{error='',extra=[]}={}) {
-  const text=[chipCounts(group.counts),...extra].filter(Boolean).join(', '),state=activityLabel({...group,counts:{}},{error});
+  const text=[chipCounts(group.counts),modelCallsText(group.counts,group.cache),...extra].filter(Boolean).join(', ')
+    ,state=activityLabel({...group,counts:{}},{error});
   const status=summary.querySelector('.tc-head-status'),label=summary.querySelector('.tc-head-label');
   // Write only changed text and tone, so an idle repaint leaves the header untouched.
   const statusText=state?(text?' · ':'')+state:'',tone=error || group.state==='failed'?'danger':'';

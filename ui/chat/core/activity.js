@@ -66,7 +66,7 @@ export function modelCallLabel(p) {
   if (!Number.isFinite(p.input_tokens)) return 'Model call · usage not reported';
   const cached=Number.isFinite(p.cached_input_tokens)
     ? ' · '+share(p.cached_input_tokens,p.input_tokens)+' cached' : '';
-  return 'Model call · '+count(p.input_tokens)+' tokens in'+cached;
+  return 'Model call · '+count(p.input_tokens)+' in'+cached;
 }
 /** Details for a model call row: provider figures, the prefix estimate and where the request first changed. */
 export function modelCallText(p) {
@@ -171,14 +171,19 @@ export function activityGroups(activity, runs) {
     const events=activity.events.filter(e=>owns(segment,e) ||
       (!covered.has(e.seq) && e.run_id===segment.run_id && lastByRun.get(e.run_id)===segment.id));
     const rows=activityRows(events);
-    const counts={tools:0,updates:0,responses:0,modes:0,compactions:0,retries:0};
+    const counts={tools:0,updates:0,responses:0,modes:0,compactions:0,retries:0,models:0};
     for (const row of rows) if (row.category in counts) counts[row.category]++;
+    // Loaded model-call events give the same cache sums the server summary sends.
+    const cache={input:0,cached:0};
+    for (const event of events) if (event.kind==='model_usage') {
+      cache.input+=event.payload?.input_tokens||0;cache.cached+=event.payload?.cached_input_tokens||0;
+    }
     const run=runs.find(r=>r.id===segment.run_id);
     const finalOutcome=lastByRun.get(segment.run_id)===segment.id && terminal.has(run?.state);
     // A stop is superseded once the conversation resumes in any later segment.
     const resumed=run?.state==='cancelled' && index<activity.segments.length-1;
     // Closed segments display as finished except for a latest segment with a terminal run outcome.
-    return {...segment,events,rows,counts,kind:run?.kind,
+    return {...segment,events,rows,counts,cache,kind:run?.kind,
       state:resumed || (segment.closed && !finalOutcome)?'finished':run?.state || 'queued'};
   });
 }

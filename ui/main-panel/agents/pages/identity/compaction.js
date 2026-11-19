@@ -77,6 +77,9 @@ export function renderCompaction(host, agent, persist, request) {
         thresholds[key] = value;
       }
       thresholds.summarizer = values.summarizer;
+      const timeout = Number(values.cache_timeout_minutes);
+      if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 1440) throw Error('Enter a cache timeout from 0 to 1,440 minutes.');
+      if (timeout > 0) thresholds.cache_timeout_minutes = timeout;
       if (thresholds.tail_tokens + agent.compaction_defaults.summary_tokens >= thresholds.trigger_tokens) {
         throw Error('Trigger must exceed the tail plus the summary target (' +
           agent.compaction_defaults.summary_tokens.toLocaleString() + ').');
@@ -96,7 +99,7 @@ export function renderCompaction(host, agent, persist, request) {
         reset.disabled = !agent.compaction_overridden;
         throw Error('Reset failed: ' + error.message);
       }
-      for (const [key, row] of rows) { row.setValue(key === 'summarizer' ? summarizerValue() : saved(key)); form.set(key, row.getValue(), true); }
+      for (const [key, row] of rows) { row.setValue(key === 'summarizer' ? summarizerValue() : key === 'cache_timeout_minutes' ? 0 : saved(key)); form.set(key, row.getValue(), true); }
       describe();
       checkRoom();
       reset.disabled = !agent.compaction_overridden;
@@ -115,6 +118,10 @@ export function renderCompaction(host, agent, persist, request) {
   rows.set('summarizer', createSelectRow(list, {title:'Summarizer', options:[['self', 'Same model'], ['system', 'System model']],
     value:summarizerValue(), disabled:!manage, key:'summarizer', form,
     hint:'Same model writes the summary from the agent’s own request, which reuses its provider cache. Claude and OpenCode bridges answer from a fork of the chat’s session when their client supports it; Muse, and any summary that fails, use the System model.'}));
+  // Zero leaves the timeout to each model's provider file (60 minutes unless it sets one).
+  rows.set('cache_timeout_minutes', createNumberRow(list, {title:'Cache timeout (minutes)',
+    hint:'How long the model provider keeps this agent’s prompt cache. After this much idle time the next call reorders the context first: skills and Main Notes changes kept beside summary blocks move into the instructions. 0 uses each model’s own setting (60 minutes unless its provider file sets one).',
+    value:agent.compaction_thresholds.cache_timeout_minutes ?? 0, min:0, max:1440, disabled:!manage, key:'cache_timeout_minutes', form}));
   const inherited = document.createElement('p');
   inherited.className = 'ac-hint';
   const describe = () => {

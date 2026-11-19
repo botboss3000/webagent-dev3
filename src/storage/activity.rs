@@ -336,6 +336,8 @@ impl Store {
                 .bind(sid).bind(&run).bind(first).bind(last).bind(&recorded).fetch_all(&self.pool).await?;
             // Same categories as the page's activityRows: one tool per call id, one update per message.
             let (mut tools, mut updates, mut compactions, mut retries) = (HashSet::new(), 0, 0, 0);
+            // Model calls and their summed input and cache reads, for the group's cache share.
+            let (mut models, mut input, mut cached) = (0, 0, 0);
             // A sub agent start is one sub agent, not another tool in the group's tool count.
             let mut subagents = HashSet::new();
             // Whether the group's latest row is a scheduled retry, so its label can say so before
@@ -362,6 +364,11 @@ impl Store {
                     "message" => updates += 1,
                     "compaction_result" => compactions += 1,
                     "retry_scheduled" => retries += 1,
+                    "model_usage" => {
+                        models += 1;
+                        input += item["input_tokens"].as_u64().unwrap_or(0);
+                        cached += item["cached_input_tokens"].as_u64().unwrap_or(0);
+                    }
                     _ => {}
                 }
                 retrying = match item["type"].as_str() {
@@ -373,8 +380,8 @@ impl Store {
             segments.push(json!({"id":format!("activity:{run}:{anchor}"),"run_id":run,"boundary_item_id":anchor,"first_seq":first,"last_seq":last,
                 "closed":latest.as_deref()!=Some(anchor.as_str()),"latest":index+1==groups.len(),"last_of_run":last_of_run.get(&run)==Some(&index),
                 "boundary_quality":if recorded.is_some(){"recorded"}else{"legacy_unverified"},
-                "retrying":retrying,
-                "counts":{"tools":tools.len(),"subagents":subagents.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions,"retries":retries}}));
+                "retrying":retrying,"cache":{"input":input,"cached":cached},
+                "counts":{"tools":tools.len(),"subagents":subagents.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions,"retries":retries,"models":models}}));
         }
         Ok(json!({"segments":segments,"cursor":cursor}))
     }

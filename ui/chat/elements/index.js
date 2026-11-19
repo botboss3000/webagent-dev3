@@ -174,6 +174,8 @@ function cluster(shown,active) {
     if(members[0].previousSibling!==element)container.insertBefore(element,members[0]);
     const groups=members.filter(node=>shown.has(node)).map(node=>shown.get(node)),counts={};
     for(const group of groups)for(const [kind,count] of Object.entries(group.counts||{}))counts[kind]=(counts[kind]||0)+count;
+    const cache={input:0,cached:0};
+    for(const group of groups){cache.input+=group.cache?.input||0;cache.cached+=group.cache?.cached||0;}
     // Background notice rows count by kind: sub-agents, builds and background calls.
     const kinds={};
     for(const node of members){
@@ -184,7 +186,7 @@ function cluster(shown,active) {
     // Spawn calls already count their sub agents; notice rows report the same ones.
     const reported=kinds['sub-agent']||0;delete kinds['sub-agent'];
     counts.subagents=counts.subagents||reported;
-    paintActivityHead(element.firstElementChild,{...(groups.at(-1)||{state:'completed'}),counts},
+    paintActivityHead(element.firstElementChild,{...(groups.at(-1)||{state:'completed'}),counts,cache},
       {error,extra:Object.entries(kinds).map(([kind,count])=>count+' '+kind+(count===1?'':'s'))});
     element.setAttribute('aria-label','Activity group');
     element.classList.toggle('v2-activity-group-glimmer',active && members.some(node=>node.classList.contains('v2-activity-group-glimmer')));

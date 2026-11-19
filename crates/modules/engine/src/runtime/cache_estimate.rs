@@ -164,6 +164,12 @@ pub fn log_call(session: &str, run_id: &str, run: &Value) {
         compactions=run["compactions"].as_u64().unwrap_or(0), "model call cache");
 }
 
+/// Log a major reorder in this module, whose info lines the app shows (engine logs are
+/// otherwise filtered to warnings).
+pub fn log_reorder(session: &str, run_id: &str, reason: &str) {
+    tracing::info!(session_id=%session, run_id=%run_id, reason, "context reordered");
+}
+
 /// The activity row for one model call: the provider's input and cache figures beside the
 /// estimate, shown as a "Model call" row in the chat's activity.
 pub fn activity_item(run: &Value) -> Value {

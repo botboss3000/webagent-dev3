@@ -2502,23 +2502,27 @@ impl<
                         return Ok(());
                     }
                 };
-                let mut compaction_config =
-                    match context_compaction::agent_thresholds(app.store.records(), &agent_id)
-                        .await
-                        .and_then(|settings| match settings {
-                            Some(settings) => settings.apply(&defaults),
-                            None => Ok(defaults),
-                        }) {
-                        Ok(config) => config,
-                        Err(_) => {
-                            run["status"] = json!("paused");
-                            run["error"] = json!(
-                                "Invalid agent compaction thresholds; review Identity settings"
-                            );
-                            app.save(&mut run).await?;
-                            return Ok(());
-                        }
-                    };
+                let thresholds =
+                    context_compaction::agent_thresholds(app.store.records(), &agent_id).await;
+                // The agent's Identity setting wins over the model's provider setting.
+                let cache_timeout_override = thresholds
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .and_then(|settings| settings.cache_timeout_minutes);
+                let mut compaction_config = match thresholds.and_then(|settings| match settings {
+                    Some(settings) => settings.apply(&defaults),
+                    None => Ok(defaults),
+                }) {
+                    Ok(config) => config,
+                    Err(_) => {
+                        run["status"] = json!("paused");
+                        run["error"] =
+                            json!("Invalid agent compaction thresholds; review Identity settings");
+                        app.save(&mut run).await?;
+                        return Ok(());
+                    }
+                };
                 // Thresholds count provider tokens: convert them with this model's measured ratio.
                 compaction_config.bytes_per_token = bytes_per_token(&run, &selection);
                 // A bridge that cannot fork its session cannot summarize itself, so its folds
@@ -3701,10 +3705,12 @@ impl<
                 // timeout, or changed tool definitions) moving things costs nothing, so the
                 // retained rows ahead of the blocks go to the instructions before this call.
                 let timeout = Duration::from_secs(
-                    60 * webagent_models::providers::cache_timeout_minutes(
-                        selection.provider,
-                        &selection.model,
-                    ),
+                    60 * cache_timeout_override.unwrap_or_else(|| {
+                        webagent_models::providers::cache_timeout_minutes(
+                            selection.provider,
+                            &selection.model,
+                        )
+                    }),
                 );
                 if let Some(reason) = super::cache_estimate::reorder_reason(&sid, &schemas, timeout)
                 {
@@ -3713,7 +3719,7 @@ impl<
                     run["tool_result_projection"]["rebase"] = json!(true);
                     context_accounting.reset();
                     super::cache_estimate::forget(&sid);
-                    tracing::info!(session_id=%sid, run_id=%id, reason, "context reordered");
+                    super::cache_estimate::log_reorder(&sid, &id, reason);
                     app.store
                         .save_run_observed(
                             &mut run,

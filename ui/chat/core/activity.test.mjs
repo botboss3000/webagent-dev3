@@ -90,15 +90,16 @@ test('closer attempts are system rows: a status names its flag, a failure reads 
   assert.equal(failed[0].text,'Attempt 3 of 3 failed: flag is missing\n\nFallback status recorded.');
 });
 
-test('each model call is one uncounted row with its cache share and estimate',()=>{
+test('each model call is one row, counted apart, with its cache share and estimate',()=>{
   const usage={kind:'model_usage',event_id:'u1',payload:{input_tokens:65219,cached_input_tokens:64896,cache_write_tokens:0,
     matched_bytes:241030,sent_bytes:242157,first_change:'history',first_change_entry:8}};
   const rows=activityRows([usage]);
-  assert.equal(rows[0].label,'Model call · 65.2k tokens in · 99.5% cached');
+  assert.equal(rows[0].label,'Model call · 65.2k in · 99.5% cached');
   assert.match(rows[0].text,/Estimate: 99.5% of the request unchanged since the previous call; first change: history entry 8/);
   const unreported=activityRows([{kind:'model_usage',event_id:'u2',payload:{sent_bytes:10,matched_bytes:0,first_change:'no_previous_call'}}]);
   assert.equal(unreported[0].label,'Model call · usage not reported');
   const groups=activityGroups({events:[{...usage,run_id:'r1',seq:1}],segments:[segment('a','r1')]},[{id:'r1',state:'completed'}]);
   assert.equal(groups[0].rows.length,1);
-  assert.equal(Object.values(groups[0].counts).reduce((a,b)=>a+b,0),0);
+  assert.equal(groups[0].counts.models,1);
+  assert.deepEqual(groups[0].cache,{input:65219,cached:64896});
 });
