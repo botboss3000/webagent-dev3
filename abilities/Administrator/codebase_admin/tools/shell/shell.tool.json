@@ -23,8 +23,8 @@
     "risk": "low"
   },
   "default_policy": {
-    "operator": "require_approval",
-    "member": "require_approval",
-    "visitor": "require_approval"
+    "operator": "deny",
+    "member": "deny",
+    "visitor": "deny"
   }
 }
