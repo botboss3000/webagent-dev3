@@ -1,4 +1,6 @@
 // Ported from v2 ui/main-panel/agents/js/tab-abilities.js: Prompts group and viewer.
+import { createRichTextEditor } from '../../../../shared/rich-text-editor/rich-text-editor.js';
+
 const chevronSvg = () => '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>';
 const iconHtml = (name, size = '18px') => `<i data-lucide="${name}" style="width:${size};height:${size}"></i>`;
 const _PROMPT_ICON_MAP = {
@@ -43,12 +45,6 @@ export async function buildPromptsGroup(request, agentId) {
   bodyEl.innerHTML = '<div class="conn-loading" style="padding:12px;color:var(--fg-3);">Loading prompts…</div>';
   groupEl.appendChild(bodyEl);
 
-  // The page-level Ask or Search filter owns this synthetic row's visibility.
-  // NOTE: `data-agent-filter-self` is read by agent-ability-table.js's
-  // `_runAgentFilter` — keep the two in sync (PREVENTIVE-COMMENTS).
-  groupEl.dataset.agentFilterSelf = 'true';
-  groupEl.dataset.agentFilterItem = ':scope > .ac-group-body > .prompt-item-wrap';
-
   let built = false;
   const ensureBody = async () => {
     if (built) return;
@@ -80,9 +76,7 @@ export async function buildPromptsGroup(request, agentId) {
     if (willExpand) ensureBody();
   });
 
-  // Hooks for the page-level composite filter (_runAgentsAbilitiesFilter): build
-  // the body on demand, and drive the expanded state without a head click.
-  groupEl._ensureBuilt = ensureBody;
+  // Opens the group and loads its slots without a head click (the Prompts subpage uses this).
   groupEl._setExpanded = (on) => {
     groupEl.classList.toggle('expanded', !!on);
     if (on) ensureBody();
@@ -152,11 +146,9 @@ function _buildPromptItem(slot, overrides) {
   body.className = 'prompt-viewer';
   body.style.cssText = 'padding:2px 4px 8px;';
   body.style.display = 'none';
-  const viewer = document.createElement('pre');
-  viewer.className = 'prompt-text-viewer';
-  viewer.style.cssText = 'margin:0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.6;color:var(--fg-2);background:var(--bg-1);border:1px solid var(--border);border-radius:8px;max-height:380px;overflow:auto;';
-  viewer.textContent = content || '(empty prompt)';
-  body.appendChild(viewer);
+  // A prompt slot is read here: the shared editor, read-only.
+  body.appendChild(createRichTextEditor({ value: content || '(empty prompt)', label: slotId + ' prompt',
+    readOnly: true, minHeight: 40, maxHeight: 420 }).element);
   item.appendChild(body);
 
   head.addEventListener('click', () => {

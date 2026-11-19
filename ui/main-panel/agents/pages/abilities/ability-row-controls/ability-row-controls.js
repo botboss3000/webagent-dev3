@@ -41,7 +41,7 @@ export function _buildMoreButton(items, opts = {}) {
 }
 
 function _buildPermissionTri(cfg) {
-  const { value = 'allow', canEdit = true, onChange = _noop, displayOnly = false } = cfg || {};
+  const { value = 'allow', canEdit = true } = cfg || {};
   const ORDER = ['deny', 'require_approval', 'allow'];
   // Map the permission mode onto the group tri's off/mixed/on detents so the
   // knob position + colour are shared 1:1: deny→off (left, grey), ask→mixed
@@ -50,8 +50,6 @@ function _buildPermissionTri(cfg) {
 
   const tri = document.createElement('span');
   tri.className = 'ac-tri ac-tri-perm';
-  tri.setAttribute('role', 'slider');
-  tri.setAttribute('tabindex', canEdit ? '0' : '-1');
   tri.innerHTML = '<span class="ac-tri-knob"></span>';
   let current = ORDER.includes(value) ? value : 'allow';
   const _titleFor = m =>
@@ -71,62 +69,13 @@ function _buildPermissionTri(cfg) {
   // drives this from the tool's own state, never from clicks on the tri.
   tri._paint = (m) => { current = ORDER.includes(m) ? m : 'allow'; paint(); };
 
-  // DISPLAY-ONLY — the tri renders the three detents (Deny · Ask · Auto) but OWNS
-  // no selection: the tool row's choice is made in the panel this graphic opens,
-  // so it must not swallow the click with its own detent zones. The row repaints
-  // it from the tool's live permission via `_paint()`.
-  if (displayOnly) {
-    tri.classList.add('ac-tri-readonly');
-    tri.setAttribute('role', 'button');
-    tri.setAttribute('aria-haspopup', 'menu');
-    tri.removeAttribute('aria-valuetext');
-    tri.setAttribute('tabindex', canEdit ? '0' : '-1');
-    return tri;
-  }
-
-  if (!canEdit) {
-    tri.classList.add('ac-tri-disabled');
-    tri.setAttribute('aria-disabled', 'true');
-    tri.removeAttribute('tabindex');
-    return tri;
-  }
-
-  let _busy = false;
-  async function _go(next) {
-    if (_busy || !ORDER.includes(next)) return;
-    if (next === current) return;
-    const prev = current;
-    _busy = true;
-    current = next;
-    paint();                       // optimistic
-    _markSaving(tri);
-    let ok = true;
-    try {
-      const r = onChange(next, prev);
-      if (r && typeof r.then === 'function') ok = (await r) !== false;
-    } catch (_) { ok = false; }
-    if (!ok) { current = prev; paint(); }   // revert — the save didn't land
-    _flashSaveCheck(tri, ok);
-    _busy = false;
-  }
-  tri._apply = _go;
-
-  // Click zone → detent (left / middle / right third).
-  tri.addEventListener('click', e => {
-    e.stopPropagation();
-    const r = tri.getBoundingClientRect();
-    const frac = (e.clientX - r.left) / r.width;
-    _go(frac < 1 / 3 ? 'deny' : (frac < 2 / 3 ? 'require_approval' : 'allow'));
-  });
-  // Keyboard: ←/↓ step toward Deny, →/↑ step toward Allow, Home/End jump to ends.
-  tri.addEventListener('keydown', e => {
-    const i = ORDER.indexOf(current);
-    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { e.preventDefault(); _go(ORDER[Math.min(ORDER.length - 1, i + 1)]); }
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { e.preventDefault(); _go(ORDER[Math.max(0, i - 1)]); }
-    else if (e.key === 'Home') { e.preventDefault(); _go('deny'); }
-    else if (e.key === 'End') { e.preventDefault(); _go('allow'); }
-  });
-
+  // The tri only draws the three detents (Deny · Ask · Auto): the tool's choice is made
+  // in the panel it opens, and the row repaints it from the live permission via _paint().
+  tri.classList.add('ac-tri-readonly');
+  tri.setAttribute('role', 'button');
+  tri.setAttribute('aria-haspopup', 'menu');
+  tri.removeAttribute('aria-valuetext');
+  tri.setAttribute('tabindex', canEdit ? '0' : '-1');
   return tri;
 }
 
@@ -345,7 +294,6 @@ function _buildToolStateControl(toolMeta, opts) {
   const tri = _buildPermissionTri({
     value: perm,
     canEdit: canEdit && !roleBlocked,
-    displayOnly: true,
   });
   tri.classList.add('ac-tool-perm-tri');
 

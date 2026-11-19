@@ -158,8 +158,8 @@ export function createSubpageList(host, {label = 'Settings', categories = []}) {
   // Each level holds its own phone back entry, so back leaves one level at a time.
   const levels = [];
   const phone = () => !!window.matchMedia?.('(max-width: 800px)').matches;
-  const claimBack = level => {
-    if (!phone()) return;
+  const claimBack = (level, anyWidth = false) => {
+    if (!anyWidth && !phone()) return;
     level.release = pushBackHandler(() => {
       if (detail.hidden || !shell.getClientRects().length) return false;
       level.release = null;
@@ -329,14 +329,16 @@ export function createSubpageList(host, {label = 'Settings', categories = []}) {
   }
 
   /** Open a page inside the current one (one level deeper), under the same back header.
-   *  Returns false when no category page is open. onPop runs when the page is left. */
-  function push({title, body, toggleWrap = null, onPop = null}) {
-    if (detail.hidden || animating || !levels.length) return false;
+   *  Returns false when no category page is open. onPop runs when the page is left.
+   *  claim:false adds no back press (a page restored after a rerender); anyWidth claims
+   *  the back press on every screen width, not only on phones. */
+  function push({title, body, toggleWrap = null, onPop = null, claim = true, anyWidth = false}) {
+    if (detail.hidden || !levels.length) return false;
     const level = {title, body, toggleWrap, onPop, release: null};
     levels.push(level);
     render();
     slide('is-in-right');
-    claimBack(level);
+    if (claim) claimBack(level, anyWidth);
     alignPageTop();
     back.focus({preventScroll: true});
     return true;

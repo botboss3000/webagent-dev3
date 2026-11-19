@@ -2312,43 +2312,6 @@ body.light-mode .ac-ability-desc {
 }
 .ac-row-more:hover { color: var(--fg-1); background: rgba(var(--brand-rgb), 0.08); }
 .ac-row-more:disabled { opacity: 0.4; cursor: default; }
-
-/* ── Group status card (replaces the group tri — read-only) ──────────────────
-   The group head's Off·Mixed·On tri-toggle is gone; a small status pill
-   summarises the group: Disabled (off) · Partial (mixed) · Enabled (on), or "—"
-   when the group has no on/off members (credential/integration groups — the
-   host page paints its own configured-count onto those). Theme-safe via
-   design-system tokens. (SISTER-PANEL: AGENT-ABILITY-TABLE.) */
-.ac-group-status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  align-self: flex-start;
-  padding: 2px 9px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  line-height: 1.5;
-  border-radius: 10px;
-  border: var(--border-width) solid var(--border);
-  background: var(--bg-1);
-  color: var(--fg-3);
-  white-space: nowrap;
-  cursor: default;
-  transition: color 0.2s, border-color 0.2s, background 0.2s;
-}
-.ac-group-status[data-state="mixed"] {
-  color: var(--warning);
-  border-color: var(--warning-soft);
-  background: var(--warning-soft);
-}
-.ac-group-status[data-state="on"] {
-  color: var(--accent);
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-}
 body.light-mode .ac-list,
 body.light-mode .ac-abilities-compact {
   background: var(--bg-elev);

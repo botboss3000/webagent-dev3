@@ -1,6 +1,7 @@
 'use strict';
 // Ported from v2 agent-ability-table.js skill row and expansion lifecycle.
 import { buildConfigRow } from './ability-row-controls/ability-row-controls.js';
+import { createRichTextEditor } from '../../../../shared/rich-text-editor/rich-text-editor.js';
 const chevronSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>';
 export function buildSkillRow(skill, { canEdit, menu, loadContent }) {
 let skillRow, skillBody;
@@ -57,10 +58,9 @@ skillToggle.addEventListener('click', event => {
         try {
           const d = await loadContent();
           skillBody.innerHTML = '';
-          const pre = document.createElement('pre');
-          pre.style.cssText = 'margin:0;padding:6px 8px;background:var(--bg-1);border:1px solid var(--border);border-radius:5px;font-size:10px;white-space:pre-wrap;overflow:auto;max-height:280px;color:var(--fg-2);';
-          pre.textContent = (d && d.content) || 'No skill text.';
-          skillBody.appendChild(pre);
+          // Skills are read here and edited at the App Default level: the shared editor, read-only.
+          skillBody.appendChild(createRichTextEditor({ value: (d && d.content) || 'No skill text.',
+            label: 'Skill text', readOnly: true, minHeight: 40, maxHeight: 280 }).element);
         } catch (_) {
           _skillLoaded = false;
           skillBody.innerHTML = '<div style="font-size:11px;color:var(--danger);">Could not load skill content. The v3 runtime must support the skill-content endpoint. Close and reopen to retry.</div>';
@@ -69,7 +69,5 @@ skillToggle.addEventListener('click', event => {
     });
     // Keep the optional expanded how-to panel tied to its row so search never
     // leaves an already-open skill body visible after hiding that skill row.
-    skillBody.dataset.searchRowDetail = 'true';
-    skillBody._searchRow = skillRow;
 return { row: skillRow, body: skillBody };
 }

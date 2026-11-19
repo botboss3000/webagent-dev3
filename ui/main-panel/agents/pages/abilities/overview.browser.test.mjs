@@ -168,16 +168,24 @@ test('an ability page takes the back press before its group page', async () => {
     // app.js answers a popstate through consumeBack, so calling it is the same press.
     const pressed = await page.evaluate(async () => {
       const {consumeBack} = await import('/ui/shared/history-back/history-back.js');
-      const row = document.querySelector('.spl-row[data-register-link="web_access"]');
+      // An ability's page is pushed onto its group's page, so the group opens first.
+      const openGroupOf = async id => {
+        const link = document.querySelector('.spl-row[data-register-link="' + id + '"]');
+        const group = link.closest('[data-register-section]').dataset.registerSection;
+        document.querySelector('.spl-row[data-register-for="' + group + '"]').click();
+        await new Promise(resolve => setTimeout(resolve, 300));
+        return link;
+      };
+      const row = await openGroupOf('web_access');
       row.click();
-      const opened = !!document.querySelector('.ab-page[data-ability-id="web_access"] .cfg-page');
+      const opened = !!document.querySelector('.spl-detail .ab-page[data-ability-id="web_access"]');
       const first = consumeBack();
       const closed = !document.querySelector('.ab-page[data-ability-id="web_access"]');
-      const listBack = row.closest('.ab-holder').hidden === false;
+      const listBack = row.getClientRects().length > 0;
       const second = consumeBack();
       return {opened, first, closed, listBack, second};
     });
-    assert.equal(pressed.opened, true, 'the row opens the ability config page');
+    assert.equal(pressed.opened, true, 'the row pushes the ability page');
     assert.equal(pressed.first, true, 'the ability page claims the press');
     assert.equal(pressed.closed, true, 'one press closes the ability page');
     assert.equal(pressed.listBack, true, 'the ability list is shown again');
@@ -237,7 +245,7 @@ test('a revision poll re-reads the estimate only when the stamp moves', async ()
   }
 });
 
-// The tool page is the shared config page, and a tool's skill opens in place in the
+// The ability page is pushed onto its group's page, and a tool's skill opens in place in the
 // shared editor instead of a modal, read-only.
 test("a tool's skill opens in the shared editor under its row", async () => {
   const server = await serve();
@@ -250,9 +258,17 @@ test("a tool's skill opens in the shared editor under its row", async () => {
     await page.goto('http://127.0.0.1:' + server.address().port + '/');
     await waitForChart(page, '1,000 tokens');
     const result = await page.evaluate(async () => {
-      document.querySelector('.spl-row[data-register-link="web_access"]').click();
-      const host = document.querySelector('.ab-page[data-ability-id="web_access"]');
-      const shell = !!host?.querySelector('.cfg-page');
+      // An ability's page is pushed onto its group's page, so the group opens first.
+      const openGroupOf = async id => {
+        const link = document.querySelector('.spl-row[data-register-link="' + id + '"]');
+        const group = link.closest('[data-register-section]').dataset.registerSection;
+        document.querySelector('.spl-row[data-register-for="' + group + '"]').click();
+        await new Promise(resolve => setTimeout(resolve, 300));
+        return link;
+      };
+      (await openGroupOf('web_access')).click();
+      const host = document.querySelector('.spl-detail .ab-page[data-ability-id="web_access"]');
+      const shell = !!host;
       const link = host.querySelector('.ac-tool-skill-link');
       link.click();
       const band = () => document.querySelector('.ab-tool-skill');
@@ -266,7 +282,7 @@ test("a tool's skill opens in the shared editor under its row", async () => {
       link.click();
       return {...opened, shell, after: document.querySelectorAll('.ab-tool-skill').length};
     });
-    assert.equal(result.shell, true, 'the tool page body is the shared config page');
+    assert.equal(result.shell, true, 'the ability page is pushed under the group page');
     assert.equal(result.bands, 1, 'one editor opens under the clicked tool row: ' + JSON.stringify(result));
     assert.equal(result.text, 'Use the weather tool for forecasts.');
     assert.equal(result.editable, false, 'a read view: tool skills are edited at the App Default level');

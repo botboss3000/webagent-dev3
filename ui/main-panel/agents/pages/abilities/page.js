@@ -5,16 +5,13 @@ import { buildAdministratorControls } from './administrator.js';
 import { buildBrowserSites } from './browser-sites.js';
 import { buildMcpControls } from './mcp.js';
 import { buildPromptsGroup } from './prompts.js';
-import { buildGroup, setGroupStatus } from './table.js';
 import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js';
 import { APP_DEFAULT, APP_DEFAULTS_CSS, buildAbilityDefaultsPanels, buildAppDefaultsBar, buildGroupDefaultsPanel, buildToolDefaultsPanel, createAppDefaults, loadAppDefaults } from './app-defaults.js';
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from './ability-row-controls/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
 import { createSubpageLinks, createSubpageList, createSubpage } from '../../../../shared/subpage-list/subpage-list.js';
-import { createConfigPage } from '../../../../shared/config-page/config-page.js';
 import { createRichTextEditor } from '../../../../shared/rich-text-editor/rich-text-editor.js';
-import { pushBackHandler } from '../../../../shared/history-back/history-back.js';
 import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 
 const node = (tag, className = '', text = '') => {
@@ -270,20 +267,20 @@ export async function renderAbilities(host, request, options) {
     mark.style.whiteSpace = 'nowrap'; // Keep "Default: Auto" on one line on phones.
     anchor?.after(mark);
   };
-  const buildAbilityBody = (detail, ability, onBack) => {
+  // An ability's page is pushed onto the group's subpage, which draws its back header.
+  const pageShell = () => { const element = node('div', 'ab-config'); return { element, body: element }; };
+  const buildAbilityBody = (detail, ability) => {
     if (detail.childElementCount) return;
     if (appDefaults) {
       // App Default edits this ability's source files, not the agent's settings.
-      const config = createConfigPage({ title: ability.name, onBack });
+      const config = pageShell();
       config.body.append(node('p', 'ac-hint', 'App Default: edits are drafts of this ability\'s source files until you Save.'));
       config.body.append(...buildAbilityDefaultsPanels(appDefaults, ability));
       for (const tool of ability.tools || []) config.body.append(buildToolDefaultsPanel(appDefaults, ability, tool));
       detail.append(config.element);
       return;
     }
-    // The tool page is the shared config page: one shell owns the back control and
-    // the list itself, so every setting that opens at this level looks the same.
-    const config = createConfigPage({ title: ability.name, onBack });
+    const config = pageShell();
     if (ability.id === 'mcp') config.body.append(buildMcpControls({ ability, request, scope,
       canManage, levelId, status }));
     const tools = _buildAbilitySettingsList();
@@ -419,42 +416,26 @@ export async function renderAbilities(host, request, options) {
   const abilityPages = new Map();
   for (const [groupId, group] of groups) {
     const section = createSubpage(register.stage, {id: 'g-' + groupId, title: group.name});
-    // The ability list and an ability's own page share this body: opening a row swaps
-    // the list for that page, and the page's back control swaps the list back in.
+    // The group's page lists its abilities; an ability's page is pushed on top of it,
+    // under the same back header (back, Escape and the back press return to the list).
     const holder = node('div', 'ab-holder');
     section.body.append(holder);
     const items = [];
     const rowInfo = new Map();
     let current = null;
-    const closeAbility = () => {
-      const entry = current;
-      if (!entry) return;
-      current = null;
-      const release = entry.release;
-      entry.release = null;
-      release?.();
-      const opened = entry.element.dataset.abilityId || '';
-      entry.element.remove();
-      holder.hidden = false;
-      holder.querySelector('.spl-row[data-register-link="' + opened + '"]')?.focus({preventScroll: true});
-    };
     const openAbility = (ability, claim = true) => {
-      if (current) closeAbility();
+      if (current) register.pop();
       const pageHost = node('div', 'ab-page');
       pageHost.dataset.abilityId = ability.id;
-      buildAbilityBody(pageHost, ability, () => closeAbility());
-      holder.hidden = true;
-      holder.after(pageHost);
-      const entry = {element: pageHost, release: null};
-      current = entry;
+      buildAbilityBody(pageHost, ability);
+      const entry = {element: pageHost};
       // A restored page claims nothing, so a reload never adds a history entry.
-      if (claim) entry.release = pushBackHandler(() => {
-        if (current !== entry || !pageHost.isConnected) return false;
-        entry.release = null;
-        closeAbility();
-        return true;
-      });
-      pageHost.querySelector('.cfg-back')?.focus({preventScroll: true});
+      const pushed = register.push({title: ability.name, body: pageHost, claim, anyWidth: true, onPop: () => {
+        if (current === entry) current = null;
+        if (expandedAbility === ability.id) expandedAbility = null;
+        holder.querySelector('.spl-row[data-register-link="' + ability.id + '"]')?.focus({preventScroll: true});
+      }});
+      if (pushed) current = entry;
     };
     for (const ability of group.items) {
       const projected = projection(ability);
@@ -548,7 +529,6 @@ export async function renderAbilities(host, request, options) {
     // The ability page sits at the register's side inset, so its rows line up with
     // the rows it opened from instead of being indented into the card.
     + '.v3-abilities-page .ab-page{padding:0;margin:0}'
-    + '.v3-abilities-page .ab-page .cfg-page{padding-top:2px}'
     + '.v3-abilities-page .ab-tool-skill{padding:2px 0 10px}'
     + '.v3-abilities-page .ab-tool-skill .rte-doc{max-height:300px}';
   style.textContent += APP_DEFAULTS_CSS;
