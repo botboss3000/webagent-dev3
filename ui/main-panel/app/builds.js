@@ -979,7 +979,8 @@ export function mountBuilds(panel, onStatus = () => {}) {
       const text = document.createElement('p');
       text.textContent = note.text;
       const detail = document.createElement('p');
-      const from = note.from_task ? ' from ' + note.from_task : '';
+      // A session's note on its own task names the task once.
+      const from = note.from_task && note.from_task !== note.to_task ? ' from ' + note.from_task : '';
       const who = note.author + (note.session ? ' (' + note.session + ')' : '');
       const when = Number.isFinite(note.at) ? new Date(note.at * 1000).toLocaleString() : '';
       detail.textContent = 'On ' + note.to_task + from + ' · ' + who + (note.verified ? '' : ' · unverified') +
