@@ -3712,8 +3712,18 @@ impl<
                         )
                     }),
                 );
-                if let Some(reason) = super::cache_estimate::reorder_reason(&sid, &schemas, timeout)
+                let mut reason = super::cache_estimate::reorder_reason(&sid, &schemas, timeout);
+                // A restart forgets the last call, so the run's first pass judges idleness
+                // from the session's stored activity; once only, so a reorder cannot repeat.
+                if reason.is_none()
+                    && !super::cache_estimate::known(&sid)
+                    && run["restart_idle_checked"] != json!(true)
                 {
+                    run["restart_idle_checked"] = json!(true);
+                    let last_at = app.store.last_other_run_at(&sid, &id).await?;
+                    reason = super::cache_estimate::stored_idle(last_at, crate::now(), timeout);
+                }
+                if let Some(reason) = reason {
                     let input = run["input"].as_array().cloned().unwrap_or_default();
                     run["input"] = json!(context_compaction::reorder(&input, &compaction_config));
                     run["tool_result_projection"]["rebase"] = json!(true);

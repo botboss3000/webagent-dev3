@@ -120,6 +120,22 @@ pub fn reorder_reason(session: &str, schemas: &[Value], timeout: Duration) -> Op
     }
 }
 
+/// Whether this process has seen a model call for the session; a restart forgets them.
+pub fn known(session: &str) -> bool {
+    last_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .0
+        .contains_key(session)
+}
+
+/// After a restart: a reorder is due when the session's last stored activity (Unix
+/// seconds) is older than the cache timeout.
+pub fn stored_idle(last_at: Option<i64>, now: u64, timeout: Duration) -> Option<&'static str> {
+    let last_at = u64::try_from(last_at?).ok()?;
+    (now.saturating_sub(last_at) > timeout.as_secs()).then_some("idle")
+}
+
 /// Forget a session's last request after a reorder, so the next call starts a fresh
 /// comparison instead of reordering again.
 pub fn forget(session: &str) {
@@ -234,6 +250,16 @@ mod tests {
         );
         forget(&session);
         assert_eq!(reorder_reason(&session, &tools, Duration::ZERO), None);
+    }
+
+    #[test]
+    fn after_a_restart_stored_activity_decides_idle() {
+        let hour = Duration::from_secs(3600);
+        assert_eq!(stored_idle(Some(1_000), 1_000 + 3601, hour), Some("idle"));
+        assert_eq!(stored_idle(Some(1_000), 1_000 + 3600, hour), None);
+        assert_eq!(stored_idle(None, 5_000, hour), None);
+        assert_eq!(stored_idle(Some(-1), 5_000, hour), None);
+        assert!(!known(&format!("cache-unknown-{}", uuid::Uuid::new_v4())));
     }
 
     #[test]

@@ -60,6 +60,9 @@ impl<
     pub async fn recent_runs(&self, sid: Option<&str>) -> Result<Vec<Value>> {
         self.repository().recent_runs(sid).await
     }
+    pub async fn last_other_run_at(&self, sid: &str, rid: &str) -> Result<Option<i64>> {
+        self.repository().last_other_run_at(sid, rid).await
+    }
     pub async fn save_run(&self, run: &mut Value, kind: &str, payload: &Value) -> Result<()> {
         self.repository().save_run(run, kind, payload).await
     }

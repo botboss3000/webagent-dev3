@@ -305,6 +305,20 @@ impl<
             .collect()
     }
 
+    /// When this session's other runs last changed (Unix seconds); after a restart this
+    /// stands in for the forgotten time of the session's last model call.
+    pub async fn last_other_run_at(&self, sid: &str, rid: &str) -> Result<Option<i64>> {
+        Ok(
+            sqlx::query_scalar(
+                "SELECT MAX(updated_at) FROM run_index WHERE session_id=? AND id<>?",
+            )
+            .bind(sid)
+            .bind(rid)
+            .fetch_one(self.pool)
+            .await?,
+        )
+    }
+
     /// Stored run views with a run-health record, newest first and at most `limit`, updated
     /// at or after `since` (Unix seconds). With `session`, only that session's conversation
     /// tree: its spawn root and every session spawned under that root.
