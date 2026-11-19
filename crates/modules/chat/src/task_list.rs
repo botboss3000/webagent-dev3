@@ -782,7 +782,8 @@ mod tests {
             end_reminder(&list, &texts).unwrap(),
             "Before you end this turn: s1.2 \"Patch\", s1.3 \"Verify\" are still open in the \
              session task list. Finish them, mark them blocked or cancelled with \
-             task_list_write, or reply again to end the turn as it is."
+             task_list_write, or answer without calling a tool to end the turn with your \
+             earlier reply."
         );
         assert_eq!(end_reminder(&List::default(), &texts), None);
         assert!(unfiled_reminder(8, false, &texts).is_some());

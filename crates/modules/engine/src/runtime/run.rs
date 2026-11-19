@@ -3589,15 +3589,14 @@ impl<
                         bridge,
                     );
                 }
-                // SESSION TASKS: the reminder call is the final request plus the draft reply
-                // and the reminder, kept out of history like the closer.
+                // SESSION TASKS: the reminder call is the history, which already ends with the
+                // draft reply, plus the reminder, kept out of history like the closer.
                 if run["task_reminder"]["pending"] == true {
                     drop_call_note(&mut projected_input);
                     projected_input
-                        .push(json!({"role":"assistant","content":run["task_reminder"]["draft"]}));
-                    projected_input
                         .push(json!({"role":"user","content":run["task_reminder"]["message"]}));
                     run["task_reminder"]["pending"] = json!(false);
+                    run["task_reminder"]["awaiting"] = json!(true);
                 }
                 // CLOSING TURN: the same request plus a private closer message, kept out of
                 // history, so the provider can reuse its cached prefix.
@@ -4111,6 +4110,24 @@ impl<
                         } else {
                             None
                         };
+                        // SESSION TASKS: an answer to the reminder that calls no tool is dropped,
+                        // and the run publishes the reply it already wrote.
+                        let reminder_answered = run["task_reminder"]["awaiting"] == true;
+                        if reminder_answered {
+                            run["task_reminder"]["awaiting"] = json!(false);
+                        }
+                        let reminder_idle = reminder_answered
+                            && closing_reply.is_none()
+                            && engine_output::tool_calls(output, crate::tool_output::CONTROL_NAME)
+                                .is_empty();
+                        let closing_reply = closing_reply.or_else(|| {
+                            reminder_idle.then(|| {
+                                run["task_reminder"]["draft"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_owned()
+                            })
+                        });
                         // The closing answer is never published or kept: the run finishes
                         // with the reply it already wrote.
                         let no_output = Vec::new();

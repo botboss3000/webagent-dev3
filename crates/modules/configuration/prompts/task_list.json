@@ -4,7 +4,7 @@
   "snapshot_rule": "If another session or a later day would need something, it belongs in Main Notes; a step of the work in front of you belongs here.",
   "snapshot_empty": "No sections yet.",
   "step_line": "Session tasks: {sections}.",
-  "end_reminder": "Before you end this turn: {steps} are still open in the session task list. Finish them, mark them blocked or cancelled with task_list_write, or reply again to end the turn as it is.",
+  "end_reminder": "Before you end this turn: {steps} are still open in the session task list. Finish them, mark them blocked or cancelled with task_list_write, or answer without calling a tool to end the turn with your earlier reply.",
   "unfiled_reminder": "Session tasks: this turn's tool work is not in the session task list yet; add or update a section with task_list_write.",
   "unfiled_after_calls": 8,
   "user_change_heading": "The user changed the session task list (revision {revision}):"

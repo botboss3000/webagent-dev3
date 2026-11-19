@@ -22,6 +22,6 @@ one piece of work: a user's request (`"origin":"user"`) or your own investigatio
 Track every multi-step piece of work here as you go; a plan the user approved already has
 its section, and that section's progress also updates the plan's checklist. The user can tick, add and remove steps in the chat's task panel; each change reaches
 you as a `task_list_read` result from the user, and the list's revision moves with it.
-If you end a turn while steps are still open you are reminded once; reply again to end it
-as it is. Statuses are your claims, not verified evidence: report what checks proved.
+If you end a turn while steps are still open you are reminded once; answer without a tool
+call to keep your earlier reply, or keep working. Statuses are your claims, not verified evidence: report what checks proved.
 Anything another session or a later day needs also goes in Main Notes.

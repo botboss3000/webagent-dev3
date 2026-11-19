@@ -168,8 +168,9 @@ changes only when work starts or finishes (bridge clients re-send it only then).
 reminders join it: once a turn's tool calls since the user's last message reach
 `unfiled_after_calls` with no `task_list_write`, a line asks the agent to file the work;
 and the first final reply of a run while open steps remain is held for one more call (the
-request plus the draft reply and a reminder naming the open steps, kept out of history like
-the closer), after which the agent's next final reply publishes. Texts are in
+history, which ends with the draft reply, plus a reminder naming the open steps, kept out of
+history like the closer). An answer that calls no tool is dropped and the draft publishes;
+one that calls tools continues the run, and its later final reply publishes. Texts are in
 `prompts/task_list.json`. Shared chat members get none of it.
 
 **Execution mode.** The mode arrives as a `set_execution_mode` result: at session
