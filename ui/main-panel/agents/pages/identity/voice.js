@@ -1,5 +1,4 @@
 import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
-'use strict';
 // Agent voice output: the toggle shows the chat's voice reply control for this agent, and the
 // chosen Kokoro voice speaks its replies. The server validates voices against its catalog.
 export function renderVoiceOutput(content, agent, persist) {

@@ -1,5 +1,6 @@
 import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 import {requestTouchVibration} from '../../../../shared/vibrate/vibrate.js';
+import {createChoiceRow,createConfigList,createSelectRow} from '../../../../shared/config-rows/config-rows.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 const select=(label,options,value)=>{const input=node('select','','ac-input');input.setAttribute('aria-label',label);for(const [id,text]of options){const option=node('option',text);option.value=id;input.append(option);}input.value=value;return input;};
 const button=(label,action)=>{const el=node('button',label,'ac-btn');el.type='button';el.style.webkitTapHighlightColor='transparent';el.onclick=event=>{requestTouchVibration(event);action();};return el;};
@@ -15,22 +16,16 @@ export function renderMemberAccess(host,agent,persist,request,{agentId,reload}) 
     ['registered','Registered','Users need an app account. Registered users join as Members; no visitor access.',false,true],
     ['authorized','Authorized','Users need an app account and an Operator\'s approval. They can request access from the agent.',false,false],
     ['visitors','Visitors only','Anyone can chat as a Visitor. Operators appoint Members.',true,false]];
-  const policy=node('div','','members-policy'),choices=node('div','','members-policy-choices');policy.append(node('div','Access policy','members-policy-title'),choices);body.append(policy);
   const current=()=>modes.find(mode=>mode[3]===settings.visitor_access&&mode[4]===settings.app_login_members)[0];
-  for(const [id,label,hint,visitor,members] of modes){
-    const option=node('label','','members-policy-opt'),input=node('input'),text=node('div','','members-policy-opt-body');
-    input.type='radio';input.name='access-policy-'+agentId;input.value=id;input.checked=current()===id;input.disabled=!agent.can_manage;option.classList.toggle('active',input.checked);
-    text.append(node('div',label,'members-policy-opt-label'),node('div',hint,'members-policy-opt-hint'));option.append(input,text);choices.append(option);
-    input.onchange=async event=>{requestTouchVibration(event);const before={...settings};settings.visitor_access=visitor;settings.app_login_members=members;
-      for(const radio of choices.querySelectorAll('input'))radio.disabled=true;
-      try{await persist({member_access:settings});status.textContent='Saved';}catch(error){Object.assign(settings,before);status.textContent=error.message;}
-      finally{for(const radio of choices.querySelectorAll('input')){radio.checked=radio.value===current();radio.disabled=!agent.can_manage;radio.closest('label').classList.toggle('active',radio.checked);}}};
-  }
+  // Policy and privacy save as soon as they change; a failed save puts the choice back.
+  const save1=async change=>{const before={...settings};Object.assign(settings,change);try{await persist({member_access:settings});}catch(error){Object.assign(settings,before);throw error;}};
+  createChoiceRow(createConfigList(body,{label:'Access policy setting'}),{title:'Access policy',value:current(),disabled:!agent.can_manage,
+    options:modes.map(([value,title,hint])=>({value,title,hint})),
+    onSave:value=>{const [,,,visitor,members]=modes.find(mode=>mode[0]===value);return save1({visitor_access:visitor,app_login_members:members});}});
   body.append(node('p','Operators can always appoint or block individual users on the Members page. Removing an assignment restores the policy\'s automatic access.','ac-hint'));
-  const privacyLabel=node('label','Conversation privacy','ac-label');
-  const privacy=select('Conversation privacy',[['private','Private'],['operator_reviewable','Operator-reviewable']],settings.conversation_privacy);
-  privacy.disabled=!agent.can_manage;privacyLabel.append(privacy);body.append(privacyLabel,node('p','Applies to new conversations. Existing conversations keep their privacy mode. Reviewable conversations disclose that Operators can read and join.','ac-hint'));
-  privacy.onchange=async()=>{privacy.disabled=true;const before=settings.conversation_privacy;settings.conversation_privacy=privacy.value;try{await persist({member_access:settings});status.textContent='Saved';}catch(error){settings.conversation_privacy=before;privacy.value=before;status.textContent=error.message;}finally{privacy.disabled=!agent.can_manage;}};
+  createSelectRow(createConfigList(body,{label:'Conversation privacy setting'}),{title:'Conversation privacy',value:settings.conversation_privacy,disabled:!agent.can_manage,
+    hint:'Applies to new conversations. Existing conversations keep their privacy mode. Reviewable conversations disclose that Operators can read and join.',
+    options:[['private','Private'],['operator_reviewable','Operator-reviewable']],onSave:value=>save1({conversation_privacy:value})});
   body.append(node('h4','Agent member levels'),node('p','Highest to lowest. Each level gets no more than the level above it; a change that breaks this order is refused. Configure abilities on the Abilities page. Message limits count each user\'s messages to this agent over the last 24 hours and 30 days.','ac-hint'));
   const levels=agent.capability_levels;
   const save=async(next,reassignments={},confirm_expansion=false)=>{

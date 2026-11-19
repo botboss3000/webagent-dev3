@@ -1,5 +1,6 @@
 'use strict';
 import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
+import {createConfigForm, createConfigList, createNumberRow, createSelectRow} from '../../../../shared/config-rows/config-rows.js';
 
 // Identity owns agent thresholds; the app-wide JSON retains hard safety limits.
 export function renderCompaction(host, agent, persist, request) {
@@ -28,8 +29,8 @@ export function renderCompaction(host, agent, persist, request) {
   host.append(hint, scope, fixed, room, fallback, estimate);
   let fixedTokens = null;
   const checkRoom = () => {
-    const trigger = Number(inputs.get('trigger_tokens')?.value);
-    const tail = Number(inputs.get('tail_tokens')?.value);
+    const trigger = Number(rows.get('trigger_tokens')?.control.value);
+    const tail = Number(rows.get('tail_tokens')?.control.value);
     if (fixedTokens === null || !Number.isFinite(trigger) || !Number.isFinite(tail)) {
       room.textContent = '';
       return;
@@ -58,57 +59,62 @@ export function renderCompaction(host, agent, persist, request) {
     ['tail_tokens', 'Verbatim tail', 'Recent estimated tokens to keep word for word'],
     ['ceiling_tokens', 'Ceiling', 'Size at which the agent stops to finish the summary. Below the trigger, the trigger is used. The model’s context limit caps both'],
   ];
-  const inputs = new Map();
-  for (const [key, label, description] of fields) {
-    const wrap = document.createElement('div');
-    wrap.className = 'ac-cfg-field';
-    const labelEl = document.createElement('label');
-    labelEl.className = 'ac-label';
-    labelEl.textContent = label;
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.min = '1';
-    input.max = '1000000';
-    input.step = '1';
-    input.className = 'ac-input';
-    input.id = 'identity-compaction-' + key;
-    // An absent ceiling means the trigger.
-    input.value = String(agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ??
-      agent.compaction_thresholds.trigger_tokens);
-    input.readOnly = !agent.can_manage;
-    labelEl.htmlFor = input.id;
-    const help = document.createElement('p');
-    help.className = 'ac-hint';
-    help.textContent = description;
-    wrap.append(labelEl, input, help);
-    host.append(wrap);
-    inputs.set(key, input);
-    input.addEventListener('input', checkRoom);
+  // An absent ceiling means the trigger.
+  const saved = (key) => agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ?? agent.compaction_thresholds.trigger_tokens;
+  const summarizerValue = () => agent.compaction_thresholds.summarizer || agent.compaction_defaults.summarizer || 'system';
+  // Managers save the thresholds together with one explicit Save; others see them read-only.
+  const manage = agent.can_manage;
+  const status = document.createElement('p');
+  status.className = 'ac-hint';
+  status.setAttribute('role', 'status');
+  const form = manage ? createConfigForm(host, {saveLabel:'Save compaction thresholds', resetLabel:'Use app defaults',
+    onSave: async (values) => {
+      status.textContent = '';
+      const thresholds = {};
+      for (const [key] of fields) {
+        const value = Number(values[key]);
+        if (!Number.isSafeInteger(value) || value < 1 || value > 1000000) throw Error('Enter whole numbers from 1 to 1,000,000.');
+        thresholds[key] = value;
+      }
+      thresholds.summarizer = values.summarizer;
+      if (thresholds.tail_tokens + agent.compaction_defaults.summary_tokens >= thresholds.trigger_tokens) {
+        throw Error('Trigger must exceed the tail plus the summary target (' +
+          agent.compaction_defaults.summary_tokens.toLocaleString() + ').');
+      }
+      agent = await persist({compaction_thresholds: thresholds});
+      describe();
+      reset.disabled = !agent.compaction_overridden;
+      status.textContent = 'Saved. New model calls use these thresholds.';
+    },
+    // Drops this agent's override so later changes to the app defaults reach it again.
+    onReset: async () => {
+      reset.disabled = true;
+      status.textContent = '';
+      try {
+        agent = await persist({reset_compaction_thresholds: true});
+      } catch (error) {
+        reset.disabled = !agent.compaction_overridden;
+        throw Error('Reset failed: ' + error.message);
+      }
+      for (const [key, row] of rows) { row.setValue(key === 'summarizer' ? summarizerValue() : saved(key)); form.set(key, row.getValue(), true); }
+      describe();
+      checkRoom();
+      reset.disabled = !agent.compaction_overridden;
+      status.textContent = 'Saved. New model calls use the app defaults.';
+    }}) : null;
+  const list = createConfigList(host, {label:'Compaction thresholds'});
+  const rows = new Map();
+  for (const [key, title, hint] of fields) {
+    const row = createNumberRow(list, {title, hint, value:saved(key), min:1, max:1000000, disabled:!manage, key, form});
+    // Typing counts as an edit at once, so Save is ready before the field is left.
+    row.control.addEventListener('input', () => { form?.set(key, Number(row.control.value)); checkRoom(); });
+    rows.set(key, row);
   }
   // Same model reuses the running request's cached prefix; Claude and OpenCode bridges answer from a
   // fork of the chat's session, Muse uses System.
-  const summarizerWrap = document.createElement('div');
-  summarizerWrap.className = 'ac-cfg-field';
-  const summarizerLabel = document.createElement('label');
-  summarizerLabel.className = 'ac-label';
-  summarizerLabel.textContent = 'Summarizer';
-  const summarizer = document.createElement('select');
-  summarizer.className = 'ac-input';
-  summarizer.id = 'identity-compaction-summarizer';
-  summarizer.disabled = !agent.can_manage;
-  for (const [value, text] of [['self', 'Same model'], ['system', 'System model']]) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = text;
-    summarizer.append(option);
-  }
-  summarizer.value = agent.compaction_thresholds.summarizer || agent.compaction_defaults.summarizer || 'system';
-  summarizerLabel.htmlFor = summarizer.id;
-  const summarizerHelp = document.createElement('p');
-  summarizerHelp.className = 'ac-hint';
-  summarizerHelp.textContent = 'Same model writes the summary from the agent’s own request, which reuses its provider cache. Claude and OpenCode bridges answer from a fork of the chat’s session when their client supports it; Muse, and any summary that fails, use the System model.';
-  summarizerWrap.append(summarizerLabel, summarizer, summarizerHelp);
-  host.append(summarizerWrap);
+  rows.set('summarizer', createSelectRow(list, {title:'Summarizer', options:[['self', 'Same model'], ['system', 'System model']],
+    value:summarizerValue(), disabled:!manage, key:'summarizer', form,
+    hint:'Same model writes the summary from the agent’s own request, which reuses its provider cache. Claude and OpenCode bridges answer from a fork of the chat’s session when their client supports it; Muse, and any summary that fails, use the System model.'}));
   const inherited = document.createElement('p');
   inherited.className = 'ac-hint';
   const describe = () => {
@@ -122,70 +128,9 @@ export function renderCompaction(host, agent, persist, request) {
   };
   describe();
   host.append(inherited);
-  if (!agent.can_manage) return;
-  const status = document.createElement('p');
-  status.className = 'ac-hint';
-  status.setAttribute('role', 'status');
-  const save = document.createElement('button');
-  save.type = 'button';
-  save.className = 'ac-btn ac-btn-ghost';
-  save.textContent = 'Save compaction thresholds';
-  save.addEventListener('click', async () => {
-    const thresholds = {};
-    for (const [key, input] of inputs) {
-      const value = Number(input.value);
-      if (!Number.isSafeInteger(value) || value < 1 || value > 1000000) {
-        status.textContent = 'Enter whole numbers from 1 to 1,000,000.';
-        return;
-      }
-      thresholds[key] = value;
-    }
-    thresholds.summarizer = summarizer.value;
-    if (thresholds.tail_tokens + agent.compaction_defaults.summary_tokens >= thresholds.trigger_tokens) {
-      status.textContent = 'Trigger must exceed the tail plus the summary target (' +
-        agent.compaction_defaults.summary_tokens.toLocaleString() + ').';
-      return;
-    }
-    save.disabled = true;
-    status.textContent = 'Saving…';
-    try {
-      const saved = await persist({compaction_thresholds: thresholds});
-      agent = saved;
-      describe();
-      reset.disabled = !agent.compaction_overridden;
-      status.textContent = 'Saved. New model calls use these thresholds.';
-    } catch (error) {
-      status.textContent = 'Save failed: ' + error.message;
-    } finally {
-      save.disabled = false;
-    }
-  });
-  // Drops this agent's override so later changes to the app defaults reach it again.
-  const reset = document.createElement('button');
-  reset.type = 'button';
-  reset.className = 'ac-btn ac-btn-ghost';
-  reset.textContent = 'Use app defaults';
+  if (!form) return;
+  const reset = [...form.element.querySelectorAll('button')].find(button => button.textContent === 'Use app defaults');
   reset.disabled = !agent.compaction_overridden;
-  reset.addEventListener('click', async () => {
-    reset.disabled = true;
-    status.textContent = 'Saving…';
-    try {
-      agent = await persist({reset_compaction_thresholds: true});
-      for (const [key, input] of inputs) {
-        input.value = String(agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ??
-          agent.compaction_thresholds.trigger_tokens);
-      }
-      summarizer.value = agent.compaction_thresholds.summarizer || agent.compaction_defaults.summarizer || 'system';
-      describe();
-      status.textContent = 'Saved. New model calls use the app defaults.';
-    } catch (error) {
-      status.textContent = 'Reset failed: ' + error.message;
-    } finally {
-      reset.disabled = !agent.compaction_overridden;
-    }
-  });
-  const actions = document.createElement('div');
-  actions.className = 'ac-actions';
-  actions.append(save, reset);
-  host.append(actions, status);
+  form.attach();
+  host.append(status);
 }

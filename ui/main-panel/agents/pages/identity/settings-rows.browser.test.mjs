@@ -93,7 +93,8 @@ try{
   await page.getByRole('button',{name:'Save widget settings',exact:true}).click();await page.waitForFunction(()=>fixture.widget.config.enabled);assert.equal(await page.evaluate(()=>fixture.writes.at(-1).body.expected_revision),5);
   await toList();
   await openRow('Shared conversations');
-  await page.getByLabel('Participants may invite others',{exact:true}).check();await page.getByRole('button',{name:'Save shared-chat policy',exact:true}).click();await page.waitForFunction(()=>fixture.agent.shared_chat.shareable);
+  // The shared switch hides its checkbox; press the visible switch.
+  await page.locator('label.conn-toggle-wrap:has([aria-label="Participants may invite others"])').click();await page.getByRole('button',{name:'Save shared-chat policy',exact:true}).click();await page.waitForFunction(()=>fixture.agent.shared_chat.shareable);
   await toList();
   await openRow('Member access');
   assert.equal(await page.getByRole('radio',{name:/^Registered/}).isChecked(),true);
@@ -116,7 +117,7 @@ try{
   await page.evaluate(()=>remount());
   assert.equal(await page.locator('.spl-row').count(),titles.length);
   await openRow('Chat modes');assert.equal(await page.locator('[data-field="default_execution_mode"]').inputValue(),'auto');await toList();
-  await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');assert.equal(await page.locator('[data-final-key="require_flag"]').isChecked(),false);await toList();
+  await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).textContent(),'Updated closing');assert.equal(await page.locator('[data-final-key="require_flag"]').isChecked(),false);await toList();
   if(touch){
    const before=await page.evaluate(()=>pulses.length);
    await rowFor('Shared conversations').tap();
@@ -191,7 +192,7 @@ try{
   assert.equal(await page.locator('.spl-row').count(),titles.length-1);
   await openRow('Chat modes');assert.equal(await page.locator('[data-field="default_execution_mode"]').isDisabled(),true);await toList();
   await openRow('Review incoming messages');assert.equal(await page.getByLabel('Enable incoming-message review',{exact:true}).isDisabled(),true);await toList();
-  await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).isDisabled(),true);await toList();
+  await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).getAttribute('contenteditable'),'false');await toList();
   await openRow('Member access');assert.equal(await page.getByLabel('Conversation privacy',{exact:true}).isDisabled(),true);assert.equal(await page.getByRole('radio',{name:/^Authorized/}).isDisabled(),true);await toList();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   if(touch)assert.equal(await page.evaluate(()=>innerWidth===390&&matchMedia('(pointer: coarse)').matches),true);

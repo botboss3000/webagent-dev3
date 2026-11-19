@@ -1,8 +1,6 @@
 import {createSubpage, createSubpageList} from '../../../../shared/subpage-list/subpage-list.js';
 import {renderMainChat} from './main-chat.js';
 import {renderMemberAccess} from './member-access.js';
-
-'use strict';
 import { renderSharedChat } from './shared-chat.js';
 import { renderEmbedSettings } from './embed.js';
 import { renderClosing } from './closing.js';
@@ -10,7 +8,7 @@ import { renderVoiceOutput } from './voice.js';
 import { renderManager } from './manager.js';
 import { renderCompaction } from './compaction.js';
 import { renderToolOutputPolicy } from './tool-output-policy.js';
-import { tipBadge } from '../../../../shared/models/field-tip.js';
+import { createConfigList, createLongTextRow, createSelectRow, createTextRow } from '../../../../shared/config-rows/config-rows.js';
 
 const ICONS = {
   profile: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
@@ -71,8 +69,17 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   // asynchronous sections still see themselves as connected.
   const register = createSubpageList(host, {label: 'Identity settings', categories: CATEGORIES});
   const stage = register.stage;
-  // Serialize fields so concurrent name/description saves share the latest revision.
+  // Serialize saves so concurrent fields share the latest revision.
   let queue = Promise.resolve();
+  const persist = (patch) => {
+    const task = queue.then(async()=>{ const saved=await put(patch); agent=saved; onSaved(saved); return saved; });
+    queue=task.catch(()=>{}); return task;
+  };
+  // An unchanged value (compared once earlier saves land) sends nothing.
+  const saveField = (field, value) => {
+    const task = queue.then(async()=>{ if(value!==agent[field]){ agent=await put({[field]:value}); onSaved(agent); } return agent; });
+    queue=task.catch(()=>{}); return task;
+  };
   const profile = createSubpage(stage, {id:'profile', title:'Profile'});
   const content = profile.body;
   const card = document.createElement('div');
@@ -83,43 +90,19 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   profileName.textContent = agent.name || 'Unnamed agent';
   card.querySelector('.identity-profile-sub').textContent = 'Agent · ' + agentId;
   content.append(card);
-  for (const [field, label, placeholder] of [['name','Name','Name this agent…'],['description','Description','Describe what this agent is for…']]) {
-    const wrap = document.createElement('div'); wrap.className = 'ac-cfg-field';
-    const labelEl = document.createElement('label'); labelEl.className = 'ac-label'; labelEl.textContent = label;
-    const indicator = document.createElement('span'); indicator.className = 'ac-cfg-ind';
-    indicator.setAttribute('role','status'); indicator.setAttribute('aria-live','polite'); labelEl.append(indicator);
-    const input = document.createElement(field === 'description' ? 'textarea' : 'input');
-    input.id = 'identity-' + field; labelEl.htmlFor = input.id;
-    if(field === 'description') input.rows = 3; else input.type = 'text';
-    input.className = 'ac-input'; input.dataset.field = field;
-    input.value = agent[field] || ''; input.placeholder = placeholder; input.readOnly = !agent.can_manage;
-    wrap.append(labelEl,input); content.append(wrap);
-    let timer;
-    const status = (text) => { indicator.textContent = text === 'Saved' ? '✓' : text === 'Saving…' ? '…' : '!'; indicator.title = text; indicator.setAttribute('aria-label',text); };
-    const save = () => {
-      clearTimeout(timer);
-      const value = field === 'name' ? input.value.trim() : input.value;
-      if(field === 'name' && !value) { input.value = agent.name; status('Name cannot be blank'); return; }
-      queue = queue.then(async () => {
-        if(value === agent[field]) return;
-        status('Saving…');
-        try {
-          agent = await put({[field]:value});
-          if(input.value.trim() === value && field === 'name') input.value = agent.name;
-          if(field === 'name') profileName.textContent = agent.name || 'Unnamed agent';
-          status('Saved'); onSaved(agent);
-        } catch(error) { status('Save failed: ' + error.message); }
-      });
-    };
-    if(!input.readOnly) {
-      input.addEventListener('input',()=>{clearTimeout(timer); timer=setTimeout(save,700);});
-      input.addEventListener('blur',save);
-    }
-  }
-  const persist = (patch) => {
-    const task = queue.then(async()=>{ const saved=await put(patch); agent=saved; onSaved(saved); return saved; });
-    queue=task.catch(()=>{}); return task;
-  };
+  const profileList = createConfigList(content, {label:'Profile fields'});
+  const nameRow = createTextRow(profileList, {title:'Name', value:agent.name||'', placeholder:'Name this agent…', disabled:!agent.can_manage,
+    onSave: async value => {
+      const name = value.trim();
+      if(!name) throw Error('Name cannot be blank');
+      await saveField('name', name);
+      if(nameRow.getValue().trim() === name) nameRow.setValue(agent.name);
+      profileName.textContent = agent.name || 'Unnamed agent';
+    }});
+  nameRow.control.dataset.field = 'name';
+  const descriptionRow = createLongTextRow(profileList, {title:'Description', value:agent.description||'', placeholder:'Describe what this agent is for…',
+    minHeight:80, disabled:!agent.can_manage, onSave: value => saveField('description', value)});
+  descriptionRow.editor.area.dataset.field = 'description';
   renderMemberAccess(stage,agent,persist,request,{agentId,reload:()=>renderIdentity(host,request,{agentId,onSaved})});
   if(agent.can_manage)await renderEmbedSettings(stage,request,{agentId});
   renderSharedChat(stage, agent, persist);
@@ -130,12 +113,14 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   const hint = document.createElement('p'); hint.className = 'ac-hint';
   hint.textContent = 'Default mode applies to new conversations. Read-only modes cannot execute mutating tools. Each mode adds its own instruction before model calls; existing permissions and approvals still apply.'; modeBody.append(hint);
   let modes = structuredClone(agent.execution_modes);
-  const defaultLabel = document.createElement('label'); defaultLabel.className = 'ac-label'; defaultLabel.textContent = 'Default mode';
-  const select = document.createElement('select'); select.className = 'ac-input'; select.dataset.field = 'default_execution_mode'; select.disabled = !agent.can_manage;
+  const choices = () => modes.filter(m=>!m._deleted&&!m._new).map(m=>[m.id,m.label]);
   const notice = document.createElement('p'); notice.className = 'ac-hint'; notice.setAttribute('role','status');
-  const fill = () => { select.replaceChildren(); modes.filter(m=>!m._deleted&&!m._new).forEach(m=>{ const option=document.createElement('option'); option.value=m.id; option.textContent=m.label; select.append(option); }); select.value=agent.default_execution_mode; };
-  fill(); defaultLabel.append(select); modeBody.append(defaultLabel,notice);
-  select.addEventListener('change',async()=>{select.disabled=true;try {await persist({default_execution_mode:select.value});notice.textContent='Default mode saved';} catch(error){notice.textContent='Save failed: '+error.message;} finally {fill();select.disabled=!agent.can_manage;} });
+  const defaultRow = createSelectRow(createConfigList(modeBody,{label:'Default chat mode'}), {title:'Default mode', options:choices(), value:agent.default_execution_mode,
+    disabled:!agent.can_manage, onSave: async value => { notice.textContent=''; await persist({default_execution_mode:value}); notice.textContent='Default mode saved'; }});
+  const select = defaultRow.control; select.dataset.field = 'default_execution_mode';
+  // Saved mode edits can rename or remove modes, so the choices are rebuilt from the saved list.
+  const fill = () => { select.replaceChildren(...choices().map(([id,label])=>{ const option=document.createElement('option'); option.value=id; option.textContent=label; return option; })); defaultRow.setValue(agent.default_execution_mode); };
+  modeBody.append(notice);
   const editor=document.createElement('div'); editor.style.cssText='display:flex;flex-direction:column;gap:8px;padding:10px 0';modeBody.append(editor);
   const renderModes=()=>{
     editor.replaceChildren();
@@ -147,20 +132,20 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
       const save=document.createElement('button');save.type='button';save.className='ac-btn ac-btn-ghost';save.textContent='SAVE CHANGES';save.disabled=!mode._new;save.dataset.modeCardSave='';
       const status=document.createElement('span');status.setAttribute('role','status');
       const updateSummary=()=>{nameText.textContent=(mode.label||mode.id)+(mode._deleted?' (will be removed)':'');};updateSummary();
-      for(const [key,label] of [['label','Name'],['description','Footer description'],['prompt','Prompt injection'],['turn_label','Per-turn label'],['turn_guidance','Per-turn guidance']]){
-        const wrap=document.createElement('label');wrap.className='ac-label';wrap.textContent=label;
-        const multiline=key==='prompt'||key==='turn_guidance';
-        const input=document.createElement(multiline?'textarea':'input');input.className='ac-input';input.dataset.modeField=key;
-        if(key==='prompt')input.rows=6;if(key==='turn_guidance'){input.rows=6;input.maxLength=4000;}if(key==='turn_label')input.maxLength=60;
-        input.value=mode[key]||'';input.disabled=!agent.can_manage;
-        if(key==='turn_guidance'){
-          wrap.append(' ',tipBadge('The per-turn label and this text are sent to the model with every turn while the session is in this mode, after the conversation history, and never saved in it. Use it for guidance the agent must follow on every turn, on top of the mode. Through a bridge (Claude Code, OpenCode), they are added with each user message, and again at the next step when they change.'));
-        }
-        input.addEventListener('input',()=>{mode[key]=input.value;save.disabled=false;status.textContent='Unsaved changes';updateSummary();});wrap.append(input);
-        if(key==='turn_guidance'){const note=document.createElement('span');note.className='ac-hint';note.textContent='Sent with every turn in this mode, after the per-turn label. Leave both empty to send nothing.';wrap.append(note);}
-        fields.append(wrap);
+      // The card saves every mode together with its own button, so its rows only collect edits.
+      const list=createConfigList(fields,{label:(mode.label||mode.id)+' settings'}),rows=[];
+      for(const [key,title] of [['label','Name'],['description','Footer description'],['prompt','Prompt injection'],['turn_label','Per-turn label'],['turn_guidance','Per-turn guidance']]){
+        const long=key==='prompt'||key==='turn_guidance';
+        const options={title,value:mode[key]||'',disabled:!agent.can_manage};
+        if(key==='turn_label')options.maxLength=60;
+        if(key==='turn_guidance')Object.assign(options,{maxLength:4000,hint:'Sent with every turn in this mode, after the per-turn label. Leave both empty to send nothing.',
+          tip:'The per-turn label and this text are sent to the model with every turn while the session is in this mode, after the conversation history, and never saved in it. Use it for guidance the agent must follow on every turn, on top of the mode. Through a bridge (Claude Code, OpenCode), they are added with each user message, and again at the next step when they change.'});
+        const row=long?createLongTextRow(list,options):createTextRow(list,options);
+        (long?row.editor.area:row.control).dataset.modeField=key;
+        row.control.addEventListener('input',()=>{mode[key]=row.getValue();save.disabled=false;status.textContent='Unsaved changes';updateSummary();});
+        rows.push(row);
       }
-      if(!mode.builtin&&agent.can_manage){const remove=document.createElement('button');remove.type='button';remove.className='ac-btn ac-btn-ghost';remove.textContent='Remove mode';remove.addEventListener('click',()=>{mode._deleted=true;fields.querySelectorAll('input,textarea,select').forEach(el=>el.disabled=true);save.disabled=false;remove.disabled=true;updateSummary();});fields.append(remove);}
+      if(!mode.builtin&&agent.can_manage){const remove=document.createElement('button');remove.type='button';remove.className='ac-btn ac-btn-ghost';remove.textContent='Remove mode';remove.addEventListener('click',()=>{mode._deleted=true;rows.forEach(row=>row.setDisabled(true));save.disabled=false;remove.disabled=true;updateSummary();});fields.append(remove);}
       if(agent.can_manage){fields.append(save,status);save.addEventListener('click',async()=>{
         save.disabled=true;status.textContent='Saving…';
         const payload=modes.filter(m=>!m._deleted).map(({_deleted,_new,permission_policy,...m})=>m);

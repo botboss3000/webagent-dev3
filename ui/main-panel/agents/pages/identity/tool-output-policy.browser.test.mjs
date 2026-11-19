@@ -81,7 +81,7 @@ try {
   await page.evaluate(()=>document.querySelector('#identity-tool-result-deduplication-enabled').dispatchEvent(new Event('change')));
   assert.deepEqual(await page.evaluate(()=>fixture.writes),[]);
   await setup(true,false);assert.equal(await toggle.isDisabled(),true);
-  assert.equal(await page.getByLabel('Summary trigger',{exact:true}).getAttribute('readonly'),'');
+  assert.equal(await page.getByLabel('Summary trigger',{exact:true}).isDisabled(),true);
   assert.equal(await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).count(),0);
   // The per-tool result-deduplication picker belongs to the shared ability row control,
   // which its own test suite covers; this fixture covers this page's policy only.

@@ -3,7 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 const source = await fs.readFile(new URL('./tool-output-policy.js', import.meta.url), 'utf8');
 const rowSource = (await fs.readFile(new URL('../../../../shared/subpage-list/subpage-list.js', import.meta.url), 'utf8')).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace('export function createSubpage', 'function createSubpage');
-const {renderToolOutputPolicy} = await import('data:text/javascript;base64,' + Buffer.from(rowSource + source.replace("import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';", '')).toString('base64'));
+// The shared config rows have their own browser suite; this fixture only needs disabled stand-ins that land in the tree.
+const configRowsImport = "import {createConfigList, createNumberRow, createSelectRow, createToggleRow} from '../../../../shared/config-rows/config-rows.js';";
+assert.ok(source.includes(configRowsImport));
+const rowStubs = `const createConfigList=host=>{const list=document.createElement('div');host.append(list);return list;};
+const stubRow=(list,{title,value,disabled}={})=>{const row=document.createElement('div');const control=document.createElement('input');
+  control.value=value;control.checked=value;control.disabled=!!disabled;control.parentElement={dataset:{}};control.attributes['aria-label']=title;row.append(control);list.append(row);
+  return {row,control,getValue:()=>control.value,setValue:next=>{control.value=next;},setDisabled:off=>{control.disabled=!!off;}};};
+const createNumberRow=stubRow,createSelectRow=stubRow,createToggleRow=stubRow;`;
+const {renderToolOutputPolicy} = await import('data:text/javascript;base64,' + Buffer.from(rowSource + rowStubs + source.replace("import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';", '').replace(configRowsImport, '')).toString('base64'));
 
 // A small DOM fixture exercises the actual field/save implementation without replacing its logic.
 class Element {

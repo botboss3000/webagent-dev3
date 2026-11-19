@@ -1300,99 +1300,6 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   .agent-config-topic-icon { width: 38px; height: 38px; }
 }
 
-/* Config → Identity replaces the old expanded-card header. */
-.agent-identity-settings .ac-category-summary > svg {
-  color: var(--accent);
-  flex: none;
-}
-.agent-identity-icon-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-.agent-identity-icon-row > span {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--fg-1);
-  font-size: 13px;
-}
-.agent-identity-icon-row > span strong {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg-1);
-}
-.agent-identity-icon-row small {
-  color: var(--fg-3);
-  font-size: 11px;
-}
-.agent-identity-icon-button {
-  width: 48px;
-  height: 48px;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: var(--border-width) solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-elev);
-  color: var(--fg-1);
-  cursor: pointer;
-  transition: border-color .15s, background .15s;
-}
-.agent-identity-icon-button:not(:disabled):hover {
-  border-color: var(--brand);
-  background: rgba(var(--brand-rgb), 0.10);
-}
-.agent-identity-icon-button:disabled {
-  cursor: default;
-  opacity: .7;
-}
-.agent-closing-message-settings {
-  margin-top: 18px;
-}
-.agent-closing-message-settings-copy {
-  color: var(--fg-1);
-  font-size: 13px;
-  line-height: 1.3;
-}
-.agent-closing-message-settings-copy strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-.agent-closing-message-settings-copy p {
-  margin: 2px 0 10px;
-  color: var(--fg-2);
-  font-size: 12px;
-  line-height: 1.45;
-}
-.agent-closing-message-output > .ac-ability-row { cursor: pointer; }
-.agent-closing-message-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-.agent-closing-message-field,
-.agent-closing-message-guidance {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: var(--fg-2);
-  font-size: 11px;
-  line-height: 1.35;
-}
-.agent-closing-message-field:nth-child(n + 3) { grid-column: 1 / -1; }
-.agent-closing-message-field textarea,
-.agent-closing-message-guidance textarea { resize: vertical; }
-.agent-closing-message-guidance { margin-top: 10px; }
-@media (max-width: 640px) {
-  .agent-closing-message-fields { grid-template-columns: 1fr; }
-  .agent-closing-message-field:nth-child(n + 3) { grid-column: auto; }
-}
 .agent-design-settings {
   margin-top: 18px;
 }
@@ -1920,21 +1827,6 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   vertical-align: middle;
 }
 @keyframes agents-spin { to { transform: rotate(360deg); } }
-
-/* ── Config tab — stacked free-text fields (Identity / Chat Messages) ──
-   The Config tab follows the App-Settings standard config-page layout: option
-   settings render as shared `.ac-list` rows, but the GENUINE free-text fields
-   (name / description / chat messages) stay as fields — not rows — per
-   docs/claude/ui-guidance.md ("when NOT to use rows"). They reuse the shared
-   `.ac-label` / `.ac-input` / `.ac-hint`; only the wrapper spacing + the small
-   on-top save-indicator slot live here. Theme-safe (all colour from tokens). */
-.ac-cfg-field { margin-bottom: 12px; }
-.ac-cfg-field:last-child { margin-bottom: 0; }
-.ac-cfg-field > .ac-label { display: flex; align-items: center; }
-/* The save overlay (_markSaving/_flashSaveCheck) covers this small slot, so the
-   spinner → ✓ / ⚠ sits beside the label rather than over the text field. */
-.ac-cfg-ind { position: relative; display: inline-block; width: 16px; height: 16px; margin-left: 6px; }
-.ac-cfg-field textarea.ac-input { min-height: 54px; line-height: 1.45; resize: vertical; }
 
 /* ── Prompt/Skill squares (reusable squares+carousel for Prompts tab) ── */
 /* Wrapper — similar pattern to .agents-squares-wrap */

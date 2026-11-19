@@ -105,6 +105,8 @@ function saver({key, form, onSave, control, error}) {
 export function createToggleRow(list, {title, hint, tip, value = false, disabled = false, key, form, onSave} = {}) {
   const {row, control, error} = shell(list, {title, hint, tip});
   const wrap = node('label', 'conn-toggle-wrap');
+  // A row's switch stays in its row: a subpage only lifts an unmarked switch into its header.
+  wrap.dataset.inlineSwitch = '';
   const input = node('input', 'conn-toggle');
   input.type = 'checkbox';
   input.checked = !!value;
@@ -227,6 +229,8 @@ export function createNumberRow(list, {title, hint, tip, value = 0, min, max, st
     input.value = String(clamp((Number(input.value) || 0) + direction * step));
     settle();
   };
+  // In a form, typing marks the draft changed at once so Save is ready before the field is left.
+  if (form && key) input.addEventListener('input', () => { if (input.value !== '') form.set(key, Number(input.value)); });
   down.addEventListener('click', event => nudge(event, -1));
   up.addEventListener('click', event => nudge(event, 1));
   input.addEventListener('change', settle);

@@ -1,24 +1,11 @@
 'use strict';
 import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
+import {createConfigList, createNumberRow, createSelectRow, createToggleRow} from '../../../../shared/config-rows/config-rows.js';
 
 const scopeOptions = [
   ['selected', 'Selected tools'],
   ['all_eligible', 'All eligible read tools'],
 ];
-
-function createField(host, label, helpText) {
-  const wrap = document.createElement('div');
-  wrap.className = 'ac-cfg-field';
-  const labelEl = document.createElement('label');
-  labelEl.className = 'ac-label';
-  labelEl.textContent = label;
-  const help = document.createElement('p');
-  help.className = 'ac-hint';
-  help.textContent = helpText;
-  wrap.append(labelEl);
-  host.append(wrap);
-  return {wrap, labelEl, help};
-}
 
 function staleMessage(error) {
   const message = error?.message || String(error);
@@ -27,7 +14,9 @@ function staleMessage(error) {
     : 'Save failed: ' + message;
 }
 
-function renderExperimentalPolicy(host, agent, persist, available, enabled) {
+// A read-only preview of the saved lifetime/budget policy: nothing here saves until the
+// experimental strategy returns, so every row is disabled.
+function renderExperimentalPolicy(host, agent, available, enabled) {
   const hint = document.createElement('p');
   hint.className = 'ac-hint';
   hint.textContent = available
@@ -35,51 +24,26 @@ function renderExperimentalPolicy(host, agent, persist, available, enabled) {
     : 'Under development · Experimental — backend update pending. Saved settings below are read-only; the running lifetime/budget policy is unchanged.';
   host.append(hint);
 
-  const canManage = false;
-  let policy = structuredClone(agent.tool_output_policy || agent.tool_output_defaults || {});
+  const policy = agent.tool_output_policy || agent.tool_output_defaults || {};
   const eligible = Array.isArray(agent.tool_output_eligible_tools)
     ? agent.tool_output_eligible_tools : [];
-
   enabled.checked = Boolean(policy.enabled);
   enabled.disabled = true;
+  // Switches inside the page stay out of the category header.
 
-  const scopeField = createField(host, 'Retention scope',
-    'Choose which eligible read tools can have older results shortened.');
-  const scope = document.createElement('select');
-  scope.className = 'ac-input';
-  scope.id = 'identity-tool-output-scope';
-  scope.disabled = !canManage;
-  for (const [value, label] of scopeOptions) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = label;
-    scope.append(option);
-  }
-  scopeField.labelEl.htmlFor = scope.id;
-  scopeField.wrap.append(scope, scopeField.help);
-
-  const toolsField = createField(host, 'Selected tools',
-    'This list is used only for Selected tools scope. Only eligible read tools are available.');
-  const toolList = document.createElement('div');
-  toolList.style.cssText = 'display:flex;flex-direction:column;gap:6px;padding:4px 0';
-  const toolChecks = new Map();
+  createSelectRow(createConfigList(host, {label: 'Retention scope setting'}), {title: 'Retention scope', hint: 'Choose which eligible read tools can have older results shortened.',
+    options: scopeOptions, value: policy.scope || 'all_eligible', disabled: true});
+  const toolHint = document.createElement('p');
+  toolHint.className = 'ac-hint';
+  toolHint.textContent = 'Selected tools: this list is used only for Selected tools scope. Only eligible read tools are available.';
+  host.append(toolHint);
+  const selected = new Set(Array.isArray(policy.tools) ? policy.tools : []);
+  const tools = createConfigList(host, {label: 'Selected tools'});
   for (const name of eligible) {
-    const row = document.createElement('label');
-    row.className = 'ac-label';
-    row.style.cssText = 'display:flex;align-items:center;gap:8px';
-    const check = document.createElement('input');
-    check.type = 'checkbox';
-    check.value = name;
-    check.dataset.toolOutputTool = name;
-    check.disabled = !canManage;
-    const text = document.createElement('span');
-    text.textContent = name;
-    row.append(check, text);
-    toolList.append(row);
-    toolChecks.set(name, check);
+    createToggleRow(tools, {title: name, value: selected.has(name), disabled: true}).control.dataset.toolOutputTool = name;
   }
-  toolsField.wrap.append(toolList, toolsField.help);
 
+  const list = createConfigList(host, {label: 'Lifetime and budget settings'});
   const numberFields = [
     ['lifetime_calls', 'Lifetime in model calls', 1, 1000,
       'How many model calls an ordinary result stays in active context before it is shortened.'],
@@ -88,127 +52,28 @@ function renderExperimentalPolicy(host, agent, persist, available, enabled) {
     ['promoted_chars', 'Promoted result characters', 1024, 262144,
       'Character budget for manually promoted results and results promoted by an edit.'],
   ];
-  const numbers = new Map();
-  for (const [key, label, min, max, description] of numberFields) {
-    const field = createField(host, label, description);
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.className = 'ac-input';
-    input.min = String(min);
-    input.max = String(max);
-    input.step = '1';
-    input.id = 'identity-tool-output-' + key;
-    input.disabled = !canManage;
-    field.labelEl.htmlFor = input.id;
-    field.wrap.append(input, field.help);
-    numbers.set(key, input);
+  for (const [key, title, min, max, hint] of numberFields) {
+    createNumberRow(list, {title, hint, value: policy[key], min, max, disabled: true});
   }
-
   const optionFields = [
     ['refresh_on_recall', 'Refresh lifetime when recalled',
       'A successful recall starts a fresh retention window.'],
     ['promote_on_edit', 'Promote results used for edits',
       'Results used by a successful edit receive the promoted character budget.'],
   ];
-  const options = new Map();
-  for (const [key, label, description] of optionFields) {
-    const field = createField(host, label, description);
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.id = 'identity-tool-output-' + key;
-    input.disabled = !canManage;
-    field.labelEl.htmlFor = input.id;
-    field.wrap.append(input, field.help);
-    options.set(key, input);
+  for (const [key, title, hint] of optionFields) {
+    createToggleRow(list, {title, hint, value: Boolean(policy[key]), disabled: true});
   }
 
   const status = document.createElement('p');
   status.className = 'ac-hint';
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
-  host.append(status);
-
-  const fill = (saved) => {
-    agent = saved;
-    policy = structuredClone(saved.tool_output_policy || saved.tool_output_defaults || {});
-    enabled.checked = Boolean(policy.enabled);
-    scope.value = policy.scope || 'all_eligible';
-    const selected = new Set(Array.isArray(policy.tools) ? policy.tools : []);
-    for (const [name, check] of toolChecks) check.checked = selected.has(name);
-    for (const [key, input] of numbers) input.value = String(policy[key]);
-    for (const [key, input] of options) input.checked = Boolean(policy[key]);
-    reset.disabled = !canManage || !saved.tool_output_overridden;
-  };
-
-  const save = document.createElement('button');
-  save.type = 'button';
-  save.className = 'ac-btn ac-btn-ghost';
-  save.textContent = 'Save tool output settings';
-  save.disabled = !canManage;
-  save.addEventListener('click', async () => {
-    if (!canManage || save.disabled) return;
-    const next = {
-      enabled: enabled.checked,
-      scope: scope.value,
-      tools: [...toolChecks].filter(([, check]) => check.checked).map(([name]) => name),
-      refresh_on_recall: options.get('refresh_on_recall').checked,
-      promote_on_edit: options.get('promote_on_edit').checked,
-    };
-    for (const [key, input] of numbers) {
-      const value = Number(input.value);
-      if (!Number.isSafeInteger(value) || value < Number(input.min) || value > Number(input.max)) {
-        status.textContent = 'Enter whole numbers from ' + Number(input.min).toLocaleString() +
-          ' to ' + Number(input.max).toLocaleString() + '.';
-        return;
-      }
-      next[key] = value;
-    }
-    if (next.scope === 'selected' && next.tools.length === 0) {
-      status.textContent = 'Choose at least one tool for Selected tools scope.';
-      return;
-    }
-    save.disabled = true;
-    reset.disabled = true;
-    status.textContent = 'Saving…';
-    try {
-      const saved = await persist({tool_output_policy: next});
-      fill(saved);
-      status.textContent = 'Saved. New model calls use these settings.';
-    } catch (error) {
-      status.textContent = staleMessage(error);
-    } finally {
-      save.disabled = !canManage;
-      reset.disabled = !canManage || !agent.tool_output_overridden;
-    }
-  });
-  const reset = document.createElement('button');
-  reset.type = 'button';
-  reset.className = 'ac-btn ac-btn-ghost';
-  reset.textContent = 'Reset to app defaults';
-  reset.disabled = !canManage || !agent.tool_output_overridden;
-  reset.addEventListener('click', async () => {
-    if (!canManage || reset.disabled) return;
-    save.disabled = true;
-    reset.disabled = true;
-    status.textContent = 'Resetting…';
-    try {
-      const saved = await persist({reset_tool_output_policy: true});
-      fill(saved);
-      status.textContent = 'Reset to app defaults. New model calls use these values.';
-    } catch (error) {
-      status.textContent = staleMessage(error);
-      reset.disabled = !canManage || !agent.tool_output_overridden;
-    } finally {
-      save.disabled = !canManage;
-    }
-  });
-  if (canManage) host.append(save, reset);
-  if (!canManage) status.textContent = available
+  status.textContent = available
     ? 'Lifetime/budget eviction is disabled independently of duplicate-result suppression.'
     : 'Backend update pending. These saved values do not change the active runtime policy.';
-  fill(agent);
+  host.append(status);
 }
-
 
 export function renderToolOutputPolicy(host, agent, persist) {
   const parent = host;
@@ -256,5 +121,5 @@ export function renderToolOutputPolicy(host, agent, persist) {
   retention.body.append(experimental);
   const policy = structuredClone(agent.tool_output_policy || agent.tool_output_defaults || {});
   if (available) policy.enabled = false;
-  renderExperimentalPolicy(experimental, {...agent, tool_output_policy: policy}, persist, available, retention.toggle);
+  renderExperimentalPolicy(experimental, {...agent, tool_output_policy: policy}, available, retention.toggle);
 }

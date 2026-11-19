@@ -152,6 +152,7 @@ export function createRichTextEditor({ value = '', label = 'Editor', placeholder
     getValue: () => doc.innerText.replace(/\n$/, ''),
     setValue: next => { doc.textContent = next; paintCount(); },
     setDisabled,
+    setDefaultText: text => { doc.dataset.placeholder = text || placeholder || 'Write something\u2026'; },
     focus: () => doc.focus(),
   };
 }
