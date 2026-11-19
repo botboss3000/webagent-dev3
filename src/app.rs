@@ -842,7 +842,9 @@ async fn run_process() -> Result<()> {
                 // Engine warnings say why a run was stopped, refused or deferred.
                 .add_directive("webagent_engine=warn".parse()?)
                 // One line per model call with cache statistics (cache_estimate.rs).
-                .add_directive("webagent_engine::runtime::cache_estimate=info".parse()?),
+                .add_directive("webagent_engine::runtime::cache_estimate=info".parse()?)
+                // One line per experimental keep-alive ping (keep_alive.rs).
+                .add_directive("webagent_engine::runtime::keep_alive=info".parse()?),
         )
         .init();
     if let Some(path) = std::env::args()
