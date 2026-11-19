@@ -215,7 +215,7 @@ const sessionList=createSessionList($('session-dropdown'),{guard,/* Shares the p
 const brokerChip=createBrokerChip({request,note,family:id=>sessionList.family(id)});
 // The Artifacts chip lists what the agent produced in the open session; snapshots refill it.
 const artifactsChip=createArtifactsChip({session:()=>session,send:text=>submit(text)});
-const tasksChip=createTasksChip({session:()=>session,request,note});
+const tasksChip=createTasksChip({session:()=>session,request,note,canEdit:()=>sharedAccess?.can_send!==false});
 // Exposes dropdown configuration through the session-list controller.
 $('session-dropdown').configure=cfg=>sessionList.configure(cfg);
 const chatPanel=root;

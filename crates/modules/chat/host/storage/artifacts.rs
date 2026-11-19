@@ -99,6 +99,70 @@ impl Store {
         Ok(output)
     }
 
+    /// Save artifact `id` of `kind` with `body` for a user's request `request_id` (the plan's
+    /// checklist after a task panel edit): no run is involved, so the caller has already
+    /// checked the user's access to the session. A retried request returns its first result.
+    pub(crate) async fn session_artifact_user_write(
+        &self,
+        sid: &str,
+        request_id: &str,
+        kind: &str,
+        id: &str,
+        body: &Value,
+    ) -> Result<Value> {
+        if !valid_id(id) || !valid_id(kind) || !valid_id(request_id) {
+            return Err(anyhow!("Invalid session artifact identifier"));
+        }
+        let sealed = self.encode_user_record(body)?;
+        if sealed.len() > MAX_ARTIFACT_BYTES {
+            return Err(anyhow!("Session artifact exceeds 64 KiB"));
+        }
+        let receipt_key = format!("receipt:base:{sid}:user:{request_id}:artifact");
+        let fingerprint = crate::digest(&json!([kind, id, body]));
+        let _guard = self.context_gate.write().await;
+        let mut tx = self.pool.begin().await?;
+        if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+            .bind(&receipt_key)
+            .fetch_optional(&mut *tx)
+            .await?
+        {
+            let receipt = self.unseal(&raw)?;
+            if receipt["fingerprint"] != fingerprint {
+                return Err(anyhow!("Artifact request ID reused with different input"));
+            }
+            let output = receipt["output"].clone();
+            tx.commit().await?;
+            return Ok(output);
+        }
+        // A user edit only updates an artifact an agent run already created.
+        let revision = sqlx::query_scalar::<_, i64>(
+            "SELECT revision FROM session_artifacts WHERE session_id=? AND artifact_id=?",
+        )
+        .bind(sid)
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow!("Session artifact not found"))?
+            + 1;
+        sqlx::query("UPDATE session_artifacts SET kind=?,revision=?,bytes=?,body=?,updated_at=? WHERE session_id=? AND artifact_id=?")
+            .bind(kind).bind(revision).bind(sealed.len() as i64).bind(&sealed)
+            .bind(crate::now() as i64).bind(sid).bind(id)
+            .execute(&mut *tx).await?;
+        let output = json!({"id":id,"kind":kind,"revision":revision});
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
+            .bind(&receipt_key)
+            .bind(self.encode_user_record(&json!({"fingerprint":fingerprint,"output":output}))?)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'base_task_artifact',?)")
+            .bind(sid)
+            .bind(self.encode_user_record(&json!({"kind":"artifact","id":id,"revision":revision}))?)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(output)
+    }
+
     /// The artifacts of session `sid`, oldest first, each with its decoded title and content.
     pub(crate) async fn session_artifacts(&self, sid: &str) -> Result<Vec<Value>> {
         let rows = sqlx::query(

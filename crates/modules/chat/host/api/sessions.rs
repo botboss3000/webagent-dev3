@@ -436,17 +436,12 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     let runs = public_runs(&app, app.store.recent_runs(Some(&id)).await?).await?;
     let components = app.store.base_chat_components(&id).await?;
     let artifacts = app.store.session_artifacts(&id).await?;
-    // The task panel is the owner's: shared chat members and observers do not get the list.
-    let task_list = if crate::shared_chat::actor(&app) == app.store.current_user_id()
-        && !crate::shared_projection::observer(&app)
-    {
-        app.store
-            .task_list_current(&id)
-            .await?
-            .map(|document| json!({"revision":document["revision"],"list":document["list"]}))
-    } else {
-        None
-    };
+    // Everyone in the chat sees the session task list's progress.
+    let task_list = app
+        .store
+        .task_list_current(&id)
+        .await?
+        .map(|document| json!({"revision":document["revision"],"list":document["list"]}));
     let component_revision = app.store.base_component_revision(&id).await?;
     let app_view = tools::core_app_control::projection(&app, &id).await?;
     let queue = crate::followup_queue::public(&app.store.followup_queue(&id).await?);

@@ -389,6 +389,21 @@ pub fn plan_checklist(section: &Section) -> String {
         .join("\n")
 }
 
+/// The plan artifact `plan` (its title and sections) with its checklist rewritten from its
+/// task list `section`, or why it has no checklist to rewrite.
+pub fn plan_with_checklist(plan: &Value, section: &Section) -> Result<Value> {
+    let mut sections = plan["sections"]
+        .as_array()
+        .cloned()
+        .ok_or_else(|| anyhow!("The plan has no sections"))?;
+    let item = sections
+        .iter_mut()
+        .find(|item| item["label"] == "Checklist")
+        .ok_or_else(|| anyhow!("The plan has no checklist"))?;
+    item["value"] = Value::String(plan_checklist(section));
+    Ok(serde_json::json!({"title":plan["title"],"sections":sections}))
+}
+
 /// The task list texts, the live file's when it is valid.
 #[must_use]
 pub fn texts() -> Value {

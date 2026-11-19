@@ -171,7 +171,8 @@ and the first final reply of a run while open steps remain is held for one more 
 history, which ends with the draft reply, plus a reminder naming the open steps, kept out of
 history like the closer). An answer that calls no tool is dropped and the draft publishes;
 one that calls tools continues the run, and its later final reply publishes. Texts are in
-`prompts/task_list.json`. Shared chat members get none of it.
+`prompts/task_list.json`. The list is the session's: every participant's runs get it,
+everyone in the chat sees its progress, and anyone who can send in the chat edits it.
 
 **Execution mode.** The mode arrives as a `set_execution_mode` result: at session
 start, when the user changes it, and when the agent changes it. A fold keeps the

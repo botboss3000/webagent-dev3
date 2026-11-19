@@ -2,7 +2,7 @@
 // works (sections of steps, a plan's checklist first). The list arrives with the session
 // snapshot; the chip shows done/total steps and opens a panel where the owner ticks, adds
 // and removes steps (each edit reaches the agent with its next step) and reads the History
-// of revisions. Only the session's owner gets the list.
+// of revisions. Everyone in the chat sees the list; those who can send in it edit.
 import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -24,9 +24,10 @@ export function taskCounts(list) {
 /**
  * Mounts the chip into the header session-tabs row and returns its session lifecycle.
  * `session()` names the open chat, `request(path, method, body)` calls the API and
- * `note(text)` reports an error.
+ * `note(text)` reports an error; `canEdit()` says whether the caller may send in the chat
+ * (others see the list read-only).
  */
-export function createTasksChip({session = () => '', request, note = () => {}} = {}) {
+export function createTasksChip({session = () => '', request, note = () => {}, canEdit = () => true} = {}) {
   const tabs = document.getElementById('chat-sub-header');
   const chip = el('button', 'sub-chip chip-tasks'); chip.type = 'button'; chip.id = 'chat-tasks-chip';
   chip.setAttribute('aria-haspopup', 'dialog'); chip.setAttribute('aria-expanded', 'false');
@@ -79,7 +80,7 @@ export function createTasksChip({session = () => '', request, note = () => {}} =
     return row;
   }
   function sectionBlock(section) {
-    const editable = section.status === 'open';
+    const editable = section.status === 'open' && canEdit();
     const part = el('section', 'task-section'); part.dataset.status = section.status;
     const head = el('div', 'task-section-head');
     head.append(el('strong', 'task-section-title', section.title), el('small', 'task-section-meta', [section.origin === 'user' ? 'Your request' : 'Agent', STATUS[section.status] || section.status].join(' · ')));

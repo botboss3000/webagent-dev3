@@ -4212,15 +4212,13 @@ impl<
                             // task list still has open steps gets one more call with a
                             // reminder, so the agent can finish, block or cancel them first.
                             if run["task_reminder"].is_null() {
-                                let (task_sid, _, requester) = webagent_context::assets::identity(
+                                let (task_sid, _, _) = webagent_context::assets::identity(
                                     &run,
                                     app.store.current_user_id(),
                                 )?;
-                                if let Some(message) = Box::pin(app.native.session_tasks_end(
-                                    app.store.records(),
-                                    &task_sid,
-                                    &requester,
-                                ))
+                                if let Some(message) = Box::pin(
+                                    app.native.session_tasks_end(app.store.records(), &task_sid),
+                                )
                                 .await?
                                 {
                                     run["task_reminder"] =

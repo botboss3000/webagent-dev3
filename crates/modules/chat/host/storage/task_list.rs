@@ -281,23 +281,19 @@ impl Store {
         Ok(history)
     }
 
-    /// Task list context for one model call of `requester` in session `sid` at history
+    /// Task list context for one model call in session `sid` at history
     /// `basis`: the snapshot definition `(id, body)`, frozen until `basis` changes at a rewind
     /// or block merge (later changes reach the history as tool results), and the lines for
     /// the step's guidance message: the current one-line task state, then the reminder to
     /// file work when `calls` tool calls since the user's last message included no list write
-    /// (`filed`). Shared chat members get none of it.
+    /// (`filed`). The list is the session's, so every participant's runs get it.
     pub(crate) async fn task_list_context(
         &self,
         sid: &str,
-        requester: &str,
         basis: &str,
         calls: u64,
         filed: bool,
     ) -> Result<(Vec<(String, String)>, Vec<String>, Vec<(u64, String)>)> {
-        if requester != self.current_user_id() {
-            return Ok((Vec::new(), Vec::new(), Vec::new()));
-        }
         let key = list_key(sid)?;
         let document = self.task_list_current(sid).await?.unwrap_or(Value::Null);
         let list: webagent_chat::task_list::List = if document.is_null() {
@@ -355,16 +351,9 @@ impl Store {
         ))
     }
 
-    /// The end-of-turn reminder for `requester` in session `sid` when its task list still
-    /// has open steps, or `None` (also for shared chat members).
-    pub(crate) async fn task_list_end_reminder(
-        &self,
-        sid: &str,
-        requester: &str,
-    ) -> Result<Option<String>> {
-        if requester != self.current_user_id() {
-            return Ok(None);
-        }
+    /// The end-of-turn reminder for session `sid` when its task list still has open steps,
+    /// or `None`.
+    pub(crate) async fn task_list_end_reminder(&self, sid: &str) -> Result<Option<String>> {
         let list: webagent_chat::task_list::List = match self.get(&list_key(sid)?).await? {
             Some(document) if document["session_id"] == sid => {
                 serde_json::from_value(document["list"].clone())?
@@ -469,9 +458,8 @@ mod tests {
         // The run belongs to another session there.
         assert!(store.task_list("foreign", "r", None).await.is_err());
         // The snapshot stays as it was until the history basis changes.
-        let user = store.current_user_id().to_owned();
         let (first, _, _) = store
-            .task_list_context("owned", &user, "b1", 0, false)
+            .task_list_context("owned", "b1", 0, false)
             .await
             .unwrap();
         assert_eq!(first[0].0, "session-tasks-2");
@@ -489,22 +477,17 @@ mod tests {
             .await
             .unwrap();
         let (same, _, _) = store
-            .task_list_context("owned", &user, "b1", 0, false)
+            .task_list_context("owned", "b1", 0, false)
             .await
             .unwrap();
         assert_eq!(same, first);
         let (rebuilt, _, _) = store
-            .task_list_context("owned", &user, "b2", 0, false)
+            .task_list_context("owned", "b2", 0, false)
             .await
             .unwrap();
         assert_eq!(rebuilt[0].0, "session-tasks-3");
-        let (member, lines, _) = store
-            .task_list_context("owned", "someone-else", "b2", 9, false)
-            .await
-            .unwrap();
-        assert!(member.is_empty() && lines.is_empty());
         let (_, lines, _) = store
-            .task_list_context("owned", &user, "b2", 9, false)
+            .task_list_context("owned", "b2", 9, false)
             .await
             .unwrap();
         assert_eq!(
@@ -523,22 +506,27 @@ mod tests {
             .unwrap();
         assert_eq!(edit["revision"], 4);
         let (_, _, updates) = store
-            .task_list_context("owned", &user, "b2", 0, false)
+            .task_list_context("owned", "b2", 0, false)
             .await
             .unwrap();
         assert_eq!(updates.len(), 1);
         assert!(updates[0].1.ends_with("s1.2 added"), "{:?}", updates[0]);
         let (_, _, again) = store
-            .task_list_context("owned", &user, "b2", 0, false)
+            .task_list_context("owned", "b2", 0, false)
             .await
             .unwrap();
         assert!(again.is_empty());
+        // A panel edit updates only a plan an agent run already saved.
+        assert!(store
+            .session_artifact_user_write("owned", "edit-1", "plan", "plan", &json!({}))
+            .await
+            .is_err());
         let history = store.task_list_history("owned").await.unwrap();
         assert_eq!(history[0]["revision"], 4);
         assert_eq!(history[0]["by"], "user");
         assert_eq!(history.last().unwrap()["revision"], 1);
         assert!(store
-            .task_list_end_reminder("owned", &user)
+            .task_list_end_reminder("owned")
             .await
             .unwrap()
             .is_none());

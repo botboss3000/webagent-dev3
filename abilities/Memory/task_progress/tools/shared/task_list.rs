@@ -85,22 +85,13 @@ async fn update_plan(
     call: Call<'_>,
     section: &rules::Section,
 ) -> Result<()> {
-    let Some(mut plan) = host
+    let Some(plan) = host
         .session_artifact(call.sid, crate::task::PLAN_ARTIFACT)
         .await?
     else {
         bail!("The session has no plan");
     };
-    let checklist = rules::plan_checklist(section);
-    let sections = plan["sections"]
-        .as_array_mut()
-        .ok_or_else(|| anyhow!("The plan has no sections"))?;
-    let item = sections
-        .iter_mut()
-        .find(|item| item["label"] == "Checklist")
-        .ok_or_else(|| anyhow!("The plan has no checklist"))?;
-    item["value"] = json!(checklist);
-    let body = json!({"title":plan["title"],"sections":plan["sections"]});
+    let body = rules::plan_with_checklist(&plan, section)?;
     host.write_session_artifact(
         call,
         crate::task::PLAN_ARTIFACT,

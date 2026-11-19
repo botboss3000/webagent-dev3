@@ -229,15 +229,12 @@ impl<
         let (calls, filed) = since_user.fold((0, false), |(calls, filed), item| {
             (calls + 1, filed || item["name"] == "task_list_write")
         });
-        let (tasks, task_lines, task_updates) = Box::pin(self.native.session_tasks(
-            self.store.records(),
-            &sid,
-            &requester,
-            &basis,
-            calls,
-            filed,
-        ))
-        .await?;
+        let (tasks, task_lines, task_updates) =
+            Box::pin(
+                self.native
+                    .session_tasks(self.store.records(), &sid, &basis, calls, filed),
+            )
+            .await?;
         notes.extend(tasks);
         let mut contributions = contributions.to_vec();
         for (index, content) in task_lines.into_iter().enumerate() {

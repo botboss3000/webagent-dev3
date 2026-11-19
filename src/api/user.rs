@@ -334,13 +334,14 @@ async fn chip_app(app: App, sid: &str, write: bool) -> Result<App, crate::ApiErr
     guard_access(&app, write, false)?;
     Ok(app)
 }
-/// The chat's task panel: only the session's owner reads or edits its task list.
+/// The chat's task panel: anyone who can view the session reads its task list; anyone who
+/// can send in it edits.
 async fn tasks_read(Extension(app): Extension<App>, Path(sid): Path<String>) -> Response {
     let app = match session_app(app, &sid).await {
         Ok(app) => app,
         Err(error) => return error.into_response(),
     };
-    if let Err(error) = guard_access(&app, false, true) {
+    if let Err(error) = guard_access(&app, false, false) {
         return error.into_response();
     }
     crate::api::task_list::read(&app, &sid)
@@ -356,7 +357,7 @@ async fn tasks_write(
         Ok(app) => app,
         Err(error) => return error.into_response(),
     };
-    if let Err(error) = guard_access(&app, true, true) {
+    if let Err(error) = guard_access(&app, true, false) {
         return error.into_response();
     }
     crate::api::task_list::write(&app, &sid, &body)
