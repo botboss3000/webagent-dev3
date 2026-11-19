@@ -106,20 +106,30 @@ if it orphans meanwhile. Work on files that are not blocked first. Never abandon
 ## Blocker board
 
 Every broker task has a board of short notes that any session can read and
-post to, whatever harness or computer it runs on. Use it when you are blocked
+post to, whatever harness or computer it runs on. The board is its own service,
+so it keeps working while the broker restarts. Use it when you are blocked
 instead of waiting in silence:
 
-- `notes` with your `broker_id` returns the notes on your task and any wait
-  cycle it is part of. A wait cycle means you are queued behind a task (often
-  an uncertain release, which holds the whole queue) that itself waits for
-  claims you hold, so neither side can move until one gives way.
+- `notes` with your `broker_id` returns the open notes on your task, any one-time
+  notices (for example that someone cleared your note) and any wait cycle you
+  are part of. A wait cycle means you are queued behind a task (often an
+  uncertain release, which holds the whole queue) that itself waits for claims
+  you hold, so neither side can move until one gives way.
 - `note` with your `broker_id`, `target_task_id` (the blocking task named in the
   blocker, progress or cycle) and `reason` (the note, up to 500 characters)
   posts on that task's board, signed with your session. Say what you need and
   what you can give up, for example "I can release module:broker if you need it".
 - Read your notes when a wait or progress read names a blocker, answer notes
   addressed to you, and agree on the board which side gives way in a wait cycle.
-  Notes clear themselves when their task ends; never post credentials.
+- A default read shows only open notes on your own task, to keep your context
+  small. To investigate another task, read it on purpose: `notes` with
+  `target_task_id`. Whenever you read another task's notes, clear the stale ones
+  you find: `note_remove` with `note_id`, `kind` `clear` and a short `reason`
+  ("blocker released", "task finished"). The author is told once. Retract your
+  own notes with `kind` `retract`; mark one answered with `kind` `resolve`.
+- Removed notes move to an archive kept 30 days (`notes` with `archived`); open
+  notes are archived after 30 days and notes on ended tasks at once. Never post
+  credentials.
 
 ## Ownership and cleanup
 

@@ -10,9 +10,35 @@
   "parameters": {
     "type": "object",
     "properties": {
+      "acceptance": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 32,
+        "items": {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "passed": {
+              "type": "boolean",
+              "enum": [
+                true
+              ]
+            }
+          },
+          "required": [
+            "check",
+            "passed"
+          ],
+          "additionalProperties": false
+        }
+      },
       "action": {
         "type": "string",
-        "description": "Arguments each action takes besides broker_id: begin label, summary (broker_id new); check check, expected_inputs_sha256, optional test_filter, feature_profile, timeout_seconds; preflight none (offset pages); finish expected_inputs_sha256; decide sync_decision, expected_sync_digest; status optional job_id; wait and cancel job_id; receipt request_id; review and reservations none; abandon and suspend none, or as an administrator task_key (task.id from takeover_preview) and reason to act on any caller's task; maintenance mode (status, drain or resume; administrators only); note target_task_id and reason (a note on another task's blocker board, signed with your broker_id); notes none (your task's notes and wait cycles). Any other argument is refused by name.",
+        "description": "Arguments each action takes besides broker_id: begin label, summary (broker_id new); check check, expected_inputs_sha256, optional test_filter, feature_profile, timeout_seconds; preflight none (offset pages); finish expected_inputs_sha256; decide sync_decision, expected_sync_digest; status optional job_id; wait and cancel job_id; receipt request_id; review and reservations none; abandon and suspend none, or as an administrator task_key (task.id from takeover_preview) and reason to act on any caller's task; maintenance mode (status, drain or resume; administrators only); note target_task_id and reason (a note on another task's blocker board, signed with your broker_id); notes optional target_task_id (another task's notes) and archived; note_remove note_id, kind (retract, resolve or clear) and reason (required to clear). Any other argument is refused by name.",
         "enum": [
           "status",
           "begin",
@@ -44,50 +70,18 @@
           "cancel",
           "maintenance",
           "note",
-          "notes"
+          "notes",
+          "note_remove"
         ]
       },
-      "task_id": {
+      "archived": {
+        "type": "boolean",
+        "description": "notes: read the archive (removed notes, kept 30 days) instead of open notes"
+      },
+      "broker_id": {
         "type": "string",
-        "pattern": "^[A-Za-z0-9_-]{8,80}$",
-        "description": "Deprecated compatibility alias for broker_id. Do not supply both."
-      },
-      "label": {
-        "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9-]{6,58}[a-z0-9]$",
-        "description": "Required with begin: the new task's name and Broker ID, a lowercase hyphenated slug naming the outcome (e.g. abilities-chart-refresh). Unique; pick another if refused."
-      },
-      "summary": {
-        "type": "string",
-        "maxLength": 200,
-        "description": "Required with begin: one plain sentence describing the outcome, shown in full on the Broker card. No chat or session IDs; the runtime attaches them."
-      },
-      "expected_inputs_sha256": {
-        "type": "string",
-        "pattern": "^[a-f0-9]{64}$"
-      },
-      "sync_decision": {
-        "type": "string",
-        "enum": [
-          "synchronize",
-          "proceed",
-          "cancel"
-        ]
-      },
-      "expected_sync_digest": {
-        "type": "string",
-        "pattern": "^[a-f0-9]{64}$"
-      },
-      "offset": {
-        "type": "integer",
-        "minimum": 0
-      },
-      "job_id": {
-        "type": "string",
-        "description": "Broker Job ID. status inspects it; wait follows it again after an early still_running result (returning at the next alert or its end); wait without job_id but with broker_id follows that task's queued claim request until it is granted; cancel stops it and keeps the task for a fix."
-      },
-      "request_id": {
-        "type": "string"
+        "pattern": "^(new|[A-Za-z0-9_-]{8,80})$",
+        "description": "Omit to continue current broker work; new with begin (label and summary required) creates independent work; a returned Broker ID selects existing work. Runtime attaches chat identity. Never invent an ID."
       },
       "check": {
         "type": "string",
@@ -99,10 +93,25 @@
           "ui_test"
         ]
       },
-      "timeout_seconds": {
+      "commit": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "expected_epoch": {
         "type": "integer",
-        "minimum": 1,
-        "maximum": 600
+        "minimum": 1
+      },
+      "expected_inputs_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "expected_sync_digest": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
       },
       "feature_profile": {
         "type": "string",
@@ -112,84 +121,28 @@
         ],
         "description": "check=check only: default compiles the linked build; live compiles the live host without linked implementation crates."
       },
-      "test_filter": {
+      "job_id": {
         "type": "string",
-        "pattern": "^[A-Za-z0-9_:]{1,160}$",
-        "description": "check=test only: run just the tests whose names contain this text, such as a module path or test name."
+        "description": "Broker Job ID. status inspects it; wait follows it again after an early still_running result (returning at the next alert or its end); wait without job_id but with broker_id follows that task's queued claim request until it is granted; cancel stops it and keeps the task for a fix."
       },
-      "paths": {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 128,
-        "items": {
-          "type": "string",
-          "maxLength": 240
-        }
-      },
-      "expected_revision": {
-        "type": "integer",
-        "minimum": 0
-      },
-      "expected_epoch": {
-        "type": "integer",
-        "minimum": 1
-      },
-      "phase_id": {
+      "kind": {
         "type": "string",
-        "pattern": "^[a-f0-9]{64}$"
+        "enum": [
+          "retract",
+          "resolve",
+          "clear"
+        ],
+        "description": "note_remove: retract your own note, resolve one answered, or clear a stale one (needs reason)"
       },
-      "priority": {
-        "type": "integer",
-        "minimum": -2,
-        "maximum": 2
-      },
-      "target_task_id": {
+      "label": {
         "type": "string",
-        "pattern": "^[A-Za-z0-9_-]{8,80}$"
-      },
-      "reason": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 500
-      },
-      "commit": {
-        "type": "string",
-        "pattern": "^[a-f0-9]{40}$"
-      },
-      "acceptance": {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 32,
-        "items": {
-          "type": "object",
-          "properties": {
-            "check": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            },
-            "passed": {
-              "type": "boolean",
-              "enum": [
-                true
-              ]
-            }
-          },
-          "required": [
-            "check",
-            "passed"
-          ],
-          "additionalProperties": false
-        }
+        "pattern": "^[a-z0-9][a-z0-9-]{6,58}[a-z0-9]$",
+        "description": "Required with begin: the new task's name and Broker ID, a lowercase hyphenated slug naming the outcome (e.g. abilities-chart-refresh). Unique; pick another if refused."
       },
       "limit": {
         "type": "integer",
         "minimum": 1,
         "maximum": 50
-      },
-      "task_key": {
-        "type": "string",
-        "pattern": "^[a-f0-9]{64}$"
       },
       "mode": {
         "type": "string",
@@ -200,10 +153,76 @@
         ],
         "description": "maintenance only: read, drain or resume the broker queue."
       },
-      "broker_id": {
+      "note_id": {
         "type": "string",
-        "pattern": "^(new|[A-Za-z0-9_-]{8,80})$",
-        "description": "Omit to continue current broker work; new with begin (label and summary required) creates independent work; a returned Broker ID selects existing work. Runtime attaches chat identity. Never invent an ID."
+        "pattern": "^[A-Za-z0-9_-]{6,40}$",
+        "description": "A note's id from a notes read"
+      },
+      "offset": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "paths": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 128,
+        "items": {
+          "type": "string",
+          "maxLength": 240
+        }
+      },
+      "phase_id": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "priority": {
+        "type": "integer",
+        "minimum": -2,
+        "maximum": 2
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      },
+      "request_id": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Required with begin: one plain sentence describing the outcome, shown in full on the Broker card. No chat or session IDs; the runtime attaches them."
+      },
+      "sync_decision": {
+        "type": "string",
+        "enum": [
+          "synchronize",
+          "proceed",
+          "cancel"
+        ]
+      },
+      "target_task_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$"
+      },
+      "task_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$",
+        "description": "Deprecated compatibility alias for broker_id. Do not supply both."
+      },
+      "task_key": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "test_filter": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_:]{1,160}$",
+        "description": "check=test only: run just the tests whose names contain this text, such as a module path or test name."
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 600
       }
     },
     "required": [
