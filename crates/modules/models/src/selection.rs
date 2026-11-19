@@ -551,6 +551,8 @@ pub enum ModelRole {
     System,
     Voice,
     Decision,
+    /// Cleans up a finished voice dictation (fillers, repeated words, punctuation).
+    Dictation,
 }
 impl ModelRole {
     pub fn label(self) -> &'static str {
@@ -562,11 +564,12 @@ impl ModelRole {
             Self::System => "System",
             Self::Voice => "Voice",
             Self::Decision => "Decision",
+            Self::Dictation => "Dictation",
         }
     }
     pub fn supported_by(self, entry: &ModelEntry) -> bool {
         entry.capabilities.contains(match self {
-            Self::Standard | Self::Premium | Self::System => "text",
+            Self::Standard | Self::Premium | Self::System | Self::Dictation => "text",
             Self::ImageIn => "image_in",
             Self::ImageOut => "image_out",
             Self::Voice => "voice",

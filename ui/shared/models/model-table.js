@@ -2817,7 +2817,7 @@ export function mountModelTable(host, opts = {}) {
   // default radio persist IN PLACE — no list rebuild — so editing a row never
   // collapses the table or disturbs the scroll position.
   function _buildSavedRow(p, readOnly, checked, cfgAnchor, rolesEditable) {
-    const isRoleAssigned = ['standard', 'premium', 'image_in', 'image_out', 'system', 'voice'].some(role => hasRole(p, role));
+    const isRoleAssigned = ['standard', 'premium', 'image_in', 'image_out', 'system', 'voice', 'dictation'].some(role => hasRole(p, role));
     const rowWrap = document.createElement('div'); rowWrap.className = 'ac-row ac-saved-injected' + (readOnly ? ' ac-saved-inherited' : ' ac-saved-own') + (isRoleAssigned ? ' ac-saved-role' : '');
     rowWrap.dataset.mtUid = p._uid;
     rowWrap.dataset.id = String(p._uid);  // for makeRowsReorderable's rowIdList()
@@ -2860,6 +2860,7 @@ export function mountModelTable(host, opts = {}) {
       ['I', 'Image', 'image_out'],
       ['⚙', 'System', 'system'],
       ['🎤', 'Voice', 'voice'],
+      ['✎', 'Dictation', 'dictation'],
     ].forEach(([symbol, title, role]) => {
       if (!hasRole(p, role)) return;
       const flag = document.createElement('span');
@@ -2881,7 +2882,7 @@ export function mountModelTable(host, opts = {}) {
     });
 
     // Roles more-button — opens a floating popover with the roster-role toggles
-    // (Standard · Premium · Vision · Image · System · Voice). The account-level
+    // (Standard · Premium · Vision · Image · System · Voice · Dictation). The account-level
     // "Default for new agents" choice is NOT a roster role: it lives in the
     // expanded detail below Display name (see loadSavedDetail), so this popover
     // stays roles-only.
@@ -2898,6 +2899,7 @@ export function mountModelTable(host, opts = {}) {
     if (hasRole(p, 'image_out')) roleLabels.push('Image');
     if (hasRole(p, 'system')) roleLabels.push('System');
     if (hasRole(p, 'voice')) roleLabels.push('Voice');
+    if (hasRole(p, 'dictation')) roleLabels.push('Dictation');
     const rolesBtn = document.createElement('button');
     rolesBtn.type = 'button';
     rolesBtn.className = 'ac-saved-roles-btn';
@@ -2966,6 +2968,8 @@ export function mountModelTable(host, opts = {}) {
       String(p.model || '').toLowerCase().endsWith(':batch') ? 'batch-only models cannot serve live voice' : '');
     _buildRoleToggle(rolesSection, !!p.decision_capable, hasRole(p, 'decision'), 'Decision', 'Classifier model for tool relevance and routing',
       (v, cb) => persistRole('decision', v, cb), locked, lockHint);
+    _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'dictation'), 'Dictation', 'Cleans up voice dictation: fillers, repeated words, punctuation',
+      (v, cb) => persistRole('dictation', v, cb), locked, lockHint);
     popover.appendChild(rolesSection);
 
     // ── Wire popover open/close ──

@@ -41,6 +41,9 @@ pub struct Dictation {
     pub max_recording_seconds: u32,
     /// Decoder threads.
     pub threads: i32,
+    /// After stop, the agent's Dictation model (if one is assigned) removes fillers and repeated
+    /// words and fixes punctuation; the typed transcript is replaced by the result.
+    pub tidy: bool,
     pub pause_detection: PauseDetection,
 }
 
@@ -90,6 +93,7 @@ impl Default for VoiceSettings {
                 finish_timeout_seconds: 30,
                 max_recording_seconds: 300,
                 threads: 4,
+                tidy: true,
                 pause_detection: PauseDetection {
                     threshold: 0.5,
                     min_silence_seconds: 0.4,

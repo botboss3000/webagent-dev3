@@ -27,6 +27,7 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex, OwnedMutexGuard};
 use webagent_media::capture::{self, Capture, Chunk};
 use webagent_media::settings::VoiceSettings;
 use webagent_media::speech::{sample_text, speech_chunks, speech_text};
+use webagent_media::tidy;
 
 use super::media_lane;
 use crate::{
@@ -340,7 +341,8 @@ fn dictation_stopped() -> ApiError {
 /// Composer dictation: `start` opens a capture in the dictation service, each `chunk` streams
 /// a PCM frame and returns the transcript so far (a draft that grows phrase by phrase at pauses;
 /// each finished passage replaces its phrases), `finish` returns the final transcript and
-/// `cancel` discards it. Nothing is stored; the client types the text into the composer.
+/// `cancel` discards it; `tidy` then returns the transcript cleaned up (see [`tidy_dictation`]).
+/// Nothing is stored; the client types the text into the composer.
 pub(crate) async fn voice_audio(
     State(app): State<App>,
     Path(sid): Path<String>,
@@ -348,6 +350,10 @@ pub(crate) async fn voice_audio(
 ) -> Api {
     session_agent_id(&app, &sid).await?;
     let op = required(&body, "op", 16)?;
+    if op == "tidy" {
+        let text = required(&body, "text", tidy::MAX_CHARS * 4)?;
+        return tidy_dictation(&app, &sid, text).await;
+    }
     let k = dictation_key(&app, &sid);
     let settings = VoiceSettings::live().dictation;
     if op == "start" {
@@ -481,6 +487,32 @@ pub(crate) async fn voice_audio(
     Ok(Json(
         json!({"text": text, "capture_id": id, "ephemeral": true}),
     ))
+}
+
+/// The dictation cleanup pass: the transcript edited once by the agent's Dictation model. It
+/// comes back unchanged (`tidied: false`) when cleanup is off, the agent has no Dictation model,
+/// the text is too short, or the answer does not look like an edit of it; a model failure is an
+/// error, and the client keeps the transcript it typed.
+async fn tidy_dictation(app: &App, sid: &str, text: &str) -> Api {
+    let unchanged = || {
+        Ok(Json(
+            json!({"text": text, "tidied": false, "ephemeral": true}),
+        ))
+    };
+    if !VoiceSettings::live().dictation.tidy || !tidy::wanted(text) {
+        return unchanged();
+    }
+    let Ok(run) = media_lane::lane_run(app, sid, model_selection::ModelRole::Dictation).await
+    else {
+        return unchanged();
+    };
+    let answer = media_lane::lane_answer(app, &run, tidy::input(text), tidy::INSTRUCTIONS).await?;
+    match tidy::accept(text, &answer) {
+        Some(cleaned) => Ok(Json(
+            json!({"text": cleaned, "tidied": true, "ephemeral": true}),
+        )),
+        None => unchanged(),
+    }
 }
 
 pub(crate) async fn voice_capabilities(State(app): State<App>, Path(sid): Path<String>) -> Api {

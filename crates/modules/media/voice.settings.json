@@ -44,6 +44,26 @@
       "min": 1,
       "max": 1440,
       "bounds": "proposed"
+    },
+    {
+      "id": "media.dictation.tidy",
+      "description": "After dictation stops, have the agent's Dictation model remove filler words and repeated words and fix punctuation in the dictated text.",
+      "type": "boolean",
+      "pointer": "/dictation/tidy",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "stop cleaning up my dictation",
+        "keep um and uh in dictated text",
+        "tidy voice dictation"
+      ],
+      "areas": [
+        "voice",
+        "dictation",
+        "microphone"
+      ],
+      "bounds": "validator"
     }
   ],
   "excluded": {
