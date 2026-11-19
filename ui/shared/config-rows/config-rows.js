@@ -75,7 +75,8 @@ function shell(list, {title, hint, tip, stacked = false}) {
   if (hint) label.append(node('div', 'ac-ability-desc', hint));
   const control = node('div', stacked ? 'cfr-field' : 'ac-config-control');
   const error = node('p', 'cfr-error');
-  error.setAttribute('role', 'status');
+  // Announced when it changes, without making every row a status region of the page.
+  error.setAttribute('aria-live', 'polite');
   row.append(label, control, error);
   list.append(row);
   return {row, control, error};
