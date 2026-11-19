@@ -95,6 +95,18 @@ test('right-click opens the row action panel at the pointer and keeps it inside 
  const edge=await p.locator('.session-row-actions').boundingBox();
  assert.ok(edge.x>=4&&edge.y>=4&&edge.x+edge.width<=1280&&edge.y+edge.height<=900,JSON.stringify(edge));
 });
+test('the first press inside the dropdown dismisses the row action panel',async t=>{
+ const p=await fixture(t);await openList(p);
+ const row=p.locator('.session-row[data-id="s3"]'),box=await row.boundingBox();
+ await row.click({button:'right',position:{x:box.width-8,y:12}});
+ const panel=p.locator('.session-row-actions');await panel.waitFor();
+ await panel.click({position:{x:3,y:3}});
+ assert.equal(await p.locator('.session-row-actions').count(),1,'a press on the panel itself keeps it open');
+ await p.locator('.session-manage-search-input').click();
+ assert.equal(await p.locator('.session-row-actions').count(),0,'the first press inside the dropdown closes the panel');
+ assert.equal(await p.locator('#session-dropdown-menu').isVisible(),true,'the dropdown itself stays open');
+ assert.equal(await p.locator('.session-manage-search-input').evaluate(n=>n===document.activeElement),true);
+});
 test('configuration deep-merges surface overlays without consulting legacy chat settings',async t=>{
  const p=await fixture(t);await p.route('**/session-dropdown.json',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({common:{menu:{rename:true,delete:true},footer:{enabled:true}},mobile:{menu:{delete:false},footer:{enabled:false}}})}));
  const value=await p.evaluate(async()=>{await cfg.loadSessionDropdownConfig();return cfg.sessionDropdownConfig('chat_mobile');});assert.deepEqual(value,{menu:{rename:true,delete:false},footer:{enabled:false}});

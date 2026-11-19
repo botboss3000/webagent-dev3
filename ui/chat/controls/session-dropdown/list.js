@@ -245,6 +245,12 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     }
     positionPopup(); window.lucide?.createIcons();
     popup.querySelector('button:not(:disabled)')?.focus({preventScroll:true});
+    // Any press outside the panel dismisses it, including a press inside the dropdown.
+    const dismissOnPress = event => {
+      if (!popup.isConnected) { document.removeEventListener('pointerdown', dismissOnPress, true); return; }
+      if (!popup.contains(event.target)) root._sessionDropdownController.setPopup(null);
+    };
+    document.addEventListener('pointerdown', dismissOnPress, {capture:true, signal:abort.signal});
   }
   /** Cancel pending hold work without activating a row or changing the selected session. */
   function cancelHold() { if (hold) { clearTimeout(hold.timer); timers.delete(hold.timer); hold = null; } }
