@@ -2547,6 +2547,16 @@ class ObservationAuthorizationTests(MaintenanceTests):
   self.assertEqual(result['execution_state'],'terminal')
   self.assertEqual(result['execution_observation']['log_read']['events'],[])
 
+ def test_restart_cancels_a_job_that_never_started(self):
+  job=self.install_job();job.update(status="running",phase="admitted",execution_observation={});self.broker._save(job)
+  old=self.install_job();old.update(status="interrupted",phase="admitted",execution_observation={},
+                                    reason="broker restarted; no automatic replay");self.broker._save(old)
+  self.broker.shutdown();self.broker=fixtures.host.Broker(self.state,self.runner)
+  for row in (job,old):
+   result=self.broker.jobs[row['job_id']]
+   self.assertEqual(result['status'],'cancelled')
+   self.assertIn('before the job started',result['reason'])
+
  def test_wait_state_and_expired_authority(self):
   job=self.install_job();job['status']='running';job['resource_waiting']={'state':'waiting','since':time.time(),'phase':'test'}
   result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':0})

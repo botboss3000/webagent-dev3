@@ -2605,6 +2605,13 @@ def call_labelled(label, function, *args):
         _LOCK_LABEL.name = None
 
 
+
+def never_started(job):
+    """Whether a job did nothing yet: no effect, no stage and no log line. A restart cancels such a job."""
+    observed = (job.get("execution_observation") or {}).get("events")
+    return not (job.get("effects_started") or job.get("execution_history") or job.get("phase_history") or observed
+                or job.get("phase") not in (None, "queued", "admitted"))
+
 class BrokerLock:
     """The broker's global RLock. Every request and job phase change waits on it, so holds and waits
     past SLOW_LOCK_SECONDS are logged with the holder, and each holder's longest hold is kept."""
@@ -3077,11 +3084,19 @@ class Broker:
                         job.get("isolated") and job["status"] == "queued"):
                     # A restart never repeats a build or external mutation.
                     job["status"] = ("uncertain" if job.get("effects_started") or job["operation"] == "deploy"
-                                     else "cancelled" if job.get("cancel_request") else "interrupted")
-                    job["reason"] = "broker restarted; no automatic replay"
+                                     else "cancelled" if job.get("cancel_request") or never_started(job)
+                                     else "interrupted")
+                    job["reason"] = ("broker restarted before the job started; nothing ran, finish again"
+                                     if job["status"] == "cancelled" and never_started(job)
+                                     else "broker restarted; no automatic replay")
                     if job["status"] == "uncertain" and self._reconcile(job):
                         job["status"] = "completed"
                         job["reason"] = "recovered matching healthy deployment"
+                    self._save(job)
+                elif job["status"] == "interrupted" and job["operation"] != "deploy" and never_started(job):
+                    # Recorded before restarts told unstarted jobs apart: nothing ran, so the task may reopen.
+                    job["status"] = "cancelled"
+                    job["reason"] = "broker restarted before the job started; nothing ran, finish again"
                     self._save(job)
         if recover:
             for job in self.jobs.values():
