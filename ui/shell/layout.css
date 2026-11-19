@@ -1,5 +1,6 @@
-/* Moved from the app-wide stylesheets (ui/shared/css/app1-3.css, index.css) in their
-   original order; linked from index.html where that sheet loaded. */
+/* The page frame: scrollbars, the split stage, the main and chat panel boxes, the phone
+   (chat-only) layout and the active tab panel. Linked early from index.html so component
+   stylesheets after it can refine these boxes. */
 /* ── Scrollbar policy: thumb-only pills (no arrow buttons) ──────────────────
    Every scrollbar in the app is a thin rounded pill. The tiny up/down (and
    left/right) arrow buttons at the ends are redundant — too small to click
@@ -109,3 +110,41 @@ body {
     from { background-position: 100% 0; }
     to { background-position: 0 0; }
 }
+
+/* COLOR SCHEME → ui/shared/css/design-system.css (single source of truth).
+   No raw hex/rgb here: use var(--brand) / var(--accent) / var(--accent-hover) for
+   the brand accent, rgba(var(--brand-rgb), a) for any accent opacity, var(--success|
+   warning|danger) (or rgba(var(--*-rgb), a)) for status, var(--purple) for the 2nd hue.
+   Need a colour that doesn't exist yet? Add a token to the palette in design-system.css
+   (the dark :root block AND its body.light-mode twin), then reference it here.
+   Re-theming the whole app (e.g. peach → green) is then a one-file edit. */
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+/* ── Responsive ── */
+  /* Keep the desktop split until both panels reach their 250px floors plus the
+     14px divider (514px). Below that, retain the established chat-only mobile
+     view rather than collapsing either desktop panel. */
+  @media (max-width: 514px) {
+    html { overflow: hidden; }
+    #stage { flex-direction: column; }
+    #chat-panel { width: 100%; min-width: 0; border-left: none; border-top: var(--border-width) solid var(--border); flex: 1; min-height: 0; max-height: none; }
+    #main-panel { flex: 1; min-height: 0; }
+    #chat-input-area { touch-action: pan-y; overscroll-behavior: none; }
+    body.chat-visible #main-panel { display: none !important; }
+  }
+
+/* ── Tab panels: only the active one shows ── */
+.tab-content { display: none; flex: 1; min-height: 0; }
+.tab-content.active { display: flex; flex-direction: column; }
+
+/* ── Debug Console Log Panel ─────────────────────────────────────────────── */
+/* Body becomes a flex column so the panel sits below the stage in normal flow,
+   rather than overlay-fixed over the chat footer. html (ui/shell/layout.css) is already
+   display:flex;flex-direction:column — body fills it and passes the flex down. */
+body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+}
+#main-header { flex-shrink: 0; }
+#stage { flex: 1 1 0; min-height: 0; }

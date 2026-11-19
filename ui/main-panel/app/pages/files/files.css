@@ -1656,7 +1656,7 @@ body.light-mode .token.regex, body.light-mode .token.important, body.light-mode 
    overlay. `body.admin-restricted` is toggled by startAdminTools/stopAdminTools
    in files.js, and removing it reasserts the user's saved chat visibility. The
    #main-panel rule also wins over the mobile `body.chat-visible #main-panel{
-   display:none}` stack rule (ui/shell/responsive.css), so the overlay shows on mobile too. */
+   display:none}` stack rule (ui/shell/layout.css), so the overlay shows on mobile too. */
 body.admin-restricted #chat-panel,
 body.admin-restricted #chat-resize-handle { display: none !important; }
 body.admin-restricted #main-panel { display: flex !important; }

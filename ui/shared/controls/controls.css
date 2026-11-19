@@ -1,5 +1,5 @@
 /* Shared form controls, drawn by ui/shared/controls/controls.js: the switch, text field
-   and dropdown, number stepper and choice cards. Loaded once by index.html for every page.
+   and dropdown, number stepper and choice cards, plus the app's buttons, labels and hints. Loaded once by index.html for every page.
    Restyle a control here only; how it sits in a setting row (width, slot) is in
    ui/shared/option-list/option-list.css under .ac-config-control, and the row itself in config-rows.css.
    Pages that still write this markup by hand get the same look from these class names. */
@@ -42,3 +42,55 @@ body.light-mode .ac-input:focus { border-color: var(--brand); }
 .ctl-choice-text { display: grid; gap: 2px; min-width: 0; }
 .ctl-choice-title { font-size: 13px; font-weight: 600; color: var(--fg-1); }
 .ctl-choice-hint { font-size: 12px; color: var(--fg-3); }
+
+/* ── Buttons, labels and hints (.ac-btn, .ac-label, .ac-hint) ── */
+/* ── Mobile keyboard: clear the bottom clutter off a focused field */
+/* Hide everything that is not the summary when collapsed, restore when open. */
+.ac-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2, var(--fg-2));
+  margin-bottom: 6px;
+}
+.ac-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--fg-muted, var(--fg-3));
+}
+.ac-btn {
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: opacity 0.15s, background 0.15s;
+  border: none;
+}
+.ac-btn:hover { opacity: 0.85; }
+.ac-btn-primary {
+  background: var(--accent);
+  color: var(--bg-0);
+}
+.ac-btn-ghost {
+  background: transparent;
+  border: 1px solid var(--fg-muted, var(--fg-3));
+  color: var(--fg-muted, var(--fg-3));
+}
+
+/* MODEL-FOCUS-NOTE: the transient "no usage yet" note the chart raises when the row */
+.ac-model-analytics-toggle .ac-btn { border-color: transparent; }
+.ac-model-analytics-toggle .ac-btn.active { background: rgba(var(--brand-rgb), 0.13); border-color: var(--accent); color: var(--accent); }
+
+/* ── Model row — the model field sits full-width on top; a wrapping bar below */
+.ac-btn-sm { padding: 6px 14px; font-size: 12px; }
+
+/* ── Spinning loader for the models panel ── */
+/* Edge fade comes from the alpha mask on #app-config-tabs (theme-agnostic), so
+   the chevron stays a transparent button in light mode too — only its glyph
+   colour changes. */
+body.light-mode .ac-hint { color: var(--fg-3); }
+body.light-mode .ac-label { color: var(--fg-2); }
+body.light-mode .ac-btn-primary { background: var(--brand); color: #fff; /* KEEP (intentional): contrast ink on the brand-filled button */ }
+body.light-mode .ac-btn-ghost { border-color: var(--fg-3); color: var(--fg-3); }
