@@ -123,19 +123,24 @@ RUN groupmod -n webagent v3 && usermod -l webagent v3app && usermod -l webagent-
 # Refresh inherited security packages even when the prepared runtime base is reused.
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+# Layers that rarely change go before the per-release programs, so packaging reuses them.
 COPY --from=tested_builder /out/compiler/mold /usr/bin/mold
 COPY --from=tested_builder /out/compiler/mold /usr/bin/ld.mold
 COPY --from=tested_builder /out/compiler/copyright /usr/share/doc/mold/copyright
 COPY --from=tested_builder /out/compiler/LICENSE.gz /usr/share/doc/mold/LICENSE.gz
 RUN install -d -m 0755 /usr/local/share/webagent && printf 'mold\n' > /usr/local/share/webagent/compiler-linker
+COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo
+# Agent voice output and composer dictation (crates/modules/media/host/voice.rs): the
+# sherpa-onnx and espeak-ng libraries and checked models come from the `voice` stage, prepared
+# once as a dependency base.
+COPY --from=voice /opt/inference /opt/inference
+COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
 # Distribution artifacts are installed only by explicit module administration.
 COPY --from=tested_builder /out/modules /usr/local/lib/webagent/modules
 COPY --from=tested_builder /out/webagent-mcp /usr/local/bin/webagent-mcp
 COPY --from=tested_builder /out/webagent-diagnostics /usr/local/bin/webagent-diagnostics
 COPY --from=tested_builder /out/webagent-optimization /usr/local/bin/webagent-optimization
-COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo
 COPY --from=tested_builder /usr/local/rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu /opt/rust
 COPY v3/sandbox.py /opt/v3/
 COPY v3/build-service /opt/v3/build-service
@@ -148,10 +153,6 @@ COPY --from=tested_builder /out/webagent-assets-service /usr/local/lib/webagent/
 COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webagent/engine/capability-context/webagent-capability-service
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
-# Agent voice output and composer dictation (crates/modules/media/host/voice.rs): the
-# sherpa-onnx and espeak-ng libraries and checked models come from the `voice` stage, prepared
-# once as a dependency base.
-COPY --from=voice /opt/inference /opt/inference
 RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 RUN chmod a+r /opt/v3/*.py
@@ -172,16 +173,18 @@ FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3loop
-COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+COPY --from=voice /opt/inference/lib/libonnxruntime.so /opt/inference/lib/libonnxruntime.so
+COPY --from=voice /opt/inference/models/bge-small-en-v1.5 /opt/inference/models/bge-small-en-v1.5
+# Configuration Controller tools and tool/skill ranking run here and start the local inference
+# service (crates/modules/inference/host/service.rs): ONNX Runtime and bge-small from the `voice` stage.
+# Nothing may precede the first COPY (it ends the prepared runtime base). These copies and the
+# package upgrade come before the per-release program, so packaging reuses them.
 RUN groupmod -n webagent v3 && usermod -l webagent v3loop
 # These libraries are inherited from the pinned base rather than installed above.
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 perl-base \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
-# Configuration Controller tools and tool/skill ranking run here and start the local inference
-# service (crates/modules/inference/host/service.rs): ONNX Runtime and bge-small from the `voice` stage.
-COPY --from=voice /opt/inference/lib/libonnxruntime.so /opt/inference/lib/libonnxruntime.so
-COPY --from=voice /opt/inference/models/bge-small-en-v1.5 /opt/inference/models/bge-small-en-v1.5
 COPY v3/abilities /opt/v3/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
 COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service

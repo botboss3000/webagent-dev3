@@ -153,6 +153,13 @@ path = "src/plugin_packages/outbound_notifications/main.rs"
 [profile.release.package.webagent-v3]
 opt-level = 2
 
+# Test builds: optimize third-party crates only. The suite spends much of its
+# time in library code (serde_json, sha2); this nearly halves the main test run,
+# and dependencies rebuild only when Cargo.lock changes. Workspace crates stay
+# unoptimized so each release's test compile stays fast.
+[profile.dev.package."*"]
+opt-level = 2
+
 # Used only by the broker's stable release (`rebuild --mode stable`): thin LTO and
 # full optimisation for the root. Dev releases keep the faster release profile.
 [profile.stable]
