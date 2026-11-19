@@ -3,6 +3,7 @@
   "name": "OpenCode Bridge",
   "base_url": "bridge://opencode",
   "validated": true,
+  "cache_timeout_minutes": 15,
   "models": [
     {
       "id": "opencode/beam-free",
