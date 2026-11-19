@@ -44,6 +44,8 @@ export function createSubpage(host, {id, title, toggleLabel}) {
   const body = document.createElement('div');
   body.className = 'spl-section-body';
   body.id = 'settings-' + id + '-body';
+  // The register shows this body as the page, so an expandable row inside it stays a row.
+  body.dataset.registerBody = '';
   section.append(body);
   let toggle = null;
   if (toggleLabel) {
