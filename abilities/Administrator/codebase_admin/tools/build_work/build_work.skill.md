@@ -79,11 +79,14 @@ finish freezes the reviewed inputs (expected_inputs_sha256) and starts the
 release. finish, check and wait return at once with a job ID; end your turn
 without polling. A background notice wakes you when the job ends, when a stage
 passes the high end of its normal range (p95, then at most every 5 minutes), or
-when it shows no progress for 15 minutes. On a notice tell the user, then use
-status with job_id; judge slow against the stage's normal range and whether it
-still reports progress, not wall time. cancel stops one job of your own session
-and keeps the task; a job that had started deploying is recorded as uncertain
-and needs reconciliation.
+when it shows no progress for 15 minutes. On a slow or stalled notice tell the
+user, then use status with job_id; judge slow against the stage's normal range
+and whether it still reports progress, not wall time. On an end notice act on
+the outcome straight away: a passed check is a handoff, not a release — the task
+stays open, so call finish with the checked digest in that same run when the
+change should ship, and a failed check names the tests to fix first. cancel
+stops one job of your own session and keeps the task; a job that had started
+deploying is recorded as uncertain and needs reconciliation.
 
 The finish result carries `stages` (seconds against each stage's p50–p90 and
 time left) and `closeout` (release commit and claim release). Report the stages
