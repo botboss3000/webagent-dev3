@@ -138,7 +138,7 @@ Per-chat files: work/harness-bridge/sessions/<webagent-session>/. `usage [--json
 bridge keeps on this computer (per-chat folders and the harnesses' session stores); `cleanup [--dry-run]`
 runs the clean-up that also runs on its schedule (cleanup.json; daily 03:00 by default).
 """
-import base64, difflib, hashlib, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request, uuid
+import base64, calendar, difflib, hashlib, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
@@ -1415,6 +1415,7 @@ def claude_command(body, stub):
 def run_claude(command, prompt, folder):
     """Run one `claude -p` in the chat folder (its sessions live under that project); return its JSON output."""
     # Prompt on stdin: a fresh chat's full history exceeds Linux's 128 KiB single-argument limit.
+    started = time.time()
     process = start_harness(command, cwd=folder)
     try:
         stdout, stderr = process.communicate(prompt, timeout=HARNESS_SECS)
@@ -1428,14 +1429,52 @@ def run_claude(command, prompt, folder):
         raise RuntimeError(f"claude failed ({process.returncode}): {stderr[:300]}")
     if output.get("is_error"):
         raise RuntimeError(f"claude error: {str(output.get('result'))[:300]}")
+    output["_started"] = started
     return output
 
 
-def claude_usage(output):
+def claude_session_usage(folder, session, since, project=None):
+    """Exact usage of the requests a `claude -p` run made since `since`, from Claude Code's session log:
+    the newest request's prompt and cache counts (earlier ones repeat its prefix), outputs summed. The log
+    repeats a request once per content block, so requests are told apart by message id; None when the log
+    is missing or holds no counted request."""
+    try:
+        lines = ((project or claude_project(folder)) / f"{session}.jsonl").read_text().splitlines()
+    except OSError:
+        return None
+    requests = {}
+    for line in lines:
+        try:
+            entry = json.loads(line)
+            at = calendar.timegm(time.strptime(entry["timestamp"][:19], "%Y-%m-%dT%H:%M:%S"))
+        except (ValueError, KeyError, TypeError):
+            continue
+        message = entry.get("message") or {}
+        usage = message.get("usage") or {}
+        counted = any(usage.get(key) for key in ("input_tokens", "cache_read_input_tokens",
+                                                 "cache_creation_input_tokens", "output_tokens"))
+        if entry.get("type") == "assistant" and message.get("id") and counted and at >= since - 1:
+            requests[message["id"]] = usage
+    if not requests:
+        return None
+    newest = list(requests.values())[-1]
+    read, written = newest.get("cache_read_input_tokens", 0), newest.get("cache_creation_input_tokens", 0)
+    prompt = newest.get("input_tokens", 0) + read + written
+    completion = sum(usage.get("output_tokens", 0) for usage in requests.values())
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion,
+            "prompt_tokens_details": {"cached_tokens": read, "cache_write_tokens": written}}
+
+
+def claude_usage(output, folder=None):
     """Chat-completions usage for the `claude -p` run that answered the call; cache reads are reported apart.
-    WebAgent sizes its compaction trigger from the prompt it sent, so the prompt is one request's: the CLI
-    sums every request of a run (a tool call and the reply after it are two), so its total is divided by
-    the run's request count. Checkpoint runs are not the call's request and are left out."""
+    Read exactly from the session log when it is there (`claude_session_usage`). Otherwise the prompt is
+    estimated as one request's: the CLI sums every request of a run (a tool call and the reply after it
+    are two), so its total is divided by the run's request count. Checkpoint runs are not the call's
+    request and are left out."""
+    if folder and output.get("session_id") and "_started" in output:
+        exact = claude_session_usage(folder, output["session_id"], output["_started"])
+        if exact:
+            return exact
     u = output.get("usage") or {}
     requests = max(1, int(output.get("num_turns") or 1))
     prompt = sum(u.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens",
@@ -1499,7 +1538,7 @@ def answer_claude(call, folder, state, delta):
                             prompt_for(call, delta, True, listed=False), folder)
     ended = time.time()
     message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": stub_calls(folder)}), body)
-    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(output)})
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(output, folder)})
     record(call, state, delta, started, ended, output)
     state["claude_session"] = output.get("session_id") or session
     save_state(folder, state)
@@ -1574,7 +1613,7 @@ def fork_claude(call):
     finally:
         shutil.rmtree(stub, ignore_errors=True)
     message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": calls}), body)
-    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(output)})
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(output, folder)})
     print(f"{call['id']}: answered a fork of chat {call.get('session')} (session {session} -> {output.get('session_id')})")
     # WebAgent accepted the summary; the fork is spent.
     forked = output.get("session_id")
@@ -1792,6 +1831,22 @@ def selftest():
     prune_claude_sessions(folder, {"claude_session": "live", "claude_checkpoint": {"session": "point"}}, project)
     assert sorted(p.name for p in project.iterdir()) == ["live.jsonl", "point.jsonl", "recent.jsonl"]
     assert claude_project(Path("/home/a/x.y/s-1")).name == "-home-a-x-y-s-1"
+    # The session log gives exact figures: the newest counted request's prompt, outputs summed.
+    log = project / "log-session.jsonl"
+    stamp = lambda offset: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + offset))
+    entry = lambda at, mid, usage: json.dumps({"type": "assistant", "timestamp": stamp(at),
+                                               "message": {"id": mid, "usage": usage}})
+    log.write_text("\n".join([
+        entry(-600, "old", {"input_tokens": 9, "output_tokens": 9}),
+        entry(-5, "a", {"input_tokens": 3, "cache_read_input_tokens": 100, "output_tokens": 7}),
+        entry(-5, "a", {"input_tokens": 3, "cache_read_input_tokens": 100, "output_tokens": 7}),
+        entry(-4, "z", {"input_tokens": 0, "output_tokens": 0}),
+        entry(-3, "b", {"input_tokens": 2, "cache_read_input_tokens": 107, "cache_creation_input_tokens": 4,
+                        "output_tokens": 5})]))
+    assert claude_session_usage(folder, "log-session", time.time() - 60, project) == {
+        "prompt_tokens": 113, "completion_tokens": 12, "total_tokens": 125,
+        "prompt_tokens_details": {"cached_tokens": 107, "cache_write_tokens": 4}}
+    assert claude_session_usage(folder, "missing", 0, project) is None
     # A run that called a tool made two requests: the prompt is one request's, not their sum.
     assert claude_usage({"num_turns": 2, "usage": {"input_tokens": 2, "cache_read_input_tokens": 198_000,
                                                    "output_tokens": 30}})["prompt_tokens"] == 99_001
