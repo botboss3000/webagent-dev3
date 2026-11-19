@@ -321,11 +321,20 @@ impl<
                     if task["quiet"] == true {
                         continue;
                     }
-                    app.stage_background_notice(&sid, &format!("build:{job_id}:ended"),
-                        json!({"source":"build","title":job_title(&follow),"task":job_task,
-                        "status":output["status"].as_str().unwrap_or("ended"),"job_id":job_id,
-                        "run_id":task["run_id"],"task_id":task["id"],"reply":reply,"result":result}))
-                        .await?;
+                    let key = format!("build:{job_id}:ended");
+                    let notice = json!({
+                        "source": "build",
+                        "title": job_title(&follow),
+                        "task": job_task,
+                        "status": output["status"].as_str().unwrap_or("ended"),
+                        "job_id": job_id,
+                        "run_id": task["run_id"],
+                        "task_id": task["id"],
+                        "reply": reply,
+                        "next": next_step(&follow, output),
+                        "result": result,
+                    });
+                    app.stage_background_notice(&sid, &key, notice).await?;
                 }
                 _ => {}
             }
@@ -918,6 +927,28 @@ fn job_title(follow: &Value) -> String {
     }
 }
 
+/// What a passed check leaves for the agent to do: a check never releases, so its
+/// notice names the finish that would ship the same inputs.
+fn next_step(follow: &Value, output: &Value) -> Option<String> {
+    if output["status"] != "completed" {
+        return None;
+    }
+    let args = &follow["pending"]["arguments"];
+    if args["action"] != "check" {
+        return None;
+    }
+    let finish = match args["expected_inputs_sha256"].as_str() {
+        Some(digest) if !digest.is_empty() => format!(
+            "build_work action=finish with this task's broker_id and expected_inputs_sha256 {digest}"
+        ),
+        _ => "build_work action=finish with this task's broker_id".to_owned(),
+    };
+    Some(format!(
+        "The check passed but did not release, so the task stays open. To ship these inputs, call \
+         {finish}; otherwise keep editing and check again."
+    ))
+}
+
 /// Readable notice text for a job that ended without an alert line: status, reason and a
 /// bounded log excerpt, never the raw receipt.
 fn ended_summary(output: &Value, job_id: &str) -> String {
@@ -1103,5 +1134,22 @@ mod tests {
         assert_eq!(finish_task(&run), Some("broker-abc"));
         assert_eq!(finish_task(&named(json!({"broker_id":"new"}))), None);
         assert_eq!(finish_task(&named(json!({}))), None);
+    }
+
+    #[test]
+    fn a_passed_check_names_the_finish_that_would_release_it() {
+        let follow = json!({"pending":{"arguments":{"action":"check",
+            "check":"ui_test","expected_inputs_sha256":"abc123"}}});
+        let next = next_step(&follow, &json!({"status":"completed"})).unwrap();
+        assert!(next.contains("did not release"));
+        assert!(next.contains("expected_inputs_sha256 abc123"));
+        assert!(next_step(&follow, &json!({"status":"failed"})).is_none());
+        let finish = json!({"pending":{"arguments":{"action":"finish",
+            "expected_inputs_sha256":"abc123"}}});
+        assert!(next_step(&finish, &json!({"status":"completed"})).is_none());
+        let no_digest = json!({"pending":{"arguments":{"action":"check"}}});
+        let next = next_step(&no_digest, &json!({"status":"completed"})).unwrap();
+        assert!(next.contains("action=finish"));
+        assert!(!next.contains("expected_inputs_sha256"));
     }
 }

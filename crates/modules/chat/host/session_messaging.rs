@@ -669,7 +669,14 @@ fn notice_text(n: &Value) -> String {
                     n["status"].as_str().unwrap_or(""),
                     reply.unwrap_or("")
                 ),
-                status => format!("{what} ended: {status}.\n{}", reply.unwrap_or("")),
+                status => format!(
+                    "{what} ended: {status}.\n{}{}",
+                    reply.unwrap_or(""),
+                    n["next"]
+                        .as_str()
+                        .map(|next| format!("\n{next}"))
+                        .unwrap_or_default()
+                ),
             }
         }
         "tool" => format!(
@@ -875,6 +882,33 @@ mod tests {
             "child_session_id":"s1","status":"failed","reason":"Model call failed","reply":"Half done"}));
         assert_eq!(failed, "Sub agent \"Option A\" (s1) ended its run: failed.\nReason: Model call failed\nPartial reply:\nHalf done\nIt did not finish. Send it a message_session to continue, or tell the user.");
         assert!(!failed.contains("read_session"));
+    }
+
+    #[test]
+    fn a_passed_check_notice_names_the_finish_it_still_needs() {
+        let notice = json!({
+            "source": "build",
+            "title": "check ui_test",
+            "job_id": "j9",
+            "status": "completed",
+            "reply": "Job j9 completed.",
+            "next": "The check passed but did not release, so the task stays open.",
+        });
+        assert_eq!(
+            notice_text(&notice),
+            "Broker check ui_test (job j9) ended: completed.\nJob j9 completed.\nThe check passed but did not release, so the task stays open."
+        );
+        let plain = json!({
+            "source": "build",
+            "title": "check fmt",
+            "job_id": "j8",
+            "status": "completed",
+            "reply": "Job j8 completed.",
+        });
+        assert_eq!(
+            notice_text(&plain),
+            "Broker check fmt (job j8) ended: completed.\nJob j8 completed."
+        );
     }
     #[tokio::test]
     async fn admission_follows_tool_policy_and_retries_do_not_duplicate_chat_or_queue() {
