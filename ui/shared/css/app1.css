@@ -204,11 +204,6 @@ body {
     pointer-events: auto;
   }
 
-  /* ── Idle footer mode (CSS-driven, no DOM rebuild) ──
-     When the textarea is empty and unfocused, .footer-mode-idle collapses
-     every element that isn't part of the ~single-row~ simplified idle pill.
-     The active layout always exists in the DOM; this class just hides parts. */
-
 /* ── Chat footer row (token bar + mode button) ───────────────────────────
    A single flex row below the pill that holds the token counter on the left
    and the execution-mode button on the right. */
@@ -252,9 +247,6 @@ body {
     margin-top: 2px;
     margin-bottom: 2px;
   }
-
-/* ── The rules below are a TEMPORARY backward-compat copy for static DOM elements.
-     When all controls load dynamically from the manifest, remove this block. */
 
 /* ── Saving / checked feedback ── */
 
@@ -327,30 +319,6 @@ body {
     0%   { transform: rotate(45deg); }
     100% { transform: rotate(405deg); }
   }
-
-/* ── Footer context panel (click the token/ctx footer) ────────────────────
-   A floating panel anchored to the LEFT edge of the chat pill footer, sitting
-   just above the context-details line. Carries only per-chat context management
-   (compaction sliders + "Compact now"); model selection/info live in the
-   model-changer panel (#chat-model-changer). Themed entirely via design-system
-   vars (dark + light).
-   PANEL-SYNC-FOOTER: keep .chat-model-picker and .chat-skill-picker in sync —
-   if you change max-height, border-radius, padding, shadow, z-index, or
-   background on one, mirror it on the other. */
-
-/* ── Context-compaction section (the panel's only content) ─────────────────
-   Two sliders ("compact at %" / "keep verbatim %") tune this chat's compaction,
-   plus a "Compact now" button that folds the conversation immediately. Saved as a
-   per-session override (POST /api/v2/chat/sessions/{id}/compaction). */
-
-/* ── Footer skill-selector panel (right-aligned, mirrors model picker) ─────
-   A floating panel anchored to the RIGHT edge of the chat pill footer, sitting
-   just above the context-details line. Shows every selectable skill (authored +
-   ability-bundled), greyed out when not active, highlighted when engaged.
-   Uses the same max-height as the model picker so the two panels are cohesive.
-   PANEL-SYNC-FOOTER: keep .chat-skill-picker and .chat-model-picker in sync —
-   if you change max-height, border-radius, padding, shadow, z-index, or
-   background on one, mirror it on the other. */
 
 /* ── Model list panel (footer model button) ─────────────────────────────
    Reuses .chat-skill-picker base (position, border, shadow, max-height).
@@ -506,27 +474,10 @@ body {
 }
 .ac-tool-skill-link:hover, .ac-tool-skill-link:focus-visible { color: var(--accent); text-decoration-color: currentColor; }
 
-
 /* The closing-message FLAG envelope is no longer rendered on the bubble. The
    flag now surfaces on the session status chip and the notification pill
    (ui/shared/js/session-flag.js); chat-bubble.js strips the envelope from the
    visible text only. See ui/chat/js/closing-message.js. */
-
-/* ── Turn sections — a single .chat-bubble.agent contains multiple sections ──
-   (LLM text blocks, tool-call blocks) that together form one agent turn.
-   Click an LLM section to reveal an inline gutter with time, model, and
-   action buttons between it and the next section. */
-
-/* ── Per-bubble "more" menu (⋮) ────────────────────────────────────────────
-   Popover from the footer's three-dot button (chat-bubble-actions.js
-   _openBubbleMoreMenu). Its Context row mirrors the pill's ctx readout
-   (chat-activity.js _renderCtxIndicator) — same values, both themes. */
-
-/* ── Connection lost (5-min timeout) — user-facing notice that the server
-     is unreachable, shown after 5 minutes of disconnection. */
-
-/* ── Pending (outbox) bubble — message queued locally because the server
-     was unreachable. Retry and dismiss buttons appear in the action bar. */
 
 /* ── Rendered Markdown inside agent bubbles ───────────────────────────────
    Agent replies render as Markdown into a `.md-body` (see
@@ -610,12 +561,6 @@ body {
    kept below for the embed chat widget, which still uses the above-pill layout. */
 /* Zone rows inherit pointer events; the empty container takes no space. */
 
-/* ── Chat input primitives ─────────────────────────────────────────────
-   `.chat-pill` provides the grid-based multi-line composer structure.
-   `.chat-pill-1line` adapts the same controls to a compact single-row layout.
-   JavaScript applies `.has-text`, `.no-voice`, and `.thinking` to reflect input
-   and activity state. */
-
 /* ── Boot-state pill ─────────────────────────────────────────────────
    Boot auth can take long enough for the static composer to be seen and used.
    Its HTML uses the canonical .chat-pill-layout-* rows and the same zone
@@ -623,20 +568,6 @@ body {
    and Send bottom-right. These rules provide only the active profile's sizes
    before config hydration. applyChatPillLayout replaces the static rows and
    removes .chat-pill-boot once the JSON-driven layout is ready. */
-/* The hydrated active pill's center zone contains the stats carousel, which
-   naturally consumes the flexible space between the two corner controls. The
-   boot pill deliberately omits stats, so keep its empty center zone flexing;
-   otherwise :empty would collapse it and place Attach beside Send. */
-#chat-input-row.chat-pill-boot
-  .chat-pill-layout-row[data-pill-row="1"]
-
-/* ── Horizontal-expanding composer (#chat-input-row) ─────────────────────
-   The main chat pill starts at the configured resting width (--chat-pill-width,
-   default 500px) and grows WIDER as the user types, up to either the viewport
-   width or content_max_width from chat_ui.json. Within its
-   current width text wraps normally and the pill grows VERTICALLY too — so it's
-   a hybrid: widens to fit long lines, then wraps and grows tall once capped.
-   JS drives both width and height via _autoResizePill. */
 
 /* ── Chat activity ("thinking") indicator ───────────────────────────────────
    While the agent works on the current session's turn, the web-chat pill glows
@@ -1257,9 +1188,6 @@ body.light-mode .agent-row-item { color: var(--fg-2); }
    rendered glyph so every dropdown avatar is visibly 18px. */
 #session-dropdown-menu .session-row-agent-icon svg,
 #session-dropdown-menu .session-row-agent-icon i { width: 18px !important; height: 18px !important; }
-/* ── Session-list group tree (orchestrator → spawns, Planner → closer) ──
-   Parent agent avatars disclose their nested children. Child rows stay
-   indented, but have no chevron column or connector rail. */
 /* ── Drag-to-reorder: pinned session rows are grabable across their full width ── */
 .session-row.pinned { cursor: grab; touch-action: none; }
 .session-row.pinned:active { cursor: grabbing; }
@@ -1784,13 +1712,4 @@ body.light-mode .account-btn-primary {
     color: var(--bg-0);
   }
 body.light-mode .account-status { color: var(--fg-2); }
-
-/* ── Chat pinch-to-zoom chip ─────────────────────────────────────────────
-   Floating level indicator + − / + / reset controls shown while the chat
-   transcript is zoomed. Wired by ui/chat/js/chat-zoom.js (two-finger pinch
-   and Ctrl+wheel on #chat-messages scale #chat-messages-inner via CSS zoom).
-   Sits TOP-CENTRE of the chat, just below the config-driven header (JS sets
-   the exact top from the header's measured height), themed with
-   design-system tokens so it reads in dark and light mode. Auto-hides via
-   .cz-hide after a zoom pause; [hidden] is the pre-first-zoom state. ── */
 

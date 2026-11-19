@@ -128,6 +128,14 @@ body.light-mode .session-dropdown-menu::-webkit-scrollbar-thumb {
 }
 
 /* ── Session dropdown merged panel ──────────────────────────────────────
+   When the menu is open the trigger chip and the list become ONE panel:
+   the chip is the panel's title row. The chip adopts the menu's solid
+   surface + border, squares the corners it shares with the list (bottom
+   normally, top when flipped up), and keeps its own border as the divider
+   between the title row and the list; the menu squares the shared corners
+   and drops the border on the shared edge. Radius unifies at 14px (the
+   menu's radius) so the whole panel reads as a single object. All layouts
+   use the same connected panel; mobile only changes the available width. */
   .chat-header-zone > [data-header-control="session_dropdown"].open {
       background: var(--bg-elev) !important;
       border-color: var(--border) !important;
@@ -202,6 +210,8 @@ body.light-mode .session-dropdown-menu::-webkit-scrollbar-thumb {
 }
 
 /* ── Session-list group tree (orchestrator → spawns, Planner → closer) ──
+   Parent agent avatars disclose their nested children. Child rows stay
+   indented, but have no chevron column or connector rail. */
 .session-child-row {
     padding-left: 22px;
     font-size: 11.5px;

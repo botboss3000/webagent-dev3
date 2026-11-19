@@ -2,6 +2,9 @@
    index.html right after app1.css so the cascade order is unchanged. */
 
 /* ── Idle footer mode (CSS-driven, no DOM rebuild) ──
+     When the textarea is empty and unfocused, .footer-mode-idle collapses
+     every element that isn't part of the ~single-row~ simplified idle pill.
+     The active layout always exists in the DOM; this class just hides parts. */
   #chat-input-area.footer-mode-idle {
     bottom: var(--idle-margin-bottom, 24px);
     /* Reduce and center padding — the active 2px/8px top/bottom pushes the
@@ -77,6 +80,8 @@
   }
 
 /* ── Chat footer row (token bar + mode button) ───────────────────────────
+   A single flex row below the pill that holds the token counter on the left
+   and the execution-mode button on the right. */
   .chat-footer-row.idle-collapsed {
     max-height: 0;
     opacity: 0;
@@ -85,6 +90,9 @@
   }
 
 /* ── Footer drag handle ───────────────────────────────────────────────────
+   A horizontal line just below the pill's bottom edge. Drag up to reveal
+   the abilities/device/mode chips, drag down to hide. The line follows the
+   pointer during drag and springs back on release. */
   /* After an idle→active transition, block clicks on newly-appeared
      buttons for a brief window so the user's finger can't hit them. */
   #chat-input-row.spring-back {
@@ -243,6 +251,9 @@
 }
 
 /* ── Chat token bar ──────────────────────────────────────────────────────
+   Sits below the chat pill, left-aligned. Shows tokens-in, a spinning shape
+   during activity, and tokens-out. The spinner animates while the agent is
+   working (chat-activity.visible is set). */
 .chat-token-bar {
     display: flex;
     align-items: center;
@@ -327,6 +338,12 @@ body.light-mode .chat-activity-bar {
   }
 
 /* ── Stop + Continue action buttons ─────────────────────────────────────────
+   MOVED: Stop/Continue now live INSIDE the chat pill (.chat-pill-controls) as
+   small icon-only circle buttons — red octagon (stop) and brand play triangle
+   (continue). Only one is visible at a time: stop while processing, continue
+   while idle. Both hidden when no agent is selected.
+   The old .chat-action-row and .chat-stop-btn / .chat-continue-btn styles are
+   kept below for the embed chat widget, which still uses the above-pill layout. */
 /* CHAT-ABOVE-PILL: the band directly above the pill that holds the
    activity bar (the "Thinking…"/tool-call chip + chevron) and the
    scroll-to-bottom button. #chat-activity is absolutely positioned to
@@ -487,6 +504,10 @@ body.light-mode .chat-continue-btn:hover {
   }
 
 /* ── Chat input primitives ─────────────────────────────────────────────
+   `.chat-pill` provides the grid-based multi-line composer structure.
+   `.chat-pill-1line` adapts the same controls to a compact single-row layout.
+   JavaScript applies `.has-text`, `.no-voice`, and `.thinking` to reflect input
+   and activity state. */
 .chat-pill {
     /* 3×2 grid layout:
        (1,1) empty — future left-column buttons,
@@ -515,6 +536,12 @@ body.light-mode .chat-continue-btn:hover {
   }
 
 /* ── Boot-state pill ─────────────────────────────────────────────────
+   Boot auth can take long enough for the static composer to be seen and used.
+   Its HTML uses the canonical .chat-pill-layout-* rows and the same zone
+   padding as chat_ui.json's active footer: textarea above, Attach bottom-left,
+   and Send bottom-right. These rules provide only the active profile's sizes
+   before config hydration. applyChatPillLayout replaces the static rows and
+   removes .chat-pill-boot once the JSON-driven layout is ready. */
 #chat-input-row.chat-pill-boot {
     /* Match chat_ui.json's active-footer radius even before appearance/config
        variables have finished hydrating. */
@@ -532,6 +559,12 @@ body.light-mode .chat-continue-btn:hover {
     font-weight: 400;
     line-height: 22px;
   }
+/* The hydrated active pill's center zone contains the stats carousel, which
+   naturally consumes the flexible space between the two corner controls. The
+   boot pill deliberately omits stats, so keep its empty center zone flexing;
+   otherwise :empty would collapse it and place Attach beside Send. */
+#chat-input-row.chat-pill-boot
+  .chat-pill-layout-row[data-pill-row="1"]
   .chat-pill-layout-zone-center {
     display: flex;
     flex: 1 1 auto;
@@ -627,6 +660,12 @@ body.light-mode .chat-continue-btn:hover {
 .chat-pill-input::placeholder { color: var(--fg-4); font-size: var(--chat-pill-font-size, 14px); }
 
 /* ── Horizontal-expanding composer (#chat-input-row) ─────────────────────
+   The main chat pill starts at the configured resting width (--chat-pill-width,
+   default 500px) and grows WIDER as the user types, up to either the viewport
+   width or content_max_width from chat_ui.json. Within its
+   current width text wraps normally and the pill grows VERTICALLY too — so it's
+   a hybrid: widens to fit long lines, then wraps and grows tall once capped.
+   JS drives both width and height via _autoResizePill. */
 #chat-input-row.chat-pill {
     /* Columns: empty · textarea (fills remaining) · buttons */
     grid-template-columns: auto 1fr auto;

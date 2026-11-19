@@ -102,6 +102,14 @@
 .cmc-toast.hiding { opacity: 0; transform: translateY(-4px) scale(0.95); transition: opacity 0.2s ease, transform 0.2s ease; }
 
 /* ── Footer context panel (click the token/ctx footer) ────────────────────
+   A floating panel anchored to the LEFT edge of the chat pill footer, sitting
+   just above the context-details line. Carries only per-chat context management
+   (compaction sliders + "Compact now"); model selection/info live in the
+   model-changer panel (#chat-model-changer). Themed entirely via design-system
+   vars (dark + light).
+   PANEL-SYNC-FOOTER: keep .chat-model-picker and .chat-skill-picker in sync —
+   if you change max-height, border-radius, padding, shadow, z-index, or
+   background on one, mirror it on the other. */
 .chat-model-picker {
     display: none;
     position: fixed;
@@ -117,6 +125,9 @@
   }
 
 /* ── Context-compaction section (the panel's only content) ─────────────────
+   Two sliders ("compact at %" / "keep verbatim %") tune this chat's compaction,
+   plus a "Compact now" button that folds the conversation immediately. Saved as a
+   per-session override (POST /api/v2/chat/sessions/{id}/compaction). */
 .chat-model-picker .cmp-compact {
     padding-top: 2px;
   }
@@ -172,6 +183,13 @@
   }
 
 /* ── Footer skill-selector panel (right-aligned, mirrors model picker) ─────
+   A floating panel anchored to the RIGHT edge of the chat pill footer, sitting
+   just above the context-details line. Shows every selectable skill (authored +
+   ability-bundled), greyed out when not active, highlighted when engaged.
+   Uses the same max-height as the model picker so the two panels are cohesive.
+   PANEL-SYNC-FOOTER: keep .chat-skill-picker and .chat-model-picker in sync —
+   if you change max-height, border-radius, padding, shadow, z-index, or
+   background on one, mirror it on the other. */
 .chat-skill-picker {
     display: none;
     position: fixed;
@@ -213,6 +231,9 @@
   }
 
 /* ── Model list panel (footer model button) ─────────────────────────────
+   Reuses .chat-skill-picker base (position, border, shadow, max-height).
+   The persisted roster order is the only visible order; an active row is
+   highlighted and any assigned roles appear as compact icons on its right. */
 .chat-model-list-panel .cml-item {
     display: flex;
     align-items: center;
@@ -260,6 +281,8 @@
 }
 
 /* ── Persistent effort slider (footer model picker) ─────────────────────
+   A panel-level, four-stop control. It deliberately sits outside .csp-list so
+   the roster can scroll without hiding the active model's effort control. */
 .chat-model-list-panel .csp-list {
     min-height: 0;
     flex: 1 1 auto;
