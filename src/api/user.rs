@@ -434,6 +434,7 @@ path_arg!(chat_controls => chat_controls_get, String);
 path_arg!(chat_usage => chat_usage_get, String);
 path_json!(chat_model => chat_model_set, String, crate::api::ChatModelBody);
 path_arg!(mode_get => session_mode_get, String);
+path_arg!(visit => session_visit, String);
 path_json!(mode_set => session_mode_set, String, SessionModeBody);
 path_arg!(abilities => session_abilities, String);
 path_json!(ability_set => session_ability_set, (String, String), SessionAbilityBody);
@@ -842,6 +843,7 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/usage", get(chat_usage))
         .route("/sessions/{id}/model", axum::routing::put(chat_model))
         .route("/sessions/{id}/mode", get(mode_get).put(mode_set))
+        .route("/sessions/{id}/visit", post(visit))
         .route("/sessions/{id}/messaging-routes", get(messaging_routes))
         .route(
             "/sessions/{id}/messaging-routes/{target}",

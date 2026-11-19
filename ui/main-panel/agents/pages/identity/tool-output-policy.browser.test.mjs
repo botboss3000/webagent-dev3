@@ -49,7 +49,7 @@ try {
   assert.deepEqual(await page.evaluate(()=>fixture.writes),[]);
   // Only the keep-alive rows have switches: the main one and four session states.
   assert.equal(await page.locator('[data-register-section=context-compaction] input[type=checkbox]').count(),5);
-  assert.equal(await page.getByLabel('Keep cache warm',{exact:true}).isChecked(),false);
+  assert.equal(await page.getByLabel('Keep cache warm (experimental)',{exact:true}).isChecked(),false);
   await page.getByLabel('Summary trigger',{exact:true}).fill('10000');
   await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).click();
   await page.getByText('Trigger must exceed the tail plus the summary target (5,000).',{exact:true}).waitFor();

@@ -58,6 +58,9 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("receipt:chat_controls:")
         || key.starts_with("compaction_segment:")
         || key.starts_with("context_compaction_job:")
+        || key.starts_with("keep_alive:")
+        || key.starts_with("keep_alive_request:")
+        || key.starts_with("keep_alive_visit:")
         || key.starts_with("compaction_request:")
         || key.starts_with("compaction_panel:")
         || key.starts_with("compaction_asked:")
@@ -155,6 +158,9 @@ mod tests {
             "compaction_panel:s",
             "compaction_asked:s",
             "panel_notes:s",
+            "keep_alive:s",
+            "keep_alive_request:s",
+            "keep_alive_visit:s",
         ] {
             assert_eq!(plane_for(key), Plane::User, "{key}");
         }

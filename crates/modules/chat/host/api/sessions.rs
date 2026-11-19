@@ -465,6 +465,27 @@ pub(crate) struct SessionModeBody {
     #[serde(default)]
     pub(crate) confirm_write: bool,
 }
+/// Opening a session in the app: an experimental keep-alive may ping it once before its
+/// cache times out. Recorded only for sessions keep-alive is following.
+pub(crate) async fn session_visit(State(app): State<App>, Path(id): Path<String>) -> Api {
+    if app.store.get(&key("session", &id)).await?.is_none() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()));
+    }
+    let followed = app
+        .store
+        .get(&format!("keep_alive:{id}"))
+        .await?
+        .is_some_and(|timing| timing["stopped"] != true);
+    if followed {
+        app.store
+            .put(
+                &format!("keep_alive_visit:{id}"),
+                &json!({"session_id":id,"at":now()}),
+            )
+            .await?;
+    }
+    Ok(Json(json!({"recorded":followed})))
+}
 pub(crate) async fn session_mode_get(State(app): State<App>, Path(id): Path<String>) -> Api {
     if app.store.get(&key("session", &id)).await?.is_none() {
         return Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()));

@@ -144,15 +144,35 @@ export function renderCompaction(host, agent, persist, request) {
     hint:'How long the model provider keeps this agent’s prompt cache. After this much idle time the next call reorders the context first: skills and Main Notes changes kept beside summary blocks move into the instructions. 0 uses each model’s own setting (60 minutes unless its provider file sets one).',
     value:agent.compaction_thresholds.cache_timeout_minutes ?? 0, min:0, max:1440, disabled:!manage, key:'cache_timeout_minutes', form}));
   // Experimental keep-alive: pings resend the last request shortly before the cache timeout.
+  // One expandable row: its switch turns keep-alive on, clicking the row opens its settings.
   const keepList = createConfigList(host, {label:'Cache keep-alive (experimental)'});
-  rows.set('keep_alive_enabled', createToggleRow(keepList, {title:'Keep cache warm',
-    hint:'Shortly before the cache timeout, resend the session’s last request with a one-word question so the provider keeps it cached. Each ping is a small extra model call; its answer is not saved. Claude and OpenCode bridges answer from a fork of the chat’s session.',
+  const keepItem = document.createElement('div');
+  keepItem.className = 'ac-row';
+  keepList.append(keepItem);
+  rows.set('keep_alive_enabled', createToggleRow(keepItem, {title:'Keep cache warm (experimental)',
+    hint:'Shortly before the cache timeout, resend the session’s last request with a one-word question so the provider keeps it cached. Each ping is a small extra model call; its answer is not saved. Claude and OpenCode bridges answer from a fork of the chat’s session. Opening a session before its cache times out also earns it one ping, even past the limit or in a state switched off here.',
     value:keepValue('keep_alive_enabled'), disabled:!manage, key:'keep_alive_enabled', form}));
-  rows.set('keep_alive_limit_minutes', createNumberRow(keepList, {title:'Stop after (minutes)',
+  const keepHead = keepItem.querySelector('.ac-ability-row');
+  const keepChevron = document.createElement('span');
+  keepChevron.className = 'ac-row-chevron ac-row-chevron--left';
+  keepChevron.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>';
+  keepHead.prepend(keepChevron);
+  keepHead.tabIndex = 0;
+  keepHead.setAttribute('role', 'button');
+  keepHead.setAttribute('aria-expanded', 'false');
+  const keepBody = document.createElement('div');
+  keepBody.className = 'ac-ability-body';
+  keepItem.append(keepBody);
+  const toggleKeep = () => keepHead.setAttribute('aria-expanded', String(keepItem.classList.toggle('expanded')));
+  keepHead.addEventListener('click', event => { if (!event.target.closest('.conn-toggle-wrap, input, button')) toggleKeep(); });
+  keepHead.addEventListener('keydown', event => {
+    if (event.target === keepHead && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggleKeep(); }
+  });
+  rows.set('keep_alive_limit_minutes', createNumberRow(keepBody, {title:'Stop after (minutes)',
     hint:'Stop pinging this long after the session’s last real model call (at most 240).',
     value:keepValue('keep_alive_limit_minutes'), min:1, max:240, disabled:!manage, key:'keep_alive_limit_minutes', form}));
   for (const [key, title, hint] of keepStates) {
-    rows.set('keep_alive_' + key, createToggleRow(keepList, {title, hint,
+    rows.set('keep_alive_' + key, createToggleRow(keepBody, {title, hint,
       value:keepValue('keep_alive_' + key), disabled:!manage, key:'keep_alive_' + key, form}));
   }
   const inherited = document.createElement('p');

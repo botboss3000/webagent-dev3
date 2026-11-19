@@ -10,7 +10,7 @@ async function fixture(issues) {
  const context=vm.createContext({document:{getElementById:()=>null},EventSource,Set,Map,setTimeout:(fn,ms)=>{timers.set(++nextTimer,fn);delays.push(ms);return nextTimer;},clearTimeout:id=>timers.delete(id)});
  const module=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'client.js'),'utf8'),{context});
  await module.link(specifier=>specifier.includes('storage-notice')?new vm.SyntheticModule(['createStorageNotice'],function(){this.setExport('createStorageNotice',()=>async()=>{});},{context}):new vm.SyntheticModule(['createAdministratorNotices'],function(){this.setExport('createAdministratorNotices',()=>({start(){},stop(){}}));},{context}));await module.evaluate();
- const client=module.namespace.createChatClient({request:async url=>{const id=url.split('/').at(-1);calls.push(id);return readOverride?readOverride(id):structuredClone(saved.get(id));},note:text=>notes.push(text),issues});
+ const client=module.namespace.createChatClient({request:async url=>{if(url.endsWith('/visit'))return {recorded:false};const id=url.split('/').at(-1);calls.push(id);return readOverride?readOverride(id):structuredClone(saved.get(id));},note:text=>notes.push(text),issues});
  async function open(id){await client.open(id,()=>{},(item,options)=>{if(failRender){--failRender;throw Error('render failed');}published.push({item,options});},summary=>{metadata.push(summary);metadataHook(summary);},data=>queues.push(data));}
  return {client,streams,saved,published,notes,timers,delays,calls,queues,metadata,metadataHook:fn=>metadataHook=fn,open,failRender:n=>failRender=n,override:fn=>readOverride=fn};
 }

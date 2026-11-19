@@ -105,6 +105,8 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
       inFlight:null, again:false, retry:null, failures:0};
     administratorNotices.start(id);
     void storageNotice();
+    // Opening counts as a visit for the experimental keep-alive; reconnects do not.
+    void request('/sessions/' + encodeURIComponent(id) + '/visit', 'POST', {}).catch(() => {});
     const streamUrl='/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + state.last;
     source = createStream ? createStream(streamUrl) : new EventSourceClass(streamUrl);
     setConnecting(true);

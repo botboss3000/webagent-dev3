@@ -3762,6 +3762,7 @@ impl<
                 // cache timeout; nothing is kept while the agent has it off.
                 if keep_alive {
                     super::keep_alive::record(
+                        app.store.records(),
                         &sid,
                         super::keep_alive::Request {
                             run_id: id.to_string(),
@@ -3774,7 +3775,9 @@ impl<
                             token_run: run.clone(),
                             timeout,
                         },
-                    );
+                        crate::now(),
+                    )
+                    .await;
                 }
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,
