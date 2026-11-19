@@ -12,6 +12,12 @@ reason), archived because its task ended, or archived by the backstop after
 backstop_seconds. Archived notes keep who removed them and why, are never returned by a
 default read, and are deleted archive_seconds after archiving. A note cleared by someone
 else leaves its author a one-time notice on their next read.
+
+Delivery: the broker reports each task's owning chat (owner kind "app" for in-app chats, with
+its session ID). The app reads open notes to app-owned tasks it has not delivered yet, shows each
+in its owning chat, and marks it delivered with an outcome. When the chat could not take it
+(stopped by the user, inactive, gone), the board posts an automatic reply back to the sender's
+task; automatic replies never get replies of their own. A note is delivered at most once.
 """
 import json
 import os
@@ -62,20 +68,25 @@ class Board:
             CREATE TABLE IF NOT EXISTS notices(id TEXT PRIMARY KEY, task TEXT NOT NULL, text TEXT NOT NULL, at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS tasks(label TEXT PRIMARY KEY, session TEXT, seen REAL NOT NULL);
         """)
+        # Columns added after the first release; ALTER keeps existing notes.
+        for table, column in (("notes", "delivered_at REAL"), ("notes", "outcome TEXT"), ("notes", "auto INTEGER NOT NULL DEFAULT 0"),
+                              ("tasks", "owner_kind TEXT"), ("tasks", "owner_session TEXT")):
+            if column.split()[0] not in {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
 
     @staticmethod
     def view(row, archived=False):
-        keys = ["id", "to_task", "from_task", "author", "session", "verified", "text", "at"]
+        keys = ["id", "to_task", "from_task", "author", "session", "verified", "text", "at", "delivered_at", "outcome", "auto"]
         if archived:
             keys += ["archived_at", "removed_by", "removal", "reason"]
         value = {key: row[key] for key in keys}
-        value["verified"] = bool(value["verified"])
+        value["verified"], value["auto"] = bool(value["verified"]), bool(value["auto"])
         return value
 
     def known(self, label):
         return self.db.execute("SELECT 1 FROM tasks WHERE label=?", (label,)).fetchone() is not None
 
-    def post(self, author, request, trusted_task=False):
+    def post(self, author, request, trusted_task=False, auto=False):
         to_task, text = request.get("to_task"), request.get("text")
         from_task = request.get("from_task")
         if not label_ok(to_task):
@@ -94,9 +105,50 @@ class Board:
             verified = trusted_task or (from_task is not None and self.known(from_task))
             note = {"id": uuid.uuid4().hex[:12], "to_task": to_task, "from_task": from_task, "author": author,
                     "session": (session or "")[:80] or None, "verified": int(verified), "text": text.strip(), "at": self.clock()}
-            self.db.execute("INSERT INTO notes(id,to_task,from_task,author,session,verified,text,at) VALUES(?,?,?,?,?,?,?,?)",
-                            tuple(note.values()))
-        return {**note, "verified": bool(verified)}
+            self.db.execute("INSERT INTO notes(id,to_task,from_task,author,session,verified,text,at,auto) VALUES(?,?,?,?,?,?,?,?,?)",
+                            tuple(note.values()) + (int(auto),))
+        return {**note, "verified": bool(verified), "auto": auto}
+
+    def undelivered(self, request):
+        """Open notes on app-owned tasks the app has not delivered yet, oldest first, with the owning chat."""
+        limit = request.get("limit", 50)
+        if not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise ValueError("limit is 1-200")
+        with self.lock:
+            rows = self.db.execute("""SELECT notes.*, tasks.owner_session FROM notes JOIN tasks ON tasks.label=notes.to_task
+                WHERE notes.archived_at IS NULL AND notes.delivered_at IS NULL AND tasks.owner_kind='app'
+                AND tasks.owner_session IS NOT NULL ORDER BY notes.at LIMIT ?""", (limit,)).fetchall()
+        return {"notes": [{**self.view(row), "owner_session": row["owner_session"]} for row in rows]}
+
+    REPLIES = {"stopped": "was stopped by its user; the note is shown there but no agent is running",
+               "inactive": "is not active, so nobody is reading it",
+               "gone": "no longer exists"}
+
+    def delivered(self, request):
+        """Mark notes delivered: [{id, outcome}], outcome delivered, stopped, inactive or gone. Every outcome
+        but delivered posts one automatic reply to the sender's task (never for an automatic note)."""
+        items = request.get("notes")
+        if not isinstance(items, list) or len(items) > 200 or not all(isinstance(i, dict) and isinstance(i.get("id"), str)
+                                                                    and i.get("outcome") in {"delivered", *self.REPLIES} for i in items):
+            raise ValueError("delivered takes notes: [{id, outcome: delivered|stopped|inactive|gone}]")
+        marked, replies = [], []
+        with self.lock:
+            for item in items:
+                row = self.db.execute("SELECT * FROM notes WHERE id=? AND delivered_at IS NULL", (item["id"],)).fetchone()
+                if row is None:
+                    continue
+                self.db.execute("UPDATE notes SET delivered_at=?, outcome=? WHERE id=?", (self.clock(), item["outcome"], row["id"]))
+                marked.append(row["id"])
+                if item["outcome"] != "delivered" and row["from_task"] and not row["auto"] and row["from_task"] != row["to_task"]:
+                    replies.append((row, item["outcome"]))
+        for row, outcome in replies:
+            text = (f"Automatic reply: the chat that owns {row['to_task']} {self.REPLIES[outcome]}. "
+                    f"Your note {row['id']} was not read by an agent.")
+            try:
+                self.post("board", {"to_task": row["from_task"], "from_task": row["to_task"], "text": text}, True, auto=True)
+            except ValueError:
+                pass
+        return {"marked": marked, "replies": len(replies)}
 
     def list(self, request):
         """Open notes on `task` (newest `limit`, with a count of the rest); with `notices`, also that task's
@@ -151,13 +203,16 @@ class Board:
     def tasks(self, request):
         """The broker's open task labels (and sessions): notes on any other task are archived as ended."""
         live = request.get("live")
+        # Owner fields are optional: owner_kind "app" (in-app chat, owner_session its session ID) or t480/<harness>.
         if not isinstance(live, list) or len(live) > 5000 or not all(isinstance(item, dict) and label_ok(item.get("label")) for item in live):
             raise ValueError("tasks takes live: [{label, session}]")
         now = self.clock()
         with self.lock:
             self.db.execute("DELETE FROM tasks")
-            self.db.executemany("INSERT OR REPLACE INTO tasks VALUES(?,?,?)",
-                                [(item["label"], str(item.get("session") or "")[:80] or None, now) for item in live])
+            self.db.executemany("INSERT OR REPLACE INTO tasks(label,session,seen,owner_kind,owner_session) VALUES(?,?,?,?,?)",
+                                [(item["label"], str(item.get("session") or "")[:80] or None, now,
+                                  str(item.get("owner_kind") or "")[:40] or None, str(item.get("owner_session") or "")[:80] or None)
+                                 for item in live])
             labels = {item["label"] for item in live}
             ended = [row for row in self.db.execute("SELECT * FROM notes WHERE archived_at IS NULL") if row["to_task"] not in labels]
             for row in ended:
@@ -198,6 +253,20 @@ class Board:
         return moved
 
 
+def broker_child(pid):
+    """The broker drops its request handling to the checkout owner's user, so that user's peer is the broker
+    when its parent is root running an installed broker release's bootstrap.py."""
+    try:
+        parent = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        if Path(f"/proc/{parent}").stat().st_uid != 0:
+            return False
+        argv = Path(f"/proc/{parent}/cmdline").read_bytes().split(b"\0")
+    except (OSError, ValueError, IndexError):
+        return False
+    return any(arg.startswith(b"/var/lib/webagent/") and b"/build-service/releases/" in arg and arg.endswith(b"/bootstrap.py")
+               for arg in argv)
+
+
 def roles(cfg):
     """Linux user ID to caller kind: root is the broker, the app's user the app, the checkout owner and the
     release login local operators."""
@@ -233,6 +302,10 @@ def handle(board, kind, request):
         return board.list(request)
     if action == "remove":
         return board.remove(author, request)
+    if action in {"undelivered", "delivered"}:
+        if kind != "app":
+            raise PermissionError("Only the app delivers notes into chats")
+        return board.undelivered(request) if action == "undelivered" else board.delivered(request)
     if action == "tasks":
         if kind != "broker":
             raise PermissionError("Only the broker reports its tasks")
@@ -267,8 +340,10 @@ def serve(cfg, home, socket_path, legacy=None):
 
     def answer(connection):
         try:
-            _, uid, _ = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            pid, uid, _ = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
             kind = kinds.get(uid)
+            if kind == "operator" and broker_child(pid):
+                kind = "broker"
             if kind is None:
                 raise PermissionError("This user may not use the board")
             raw = connection.makefile("rb").readline(LIMIT + 1)

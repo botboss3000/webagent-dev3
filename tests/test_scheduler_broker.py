@@ -1,5 +1,5 @@
 """Broker boundary regressions for ownership, retries, publication and corrections."""
-import hashlib,json,subprocess,tempfile,time,unittest,uuid
+import hashlib,json,os,subprocess,tempfile,time,unittest,uuid
 from pathlib import Path
 from unittest.mock import patch
 import test_admin_build as fixtures
@@ -649,6 +649,33 @@ class SchedulerBrokerTests(unittest.TestCase):
         legacy=self.root/"board.json";legacy.write_text(json.dumps({"notes":[{"id":"n1","to_label":"target-task","from_label":"author-task","origin":"t480/claude-code","text":"moved"}]}))
         self.assertEqual(board.import_legacy(legacy),1);self.assertFalse(legacy.exists())
         self.assertEqual([n["text"]for n in module.handle(board,"operator",{"action":"list","task":"target-task"})["notes"]],["moved"])
+
+    def test_board_delivers_notes_into_app_chats_once(self):
+        """The broker names each task's owning chat; the app reads undelivered notes on app-owned tasks, marks
+        them, and an undeliverable note gets one automatic reply on the sender's task (never a reply to a reply)."""
+        module,board=self.board()
+        module.handle(board,"broker",{"action":"tasks","live":[{"label":"app-task-1","owner_kind":"app","owner_session":"sess-1"},
+                                                              {"label":"local-task","owner_kind":"t480/claude-code"}]})
+        to_app=module.handle(board,"broker",{"action":"post","author":"t480/claude-code","verified":True,"to_task":"app-task-1","from_task":"local-task","text":"release chat?"})
+        module.handle(board,"broker",{"action":"post","author":"app/admin","verified":True,"to_task":"local-task","from_task":"app-task-1","text":"for local"})
+        with self.assertRaises(PermissionError):module.handle(board,"operator",{"action":"undelivered"})
+        waiting=module.handle(board,"app",{"action":"undelivered","user":"admin"})["notes"]
+        self.assertEqual([(n["id"],n["owner_session"])for n in waiting],[(to_app["id"],"sess-1")])
+        with self.assertRaises(ValueError):module.handle(board,"app",{"action":"delivered","user":"admin","notes":[{"id":to_app["id"],"outcome":"maybe"}]})
+        self.assertEqual(module.handle(board,"app",{"action":"delivered","user":"admin","notes":[{"id":to_app["id"],"outcome":"stopped"}]}),{"marked":[to_app["id"]],"replies":1})
+        self.assertEqual(module.handle(board,"app",{"action":"undelivered","user":"admin"})["notes"],[])
+        self.assertEqual(module.handle(board,"app",{"action":"delivered","user":"admin","notes":[{"id":to_app["id"],"outcome":"gone"}]})["marked"],[])
+        replies=[n for n in module.handle(board,"operator",{"action":"list","task":"local-task"})["notes"]if n["auto"]]
+        self.assertEqual(len(replies),1);self.assertIn("was stopped by its user",replies[0]["text"]);self.assertTrue(replies[0]["verified"])
+        # The automatic reply on an app task is delivered but never answered automatically.
+        module.handle(board,"broker",{"action":"tasks","live":[{"label":"app-task-1","owner_kind":"app","owner_session":"sess-1"},
+                                                              {"label":"local-task","owner_kind":"app","owner_session":"sess-2"}]})
+        auto=[n for n in module.handle(board,"app",{"action":"undelivered","user":"admin"})["notes"]if n["auto"]]
+        self.assertEqual(module.handle(board,"app",{"action":"delivered","user":"admin","notes":[{"id":auto[0]["id"],"outcome":"gone"}]})["replies"],0)
+        # The broker names owners from the task's origin.
+        self.begin("owner-task");owner=self.broker.scheduler.board_owner(next(i for i in self.broker.work.values()if i["task_id"]=="owner-task"))
+        self.assertNotEqual(owner["owner_kind"],"app")
+        self.assertFalse(module.broker_child(os.getpid()))
 
     def test_wait_cycle_through_an_uncertain_release_and_its_sessions_fix_task(self):
         """This morning's deadlock: mine is queued behind an uncertain release while the same session's fix

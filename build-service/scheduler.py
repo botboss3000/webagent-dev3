@@ -536,7 +536,11 @@ class Scheduler:
         # Scope holders get a 30-minute floor: local checks and commit close-out make no broker call.
         self.store.orphan(self.orphan_after,max(self.orphan_after,1800))
         self.settle();self.trim_registry()
-        self.board.push([{"label":i["task_id"],"session":self.session(i["key"])}for i in list(self.broker.work.values())if self.live(i.get("key"))])
+        self.board.push([{"label":i["task_id"],"session":self.session(i["key"]),**self.board_owner(i)}for i in list(self.broker.work.values())if self.live(i.get("key"))])
+    def board_owner(self,item):
+        """The chat a task's notes are delivered to: an in-app (v3) chat by its session ID, else the local harness."""
+        origin=self.origin(item["key"])
+        return {"owner_kind":"app","owner_session":item.get("workspace")}if origin=="v3"else{"owner_kind":origin}
     def touch_task(self,args,trusted,workspace):
         """Treat any authenticated call naming the caller's own task as liveness; never revives orphaned or foreign ownership."""
         if self.mode!="enforce":return
