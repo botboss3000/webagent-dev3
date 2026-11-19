@@ -182,6 +182,15 @@ is divided by weight (weight × (1 + priority + up to 2 for steps running past
 15 min)), rebalanced every few seconds as steps start and end. Memory, disk,
 packaging and admission keys are described in their own sections below.
 
+## New broker files need two installs
+
+An install runs the installed broker's own installer, which copies only the files on its list.
+The first install of a tree that adds a broker file (for example `board_host.py`) therefore
+installs the new installer but not the new file; a second install of the same tree copies it.
+Code that imports a new file must start without it (load it on first use, as
+`scheduler.BoardClient` does), and a list that requires it (the reviewed modules in host.py)
+can only name it from the release after it is installed.
+
 ## Release-scope guards
 
 Checked source patches are text unified diffs, except that image and font assets

@@ -611,7 +611,12 @@ class SchedulerBrokerTests(unittest.TestCase):
         # The in-app build_work tool adds a request_id to every call; the board accepts and ignores it.
         self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"board-target","reason":"again","request_id":"inapp-request-1"})
         self.assertEqual(len(self.call("build_work",{"action":"notes","task_id":"board-target","request_id":"inapp-request-2"})["notes"]),2)
+        # Another task's board is read on purpose with target_task_id (the in-app tool names its own task).
+        other=self.call("build_work",{"action":"notes","task_id":"board-author","target_task_id":"board-target"})
+        self.assertEqual((other["task_id"],len(other["notes"])),("board-target",2))
         target["status"]="abandoned";self.broker.scheduler.housekeeping()
+        with self.assertRaisesRegex(ValueError,"has finished"):
+            self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"board-target","reason":"late"})
         self.assertEqual(self.broker.scheduler.board.notes("board-target")["notes"],[])
         archived=self.call("build_work",{"action":"notes","task_id":"board-target","archived":True})["notes"]
         self.assertEqual({n["removal"]for n in archived},{"task-ended"})

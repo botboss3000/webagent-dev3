@@ -488,7 +488,9 @@ class Scheduler:
     def find(self,label):
         """An open task by its label, whoever owns it: notes may address any operator's task."""
         if not isinstance(label,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",label):raise ValueError("Bounded task ID required")
-        found=[i for i in self.broker.work.values()if i.get("task_id")==label and self.live(i.get("key"))]
+        named=[i for i in self.broker.work.values()if i.get("task_id")==label]
+        found=[i for i in named if self.live(i.get("key"))]
+        if not found and named:raise ValueError("Task "+label+" has finished (completed, abandoned or its release submitted); its board takes no new notes")
         if not found:raise ValueError("No open task "+label)
         return max(found,key=lambda i:i.get("created_at",0))
     def live(self,key):
@@ -508,8 +510,9 @@ class Scheduler:
         request_id is accepted and ignored: the in-app build_work tool adds one to every call."""
         action=args["action"]
         if action=="notes":
-            if set(args)-{"action","task_id","request_id","archived","limit"}:raise ValueError("notes takes task_id, optional archived and limit")
-            label=args.get("task_id")
+            if set(args)-{"action","task_id","target_task_id","request_id","archived","limit"}:raise ValueError("notes takes task_id, optional target_task_id, archived and limit")
+            # target_task_id reads another task's board; the in-app tool always names its own task_id.
+            label=args.get("target_task_id")or args.get("task_id")
             if not isinstance(label,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",label):raise ValueError("Bounded task ID required")
             value=self.board.call({"action":"list","task":label,"archived":args.get("archived") is True,"limit":args.get("limit",10),"notices":True})
             live=[i for i in self.broker.work.values()if i.get("task_id")==label and self.live(i.get("key"))]
