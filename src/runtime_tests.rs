@@ -1731,6 +1731,8 @@ async fn agent_loop_gates_tool_and_denial_continues_without_worker() {
     .await
     .unwrap();
     activate_codebase(&app, &sid).await;
+    // The shell tool is denied by default; this journey needs one that waits for approval.
+    set_tool_permission(&app, "shell", access::Permission::Ask).await;
     let id = queued(&app, &sid).await;
     let mut run = app.run(&id).await.unwrap();
     run["loaded_abilities"] = json!(["codebase_admin"]);
@@ -1868,9 +1870,9 @@ async fn catalog_change_revokes_loaded_ability_before_pending_tool() {
     assert_eq!(finished["status"], "completed", "{}", finished["error"]);
     assert_eq!(finished["loaded_abilities"], json!([]));
     assert_eq!(finished["ability_catalog_version"], app.abilities.version());
-    let output = finished["input"]
-        .as_array()
-        .unwrap()
+    // A finished run keeps no input copy; the denied result lives in the session history.
+    let history = app.store.context(&sid).await.unwrap();
+    let output = history
         .iter()
         .find(|item| item["type"] == "function_call_output")
         .unwrap();
@@ -8872,7 +8874,9 @@ async fn auto_batch_keeps_an_approved_repeat_confirmation() {
     let after = app.run(&id).await.unwrap();
     assert_ne!(after["pending"]["id"], "repeat-pending");
     assert_ne!(after["status"], "waiting_approval");
-    assert!(after["input"].as_array().unwrap().iter().any(|item| {
+    // A finished run keeps no input copy; the result lives in the session history.
+    let history = app.store.context(&sid).await.unwrap();
+    assert!(history.iter().any(|item| {
         item["type"] == "function_call_output" && item["call_id"] == "repeat-read-0"
     }));
 }
@@ -9960,7 +9964,10 @@ async fn live_context_default_stack_journey() {
     assert!(!requests[2]["input"]
         .to_string()
         .contains("LIVE_SKILL_CURRENT"));
-    assert!(durable["input"].to_string().contains("LIVE_SKILL_FIRST"));
+    // A finished run keeps no input copy; the skill result lives in the session history.
+    assert!(json!(app.store.context(&sid).await.unwrap())
+        .to_string()
+        .contains("LIVE_SKILL_FIRST"));
     for marker in ["LIVE_SKILL_FIRST", "LIVE_SKILL_CURRENT"] {
         assert!(!durable["loaded_skills"].to_string().contains(marker));
     }
@@ -11329,9 +11336,12 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
         assert_eq!(after["uncertain"], false);
         assert!(after["pending"].is_null());
         assert_eq!(after["call_index"], 1);
+        // A finished run keeps no input copy; its result lives in the session history.
+        assert_eq!(after["input"], json!([]));
         assert_eq!(
-            after["input"]
-                .as_array()
+            app.store
+                .context(&sid)
+                .await
                 .unwrap()
                 .iter()
                 .filter(|v| v["type"] == "function_call_output")

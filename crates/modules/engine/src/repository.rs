@@ -452,6 +452,7 @@ impl<
                 crate::send_future(self.chat.require_participation(&mut tx, run)).await?;
             }
             let expected = run["run_revision"].as_u64().unwrap_or(0);
+            let mut diagnostic_only = false;
             if let Some(raw) =
                 sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
                     .bind(format!("run:{rid}"))
@@ -475,14 +476,21 @@ impl<
                 } else {
                     metadata
                 };
+                // A late tool error may add validated evidence only. The worker that reports it
+                // may still hold the input the finished run no longer stores, so that copy is
+                // set aside when comparing; such a save never adds to the history below.
+                diagnostic_only = kind == "run_status"
+                    && crate::tools::failure::diagnostic_only_update(
+                        &finished_record(&previous),
+                        &finished_record(run),
+                    );
                 if previous["generation"] != run["generation"]
                     || previous["lease_epoch"] != run["lease_epoch"]
                     || previous["run_revision"].as_u64().unwrap_or(0) != expected
                     || (matches!(previous["status"].as_str(),Some("completed"|"cancelled"|"failed"))
                     && previous!=*run
-                    // A late tool error may add validated evidence only. Terminal
-                    // state/results stay immutable and every existing fence still applies.
-                    && !(kind=="run_status" && crate::tools::failure::diagnostic_only_update(&previous,run)))
+                    // Terminal state/results stay immutable and every existing fence still applies.
+                    && !diagnostic_only)
                     || (previous["status"] != "running"
                         && run["status"] == "running"
                         && previous["lease_epoch"].as_i64().unwrap_or(0) > 0)
@@ -537,7 +545,7 @@ impl<
                 )
                 .await?;
             }
-            let mut persisted = run.clone();
+            let mut persisted = finished_record(run);
             if let Some(revision) = run["_context_assets_write"]["state"]["revision"].as_u64() {
                 persisted["context_assets_revision"] = json!(revision);
             }
@@ -576,10 +584,12 @@ impl<
                 } else {
                     payload.clone()
                 };
-                sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)")
+                // A progress update names its run so the log keeps only the newest per run.
+                sqlx::query("INSERT INTO events(session_id,kind,payload,run_id) VALUES(?,?,?,?)")
                     .bind(run["session_id"].as_str().unwrap())
                     .bind(kind)
                     .bind(self.records.encode_user_record(&event_payload)?)
+                    .bind((kind == "run_status").then_some(rid.as_str()))
                     .execute(&mut *tx)
                     .await?;
             }
@@ -591,7 +601,7 @@ impl<
             // saved after those calls.
             // History entries the server adds end the input with their own result; they are
             // saved below, call first, so the latest-result save is skipped for them.
-            if kind != "model_output" && kind != "history_rows" {
+            if kind != "model_output" && kind != "history_rows" && !diagnostic_only {
                 crate::send_future(self.insert_tool_output(&mut tx, run, sid, rid)).await?;
             }
             if kind == "working_message" && run["module_silent"] != true {
@@ -960,6 +970,9 @@ impl<
                 run["_tool_execution_metadata"] = map.clone();
             }
             run["run_revision"] = json!(expected + 1);
+            // The caller's copy now matches what was stored, so its later saves meet the
+            // exact terminal fence.
+            *run = finished_record(run);
             if matches!(
                 run["status"].as_str(),
                 Some("completed" | "cancelled" | "failed")
@@ -1229,6 +1242,30 @@ fn reshapes_context(kind: &str) -> bool {
     matches!(kind, "context_compacted" | "context_reordered")
 }
 
+/// What a finished run keeps on disk: its input copy is emptied and its duplicate-result
+/// tracking dropped, since later runs rebuild input from history and the session keeps the
+/// tracking. A digest of the dropped input stays, so a later save still proves it holds the
+/// same input. Runs that are not finished are returned unchanged. Identical to
+/// `webagent_storage::recovery::finished_run`, which the engine cannot depend on; a root
+/// test keeps the two in step.
+pub fn finished_record(run: &Value) -> Value {
+    let mut record = run.clone();
+    if matches!(
+        record["status"].as_str(),
+        Some("completed" | "cancelled" | "failed")
+    ) {
+        let emptied = record["input"].as_array().is_some_and(Vec::is_empty);
+        if !(emptied && record["input_digest"].is_string()) {
+            record["input_digest"] = json!(crate::digest(&record["input"]));
+        }
+        record["input"] = json!([]);
+        if let Some(fields) = record.as_object_mut() {
+            fields.remove("tool_result_projection");
+        }
+    }
+    record
+}
+
 /// Name the failed provenance check of a compaction save, if any: the rejected payload is
 /// rolled back with its transaction, so the error is the only record of why.
 fn compaction_rejection(
@@ -1259,8 +1296,32 @@ fn compaction_rejection(
 
 #[cfg(test)]
 mod compaction_tests {
-    use super::compaction_rejection;
+    use super::{compaction_rejection, finished_record};
     use serde_json::json;
+
+    /// A finished run is stored without its input copy or duplicate-result tracking;
+    /// a run still working keeps both.
+    #[test]
+    fn finished_runs_drop_their_input_copy_and_projection() {
+        let run = |status| {
+            json!({"id":"r","status":status,"input":[{"role":"user","content":"hi"}],
+                "tool_result_projection":{"revision":2},"usage":{"input_tokens":5}})
+        };
+        let digest = crate::digest(&json!([{"role":"user","content":"hi"}]));
+        for status in ["completed", "cancelled", "failed"] {
+            let finished = finished_record(&run(status));
+            assert_eq!(
+                finished,
+                json!({"id":"r","status":status,"input":[],"input_digest":digest,
+                    "usage":{"input_tokens":5}})
+            );
+            // Trimming again keeps the digest of the input that was dropped.
+            assert_eq!(finished_record(&finished), finished);
+        }
+        for status in ["running", "queued", "waiting_approval", "paused", "stopped"] {
+            assert_eq!(finished_record(&run(status)), run(status));
+        }
+    }
 
     /// A source whose tool outputs the planner shortened for the summary can exceed 256 KiB.
     #[test]

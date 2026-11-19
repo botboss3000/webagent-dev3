@@ -91,12 +91,21 @@ impl StoreCore {
                 webagent_chat::shared::require_participation_in(self, tx, value).await?;
             }
         }
-        let session_value;
+        let prepared;
         let value = if key.starts_with("session:") {
-            session_value =
+            prepared =
                 webagent_chat::session::prepare_session_document(self, tx, key, value, now())
                     .await?;
-            &session_value
+            &prepared
+        } else if key.starts_with("run:")
+            && matches!(
+                value["status"].as_str(),
+                Some("completed" | "cancelled" | "failed")
+            )
+        {
+            // Every writer of a finished run stores it without its input copy.
+            prepared = recovery::finished_run(value);
+            &prepared
         } else {
             value
         };

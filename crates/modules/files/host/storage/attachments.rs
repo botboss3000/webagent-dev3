@@ -235,6 +235,7 @@ impl Store {
             self.cache.lock().unwrap().invalidate(&keys);
             let _ = std::fs::remove_dir_all(self.blob_dir());
         }
+        let (runs_trimmed, progress_removed) = self.prune_finished_runs().await?;
         let mut rewritten = 0u64;
         for (table, id, column) in [
             ("docs", "rowid", "value"),
@@ -310,8 +311,114 @@ impl Store {
         Ok(
             json!({"used_bytes_before":before,"used_bytes_after":self.storage_used().await?,
             "database_bytes_before":database_before,"database_bytes_after":self.database_bytes(),
-            "records_rewritten":rewritten,"recovery_manifests_refreshed":manifests,"attachments_deleted":removed_attachments,"vacuum_error":vacuum}),
+            "records_rewritten":rewritten,"recovery_manifests_refreshed":manifests,"attachments_deleted":removed_attachments,
+            "finished_runs_trimmed":runs_trimmed,"progress_updates_removed":progress_removed,"vacuum_error":vacuum}),
         )
+    }
+    /// Bring records saved before finished runs were trimmed to the current shape: empty each
+    /// finished run's input copy, drop its duplicate-result tracking, and keep only the newest
+    /// progress update per run. Returns (runs trimmed, progress updates removed).
+    async fn prune_finished_runs(&self) -> Result<(u64, u64)> {
+        let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM docs WHERE key GLOB 'run:*'")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut trimmed = 0u64;
+        for key in keys {
+            let mut tx = self.pool.begin().await?;
+            let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                .bind(&key)
+                .fetch_optional(&mut *tx)
+                .await?
+            else {
+                continue;
+            };
+            let Ok(mut run) = self.unseal(&raw) else {
+                continue;
+            };
+            let Some(rid) = run["id"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            let finished = matches!(
+                run["status"].as_str(),
+                Some("completed" | "cancelled" | "failed")
+            );
+            let has_copy = run["_recovery_input"]["count"].as_u64().unwrap_or(0) > 0
+                || run["input"]
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty());
+            if !finished || (!has_copy && run.get("tool_result_projection").is_none()) {
+                continue;
+            }
+            sqlx::query("DELETE FROM recovery_input WHERE run_id=?")
+                .bind(&rid)
+                .execute(&mut *tx)
+                .await?;
+            let fields = run.as_object_mut().expect("run record is an object");
+            fields.remove("tool_result_projection");
+            fields.remove("input");
+            fields.insert(
+                "_recovery_input".into(),
+                json!({"version":1,"count":0,"manifest":[]}),
+            );
+            // Same encoding as `write_document`, without its live-run admission checks.
+            sqlx::query("UPDATE docs SET value=? WHERE key=?")
+                .bind(self.encode_user_record(&run)?)
+                .bind(&key)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            self.cache.lock().unwrap().invalidate(&[key]);
+            trimmed += 1;
+        }
+        // Updates written before the run id column carry their run only inside the payload.
+        let rows = sqlx::query(
+            "SELECT seq,run_id,payload FROM events WHERE kind='run_status' ORDER BY seq",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut newest = std::collections::HashMap::new();
+        for row in &rows {
+            let run = match row.get::<Option<String>, _>("run_id") {
+                Some(run) => run,
+                None => match self.unseal(&row.get::<Vec<u8>, _>("payload")) {
+                    Ok(payload) => match payload["id"].as_str() {
+                        Some(run) => run.to_owned(),
+                        None => continue,
+                    },
+                    Err(_) => continue,
+                },
+            };
+            newest.insert(run, row.get::<i64, _>("seq"));
+        }
+        let kept: std::collections::HashSet<i64> = newest.values().copied().collect();
+        let mut tx = self.pool.begin().await?;
+        let mut removed = 0u64;
+        for row in &rows {
+            let seq = row.get::<i64, _>("seq");
+            if !kept.contains(&seq) {
+                removed += sqlx::query("DELETE FROM events WHERE seq=?")
+                    .bind(seq)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+            }
+        }
+        for (run, seq) in &newest {
+            sqlx::query("UPDATE events SET run_id=? WHERE seq=?")
+                .bind(run)
+                .bind(seq)
+                .execute(&mut *tx)
+                .await?;
+        }
+        removed += sqlx::query(
+            "DELETE FROM loop_events WHERE kind='run_status' AND seq NOT IN \
+             (SELECT MAX(seq) FROM loop_events WHERE kind='run_status' GROUP BY run_id)",
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok((trimmed, removed))
     }
     /// Recovery metadata commits to each `recovery_input` row's stored bytes. After those rows are
     /// re-encoded, refresh the stored-bytes hashes, first proving each row still holds exactly the

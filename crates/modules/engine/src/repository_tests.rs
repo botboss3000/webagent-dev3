@@ -44,7 +44,7 @@ impl Fixture {
         let app = open_pool(root.path().join("app.db")).await;
         sqlx::raw_sql("CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB NOT NULL);
    CREATE TABLE run_index(id TEXT PRIMARY KEY,session_id TEXT,status TEXT,updated_at INTEGER,enqueue_seq INTEGER,lease_epoch INTEGER NOT NULL DEFAULT 0,lease_owner TEXT,lease_expires_at INTEGER NOT NULL DEFAULT 0);
-   CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,kind TEXT,payload BLOB);
+   CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,kind TEXT,payload BLOB,run_id TEXT);
    CREATE TABLE interactions(session_id TEXT,run_id TEXT,step TEXT,value BLOB,PRIMARY KEY(session_id,run_id,step));
    CREATE TABLE loop_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT,schema_version INTEGER,kind TEXT,payload BLOB,created_at INTEGER);
    CREATE TABLE publication_outbox(run_id TEXT PRIMARY KEY,schema_version INTEGER,payload BLOB,created_at INTEGER);
@@ -524,8 +524,10 @@ async fn late_loop_event_abort_rolls_back_staged_ledger_history_notification_and
         .await
         .is_err());
     tx.rollback().await.unwrap();
+    // The finished run's input copy is dropped from both the stored and the caller's copy.
     let saved = f.repo().read_run("r").await.unwrap().unwrap();
     assert_eq!(saved, run);
+    assert_eq!(run["input"], json!([]));
     let rows = f.docs().await;
     let outbox = f.count("publication_outbox").await;
     f.repo()

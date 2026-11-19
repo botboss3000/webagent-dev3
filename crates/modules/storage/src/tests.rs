@@ -422,6 +422,64 @@ async fn documents_and_events_use_raw_plane_sql() {
     assert!(rest.iter().all(|(_, kind, _)| kind == "k"));
 }
 
+/// Only the newest progress update per run stays in both event logs; other events stay.
+#[tokio::test]
+async fn progress_updates_keep_only_the_newest_per_run() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("user_data/admin/admin.db");
+    let pool = pool::open_pool(&path, true, true).await.unwrap();
+    // Reopening an existing database leaves the added column and triggers in place.
+    let pool = {
+        pool.close().await;
+        pool::open_pool(&path, true, true).await.unwrap()
+    };
+    for (run, payload) in [("a", "1"), ("b", "2"), ("a", "3"), ("x", "4")] {
+        sqlx::query(
+            "INSERT INTO events(session_id,kind,payload,run_id) VALUES('s','run_status',?,?)",
+        )
+        .bind(payload.as_bytes())
+        .bind(run)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO loop_events(run_id,schema_version,kind,payload,created_at) VALUES(?,1,'run_status',?,0)")
+            .bind(run)
+            .bind(payload.as_bytes())
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    docs::append_event(&pool, "s", "session_updated", b"5")
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO loop_events(run_id,schema_version,kind,payload,created_at) VALUES('a',1,'claimed',x'00',0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let events: Vec<Vec<u8>> = sqlx::query_scalar("SELECT payload FROM events ORDER BY seq")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        events,
+        [b"2".to_vec(), b"3".to_vec(), b"4".to_vec(), b"5".to_vec()]
+    );
+    let loop_kinds: Vec<(String, String)> =
+        sqlx::query_as("SELECT run_id,kind FROM loop_events ORDER BY seq")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        loop_kinds,
+        [
+            ("b".into(), "run_status".into()),
+            ("a".into(), "run_status".into()),
+            ("x".into(), "run_status".into()),
+            ("a".into(), "claimed".into()),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn recovery_input_round_trips_reuses_ciphertext_and_detects_tampering() {
     let root = tempfile::tempdir().unwrap();

@@ -62,6 +62,26 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
             CREATE INDEX IF NOT EXISTS events_session ON events(session_id,seq);
             CREATE TABLE IF NOT EXISTS legacy_event_map(legacy_seq INTEGER PRIMARY KEY,new_seq INTEGER NOT NULL UNIQUE);")
             .execute(&pool).await?;
+        let event_columns = sqlx::query("PRAGMA table_info(events)")
+            .fetch_all(&pool)
+            .await?;
+        if !event_columns
+            .iter()
+            .any(|row| row.get::<String, _>("name") == "run_id")
+        {
+            sqlx::query("ALTER TABLE events ADD COLUMN run_id TEXT")
+                .execute(&pool)
+                .await?;
+        }
+        // Each progress update is a full run snapshot, so a new one replaces the older ones.
+        sqlx::raw_sql(
+            "CREATE INDEX IF NOT EXISTS events_run ON events(run_id,seq) WHERE run_id IS NOT NULL;
+            CREATE TRIGGER IF NOT EXISTS events_newest_run_status AFTER INSERT ON events
+            WHEN NEW.kind='run_status' AND NEW.run_id IS NOT NULL BEGIN
+            DELETE FROM events WHERE run_id=NEW.run_id AND kind='run_status' AND seq<NEW.seq; END;",
+        )
+        .execute(&pool)
+        .await?;
     }
     if events && !runs {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS loop_heartbeat(
@@ -85,6 +105,9 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
             CREATE INDEX IF NOT EXISTS loop_commands_run ON loop_commands(run_id,seq);
             CREATE TABLE IF NOT EXISTS loop_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL,schema_version INTEGER NOT NULL CHECK(schema_version=1),kind TEXT NOT NULL,payload BLOB NOT NULL,created_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS loop_events_run ON loop_events(run_id,seq);
+            CREATE TRIGGER IF NOT EXISTS loop_events_newest_run_status AFTER INSERT ON loop_events
+            WHEN NEW.kind='run_status' BEGIN
+            DELETE FROM loop_events WHERE run_id=NEW.run_id AND kind='run_status' AND seq<NEW.seq; END;
             CREATE TABLE IF NOT EXISTS publication_outbox(run_id TEXT PRIMARY KEY,schema_version INTEGER NOT NULL CHECK(schema_version=1),payload BLOB NOT NULL,created_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS session_artifacts(session_id TEXT NOT NULL,artifact_id TEXT NOT NULL,kind TEXT NOT NULL,revision INTEGER NOT NULL,run_id TEXT NOT NULL,bytes INTEGER NOT NULL,body BLOB NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(session_id,artifact_id));")
             .execute(&pool).await?;

@@ -13,6 +13,29 @@ pub fn recovery_digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// What a finished run keeps on disk: its input copy is emptied and its duplicate-result
+/// tracking dropped, since later runs rebuild input from history and the session keeps the
+/// tracking. A digest of the dropped input stays, so a later save still proves it holds the
+/// same input. Runs that are not finished are returned unchanged. The engine keeps an
+/// identical copy (`webagent_engine::repository::finished_record`), checked by a root test.
+pub fn finished_run(run: &Value) -> Value {
+    let mut record = run.clone();
+    if matches!(
+        record["status"].as_str(),
+        Some("completed" | "cancelled" | "failed")
+    ) {
+        let emptied = record["input"].as_array().is_some_and(Vec::is_empty);
+        if !(emptied && record["input_digest"].is_string()) {
+            record["input_digest"] = json!(webagent_configuration::digest(&record["input"]));
+        }
+        record["input"] = json!([]);
+        if let Some(fields) = record.as_object_mut() {
+            fields.remove("tool_result_projection");
+        }
+    }
+    record
+}
+
 // RECOVERY-HASH-STREAM: serde writes canonical compact JSON directly into the
 // digest. No history-sized temporary JSON buffer is allocated for comparison.
 // The digest must match recovery_digest(serde_json::to_vec(item)) exactly.

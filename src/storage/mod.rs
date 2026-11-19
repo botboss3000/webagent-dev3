@@ -1604,10 +1604,20 @@ impl Store {
             .await?;
         }
         if kind != "message" {
-            sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)")
+            // A progress update names its run so the log keeps only the newest per run.
+            sqlx::query("INSERT INTO events(session_id,kind,payload,run_id) VALUES(?,?,?,?)")
                 .bind(sid)
                 .bind(kind)
                 .bind(self.encode_for_pool(destination, payload)?)
+                .bind(
+                    (kind == "run_status")
+                        .then(|| {
+                            payload["run_id"]
+                                .as_str()
+                                .or_else(|| payload["id"].as_str())
+                        })
+                        .flatten(),
+                )
                 .execute(&mut *tx)
                 .await?;
         }
@@ -2978,6 +2988,66 @@ mod tests {
             .await
             .unwrap());
         (root, store, run)
+    }
+
+    /// The engine's and the store's finished-run shapes agree, so the engine's run fence
+    /// matches what every writer stores.
+    #[test]
+    fn engine_and_store_trim_finished_runs_the_same_way() {
+        for status in ["completed", "cancelled", "failed", "running"] {
+            let run = json!({"id":"r","status":status,"input":[{"role":"user","content":"hi"}],
+                "tool_result_projection":{"revision":1}});
+            let stored = webagent_storage::recovery::finished_run(&run);
+            assert_eq!(stored, webagent_engine::repository::finished_record(&run));
+            assert_eq!(
+                webagent_storage::recovery::finished_run(&stored),
+                webagent_engine::repository::finished_record(&stored)
+            );
+        }
+    }
+
+    /// A run that finishes drops its stored input copy and duplicate-result tracking; the
+    /// session keeps the tracking for the next run. A finished run written outside the
+    /// engine (here the user's cancel) is stored the same way.
+    #[tokio::test]
+    async fn finished_run_drops_its_input_copy_and_keeps_session_projection() {
+        let (_root, store, mut run) = renewal_fixture().await;
+        run["tool_result_projection"] = json!({"revision":1,"origins":{}});
+        run["status"] = json!("cancelled");
+        store
+            .save_run_override(&mut run, "run_status", &json!({"id":"renew-run"}))
+            .await
+            .unwrap();
+        let rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM recovery_input WHERE run_id='renew-run'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, 0);
+        let stored = store.get("run:renew-run").await.unwrap().unwrap();
+        assert_eq!(stored["status"], "cancelled");
+        assert_eq!(stored["input"], json!([]));
+        assert!(stored.get("tool_result_projection").is_none());
+        let session = store.get("session:renew-session").await.unwrap().unwrap();
+        assert_eq!(session["tool_result_projection"]["revision"], 1);
+        // The cancel command saves through the shared document write, not the engine.
+        let cancelled = json!({"id":"cancelled-run","session_id":"renew-session",
+            "status":"cancelled","run_revision":0,"input":[{"role":"user","content":"x"}]});
+        store
+            .atomic_docs_event(
+                vec![("run:cancelled-run".into(), cancelled.clone())],
+                "renew-session",
+                "run_status",
+                &json!({"id":"cancelled-run","status":"cancelled"}),
+            )
+            .await
+            .unwrap();
+        let stored = store.get("run:cancelled-run").await.unwrap().unwrap();
+        assert_eq!(stored["input"], json!([]));
+        assert_eq!(
+            stored["input_digest"],
+            webagent_configuration::digest(&cancelled["input"])
+        );
     }
 
     /// Verify renewal uses small metadata and rejects wrong generation, owner, epoch and stopped runs.
