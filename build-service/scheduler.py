@@ -23,6 +23,10 @@ def never_started(job):
     observed=(job.get("execution_observation")or{}).get("events")
     return not(job.get("effects_started")or job.get("execution_history")or job.get("phase_history")or observed
                or job.get("phase")not in(None,"queued","admitted"))
+def live_effect(job):
+    """Whether a job may have changed something live that nobody reconciled: effects began and it did not
+    complete, unless an operator confirmed it never went live (not-installed checks the served files)."""
+    return bool(job.get("effects_started"))and job.get("status")!="completed"and not job.get("operator_not_installed_at")
 def unstarted_interruption(job):
     """An interrupted job a restart caught before it started (recorded before restarts cancelled those):
     nothing ran, so it counts as cancelled and its task may reopen or end. Its receipt stays as written."""
@@ -103,7 +107,7 @@ class Scheduler:
         return [j for j in self.broker.jobs.values()if j.get("ownership_id")==item["key"]or(j.get("task_id")==item["task_id"]and j.get("user_id")==item.get("user_id")and j.get("workspace")==item.get("workspace"))]
     def settled(self,item):
         """No job of the task can still run, and none left an unreconciled deployment effect."""
-        return all((j.get("status")in {"failed","cancelled","stale","completed"}or unstarted_interruption(j))and not(j.get("effects_started")and j.get("status")!="completed")for j in self.task_jobs(item))
+        return all((j.get("status")in {"failed","cancelled","stale","completed"}or unstarted_interruption(j))and not live_effect(j)for j in self.task_jobs(item))
     def failed_release(self,item):
         """A closed task whose latest release failed before any deployment effect; it may reopen for a fix."""
         job=self.broker.jobs.get(item.get("job_id"))or{}
@@ -754,7 +758,7 @@ class Scheduler:
         if previous.get("state")!="pending"and not(record and previous.get("reconciled_by")==args["request_id"]):raise ValueError("Exact pending continuation required")
         if self.pending(key,except_path=path)not in {args["original_request_id"],None}:raise ValueError("Another scheduler transition requires recovery")
         job=self.broker.jobs.get(previous.get("previous_job"))
-        if not job or (job.get("status")!="completed"and not(job.get("status")=="failed"and not job.get("effects_started")))or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=workspace:
+        if not job or (job.get("status")!="completed"and not(job.get("status")=="failed"and not live_effect(job)))or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=workspace:
             raise ValueError("Completed or pre-effect failed owned generation required")
         if any(j.get("ownership_id")==key and j.get("status")in {"queued","running","interrupted","uncertain","needs_decision"}for j in self.broker.jobs.values()):raise ValueError("Reconcile active execution first")
         if item.get("acquisition_refresh"):raise ValueError("Reconcile active acquisition first")
@@ -797,7 +801,7 @@ class Scheduler:
     def continuation(self,item,args,value,record,path,owner,revision,epoch,request):
         """Recoverable generation switch; preserve the old tree and pin the new baseline once."""
         job=self.broker.jobs.get(record["previous_job"])
-        if not job or (job["status"]!="completed"and not(job["status"]=="failed"and not job.get("effects_started"))):raise ValueError("Completed or pre-effect failed generation required for correction")
+        if not job or (job["status"]!="completed"and not(job["status"]=="failed"and not live_effect(job))):raise ValueError("Completed or pre-effect failed generation required for correction")
         folder=self.broker.work_dir/"continuations"/item["key"]/path.stem
         folder.mkdir(parents=True,exist_ok=True)
         baseline=folder/"baseline.tar";prepared=folder/"prepared";tree=self.broker.work_dir/"trees"/item["key"]
@@ -854,7 +858,7 @@ class Scheduler:
         else:value=self.ensure(item,trusted,workspace)
         owner=self.owner(trusted,workspace)
         if action=="takeover_preview":
-            return {"task":{k:value[k]for k in ["id","label","state","epoch","revision","scopes"]}|{"session":self.session(value["id"]),"origin":self.origin(value["id"])},"jobs":[{"job_id":j["job_id"],"status":j["status"],"effects_started":bool(j.get("effects_started"))}for j in self.broker.jobs.values()if j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]]}
+            return {"task":{k:value[k]for k in ["id","label","state","epoch","revision","scopes"]}|{"session":self.session(value["id"]),"origin":self.origin(value["id"])},"jobs":[{"job_id":j["job_id"],"status":j["status"],"effects_started":live_effect(j)}for j in self.broker.jobs.values()if j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]]}
         revision=args.get("expected_revision");epoch=args.get("expected_epoch")
         request="action-"+hashlib.sha256(ownership.canonical([owner,value["id"],args.get("request_id")]).encode()).hexdigest()
         if type(revision)is not int or type(epoch)is not int:raise ValueError("Expected ownership revision and epoch required")
@@ -865,7 +869,7 @@ class Scheduler:
             jobs=[j for j in self.broker.jobs.values()if j.get("ownership_id")==item["key"]or(j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]) ]
             if not jobs or any(j.get("status")not in {"cancelled","failed","stale","completed"}and not unstarted_interruption(j)for j in jobs):
                 raise ValueError("Reconcile task execution before clearing requests")
-            if any(j.get("effects_started")and j.get("status")!="completed"for j in jobs):
+            if any(live_effect(j)for j in jobs):
                 raise ValueError("Reconcile deployment effects before clearing requests")
             if item.get("acquisition_refresh"):
                 raise ValueError("Reconcile task transition before clearing requests")

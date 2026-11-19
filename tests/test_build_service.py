@@ -2570,6 +2570,14 @@ class ObservationAuthorizationTests(MaintenanceTests):
   self.assertEqual(json.loads((self.broker.state/(job['job_id']+'.json')).read_text())['job_id'],job['job_id'])
   self.assertEqual(list(self.broker.state.glob(job['job_id']+'.tmp*')),[])
 
+ def test_release_confirmed_not_installed_has_no_live_effect(self):
+  live=fixtures.host.scheduler_module.live_effect
+  job={'status':'failed','effects_started':True}
+  self.assertTrue(live(job))
+  self.assertFalse(live({**job,'operator_not_installed_at':1.0}))
+  self.assertFalse(live({**job,'status':'completed'}))
+  self.assertFalse(live({'status':'failed'}))
+
  def test_wait_state_and_expired_authority(self):
   job=self.install_job();job['status']='running';job['resource_waiting']={'state':'waiting','since':time.time(),'phase':'test'}
   result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':0})
