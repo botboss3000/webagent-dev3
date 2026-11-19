@@ -4,6 +4,36 @@ The context release resolves permanent instruction identities against current
 sources at every model-call boundary. Prompts, skill bodies and tool schemas
 participate in that refresh; selecting a skill does not freeze its text.
 
+## At a glance: what is in a model call and when it changes
+
+A request is read in this order; a provider reuses its cache from the first byte
+up to the first byte that changed.
+
+| Part | What it holds | When it changes |
+| --- | --- | --- |
+| Tool definitions | Schemas of the active abilities' tools | The user activates or removes an ability (a major reorder) |
+| Instructions | Base instructions and prompt slots, skills not in the history, the skill menu, Main Notes guidance and snapshot | A block merge or major reorder; a changed live source (prompt, skill or menu file) |
+| Retained rows R1, R2, ... | Per fold: loaded skills (`load_skill` results), the latest `set_execution_mode` result, one combined Main Notes change | Written once by their fold, then unchanged until a merge or major reorder |
+| Summary blocks B1, B2, ... | One summary per fold | A merge rewrites the oldest ones into one |
+| Verbatim tail | Recent turns word for word, with any skills, notes changes and mode changes made since the last fold | Grows each call; a fold summarizes its older part |
+| Per-step guidance message | The mode's turn guidance and, once per new run-health issue, a review prompt | Sent after the history for one call only, never saved, so it never breaks the cache |
+
+Four events reshape the request:
+
+- **Fold** (built): summarizes history after the newest block into a new block and
+  keeps that range's retained rows just ahead of it. Nothing before the new rows
+  changes.
+- **Merge** (built): once the blocks together pass `merge_tokens`, folds the oldest
+  blocks and their rows into one block; their skills and notes go into the
+  instructions.
+- **Major reorder** (agreed, not built): after the cache timeout or when the user
+  activates an ability, moves every retained row into the instructions, rebuilds
+  the Main Notes snapshot and summarizes only if over the trigger.
+- **Keep-alive** (agreed, experimental, not built): resends the last request
+  before the timeout so the cache stays warm; the context does not change.
+
+Details: **Compaction layout and cache reuse** below.
+
 ## Execution route and ownership
 
 The normal loop in src/agent_loop/run.rs hydrates native selection identities
@@ -90,6 +120,75 @@ two blocks keep theirs. The merge rewrites the start of the history anyway, so
 its rows' skills join the instructions and the Main Notes snapshot is rebuilt:
 the snapshot is keyed by `notes_basis` (history revision and `notes_front`,
 which a merge's `context_compacted` event increments), not by every compaction.
+
+**Folding folded blocks.** When an automatic compaction is due, the planner first
+checks for a merge: at least three blocks whose summaries together pass
+`merge_tokens` (default 50k), and a merge source within the summary source limit. The cut falls just after the third-newest block, so
+the newest two blocks keep the rows ahead of them. Everything before the cut,
+blocks and rows, is the merge source; the summary leaves out skill text, Main
+Notes changes and mode results as it does for a fold. The result is one block
+followed by the untouched rest. Retained rows that were in the merged range are
+gone from the history: their skills are no longer in the history, so the skill
+selector adds them to the instructions; `notes_front` increments, so the next
+call rebuilds the Main Notes snapshot; and if the merged rows held the only
+`set_execution_mode` result, the server adds a fresh one at the end of the
+history.
+
+**Skills through their tool results.** A loaded skill's text first reaches the
+model as the `load_skill` tool result (status `loaded`, with `text`). While a
+result with its text is in the history, the run's skill filter
+(`skills_in_history` in the engine run loop) keeps that skill out of the
+instructions, so loading a skill never changes the instructions. A fold keeps
+the exchange, text included, just ahead of its new block; a skill loaded in the
+verbatim tail stays where it was loaded. Only when the result leaves the history
+(a merge, or the major reorder) does the selector place the current skill text
+among the instructions' skills.
+
+**Main Notes through their changes.** The instructions carry the notes guidance
+and one snapshot, keyed by `notes_basis`, which stays frozen between merges.
+Changes reach the session as tool exchanges at the end of the history: another
+session's write arrives as a server-added `main_notes_read-<id>` row with the
+diff for that notes version; this session's own write is its `main_notes_write`
+result, with the entry's line before and after. A fold combines every change in
+the summarized range and in the verbatim tail, oldest first, into one
+`main_notes_read` exchange placed with the fold's other retained rows, and drops
+them from the tail. A merge or major reorder drops the diffs and rebuilds the
+snapshot from the current notes.
+
+**Execution mode.** The mode arrives as a `set_execution_mode` result: at session
+start, when the user changes it, and when the agent changes it. A fold keeps the
+latest one from its range unless the verbatim tail already has a newer one; the
+server adds a fresh one whenever no result in the history shows the current
+revision. `prompts/mode_guidance.json` (`placement`) decides where the mode's
+text goes: `history` puts the full guidance in the results only; `both`
+(default) also puts the mode's turn guidance in each step's guidance message;
+`per_step` puts the full guidance in each step's guidance message and leaves the
+results with only the mode and revision.
+
+**Per-step guidance message.** Call-lifetime contributions (the mode's turn
+guidance, and a one-call review prompt when the run has a new issue group to
+explain) are joined into one message in the profile's instruction role and
+appended after the history for that call only. It is never saved, so the next
+call's request differs from the previous one only from that point on: the small
+change the cache estimate reports at the end of each call.
+
+**Worked example.** One session through three folds, a merge and a major reorder
+(H = history items; bold marks what is new and uncached on the next call):
+
+| After | Tools | Instructions | History |
+| --- | --- | --- | --- |
+| Start | T | base, notes v12 | mode, user message |
+| Skill and notes changes | T | base, notes v12 | mode, user, **load_skill A, notes diff v13, own write v14, more turns** |
+| Fold 1 | T | base, notes v12 | **R1 (skill A, mode, notes v13-v14), B1, tail** |
+| Fold 2 | T | base, notes v12 | R1, B1, **R2 (skill B, mode, notes v15), B2, tail** |
+| Fold 3 | T | base, notes v12 | R1, B1, R2, B2, **R3, B3, tail** |
+| Merge | T | base, **skill A, notes v16** | **M (B1 and R1), R2, B2, R3, B3, tail** |
+| Major reorder | **T** | **base, skills A and B, notes v17, mode** | **M, B2, B3, tail** |
+
+Measured on 2026-11-19 (session 588ba58a): after fold 1 the first change was
+history entry 0, with all 240,568 bytes of tools and instructions reused (63,488
+tokens cached by the provider); after fold 2 the first change was entry 5, right
+after R1 and B1 (252,932 bytes, 66,176 tokens).
 
 **Major reorder (agreed, not built).** Triggered by the cache timeout (idle time
 since the session's last model call) or by the user activating an ability (it
