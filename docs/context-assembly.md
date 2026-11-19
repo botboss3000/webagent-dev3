@@ -26,7 +26,7 @@ Four events reshape the request:
 - **Merge** (built): once the blocks together pass `merge_tokens`, folds the oldest
   blocks and their rows into one block; their skills and notes go into the
   instructions.
-- **Major reorder** (agreed, not built): after the cache timeout or when the user
+- **Major reorder**: after the cache timeout or when the user
   activates an ability, moves every retained row into the instructions, rebuilds
   the Main Notes snapshot and summarizes only if over the trigger.
 - **Keep-alive** (experimental, off by default): resends the last request
@@ -207,20 +207,23 @@ history entry 0, with all 240,568 bytes of tools and instructions reused (63,488
 tokens cached by the provider); after fold 2 the first change was entry 5, right
 after R1 and B1 (252,932 bytes, 66,176 tokens).
 
-**Major reorder (agreed, not built).** Triggered by the cache timeout (idle time
-since the session's last model call) or by the user activating an ability (it
-changes the tool definitions; agents have no activation tool). Retained rows move
-into the instructions, Main Notes becomes one current snapshot with the diffs
-dropped, and the mode guidance joins the instructions; later mode changes still
-arrive as `set_execution_mode` exchanges. Skills in history that is not summarized
+**Major reorder (built, commits 4b118d5, f9b7c50).** Triggered by the cache
+timeout (idle time since the session's last model call) or by the user activating
+an ability (it changes the tool definitions; agents have no activation tool).
+Retained rows move into the instructions and Main Notes becomes one current
+snapshot with the diffs dropped. The current mode arrives as one fresh
+`set_execution_mode` exchange at the end of the history, as later mode changes do. Skills in history that is not summarized
 stay where they were loaded. Blocks keep their order unless they are over the
 merge limit. A summary is made only when the history is over the trigger. An idle
 session reorders at its next call; a running one at its next model call, with the
-new tools, pausing only when a summary is needed.
+new tools, pausing only when a summary is needed. The loop keeps each session's
+last call time in memory; after a restart the first pass of a run uses the
+session's latest stored run update instead. Each reorder logs `context reordered`
+with its reason (`idle` or `tools`).
 
-**Cache timeout (agreed, not built).** A per-model default in
-`crates/modules/models/providers/<provider>.json` (about one hour), adjustable on
-the Identity page.
+**Cache timeout (built).** `cache_timeout_minutes` per model or provider in
+`crates/modules/models/providers/<provider>.json` (60 minutes when absent), and
+Identity → Context compaction → Cache timeout per agent (0 uses the model's).
 
 **Keep-alive (experimental, off by default).** Turned on per agent under
 Identity → Context compaction. While on, each main model call's request is kept in
@@ -247,9 +250,9 @@ unchanged leading bytes, the bytes sent and the first change in
 `usage.cache_estimate`, and logs one `model call cache` line per call with the
 provider's cached and cache-write tokens beside it. The composer's context
 statistics panel shows both. The OpenCode bridge reads usage from its server's
-session messages when `opencode run` prints no step totals. Showing the cached
-share on model-call activity rows is agreed but not built: activity has no
-per-model-call row yet.
+session messages when `opencode run` prints no step totals. Each model call also
+has an activity row ("Model call · 102.0k in · 99.7% cached"), and a reply's
+activity group head sums them ("2 model calls · 49.9% cached").
 
 ## Provider-specific projection
 
