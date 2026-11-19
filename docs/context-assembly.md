@@ -50,15 +50,82 @@ growth once, including provider-specific representation.
 
 Synthetic instructions are a model-call projection. They never enter durable
 chat history or the history summarized by compaction. Compaction and Undo reset
-layout metadata while keeping selectors and receipts, so the next call rebuilds
-current definitions. Unload is revision-fenced; stale saves or retries cannot
-resurrect a removed selector.
+layout metadata while keeping selectors and receipts. A fold does not change the
+instructions: the skills, Main Notes changes and mode it keeps stay in the history
+ahead of its new block (see **Compaction layout and cache reuse**). Unload is
+revision-fenced; stale saves or retries cannot resurrect a removed selector.
 
 Stable unchanged bytes and ordering can preserve a provider's reusable prefix.
 Changed live sources deliberately change those bytes. Actual cache hits, billed
 tokens and provider latency are not guaranteed by placement tests. Tool schemas
 remain in each endpoint's native request field; this feature does not move them
 into durable transcript text.
+
+## Compaction layout and cache reuse
+
+Providers cache a request from its first byte up to the first byte that changed,
+so compaction keeps everything before its newest summary block byte-identical.
+Agreed design, 2026-11-19; status per part below.
+
+A request reads: tool definitions, instructions (base, skills, Main Notes
+snapshot), then history: R1, B1, R2, B2, ... and the verbatim tail. Bn is a
+summary block; Rn is the retained rows its fold kept ahead of it, as the original
+tool-call exchanges.
+
+**Fold (built, commit 4802868).** Fold n summarizes the history after the last
+block and keeps, just ahead of its new block: each `load_skill` exchange still
+carrying its text (a skill whose text is in the history stays out of the
+instructions); the latest `set_execution_mode` exchange unless the tail has a
+newer one; and every Main Notes change from the summarized range and the verbatim
+tail (the server's `main_notes_read-…` rows and the session's own
+`main_notes_write` results) combined into one `main_notes_read` exchange. Skills
+loaded in the tail stay where they were loaded. Summaries leave all of these out.
+`summary_blocks` and `leading_blocks` in context-contracts compaction find the
+blocks through the rows kept ahead of them, for the planner, the external plan
+validator, the merge cut and the fork summary wording.
+
+**Merge (built).** Once the blocks together pass `merge_tokens`, the oldest are
+summarized into one block, together with the rows kept ahead of them; the newest
+two blocks keep theirs. The merge rewrites the start of the history anyway, so
+its rows' skills join the instructions and the Main Notes snapshot is rebuilt:
+the snapshot is keyed by `notes_basis` (history revision and `notes_front`,
+which a merge's `context_compacted` event increments), not by every compaction.
+
+**Major reorder (agreed, not built).** Triggered by the cache timeout (idle time
+since the session's last model call) or by the user activating an ability (it
+changes the tool definitions; agents have no activation tool). Retained rows move
+into the instructions, Main Notes becomes one current snapshot with the diffs
+dropped, and the mode guidance joins the instructions; later mode changes still
+arrive as `set_execution_mode` exchanges. Skills in history that is not summarized
+stay where they were loaded. Blocks keep their order unless they are over the
+merge limit. A summary is made only when the history is over the trigger. An idle
+session reorders at its next call; a running one at its next model call, with the
+new tools, pausing only when a summary is needed.
+
+**Cache timeout (agreed, not built).** A per-model default in
+`crates/modules/models/providers/<provider>.json` (about one hour), adjustable on
+the Identity page.
+
+**Keep-alive (agreed, experimental, off by default, not built).** Shortly before
+the timeout, resend the session's last request with a forced no-op tool call (a
+tiny text answer where forcing is unsupported); nothing is saved to the history.
+It stops after a maximum time set on Identity (default 4 hours). Each session
+state has its own switch, on by default for completed and needs input or
+approval, off for stopped and error; dismissing a session from its menu stops
+its timer.
+
+**Measurement (built, commits 9a6c1a6, eff85a9, d555f4a).** At each main model
+call the engine fingerprints the tool definitions, instructions and each history
+entry and compares them with the session's previous call
+(`crates/modules/engine/src/runtime/cache_estimate.rs`, kept in memory for 256
+sessions, so the first call after a restart has no comparison). It records the
+unchanged leading bytes, the bytes sent and the first change in
+`usage.cache_estimate`, and logs one `model call cache` line per call with the
+provider's cached and cache-write tokens beside it. The composer's context
+statistics panel shows both. The OpenCode bridge reads usage from its server's
+session messages when `opencode run` prints no step totals. Showing the cached
+share on model-call activity rows is agreed but not built: activity has no
+per-model-call row yet.
 
 ## Provider-specific projection
 
