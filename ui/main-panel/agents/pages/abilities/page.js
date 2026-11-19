@@ -6,6 +6,7 @@ import { buildBrowserSites } from './browser-sites.js';
 import { buildMcpControls } from './mcp.js';
 import { buildPromptsGroup } from './prompts.js';
 import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js';
+import { buildStaleSettings } from './stale-settings.js';
 import { APP_DEFAULT, APP_DEFAULTS_CSS, buildAbilityDefaultsPanels, buildAppDefaultsBar, buildGroupDefaultsPanel, buildToolDefaultsPanel, createAppDefaults, loadAppDefaults } from './app-defaults.js';
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from './ability-row-controls/ability-row-controls.js';
@@ -412,6 +413,9 @@ export async function renderAbilities(host, request, options) {
     lucide: 'file-text',
   });
   page.append(overview, search);
+  // Saved settings that name a renamed or removed tool, ability or skill no longer apply.
+  const stale = canManage && !appDefaults ? buildStaleSettings({ data, abilities: data.abilities || [], request, scope, rerender, status }) : null;
+  if (stale) page.append(stale);
   const register = createSubpageList(page, {label: 'Ability groups', categories});
   const abilityPages = new Map();
   for (const [groupId, group] of groups) {
