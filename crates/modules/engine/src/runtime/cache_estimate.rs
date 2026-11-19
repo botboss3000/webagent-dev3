@@ -127,6 +127,17 @@ pub fn log_call(session: &str, run_id: &str, run: &Value) {
         compactions=run["compactions"].as_u64().unwrap_or(0), "model call cache");
 }
 
+/// The activity row for one model call: the provider's input and cache figures beside the
+/// estimate, shown as a "Model call" row in the chat's activity.
+pub fn activity_item(run: &Value) -> Value {
+    let (latest, estimate) = (&run["usage"]["latest"], &run["usage"]["cache_estimate"]);
+    json!({"type":"model_usage","input_tokens":latest["input_tokens"],
+        "cached_input_tokens":latest["cached_input_tokens"],
+        "cache_write_tokens":latest["cache_write_tokens"],
+        "matched_bytes":estimate["matched_bytes"],"sent_bytes":estimate["sent_bytes"],
+        "first_change":estimate["first_change"],"first_change_entry":estimate["first_change_entry"]})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

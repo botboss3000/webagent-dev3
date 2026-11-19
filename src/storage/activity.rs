@@ -138,6 +138,13 @@ fn event(
             json!({"summary":item["summary"],"error":item["error"]}),
         ),
         "closing_reminder" => ("closing_reminder", json!({})),
+        "model_usage" => (
+            "model_usage",
+            json!({"input_tokens":item["input_tokens"],"cached_input_tokens":item["cached_input_tokens"],
+                "cache_write_tokens":item["cache_write_tokens"],"matched_bytes":item["matched_bytes"],
+                "sent_bytes":item["sent_bytes"],"first_change":item["first_change"],
+                "first_change_entry":item["first_change_entry"]}),
+        ),
         "closing_status" => (
             "closing_status",
             json!({"attempt":item["attempt"],"of":item["of"],"model":item["model"],

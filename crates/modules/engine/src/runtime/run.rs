@@ -3986,6 +3986,12 @@ impl<
                     Ok(response) => {
                         X::record_usage(&mut run, &response);
                         super::cache_estimate::log_call(&sid, &id, &run);
+                        let usage_row = super::cache_estimate::activity_item(&run);
+                        compaction_activity(
+                            &mut run,
+                            format!("usage:{}", uuid::Uuid::new_v4()),
+                            usage_row,
+                        );
                         // A completed reply ends this call's failover attempt: the next
                         // call starts with a fresh retry budget and no carried-over
                         // response or tool-effect flags. The pinned candidate and its
@@ -4308,7 +4314,8 @@ struct BackgroundFold {
 }
 
 /// Queue one activity row for the next run save. Rows are stored in `interactions`
-/// under a `compaction:` step, which session context assembly skips.
+/// under an activity-only step (`compaction:`, `usage:`), which session context assembly
+/// skips.
 fn compaction_activity(run: &mut Value, step: String, item: Value) {
     let entry = json!({"step":step,"item":item});
     match run["_activity_items"].as_array_mut() {

@@ -818,7 +818,7 @@ impl Store {
         });
         let rows = sqlx::query(
             // Compaction call/result rows are activity only, never model context.
-            "SELECT seq,run_id,step,item FROM interactions WHERE session_id=? AND seq>? AND step NOT LIKE 'compaction:%' AND step NOT LIKE 'retry:%' AND step NOT LIKE 'preload:%' AND step NOT LIKE 'closing:%' ORDER BY seq",
+            "SELECT seq,run_id,step,item FROM interactions WHERE session_id=? AND seq>? AND step NOT LIKE 'compaction:%' AND step NOT LIKE 'retry:%' AND step NOT LIKE 'preload:%' AND step NOT LIKE 'closing:%' AND step NOT LIKE 'usage:%' ORDER BY seq",
         )
         .bind(sid)
         .bind(cursor)

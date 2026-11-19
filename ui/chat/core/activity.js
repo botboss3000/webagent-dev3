@@ -58,6 +58,30 @@ function compactionSize(input,summary) {
 }
 
 
+/** A share as a percentage rounded down to one decimal, so 99.5% never reads as 100%. */
+const share=(part,whole)=>(Math.floor(1000*part/Math.max(1,whole))/10)+'%';
+/** Label for one model call's cache figures: input tokens and the share read from cache. */
+export function modelCallLabel(p) {
+  const count=n=>n>=1000?(n/1000).toFixed(1)+'k':String(n);
+  if (!Number.isFinite(p.input_tokens)) return 'Model call · usage not reported';
+  const cached=Number.isFinite(p.cached_input_tokens)
+    ? ' · '+share(p.cached_input_tokens,p.input_tokens)+' cached' : '';
+  return 'Model call · '+count(p.input_tokens)+' tokens in'+cached;
+}
+/** Details for a model call row: provider figures, the prefix estimate and where the request first changed. */
+export function modelCallText(p) {
+  const change={no_previous_call:'no previous call to compare',tools:'tool definitions',instructions:'instructions',
+    appended:'none, only new history added'}[p.first_change]
+    || (p.first_change==='history'?'history entry '+p.first_change_entry:'');
+  const estimate=Number.isFinite(p.sent_bytes)&&p.sent_bytes>0
+    ? 'Estimate: '+share(p.matched_bytes||0,p.sent_bytes)+' of the request unchanged since the previous call'
+      +(change?'; first change: '+change:'') : '';
+  const provider=Number.isFinite(p.input_tokens)
+    ? 'Provider: '+p.input_tokens+' input tokens, '+(p.cached_input_tokens??'unreported')+' read from cache, '
+      +(p.cache_write_tokens??0)+' written to cache' : 'Provider: usage not reported';
+  return [provider,estimate].filter(Boolean).join('\n');
+}
+
 /** Projects journal events into grouped tool, message, mode, compaction, retry and closer rows for activityGroups. */
 export function activityRows(events) {
   const rows=[], tools=new Map(), messages=new Map(), controls=new Set();
@@ -99,6 +123,9 @@ export function activityRows(events) {
         :'Retrying connection in '+wait+' · attempt '+p.attempt+' of '+p.of;
       rows.push({id:event.event_id,category:'retries',retry:true,autoResume:!!p.auto_resume,label,
         text:p.error||'',events:[event]});
+    } else if (kind === 'model_usage') {
+      // One row per model call: how much of its input the provider read from cache, beside our estimate.
+      rows.push({id:event.event_id,category:'models',modelCall:true,label:modelCallLabel(p),text:modelCallText(p),events:[event]});
     } else if (kind === 'closing_status') {
       // The System-role closer's session status; a failed attempt reads like a failed tool call.
       const text=p.error?'Attempt '+p.attempt+' of '+p.of+' failed: '+p.error+(p.fallback?'\n\nFallback status recorded.':'')
