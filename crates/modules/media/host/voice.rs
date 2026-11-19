@@ -338,9 +338,9 @@ fn dictation_stopped() -> ApiError {
 }
 
 /// Composer dictation: `start` opens a capture in the dictation service, each `chunk` streams
-/// a PCM frame and returns the transcript so far (it grows phrase by phrase at pauses),
-/// `finish` returns the final transcript and `cancel` discards it. Nothing is stored; the
-/// client types the text into the composer.
+/// a PCM frame and returns the transcript so far (a draft that grows phrase by phrase at pauses;
+/// each finished passage replaces its phrases), `finish` returns the final transcript and
+/// `cancel` discards it. Nothing is stored; the client types the text into the composer.
 pub(crate) async fn voice_audio(
     State(app): State<App>,
     Path(sid): Path<String>,

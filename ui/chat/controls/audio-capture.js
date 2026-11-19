@@ -14,12 +14,16 @@ export const LAG_ON_FRAMES=20,LAG_OFF_FRAMES=5;
 export const BATCH_FRAMES=20;
 /** Server captures restarted from the browser's recording before the dictation fails. */
 export const MAX_RESTARTS=3;
-/** A request with no answer after this long is retried (finish waits for the recognizer, up to 15 s server side); the retry keeps its sequence number, so the server replays rather than repeats it. */
-const CHUNK_TIMEOUT_MS=10000,FINISH_TIMEOUT_MS=20000;
+/** A request with no answer after this long is retried (finish waits for the recognizer to transcribe the last passage, up to 30 s server side); the retry keeps its sequence number, so the server replays rather than repeats it. */
+const CHUNK_TIMEOUT_MS=10000,FINISH_TIMEOUT_MS=40000;
 /** Requests keep being retried until none has succeeded for this long. */
 const GIVE_UP_MS=120000;
 /** The AudioWorklet half of the capture; a same-origin module because the page policy refuses blob: scripts. */
 const WORKLET=new URL('./audio-capture-worklet.js',import.meta.url).href;
+/** The audio context with the worklet loaded, kept (suspended) between dictations so the next one records without loading it again. */
+let shared=null;
+/** Purpose: Reuse the kept audio context or create one and start loading the worklet into it. */
+function audioContext(Context){if(!shared||shared.context.state==='closed'){const context=new Context();shared={context,ready:context.audioWorklet.addModule(WORKLET).catch(e=>{if(shared?.context===context)shared=null;context.close().catch(()=>{});throw e;})};}return shared;}
 /** Purpose: Join recorded frames into one request body. */
 function join(parts){const out=new Uint8Array(parts.reduce((n,p)=>n+p.length,0));let at=0;for(const p of parts){out.set(p,at);at+=p.length;}return out;}
 /** Purpose: Own one dictation's microphone lifecycle and expose start, finish, cancel, and active state. Callbacks report progress, the whole transcript so far, the final transcript, terminal errors, and onLag(true|false) while the upload backlog or reconnect retries mean the connection is not keeping up; generation checks fence stale work after cancellation or session changes. composer-media.js supplies the send hook through client.voiceAudio. */
@@ -32,7 +36,7 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
   // Purpose: Clear any reported lag when a capture ends for any reason.
  function quiet(c){c.retrying=false;if(c.lagging){c.lagging=false;onLag(false);}}
   // Purpose: Release capture timers, Web Audio nodes, context, and microphone tracks; context-close rejection is ignored during teardown.
- function stop(c){clearTimeout(c.timer);if(c.node)c.node.port.onmessage=null;c.node?.disconnect();c.source?.disconnect();c.sink?.disconnect();c.context?.close().catch(()=>{});c.stream?.getTracks().forEach(t=>t.stop());}
+ function stop(c){clearTimeout(c.timer);if(c.node)c.node.port.onmessage=null;c.node?.disconnect();c.source?.disconnect();c.sink?.disconnect();c.context?.suspend().catch(()=>{});c.stream?.getTracks().forEach(t=>t.stop());}
   // Purpose: Send a request for the current server capture, retrying network failures, timeouts and server errors with capped backoff until none has succeeded for GIVE_UP_MS. Client errors are final; pump handles an expired capture. Retries mark the capture lagging until a request succeeds.
  async function request(c,body){
   for(let n=0;;n++){
@@ -50,7 +54,7 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
   // Purpose: Stop recording when the dictation reaches the server's length limit, counted from the first sample.
  function limit(c){clearTimeout(c.timer);if(c.node&&!c.stopping)c.timer=setTimeout(()=>finish(),Math.max(0,c.limitMs-(Date.now()-c.started)));}
   // Purpose: Open a server capture, taking its length limit, and cancel it best-effort if this capture ended meanwhile.
- async function open(c){c.id='';c.seq=0;const ready=await request(c,{op:'start'});if(!valid(c)){send(c.sid,{op:'cancel',capture_id:ready.capture_id}).catch(()=>{});return;}c.id=ready.capture_id;if(ready.max_seconds>0){c.limitMs=ready.max_seconds*1000;limit(c);}}
+ async function open(c){c.id='';c.seq=0;if(!c.sid)c.sid=await c.sidReady;const ready=await request(c,{op:'start'});if(!valid(c)){send(c.sid,{op:'cancel',capture_id:ready.capture_id}).catch(()=>{});return;}c.id=ready.capture_id;if(ready.max_seconds>0){c.limitMs=ready.max_seconds*1000;limit(c);}}
   // Purpose: Replace an expired server capture (idle too long, its recognizer stopped, or the server restarted) with a new one fed the whole recording again; its partial text stays hidden until that replay is sent.
  function restart(c,e){if(e.status!==409||c.restarts>=MAX_RESTARTS)return false;c.restarts++;c.id='';c.queue=c.recorded.slice();c.replay=c.queue.length;lag(c);return true;}
   // Purpose: Open the server capture, send queued frames (several per request when a backlog has built up), forward the server's transcript so far, and finish after the queue drains. Other request errors fail the capture.
@@ -78,19 +82,19 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
   await new Promise(r=>{c.flushed=r;c.node.port.postMessage('flush');setTimeout(r,300);});
   if(!valid(c))return;stop(c);c.finishing=true;if(c.pending.length){c.queue.push(c.pending);c.recorded.push(c.pending);}c.pending=new Uint8Array();await pump(c);
  }
-  // Purpose: Acquire secure-context microphone access and record Web Audio PCM from the first sample while the server capture opens alongside. Returns false when already active or invalidated. Secure-context or browser-support preflight errors reject before capture creation; failures during later setup are reported through onError and return false.
+  // Purpose: Acquire secure-context microphone access and record Web Audio PCM from the first sample while the server capture opens alongside. sid may be a promise (a conversation still being created); audio waits for it. Returns false when already active or invalidated. Secure-context or browser-support preflight errors reject before capture creation; failures during later setup are reported through onError and return false.
  async function start(sid){
   if(active)return false;
   const Context=window.AudioContext||window.webkitAudioContext;
   if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia||!Context||!window.AudioWorkletNode)throw Error('Dictation needs a current browser with microphone access on a secure connection.');
-  const c={sid,generation:++generation,started:Date.now(),limitMs:300000,id:'',seq:0,queue:[],recorded:[],pending:new Uint8Array(),replay:0,restarts:0,okAt:Date.now(),pumping:false,stopping:false,finishing:false,lagging:false,retrying:false};active=c;
+  const c={sid:'',sidReady:Promise.resolve(sid),generation:++generation,started:Date.now(),limitMs:300000,id:'',seq:0,queue:[],recorded:[],pending:new Uint8Array(),replay:0,restarts:0,okAt:Date.now(),pumping:false,stopping:false,finishing:false,lagging:false,retrying:false};active=c;
   try{
       // Ready before the microphone prompt resolves, so recording begins with the first sample.
-   c.context=new Context();const resumed=c.context.resume();
+   const audio=audioContext(Context);c.context=audio.context;const resumed=c.context.resume();
    onState('requesting_microphone');pump(c);
-      // The microphone opens while the worklet loads, so recording begins as early as the browser allows.
-   const mic=navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(stream=>{c.stream=stream;if(!valid(c))stop(c);});
-   await Promise.all([mic,c.context.audioWorklet.addModule(WORKLET)]);
+      // The microphone opens while the worklet loads, so recording begins as early as the browser allows. Echo cancellation and noise suppression are off: they fade speech in after each pause, losing soft words; the recognizer handles room noise itself.
+   const mic=navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:true}}).then(stream=>{c.stream=stream;if(!valid(c))stop(c);});
+   await Promise.all([mic,audio.ready]);
    if(!valid(c)){stop(c);return false;}
       // Emits downsampled PCM only for the current capture and stops accepting samples after finish has collected the last block.
    c.source=c.context.createMediaStreamSource(c.stream);c.node=new window.AudioWorkletNode(c.context,'dictation-capture');c.sink=c.context.createGain();c.sink.gain.value=0;

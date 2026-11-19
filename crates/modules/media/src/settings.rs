@@ -35,7 +35,7 @@ pub struct Dictation {
     pub max_concurrent: usize,
     /// A dictation with no audio for this long was abandoned and is dropped.
     pub idle_capture_seconds: u64,
-    /// Longest wait for the last phrase after stop.
+    /// Longest wait for the last passage after stop.
     pub finish_timeout_seconds: u64,
     /// Longest dictation; the browser stops recording here.
     pub max_recording_seconds: u32,
@@ -44,7 +44,7 @@ pub struct Dictation {
     pub pause_detection: PauseDetection,
 }
 
-/// Silero pause detection, which closes a phrase for transcription.
+/// Silero pause detection, which closes a phrase for its live draft and ends passages.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PauseDetection {
@@ -59,6 +59,9 @@ pub struct PauseDetection {
     /// Audio before each detected phrase that is transcribed with it, so a soft first word
     /// (heard before the detector is sure of speech) is kept.
     pub lead_in_seconds: f32,
+    /// Speech transcribed together: after this much, the passage ends at the next pause and is
+    /// transcribed in one piece, replacing the phrase-by-phrase draft.
+    pub passage_seconds: f32,
 }
 
 /// Agent voice replies (Kokoro).
@@ -84,15 +87,16 @@ impl Default for VoiceSettings {
                 idle_unload_minutes: 10,
                 max_concurrent: 4,
                 idle_capture_seconds: 90,
-                finish_timeout_seconds: 15,
+                finish_timeout_seconds: 30,
                 max_recording_seconds: 300,
-                threads: 2,
+                threads: 4,
                 pause_detection: PauseDetection {
                     threshold: 0.5,
                     min_silence_seconds: 0.4,
                     min_speech_seconds: 0.25,
                     max_phrase_seconds: 10.0,
                     lead_in_seconds: 0.5,
+                    passage_seconds: 45.0,
                 },
             },
             speech: Speech {
@@ -166,6 +170,10 @@ impl VoiceSettings {
             (
                 (0.0..=2.0).contains(&p.lead_in_seconds),
                 "pause_detection.lead_in_seconds is 0-2",
+            ),
+            (
+                (5.0..=120.0).contains(&p.passage_seconds),
+                "pause_detection.passage_seconds is 5-120",
             ),
             (
                 s.idle_unload_minutes <= 1440,

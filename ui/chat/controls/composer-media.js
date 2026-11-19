@@ -24,7 +24,7 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
  const $=id=>root.querySelector('#'+id),pill=$('chat-input-row'),preview=$('chat-preview-bar'),mic=$('chat-voice-btn'),input=$('chat-input');
  const abort=new AbortController(),staged=new Map();
  let attachmentLimits={max_file_size_mb:null,max_per_message:null};
- let available=false,session='',generation=0,disposed=false;
+ let available=false,session='',generation=0,disposed=false,adopting=false;
   // Composer text around the dictation insertion point, captured when dictation starts.
  let around=null,typingTimer=null;
   // Stop any in-progress letter-by-letter typing animation.
@@ -109,10 +109,11 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
   // Bridge capture frames to client.voiceAudio; each transcript update and the final text are typed at the cursor, and errors leave what was typed.
  const capture=createAudioCapture({send:(id,b)=>client.voiceAudio(id,b),onState:state,onLag:on=>{voiceLagging=!!on;state(voiceState);},onText:dictate,onComplete:text=>{dictate(text);const finishRelease=()=>{if(typingTimer){setTimeout(finishRelease,30);return;}if(around&&!String(text||'').trim())note('No speech detected.');release();};finishRelease();},onError:e=>{release();note(e.name==='NotAllowedError'?'Microphone permission is blocked. Allow it in the browser site controls and try again.':e.message);}});
   // Toggle: stop the active dictation, or start one at the cursor once availability and session-generation checks pass.
- mic.onclick=guard(async()=>{if(capture.active){await capture.finish();return;}if(!available)return;const epoch=generation,origin=session;const sid=await ensureSession();if(disposed||(origin&&origin!==session)||(epoch!==generation&&session!==sid))return;around={before:input.value.slice(0,input.selectionStart),after:input.value.slice(input.selectionEnd),targetTranscript:'',shown:0,lastTarget:'',lead:'',trail:''};input.readOnly=true;try{if(!await capture.start(sid))release();}catch(e){release();throw e;}});
+   // The microphone opens at the tap, before a new conversation exists; its audio waits for ensureSession, and open() adopts that conversation instead of cancelling.
+mic.onclick=guard(async()=>{if(capture.active){await capture.finish();return;}if(!available)return;const epoch=generation,origin=session;adopting=!session;const sid=ensureSession().then(sid=>{adopting=false;if(disposed||(origin&&origin!==session)||(epoch!==generation&&session!==sid))throw Error('Conversation changed; dictate again.');return sid;},e=>{adopting=false;throw e;});around={before:input.value.slice(0,input.selectionStart),after:input.value.slice(input.selectionEnd),targetTranscript:'',shown:0,lastTarget:'',lead:'',trail:''};input.readOnly=true;try{if(!await capture.start(sid))release();}catch(e){release();throw e;}});
  input.addEventListener('click',()=>{if(!around)return;const start=input.selectionStart,end=input.selectionEnd;stopTyping();capture.cancel();around=null;input.readOnly=false;input.setSelectionRange(start,end);},{signal:abort.signal});
-  // Cancel any dictation before displaying a new session.
- function open(id){stopTyping();capture.cancel();around=null;input.readOnly=false;++generation;session=id;paint();}
+  // Cancel any dictation before displaying a new session, except the conversation a dictation started without one is waiting for.
+ function open(id){if(adopting&&!session&&capture.active){adopting=false;session=id;paint();return;}stopTyping();capture.cancel();around=null;input.readOnly=false;++generation;session=id;paint();}
   // Return staged upload IDs for submission, refusing while any file is pending, failed, or not uploaded.
  function snapshot(sid=session){const files=staged.get(sid)||[];if(files.some(i=>i.pending||i.error||!i.uploaded))throw Error('Finish or remove failed uploads before sending.');return files.map(i=>i.id);}
   // Retire only the submitted IDs and revoke their preview URLs after the message is accepted.

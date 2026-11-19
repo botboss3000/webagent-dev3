@@ -1,13 +1,18 @@
 //! The shared composer dictation recognizer. One process (`webagent-v3 --voice-service
 //! dictation`, started by `host/voice.rs`) holds the multilingual Parakeet v3 model for every
-//! dictation and transcribes each phrase when the Silero pause detector closes it; the spoken
-//! language is detected per phrase. sherpa-onnx is loaded at run time from the `voice` stage of
-//! the Dockerfile, so the workspace builds and tests without its native libraries.
+//! dictation. Each phrase the Silero pause detector closes is transcribed at once as a live
+//! draft; once a passage of `passage_seconds` of speech ends at a pause, the whole passage is
+//! transcribed again in one piece and replaces its draft, and finish does the same for the last
+//! passage. Transcribing short phrases alone made every thinking pause a sentence end and lost
+//! words the model could not place without context; the passage transcript keeps all audio, so
+//! nothing the detector missed is dropped. The spoken language is detected per transcription.
+//! sherpa-onnx is loaded at run time from the `voice` stage of the Dockerfile, so the workspace
+//! builds and tests without its native libraries.
 //!
 //! Requests arrive one JSON object per line on stdin: `{"op":"open","id":ID}`,
 //! `{"op":"audio","id":ID,"pcm":BASE64}` (16 kHz mono s16le), `{"op":"finish","id":ID}` or
 //! `{"op":"cancel","id":ID}`. Replies are JSON lines on stdout: `{"ready":true}` once the model
-//! has loaded, `{"id":ID,"text":TEXT}` with the transcript so far after each phrase,
+//! has loaded, `{"id":ID,"text":TEXT}` with the transcript so far whenever it changes,
 //! `{"id":ID,"final":TEXT}` for a finished dictation and `{"id":ID,"error":REASON}`. Audio stays
 //! in memory until finish or cancel; nothing is stored and no network is used.
 use std::collections::HashMap;
@@ -35,15 +40,15 @@ const VAD_WINDOW: usize = 512;
 /// Audio the detector may hold for a phrase in progress, in seconds.
 const VAD_BUFFER_SECONDS: f32 = 60.0;
 
-/// Transcribes one dictation's audio phrase by phrase.
+/// Transcribes one dictation's audio as it arrives.
 pub trait Transcriber {
-    /// One dictation's pause detector and phrases so far.
+    /// One dictation's pause detector and transcript so far.
     type Dictation;
     /// A new dictation, or `None` when its detector cannot be created.
     fn open(&self) -> Option<Self::Dictation>;
-    /// Add samples in [-1, 1); returns the whole transcript when a phrase was added.
+    /// Add samples in [-1, 1); returns the whole transcript when it changed.
     fn push(&self, dictation: &mut Self::Dictation, samples: &[f32]) -> Option<String>;
-    /// Transcribe the phrase still in progress and return the whole transcript.
+    /// Transcribe the passage still in progress and return the whole transcript.
     fn finish(&self, dictation: Self::Dictation) -> String;
 }
 
@@ -319,6 +324,7 @@ struct Api {
     vad_front: unsafe extern "C" fn(Handle) -> *const ffi::SpeechSegment,
     vad_pop: unsafe extern "C" fn(Handle),
     vad_flush: unsafe extern "C" fn(Handle),
+    vad_detected: unsafe extern "C" fn(Handle) -> i32,
     destroy_segment: unsafe extern "C" fn(*const ffi::SpeechSegment),
 }
 
@@ -331,35 +337,78 @@ pub struct Parakeet {
     vad: ffi::VadModelConfig,
     /// Owns the strings `vad` points to.
     _vad_strings: Vec<CString>,
-    /// Samples of audio before each detected phrase that are transcribed with it.
+    /// Samples of audio before each detected phrase that are transcribed with its draft.
     lead_in: usize,
+    /// Samples of speech after which a passage ends at the next pause.
+    passage: usize,
+    /// Samples of silence that close a phrase.
+    pause: usize,
 }
 
-/// One open dictation: its pause detector and the phrases transcribed so far.
+/// One open dictation: its pause detector, finished passages and the passage in progress.
 pub struct ParakeetDictation {
     vad: Handle,
     destroy: unsafe extern "C" fn(Handle),
+    /// Transcripts of the finished passages.
+    passages: Vec<String>,
+    /// Draft transcripts of the phrases in the passage in progress.
     phrases: Vec<String>,
-    /// This dictation's audio not yet transcribed, kept so a phrase can include its lead-in.
-    pending: Vec<f32>,
-    /// Position of `pending[0]` among all of the dictation's samples.
+    /// Every sample of the passage in progress, so it can be transcribed in one piece.
+    audio: Vec<f32>,
+    /// Position of `audio[0]` among all of the dictation's samples.
     start: usize,
+    /// Where the last closed phrase ends; the next draft's lead-in stops there.
+    spoken: usize,
 }
 
-/// Where a phrase lies in `pending` (which begins at sample `start`): the detector found it at
-/// `phrase_start` with `len` samples. The span reaches back `lead_in` samples, because the detector
-/// marks speech only once it is sure (a soft first word comes earlier), but never into audio an
-/// earlier phrase used.
+impl ParakeetDictation {
+    /// The finished passages, then the drafts of the passage in progress.
+    fn transcript(&self) -> String {
+        let parts: Vec<&str> = self
+            .passages
+            .iter()
+            .chain(&self.phrases)
+            .map(String::as_str)
+            .collect();
+        parts.join(" ")
+    }
+}
+
+/// Where a phrase lies in `audio` (which begins at sample `start` and holds `available` samples):
+/// the detector found it at `phrase_start` with `len` samples. The span reaches back `lead_in`
+/// samples, because the detector marks speech only once it is sure (a soft first word comes
+/// earlier), but never before `floor`, the end of the phrase before it.
 fn phrase_span(
     phrase_start: usize,
     len: usize,
     lead_in: usize,
+    floor: usize,
     start: usize,
-    pending: usize,
+    available: usize,
 ) -> Range<usize> {
-    let end = (phrase_start + len).saturating_sub(start).min(pending);
-    let from = phrase_start.saturating_sub(lead_in).max(start) - start;
+    let end = (phrase_start + len).saturating_sub(start).min(available);
+    let from = phrase_start.saturating_sub(lead_in).max(floor).max(start) - start;
     from.min(end)..end
+}
+
+/// Where the passage beginning at sample `start` ends, now that a phrase closed at `spoken`, or
+/// `None` while it is still short. A passage of `passage` samples ends halfway into the pause
+/// (`pause` samples) after that phrase, so a soft sound on either side stays with its words; if
+/// speech carried on with no pause (the detector cut a long phrase, so `speaking` is still set),
+/// it waits for the next one. At twice that length it ends at the phrase regardless, which bounds
+/// the work left for finish.
+fn passage_cut(
+    start: usize,
+    spoken: usize,
+    passage: usize,
+    pause: usize,
+    speaking: bool,
+) -> Option<usize> {
+    let len = spoken.saturating_sub(start);
+    if len >= passage.saturating_mul(2) {
+        return Some(spoken);
+    }
+    (len >= passage && !speaking).then_some(spoken + pause / 2)
 }
 
 impl Drop for ParakeetDictation {
@@ -437,6 +486,7 @@ impl Parakeet {
                 vad_front: symbol!("SherpaOnnxVoiceActivityDetectorFront"),
                 vad_pop: symbol!("SherpaOnnxVoiceActivityDetectorPop"),
                 vad_flush: symbol!("SherpaOnnxVoiceActivityDetectorFlush"),
+                vad_detected: symbol!("SherpaOnnxVoiceActivityDetectorDetected"),
                 destroy_segment: symbol!("SherpaOnnxDestroySpeechSegment"),
             }
         };
@@ -494,6 +544,8 @@ impl Parakeet {
             vad,
             _vad_strings: vec![silero],
             lead_in: (pauses.lead_in_seconds * SAMPLE_RATE as f32) as usize,
+            passage: (pauses.passage_seconds * SAMPLE_RATE as f32) as usize,
+            pause: (pauses.min_silence_seconds * SAMPLE_RATE as f32) as usize,
         };
         parakeet.open().ok_or("Silero VAD model failed to load")?;
         Ok(parakeet)
@@ -527,15 +579,15 @@ impl Parakeet {
         }
     }
 
-    /// Transcribe every phrase the detector has closed; true when the transcript grew.
-    fn drain(&self, dictation: &mut ParakeetDictation) -> bool {
+    /// Take the phrases the detector has closed, as (first sample, samples).
+    fn closed(&self, dictation: &mut ParakeetDictation) -> Vec<(usize, Vec<f32>)> {
         let api = &self.api;
-        let mut grew = false;
+        let mut phrases = Vec::new();
         // SAFETY: `dictation.vad` is a live detector; each front segment is copied out and
         // destroyed before the detector pops it.
         while unsafe { (api.vad_empty)(dictation.vad) } == 0 {
             // SAFETY: as above; the segment's sample pointer covers `n` floats until it is destroyed.
-            let (phrase_start, detected) = unsafe {
+            phrases.push(unsafe {
                 let segment = (api.vad_front)(dictation.vad);
                 let found = if segment.is_null() || (*segment).samples.is_null() {
                     (0, Vec::new())
@@ -550,29 +602,66 @@ impl Parakeet {
                 }
                 (api.vad_pop)(dictation.vad);
                 found
-            };
+            });
+        }
+        phrases
+    }
+
+    /// Transcribe each closed phrase as a draft, then end the passage if it is long enough;
+    /// true when the transcript changed.
+    fn drain(&self, dictation: &mut ParakeetDictation) -> bool {
+        let closed = self.closed(dictation);
+        if closed.is_empty() {
+            return false;
+        }
+        for (phrase_start, detected) in closed {
             let span = phrase_span(
                 phrase_start,
                 detected.len(),
                 self.lead_in,
+                dictation.spoken,
                 dictation.start,
-                dictation.pending.len(),
+                dictation.audio.len(),
             );
-            // The detector's own copy is used only if this dictation's audio no longer covers it.
+            dictation.spoken = phrase_start + detected.len();
+            // The detector's own copy is used only if the passage audio no longer covers it.
             let samples = if span.end - span.start >= detected.len() {
-                dictation.pending[span.clone()].to_vec()
+                &dictation.audio[span]
             } else {
-                detected
+                &detected[..]
             };
-            dictation.pending.drain(..span.end);
-            dictation.start += span.end;
-            let phrase = self.transcribe(&samples);
+            let phrase = self.transcribe(samples);
             if !phrase.is_empty() {
                 dictation.phrases.push(phrase);
-                grew = true;
             }
         }
-        grew
+        // SAFETY: a live detector.
+        let speaking = unsafe { (self.api.vad_detected)(dictation.vad) } != 0;
+        if let Some(cut) = passage_cut(
+            dictation.start,
+            dictation.spoken,
+            self.passage,
+            self.pause,
+            speaking,
+        ) {
+            let end = cut
+                .saturating_sub(dictation.start)
+                .min(dictation.audio.len());
+            self.end_passage(dictation, end);
+        }
+        true
+    }
+
+    /// Transcribe the first `end` samples of the passage in progress in one piece, replacing
+    /// their drafts, and start the next passage after them.
+    fn end_passage(&self, dictation: &mut ParakeetDictation, end: usize) {
+        let passage = self.transcribe(&dictation.audio[..end]);
+        if !passage.is_empty() {
+            dictation.passages.push(passage);
+        }
+        dictation.phrases.clear();
+        dictation.audio.drain(..end);
+        dictation.start += end;
     }
 }
 
@@ -585,31 +674,37 @@ impl Transcriber for Parakeet {
         (!vad.is_null()).then(|| ParakeetDictation {
             vad,
             destroy: self.api.destroy_vad,
+            passages: Vec::new(),
             phrases: Vec::new(),
-            pending: Vec::new(),
+            audio: Vec::new(),
             start: 0,
+            spoken: 0,
         })
     }
 
     fn push(&self, dictation: &mut ParakeetDictation, samples: &[f32]) -> Option<String> {
-        dictation.pending.extend_from_slice(samples);
-        // Keep no more than the detector can hold for a phrase, plus its lead-in.
-        let keep = VAD_BUFFER_SECONDS as usize * SAMPLE_RATE as usize + self.lead_in;
-        let excess = dictation.pending.len().saturating_sub(keep);
-        dictation.pending.drain(..excess);
-        dictation.start += excess;
+        // The passage keeps all its audio; the host's recording limit bounds it.
+        dictation.audio.extend_from_slice(samples);
         for window in samples.chunks(VAD_WINDOW) {
             // SAFETY: a live detector; `window` outlives the call, which copies it.
             unsafe { (self.api.vad_accept)(dictation.vad, window.as_ptr(), window.len() as i32) };
         }
-        self.drain(dictation).then(|| dictation.phrases.join(" "))
+        self.drain(dictation).then(|| dictation.transcript())
     }
 
     fn finish(&self, mut dictation: ParakeetDictation) -> String {
         // SAFETY: a live detector; flushing closes the phrase in progress.
         unsafe { (self.api.vad_flush)(dictation.vad) };
-        self.drain(&mut dictation);
-        dictation.phrases.join(" ")
+        // The last passage replaces its drafts, so its closed phrases only mark where speech was.
+        for (phrase_start, detected) in self.closed(&mut dictation) {
+            dictation.spoken = phrase_start + detected.len();
+        }
+        // A passage with no speech is not transcribed, so noise cannot add words.
+        if dictation.spoken > dictation.start {
+            let end = dictation.audio.len();
+            self.end_passage(&mut dictation, end);
+        }
+        dictation.transcript()
     }
 }
 
@@ -673,14 +768,27 @@ mod tests {
 
     #[test]
     fn phrases_reach_back_for_their_lead_in_but_not_into_the_last_phrase() {
-        // Pending audio starts at sample 1000 and holds 5000 samples.
-        assert_eq!(phrase_span(3000, 1000, 800, 1000, 5000), 1200..3000);
-        // The lead-in stops at the first pending sample.
-        assert_eq!(phrase_span(1200, 1000, 800, 1000, 5000), 0..1200);
+        // Passage audio starts at sample 1000 and holds 5000 samples.
+        assert_eq!(phrase_span(3000, 1000, 800, 0, 1000, 5000), 1200..3000);
+        // The lead-in stops at the first passage sample.
+        assert_eq!(phrase_span(1200, 1000, 800, 0, 1000, 5000), 0..1200);
+        // ... and at the end of the phrase before.
+        assert_eq!(phrase_span(3000, 1000, 800, 2500, 1000, 5000), 1500..3000);
         // A phrase reported past the kept audio is clamped.
-        assert_eq!(phrase_span(5500, 1000, 0, 1000, 5000), 4500..5000);
+        assert_eq!(phrase_span(5500, 1000, 0, 0, 1000, 5000), 4500..5000);
         // A phrase entirely before the kept audio is empty.
-        assert_eq!(phrase_span(0, 500, 0, 1000, 5000), 0..0);
+        assert_eq!(phrase_span(0, 500, 0, 0, 1000, 5000), 0..0);
+    }
+
+    #[test]
+    fn passages_end_in_the_first_pause_after_their_length() {
+        // A passage from sample 100 with 1000 samples of speech, ending in a 200-sample pause.
+        assert_eq!(passage_cut(100, 1100, 1000, 200, false), Some(1200));
+        // Shorter, or speech carried on without a pause: it goes on.
+        assert_eq!(passage_cut(100, 1000, 1000, 200, false), None);
+        assert_eq!(passage_cut(100, 1100, 1000, 200, true), None);
+        // Twice as long: it ends at the phrase even mid-speech.
+        assert_eq!(passage_cut(100, 2100, 1000, 200, true), Some(2100));
     }
 
     #[test]

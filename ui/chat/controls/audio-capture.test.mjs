@@ -6,12 +6,14 @@ import { createAudioCapture, LAG_ON_FRAMES, LAG_OFF_FRAMES, BATCH_FRAMES } from 
 function fakeBrowser(){
  let node;
  class Context{
-  constructor(){this.sampleRate=16000;this.destination={};this.audioWorklet={addModule:async()=>{}};}
+  constructor(){Context.made++;this.state='running';this.sampleRate=16000;this.destination={};this.audioWorklet={addModule:async()=>{}};}
   async resume(){}
-  close(){return Promise.resolve();}
+  suspend(){return Promise.resolve();}
+  close(){this.state='closed';return Promise.resolve();}
   createMediaStreamSource(){return {connect(){},disconnect(){}};}
   createGain(){return {gain:{},connect(){},disconnect(){}};}
  }
+ Context.made=0;
  class WorkletNode{constructor(){node=this;this.port={postMessage:m=>{if(m==='flush')setTimeout(()=>this.port.onmessage?.({data:'flushed'}));}};}connect(){}disconnect(){}}
  globalThis.window={AudioContext:Context,AudioWorkletNode:WorkletNode,isSecureContext:true};
  Object.defineProperty(globalThis,'navigator',{value:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[]})}},configurable:true});
@@ -142,5 +144,23 @@ test('recording stops at the length limit the server gives at start',async()=>{
   await new Promise(r=>setTimeout(r,400));
   assert.deepEqual(events.done,['done']);
   assert.equal(capture.active,false);
+ }finally{capture.cancel();}
+});
+
+test('a conversation still being created holds the audio, and the next dictation reuses the audio context',async()=>{
+ fakeBrowser();
+ const sids=[];let created;
+ const send=async(sid,body)=>{sids.push(sid);if(body.op==='start')return {capture_id:'cap'};if(body.op==='finish')return {text:'done'};return {text:''};};
+ const done=[];
+ const capture=createAudioCapture({send,onState(){},onText(){},onComplete:t=>{done.push(t);},onError:e=>{throw e;}});
+ try{
+  const made=window.AudioContext.made;
+  assert.equal(await capture.start(new Promise(r=>{created=r;})),true);
+  await tick();assert.deepEqual(sids,[]);
+  created('new');await capture.finish();
+  assert.ok(sids.length>0&&sids.every(s=>s==='new'));
+  assert.equal(await capture.start('new'),true);await capture.finish();
+  assert.deepEqual(done,['done','done']);
+  assert.ok(window.AudioContext.made-made<=1,'one audio context for both dictations');
  }finally{capture.cancel();}
 });
