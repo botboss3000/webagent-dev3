@@ -1,11 +1,11 @@
-import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
+import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 'use strict';
 // Final response: whether every message becomes a chat bubble, and which run-ending parts the
 // agent records. Guidance about publishing lives in each execution mode's per-turn guidance; the
 // flag vocabulary and word limit stay app-wide in the closing gate configuration.
 export function renderClosing(content, agent, persist) {
   if (!agent.closing_message) return;
-  const {body:section} = createSettingsRow(content, {id:'final-response', title:'Final response'});
+  const {body:section} = createSubpage(content, {id:'final-response', title:'Final response'});
   section.classList.add('agent-closing-message-settings');
   const protocol = agent.closing_protocol || {};
   const flags = Array.isArray(protocol.flags) ? protocol.flags.join(', ') : 'the configured flag vocabulary';

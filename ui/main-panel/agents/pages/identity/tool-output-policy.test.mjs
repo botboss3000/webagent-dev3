@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 const source = await fs.readFile(new URL('./tool-output-policy.js', import.meta.url), 'utf8');
-const rowSource = (await fs.readFile(new URL('../../../../shared/settings-register/settings-register.js', import.meta.url), 'utf8')).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace('export function createSettingsRow', 'function createSettingsRow');
-const {renderToolOutputPolicy} = await import('data:text/javascript;base64,' + Buffer.from(rowSource + source.replace("import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';", '')).toString('base64'));
+const rowSource = (await fs.readFile(new URL('../../../../shared/subpage-list/subpage-list.js', import.meta.url), 'utf8')).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace('export function createSubpage', 'function createSubpage');
+const {renderToolOutputPolicy} = await import('data:text/javascript;base64,' + Buffer.from(rowSource + source.replace("import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';", '')).toString('base64'));
 
 // A small DOM fixture exercises the actual field/save implementation without replacing its logic.
 class Element {

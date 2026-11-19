@@ -1,4 +1,4 @@
-import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
+import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 import {requestTouchVibration} from '../../../../shared/vibrate/vibrate.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 const select=(label,options,value)=>{const input=node('select','','ac-input');input.setAttribute('aria-label',label);for(const [id,text]of options){const option=node('option',text);option.value=id;input.append(option);}input.value=value;return input;};
@@ -6,7 +6,7 @@ const button=(label,action)=>{const el=node('button',label,'ac-btn');el.type='bu
 
 /** Agent joining, privacy and ladder structure; Abilities owns capability editing. */
 export function renderMemberAccess(host,agent,persist,request,{agentId,reload}) {
-  const {body}=createSettingsRow(host,{id:'member-access',title:'Member access'});
+  const {body}=createSubpage(host,{id:'member-access',title:'Member access'});
   const status=node('p','','ac-hint');status.setAttribute('role','status');
   const settings=structuredClone(agent.member_access);
   body.append(node('p','App accounts provide login. This agent controls membership and capabilities.','ac-hint'));

@@ -2,7 +2,7 @@ import {requestTouchVibration} from '../vibrate/vibrate.js';
 import {pushBackHandler} from '../history-back/history-back.js';
 
 const FALLBACK_ICON = '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>';
-const CHEV_BACK = '<svg class="sr-chev-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
+const CHEV_BACK = '<svg class="spl-chev-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
 
 // Custom icons (an ability's or group's .svg) are drawn inline, so only drawing elements and
 // attributes survive; the server checks them too. Anything else is dropped, never escaped in.
@@ -26,23 +26,23 @@ export function safeSvg(markup) {
     }
   };
   clean(root);
-  root.setAttribute('class', 'sr-icon');
+  root.setAttribute('class', 'spl-icon');
   root.setAttribute('aria-hidden', 'true');
   return document.importNode(root, true);
 }
 
 function iconMarkup(icon) {
-  return '<svg class="sr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (icon || FALLBACK_ICON) + '</svg>';
+  return '<svg class="spl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (icon || FALLBACK_ICON) + '</svg>';
 }
 
 /** One setting page: the register shows its content, so it never expands in place. */
-export function createSettingsRow(host, {id, title, toggleLabel}) {
+export function createSubpage(host, {id, title, toggleLabel}) {
   const section = document.createElement('section');
-  section.className = 'sr-section';
+  section.className = 'spl-section';
   section.dataset.registerSection = id;
   section.dataset.registerTitle = title;
   const body = document.createElement('div');
-  body.className = 'sr-section-body';
+  body.className = 'spl-section-body';
   body.id = 'settings-' + id + '-body';
   section.append(body);
   let toggle = null;
@@ -70,34 +70,34 @@ export function createSettingsRow(host, {id, title, toggleLabel}) {
 }
 
 /** A list of rows that each open a page elsewhere instead of revealing one here. */
-export function createSettingsMenu(host, {label = 'Settings', items = []} = {}) {
+export function createSubpageLinks(host, {label = 'Settings', items = []} = {}) {
   const shell = document.createElement('div');
-  shell.className = 'sr-shell';
+  shell.className = 'spl-shell';
   const menu = document.createElement('div');
-  menu.className = 'sr-menu is-intro';
+  menu.className = 'spl-menu is-intro';
   menu.setAttribute('aria-label', label);
   for (const [index, item] of items.entries()) {
     const row = document.createElement('div');
-    row.className = 'sr-item';
+    row.className = 'spl-item';
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'sr-row';
+    button.className = 'spl-row';
     button.dataset.registerLink = item.id;
     button.style.setProperty('--i', String(index));
     button.setAttribute('aria-label', 'Open ' + item.title);
     const tile = document.createElement('span');
-    tile.className = 'sr-tile';
+    tile.className = 'spl-tile';
     tile.setAttribute('aria-hidden', 'true');
     const custom = safeSvg(item.svg);
     if (custom) tile.append(custom);
     else tile.innerHTML = item.icon ? '<i data-lucide="' + item.icon + '"></i>' : iconMarkup('');
     const text = document.createElement('span');
-    text.className = 'sr-text';
+    text.className = 'spl-text';
     const title = document.createElement('span');
-    title.className = 'sr-title';
+    title.className = 'spl-title';
     title.textContent = item.title;
     const hint = document.createElement('span');
-    hint.className = 'sr-hint';
+    hint.className = 'spl-hint';
     hint.textContent = item.hint || '';
     text.append(title, hint);
     button.append(tile, text);
@@ -108,7 +108,7 @@ export function createSettingsMenu(host, {label = 'Settings', items = []} = {}) 
     row.append(button);
     if (item.trailing) {
       const slot = document.createElement('span');
-      slot.className = 'sr-trailing';
+      slot.className = 'spl-trailing';
       slot.append(item.trailing);
       row.append(slot);
     }
@@ -121,34 +121,34 @@ export function createSettingsMenu(host, {label = 'Settings', items = []} = {}) 
 }
 
 /** A list of setting categories that opens one category's page at a time. */
-export function createSettingsRegister(host, {label = 'Settings', categories = []}) {
+export function createSubpageList(host, {label = 'Settings', categories = []}) {
   const shell = document.createElement('div');
-  shell.className = 'sr-shell';
+  shell.className = 'spl-shell';
   const stack = document.createElement('div');
-  stack.className = 'sr-stack';
+  stack.className = 'spl-stack';
   const menu = document.createElement('div');
-  menu.className = 'sr-menu is-intro';
+  menu.className = 'spl-menu is-intro';
   menu.setAttribute('aria-label', label);
   const detail = document.createElement('div');
-  detail.className = 'sr-detail';
+  detail.className = 'spl-detail';
   detail.hidden = true;
   const head = document.createElement('div');
-  head.className = 'sr-detail-head';
+  head.className = 'spl-detail-head';
   const back = document.createElement('button');
   back.type = 'button';
-  back.className = 'sr-back';
-  back.innerHTML = CHEV_BACK + '<span class="sr-back-title"></span>';
+  back.className = 'spl-back';
+  back.innerHTML = CHEV_BACK + '<span class="spl-back-title"></span>';
   const slot = document.createElement('span');
-  slot.className = 'sr-toggle-slot';
+  slot.className = 'spl-toggle-slot';
   head.append(back, slot);
   const detailBody = document.createElement('div');
-  detailBody.className = 'sr-detail-body';
+  detailBody.className = 'spl-detail-body';
   detail.append(head, detailBody);
   stack.append(menu, detail);
   shell.append(stack);
   host.append(shell);
   const stage = document.createElement('div');
-  stage.className = 'sr-stage';
+  stage.className = 'spl-stage';
   host.append(stage);
 
   const pages = new Map();
@@ -203,11 +203,11 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
       const toggleWrap = section.querySelector('.conn-toggle-wrap:not([data-inline-switch])');
       const toggle = toggleWrap?.querySelector('input.conn-toggle') || null;
       const category = meta.get(id) || {};
-      section.querySelector('.sr-section-head')?.remove();
+      section.querySelector('.spl-section-head')?.remove();
       section.querySelector('.conn-card-header')?.remove();
       body.hidden = false;
       body.style.display = 'block';
-      body.classList.add('sr-page-body');
+      body.classList.add('spl-page-body');
       return [{id, section, body, toggleWrap, toggle,
         title: category.title || section.dataset.registerTitle || 'Settings',
         hint: category.hint || '', icon: category.icon || '',
@@ -217,7 +217,7 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
     stage.remove();
     // Sections stay in the document so one that reloads itself still sees itself connected.
     const anchors = document.createElement('div');
-    anchors.className = 'sr-anchors';
+    anchors.className = 'spl-anchors';
     anchors.append(...entries.map(entry => entry.section));
     shell.append(anchors);
 
@@ -225,22 +225,22 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
       pages.set(entry.id, entry);
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'sr-row';
+      row.className = 'spl-row';
       row.dataset.registerFor = entry.id;
       row.style.setProperty('--i', String(index));
       // A category gives raw SVG paths (icon) or a Lucide name (lucide), plus an optional color.
-      row.innerHTML = '<span class="sr-tile">'
+      row.innerHTML = '<span class="spl-tile">'
         + (entry.lucide ? '<i data-lucide="' + entry.lucide + '"></i>' : iconMarkup(entry.icon)) + '</span>'
-        + '<span class="sr-text"><span class="sr-title"></span><span class="sr-hint"></span></span>'
-        + '<span class="sr-state"></span>';
+        + '<span class="spl-text"><span class="spl-title"></span><span class="spl-hint"></span></span>'
+        + '<span class="spl-state"></span>';
       const custom = safeSvg(entry.svg);
-      if (custom) row.querySelector('.sr-tile').replaceChildren(custom);
-      if (entry.color) row.querySelector('.sr-tile').style.color = entry.color;
-      row.querySelector('.sr-title').textContent = entry.title;
-      const hintEl = row.querySelector('.sr-hint');
+      if (custom) row.querySelector('.spl-tile').replaceChildren(custom);
+      if (entry.color) row.querySelector('.spl-tile').style.color = entry.color;
+      row.querySelector('.spl-title').textContent = entry.title;
+      const hintEl = row.querySelector('.spl-hint');
       hintEl.textContent = entry.hint;
       if (!entry.hint) hintEl.remove();
-      entry.state = row.querySelector('.sr-state');
+      entry.state = row.querySelector('.spl-state');
       if (entry.toggle) {
         entry.state.textContent = entry.toggle.checked ? 'On' : 'Off';
         entry.toggle.addEventListener('change', () => {
@@ -265,7 +265,7 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
     // A section that asks to open while its own page is showing only needs the focus kept.
     if (currentId === id && !detail.hidden) return;
     currentId = id;
-    back.querySelector('.sr-back-title').textContent = entry.title;
+    back.querySelector('.spl-back-title').textContent = entry.title;
     detailBody.replaceChildren(entry.body);
     slot.replaceChildren(entry.toggleWrap || '');
     animating = true;

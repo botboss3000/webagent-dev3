@@ -1,9 +1,9 @@
 'use strict';
-import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
+import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 
 // Identity owns agent thresholds; the app-wide JSON retains hard safety limits.
 export function renderCompaction(host, agent, persist, request) {
-  const row = createSettingsRow(host, {id:'context-compaction', title:'Context compaction'});
+  const row = createSubpage(host, {id:'context-compaction', title:'Context compaction'});
   host = row.body;
   const hint = document.createElement('p');
   hint.className = 'ac-hint';

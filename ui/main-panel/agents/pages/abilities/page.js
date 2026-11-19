@@ -11,7 +11,7 @@ import { APP_DEFAULT, APP_DEFAULTS_CSS, buildAbilityDefaultsPanels, buildAppDefa
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from './ability-row-controls/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
-import { createSettingsMenu, createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register/settings-register.js';
+import { createSubpageLinks, createSubpageList, createSubpage } from '../../../../shared/subpage-list/subpage-list.js';
 import { createConfigPage } from '../../../../shared/config-page/config-page.js';
 import { createRichTextEditor } from '../../../../shared/rich-text-editor/rich-text-editor.js';
 import { pushBackHandler } from '../../../../shared/history-back/history-back.js';
@@ -170,7 +170,7 @@ export async function renderAbilities(host, request, options) {
   // the control unchanged and shows the reason in red under its row.
   const save = async (ability, kind, mode, control, toolName = null) => {
     const input = control.querySelector('input') || control;
-    const row = control.closest('.sr-item');
+    const row = control.closest('.spl-item');
     row?.nextElementSibling?.classList.contains('v3-toggle-error') && row.nextElementSibling.remove();
     input.disabled = true;
     _markSaving(control);
@@ -200,7 +200,7 @@ export async function renderAbilities(host, request, options) {
         input.checked = mode !== 'off';
         input.setAttribute('aria-label', input.getAttribute('aria-label').replace(/: \w+\./, ': ' + mode + '.'));
       }
-      const item = kind === 'ability' && control.closest('.sr-item');
+      const item = kind === 'ability' && control.closest('.spl-item');
       if (item) item.dataset.exposure = mode;
       input.disabled = false;
       _flashSaveCheck(control, true);
@@ -415,10 +415,10 @@ export async function renderAbilities(host, request, options) {
     lucide: 'file-text',
   });
   page.append(overview, search);
-  const register = createSettingsRegister(page, {label: 'Ability groups', categories});
+  const register = createSubpageList(page, {label: 'Ability groups', categories});
   const abilityPages = new Map();
   for (const [groupId, group] of groups) {
-    const section = createSettingsRow(register.stage, {id: 'g-' + groupId, title: group.name});
+    const section = createSubpage(register.stage, {id: 'g-' + groupId, title: group.name});
     // The ability list and an ability's own page share this body: opening a row swaps
     // the list for that page, and the page's back control swaps the list back in.
     const holder = node('div', 'ab-holder');
@@ -436,7 +436,7 @@ export async function renderAbilities(host, request, options) {
       const opened = entry.element.dataset.abilityId || '';
       entry.element.remove();
       holder.hidden = false;
-      holder.querySelector('.sr-row[data-register-link="' + opened + '"]')?.focus({preventScroll: true});
+      holder.querySelector('.spl-row[data-register-link="' + opened + '"]')?.focus({preventScroll: true});
     };
     const openAbility = (ability, claim = true) => {
       if (current) closeAbility();
@@ -495,20 +495,20 @@ export async function renderAbilities(host, request, options) {
     // ability's switch beside each one.
     // App Default edits the group's own card above its abilities.
     if (appDefaults) holder.append(buildGroupDefaultsPanel(appDefaults, groupId, group.name));
-    createSettingsMenu(holder, {label: group.name + ' abilities', items});
+    createSubpageLinks(holder, {label: group.name + ' abilities', items});
     for (const [id, info] of rowInfo) {
-      const button = holder.querySelector('.sr-row[data-register-link="' + id + '"]');
-      const item = button?.closest('.sr-item');
+      const button = holder.querySelector('.spl-row[data-register-link="' + id + '"]');
+      const item = button?.closest('.spl-item');
       if (!button || !item) continue;
       item.dataset.abilityId = id;
       button.dataset.abilityId = id;
-      if (info.incomplete) button.querySelector('.sr-title').style.color = 'var(--danger)';
+      if (info.incomplete) button.querySelector('.spl-title').style.color = 'var(--danger)';
       button.title = [info.name, info.status].filter(Boolean).join(' · ');
     }
   }
   let promptsSection = null;
   if (prompts) {
-    promptsSection = createSettingsRow(register.stage, {id: 'prompts', title: 'Prompts'});
+    promptsSection = createSubpage(register.stage, {id: 'prompts', title: 'Prompts'});
     prompts.classList.add('expanded', 'v3-register-prompts');
     prompts.querySelector('.ac-group-head')?.remove();
   }
@@ -518,17 +518,17 @@ export async function renderAbilities(host, request, options) {
   const filter = () => {
     searchText = search.value.trim().toLowerCase();
     // Both stages are register rows, so one rule hides a row at either level. A list row
-    // sits in an .sr-item wrapper; a group row is appended bare, so hide the row itself.
-    for (const row of page.querySelectorAll('.sr-row[data-register-link]')) {
+    // sits in an .spl-item wrapper; a group row is appended bare, so hide the row itself.
+    for (const row of page.querySelectorAll('.spl-row[data-register-link]')) {
       const ability = abilities.find(item => item.id === row.dataset.abilityId);
-      (row.closest('.sr-item') || row).hidden = !!searchText && !matchesAbility(ability);
+      (row.closest('.spl-item') || row).hidden = !!searchText && !matchesAbility(ability);
     }
     const noPrompts = !!searchText && !slots.some(slot =>
       [slot.slot_name, slot.content].some(value =>
         String(value || '').toLowerCase().includes(searchText)));
-    for (const row of page.querySelectorAll('.sr-row[data-register-for]')) {
+    for (const row of page.querySelectorAll('.spl-row[data-register-for]')) {
       const id = row.dataset.registerFor;
-      const item = row.closest('.sr-item') || row;
+      const item = row.closest('.spl-item') || row;
       if (id === 'prompts') { item.hidden = noPrompts; continue; }
       item.hidden = !!searchText && !groups.get(id.slice(2)).items.some(matchesAbility);
     }
@@ -536,11 +536,11 @@ export async function renderAbilities(host, request, options) {
   search.addEventListener('input', filter);
   page.append(status);
   const style = node('style');
-  style.textContent = '.v3-abilities-page .sr-shell{margin-top:2px}'
-    + '.v3-abilities-page .sr-item[hidden]{display:none}'
+  style.textContent = '.v3-abilities-page .spl-shell{margin-top:2px}'
+    + '.v3-abilities-page .spl-item[hidden]{display:none}'
     // Every level shares the group list's inset: the register's page body adds 2px
     // of its own, which would step the ability list and the config page inward.
-    + '.v3-abilities-page .sr-detail-body{padding-left:0;padding-right:0}'
+    + '.v3-abilities-page .spl-detail-body{padding-left:0;padding-right:0}'
     + '.v3-abilities-page .v3-register-prompts{border:0;background:transparent}'
     + '.v3-abilities-page .v3-register-prompts>.ac-group-body{padding:0}'
     // The ability page sits at the register's side inset, so its rows line up with

@@ -1,4 +1,4 @@
-import {createSettingsRow, createSettingsRegister} from '../../../../shared/settings-register/settings-register.js';
+import {createSubpage, createSubpageList} from '../../../../shared/subpage-list/subpage-list.js';
 import {renderMainChat} from './main-chat.js';
 import {renderMemberAccess} from './member-access.js';
 
@@ -69,11 +69,11 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   };
   // Sections build in the register's off-screen staging element, which stays in the document so
   // asynchronous sections still see themselves as connected.
-  const register = createSettingsRegister(host, {label: 'Identity settings', categories: CATEGORIES});
+  const register = createSubpageList(host, {label: 'Identity settings', categories: CATEGORIES});
   const stage = register.stage;
   // Serialize fields so concurrent name/description saves share the latest revision.
   let queue = Promise.resolve();
-  const profile = createSettingsRow(stage, {id:'profile', title:'Profile'});
+  const profile = createSubpage(stage, {id:'profile', title:'Profile'});
   const content = profile.body;
   const card = document.createElement('div');
   card.className = 'identity-profile';
@@ -126,7 +126,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   await renderMainChat(stage, request, {agentId,canManage:agent.can_manage});
   renderCompaction(stage, agent, persist, request);
   renderToolOutputPolicy(stage, agent, persist);
-  const {body:modeBody}=createSettingsRow(stage,{id:'chat-modes',title:'Chat modes'});
+  const {body:modeBody}=createSubpage(stage,{id:'chat-modes',title:'Chat modes'});
   const hint = document.createElement('p'); hint.className = 'ac-hint';
   hint.textContent = 'Default mode applies to new conversations. Read-only modes cannot execute mutating tools. Each mode adds its own instruction before model calls; existing permissions and approvals still apply.'; modeBody.append(hint);
   let modes = structuredClone(agent.execution_modes);

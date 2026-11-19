@@ -134,10 +134,10 @@ test('a save repaints only the chart, not the abilities page', async () => {
       origin: performance.timeOrigin,
       abilityReads: window.fixture.abilityReads(),
       marker: document.getElementById('host').dataset.marker,
-      rows: document.querySelectorAll('.sr-item[data-ability-id]').length,
+      rows: document.querySelectorAll('.spl-item[data-ability-id]').length,
       toggle: document.querySelector('[data-ability-id="web_access"] input.conn-toggle')?.checked,
       toggleType: document.querySelector('[data-ability-id="web_access"] input.conn-toggle')?.type,
-      exposure: document.querySelector('.sr-item[data-ability-id="web_access"]')?.dataset.exposure,
+      exposure: document.querySelector('.spl-item[data-ability-id="web_access"]')?.dataset.exposure,
       puts: window.fixture.requests.filter(item => item.method === 'PUT').map(item => item.url),
       reads: window.fixture.reads(),
     }));
@@ -168,7 +168,7 @@ test('an ability page takes the back press before its group page', async () => {
     // app.js answers a popstate through consumeBack, so calling it is the same press.
     const pressed = await page.evaluate(async () => {
       const {consumeBack} = await import('/ui/shared/history-back/history-back.js');
-      const row = document.querySelector('.sr-row[data-register-link="web_access"]');
+      const row = document.querySelector('.spl-row[data-register-link="web_access"]');
       row.click();
       const opened = !!document.querySelector('.ab-page[data-ability-id="web_access"] .cfg-page');
       const first = consumeBack();
@@ -250,7 +250,7 @@ test("a tool's skill opens in the shared editor under its row", async () => {
     await page.goto('http://127.0.0.1:' + server.address().port + '/');
     await waitForChart(page, '1,000 tokens');
     const result = await page.evaluate(async () => {
-      document.querySelector('.sr-row[data-register-link="web_access"]').click();
+      document.querySelector('.spl-row[data-register-link="web_access"]').click();
       const host = document.querySelector('.ab-page[data-ability-id="web_access"]');
       const shell = !!host?.querySelector('.cfg-page');
       const link = host.querySelector('.ac-tool-skill-link');

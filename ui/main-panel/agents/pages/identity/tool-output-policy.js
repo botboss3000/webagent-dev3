@@ -1,5 +1,5 @@
 'use strict';
-import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
+import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 
 const scopeOptions = [
   ['selected', 'Selected tools'],
@@ -212,7 +212,7 @@ function renderExperimentalPolicy(host, agent, persist, available, enabled) {
 
 export function renderToolOutputPolicy(host, agent, persist) {
   const parent = host;
-  const row = createSettingsRow(host, {id:'duplicate-tool-results', title:'Duplicate tool results', toggleLabel:'Suppress identical tool results'});
+  const row = createSubpage(host, {id:'duplicate-tool-results', title:'Duplicate tool results', toggleLabel:'Suppress identical tool results'});
   host = row.body;
   const help = document.createElement('p');
   help.className = 'ac-hint';
@@ -248,7 +248,7 @@ export function renderToolOutputPolicy(host, agent, persist) {
       enabled.disabled = !agent.can_manage || !available;
     }
   });
-  const retention = createSettingsRow(parent, {id:'lifetime-budget-retention', title:'Lifetime/budget retention', toggleLabel:'Enable retention'});
+  const retention = createSubpage(parent, {id:'lifetime-budget-retention', title:'Lifetime/budget retention', toggleLabel:'Enable retention'});
   retention.toggle.id = 'identity-tool-output-enabled';
   const experimental = document.createElement('fieldset');
   experimental.disabled = true;

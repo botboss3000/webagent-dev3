@@ -1,10 +1,10 @@
-import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
+import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 'use strict';
 // Expansion and enablement are independent; prompt saves retain the saved enabled state.
 export function renderManager(content, agent, persist) {
   const settings=agent.manager_incoming_message;
   if(!settings)return;
-  const {body,toggle,setExpanded}=createSettingsRow(content,{id:'review-incoming-messages',title:'Review incoming messages',toggleLabel:'Enable incoming-message review'});
+  const {body,toggle,setExpanded}=createSubpage(content,{id:'review-incoming-messages',title:'Review incoming messages',toggleLabel:'Enable incoming-message review'});
   toggle.disabled=!agent.can_manage;
   const criteriaLabel=document.createElement('label');criteriaLabel.className='agent-closing-message-guidance';criteriaLabel.textContent='Acceptance prompt';
   const criteria=document.createElement('textarea');criteria.className='ac-input';criteria.rows=5;criteria.maxLength=8192;criteria.value=settings.criteria||'';criteria.disabled=!agent.can_manage;criteria.placeholder='Accept questions about clothing, sizes, availability and orders. Reject unrelated requests.';

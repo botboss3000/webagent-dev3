@@ -1,10 +1,10 @@
-import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
+import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 'use strict';
 // Agent voice output: the toggle shows the chat's voice reply control for this agent, and the
 // chosen Kokoro voice speaks its replies. The server validates voices against its catalog.
 export function renderVoiceOutput(content, agent, persist) {
   if (!agent.voice_output || !Array.isArray(agent.voice_catalog)) return;
-  const {body, toggle} = createSettingsRow(content, {id:'voice-output', title:'Voice output', toggleLabel:'Enable voice output'});
+  const {body, toggle} = createSubpage(content, {id:'voice-output', title:'Voice output', toggleLabel:'Enable voice output'});
   const hint = document.createElement('p');
   hint.className = 'ac-hint';
   hint.textContent = 'When enabled, chats with this agent show a voice reply control below the composer. Users who turn it on hear each new reply in the voice chosen here. Play a sample to compare voices.';

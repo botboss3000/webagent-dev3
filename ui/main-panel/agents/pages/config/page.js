@@ -1,5 +1,5 @@
 'use strict';
-import { createSettingsMenu } from '../../../../shared/settings-register/settings-register.js';
+import { createSubpageLinks } from '../../../../shared/subpage-list/subpage-list.js';
 
 /** The pin control for one page: pressed keeps it in the agent card tabs. */
 function starButton(page, favorites, onToggle) {
@@ -27,7 +27,7 @@ export function renderAgentDirectory(host, pages, onNavigate, favorites = [], on
   label.className = 'agent-config-settings-group-label';
   label.textContent = 'Core configuration';
   group.append(label);
-  createSettingsMenu(group, {
+  createSubpageLinks(group, {
     label: 'Agent configuration pages',
     items: pages.map(page => ({
       id: page.id,

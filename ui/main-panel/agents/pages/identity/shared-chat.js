@@ -1,7 +1,7 @@
-import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
+import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 // Shared-chat policy uses Identity's serialized, revision-fenced persistence.
 export function renderSharedChat(host,agent,persist) {
-  const {body:section}=createSettingsRow(host,{id:'shared-conversations',title:'Shared conversations'});
+  const {body:section}=createSubpage(host,{id:'shared-conversations',title:'Shared conversations'});
   const hint=document.createElement('p');hint.className='ac-hint';hint.textContent='Participant sharing applies immediately. Operator review is controlled by the privacy mode captured when each conversation was created. Joining is announced.';section.append(hint);
   const form=document.createElement('form');section.append(form);
   const fields={};
