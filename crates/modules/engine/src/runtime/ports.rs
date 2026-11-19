@@ -166,6 +166,9 @@ pub trait PromptSlots<S>: Clone + Send + Sync + 'static {
         agent: &'a str,
     ) -> impl Future<Output = Result<Vec<Value>>> + Send + 'a;
 }
+/// One model call's session task list context: snapshot definitions, guidance lines and the
+/// user's edits not yet in the history.
+pub type TaskContext = (Vec<(String, String)>, Vec<String>, Vec<(u64, String)>);
 pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
     fn main_guidance<'a>(
         &'a self,
@@ -184,9 +187,10 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         basis: &'a str,
     ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<(u64, String)>)>> + Send + 'a;
     /// Session task list context for one model call of `requester` in session `sid` at
-    /// history `basis`: the snapshot definition `(id, body)` and the step's guidance lines
+    /// history `basis`: the snapshot definition `(id, body)`, the step's guidance lines
     /// (the one-line state, and the reminder to file work when `calls` tool calls since the
-    /// user's last message held no list write, `filed`).
+    /// user's last message held no list write, `filed`) and the user's edits not yet in the
+    /// history, one `(revision, text)` each.
     fn session_tasks<'a>(
         &'a self,
         store: &'a S,
@@ -195,7 +199,7 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         basis: &'a str,
         calls: u64,
         filed: bool,
-    ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<String>)>> + Send + 'a;
+    ) -> impl Future<Output = Result<TaskContext>> + Send + 'a;
     /// The reminder sent once when `requester` ends a turn of session `sid` while its task
     /// list still has open steps, or `None`.
     fn session_tasks_end<'a>(

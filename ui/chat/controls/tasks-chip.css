@@ -1,0 +1,47 @@
+/* Tasks chip (tasks-chip.js): the header chip for the session task list, its panel of
+   sections and steps, and the History of revisions. Chip and panel reuse the shared
+   .sub-chip and .sub-chip-menu skins. */
+#chat-sub-header .sub-chip.chip-tasks .chip-status { color: var(--brand); }
+#chat-sub-header .sub-chip.chip-tasks .chip-status svg { width: 12px; height: 12px; }
+#chat-sub-header .sub-chip.chip-tasks:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tasks-chip-meta { color: var(--fg-3); font-weight: 500; font-variant-numeric: tabular-nums; }
+.task-panel {
+  width: min(460px, calc(100vw - 16px));
+  max-height: min(70dvh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 12px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-tap-highlight-color: transparent;
+}
+.task-panel button, .task-panel input { -webkit-tap-highlight-color: transparent; }
+.task-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.task-tab { min-height: 32px; padding: 4px 12px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-2); font: inherit; cursor: pointer; }
+.task-tab[aria-selected="true"] { color: var(--fg-1); border-color: var(--accent); }
+.task-tab:active, .task-remove:active, .task-add-button:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
+.task-tab:focus-visible, .task-remove:focus-visible, .task-add-button:focus-visible, .task-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-section + .task-section { margin-top: 12px; padding-top: 10px; border-top: var(--border-width) solid var(--border); }
+.task-section[data-status="done"], .task-section[data-status="cancelled"] { color: var(--fg-2); }
+.task-section-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.task-section-title { overflow-wrap: anywhere; }
+.task-section-meta, .task-step-detail, .task-history-meta { color: var(--fg-2); font-size: 12px; }
+.task-section-summary, .task-section-notes { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-section-notes { color: var(--fg-2); }
+.task-steps { list-style: none; margin: 6px 0 0; padding: 0; }
+.task-step { display: flex; align-items: flex-start; gap: 8px; min-height: 32px; padding: 2px 0; }
+.task-step[data-status="done"] .task-step-label { text-decoration: line-through; color: var(--fg-2); }
+.task-step[data-status="cancelled"] .task-step-label { text-decoration: line-through; color: var(--fg-3); }
+.task-check { width: 18px; height: 18px; margin: 3px 0 0; flex: none; accent-color: var(--accent); cursor: pointer; }
+.task-mark { width: 18px; flex: none; text-align: center; color: var(--fg-2); }
+.task-step-text { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.task-remove { flex: none; min-width: 32px; min-height: 32px; border: var(--border-width) solid transparent; border-radius: 8px; background: none; color: var(--fg-2); font: inherit; font-size: 16px; cursor: pointer; }
+.task-remove:hover { border-color: var(--border); }
+.task-add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.task-add-input { flex: 1 1 180px; min-width: 0; min-height: 32px; padding: 4px 8px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); font: inherit; }
+.task-add-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.task-add-button { min-height: 32px; padding: 4px 12px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); font: inherit; cursor: pointer; }
+.task-history { list-style: none; margin: 0; padding: 0; }
+.task-history-entry + .task-history-entry { margin-top: 8px; }
+.task-history-changes { margin: 2px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
+.task-history-empty { color: var(--fg-2); }

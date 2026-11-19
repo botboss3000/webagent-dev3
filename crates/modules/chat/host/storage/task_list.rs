@@ -1,11 +1,16 @@
 //! Session task list storage: the current list under `base_tasks:{sid}` and every revision
 //! under `base_tasks:{sid}:r{revision}`, each an encrypted, compressed user record carrying
-//! its `session_id`, so the session's deletion erases them. Writes are revision-fenced and a
-//! retried call returns its first result through the call's receipt.
+//! its `session_id`, so the session's deletion erases them. Writes, the agent's and the
+//! user's, are revision-fenced and a retried request returns its first result through its
+//! receipt. The user's changes wait in the current document until the agent receives them.
 use super::*;
 
 /// Encoded size limit of one list revision.
 const MAX_LIST_BYTES: usize = 64 * 1024;
+/// The user's changes the current document keeps for the agent; older ones drop first.
+const MAX_USER_CHANGES: usize = 20;
+/// Revisions one history read returns, newest first.
+const HISTORY_LIMIT: i64 = 100;
 
 fn list_key(sid: &str) -> Result<String> {
     if sid.is_empty()
@@ -58,7 +63,7 @@ impl Store {
         list: &Value,
         changes: &Value,
     ) -> Result<Value> {
-        let key = list_key(sid)?;
+        list_key(sid)?;
         if generation.is_empty()
             || generation.len() > 128
             || rid.is_empty()
@@ -73,10 +78,6 @@ impl Store {
         {
             return Err(anyhow!("Invalid task list write"));
         }
-        let revision = expected_revision
-            .checked_add(1)
-            .filter(|next| list["revision"] == json!(next))
-            .ok_or_else(|| anyhow!("Task list revision does not follow the expected one"))?;
         let receipt_key = format!("receipt:base:{sid}:{rid}:{pending_id}:{receipt}");
         let fingerprint = crate::digest(&json!([expected_revision, list, changes]));
         let _guard = self.context_gate.write().await;
@@ -96,33 +97,16 @@ impl Store {
         }
         self.base_run_fence(&mut tx, sid, rid, Some(pending_id), Some(generation))
             .await?;
-        let stored = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
-            .fetch_optional(&mut *tx)
-            .await?
-            .map(|raw| self.unseal(&raw))
-            .transpose()?
-            .and_then(|document| document["revision"].as_u64())
-            .unwrap_or(0);
-        if stored != expected_revision {
-            return Err(anyhow!(
-                "The task list changed (now revision {stored}); read it and write again"
-            ));
-        }
-        let document = json!({"schema_version":1,"session_id":sid,"revision":revision,
-            "updated_by_run":rid,"updated_at":crate::now(),"changes":changes,"list":list});
-        let sealed = self.encode_user_record(&document)?;
-        if sealed.len() > MAX_LIST_BYTES {
-            return Err(anyhow!("The task list would exceed 64 KiB"));
-        }
-        for key in [key.clone(), format!("{key}:r{revision:010}")] {
-            sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-                .bind(key)
-                .bind(&sealed)
-                .execute(&mut *tx)
-                .await?;
-        }
-        let output = json!({"revision":revision,"changes":changes});
+        let output = self
+            .task_list_commit(
+                &mut tx,
+                sid,
+                expected_revision,
+                json!({"run":rid}),
+                list,
+                changes,
+            )
+            .await?;
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
             .bind(&receipt_key)
             .bind(self.encode_user_record(&json!({"fingerprint":fingerprint,"output":output}))?)
@@ -130,6 +114,171 @@ impl Store {
             .await?;
         tx.commit().await?;
         Ok(output)
+    }
+
+    /// Save `list` (already at the next revision) as session `sid`'s task list for the user's
+    /// edit `request_id`, which the agent receives with its next model call. Fails unless the
+    /// stored revision is `expected_revision`; a retried request returns its first result.
+    pub(crate) async fn task_list_user_write(
+        &self,
+        sid: &str,
+        request_id: &str,
+        expected_revision: u64,
+        list: &Value,
+        changes: &Value,
+    ) -> Result<Value> {
+        list_key(sid)?;
+        if request_id.is_empty()
+            || request_id.len() > 64
+            || !request_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(anyhow!("Invalid task list request"));
+        }
+        let receipt_key = format!("receipt:base:{sid}:user:{request_id}:tasks");
+        let fingerprint = crate::digest(&json!([expected_revision, list, changes]));
+        let _guard = self.context_gate.write().await;
+        let mut tx = self.pool.begin().await?;
+        if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+            .bind(&receipt_key)
+            .fetch_optional(&mut *tx)
+            .await?
+        {
+            let receipt = self.unseal(&raw)?;
+            if receipt["fingerprint"] != fingerprint {
+                return Err(anyhow!("Task list request ID reused with different input"));
+            }
+            let output = receipt["output"].clone();
+            tx.commit().await?;
+            return Ok(output);
+        }
+        let session = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+            .bind(format!("session:{sid}"))
+            .fetch_optional(&mut *tx)
+            .await?
+            .map(|raw| self.unseal(&raw))
+            .transpose()?;
+        if session.is_none_or(|session| session["id"] != sid) {
+            return Err(anyhow!("Session unavailable"));
+        }
+        let output = self
+            .task_list_commit(
+                &mut tx,
+                sid,
+                expected_revision,
+                json!("user"),
+                list,
+                changes,
+            )
+            .await?;
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
+            .bind(&receipt_key)
+            .bind(self.encode_user_record(&json!({"fingerprint":fingerprint,"output":output}))?)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(output)
+    }
+
+    /// Write the next revision inside `tx`: the current document and its history copy, the
+    /// user's waiting changes carried forward (with this one when `by` is the user), and an
+    /// event so open chats re-read the session.
+    async fn task_list_commit(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        expected_revision: u64,
+        by: Value,
+        list: &Value,
+        changes: &Value,
+    ) -> Result<Value> {
+        let key = list_key(sid)?;
+        let revision = expected_revision
+            .checked_add(1)
+            .filter(|next| list["revision"] == json!(next))
+            .ok_or_else(|| anyhow!("Task list revision does not follow the expected one"))?;
+        let stored = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+            .bind(&key)
+            .fetch_optional(&mut **tx)
+            .await?
+            .map(|raw| self.unseal(&raw))
+            .transpose()?
+            .unwrap_or(Value::Null);
+        let current = stored["revision"].as_u64().unwrap_or(0);
+        if current != expected_revision {
+            return Err(anyhow!(
+                "The task list changed (now revision {current}); read it and write again"
+            ));
+        }
+        let mut waiting = stored["user_changes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if by == "user" {
+            waiting.push(json!({"revision":revision,"changes":changes}));
+        }
+        let skip = waiting.len().saturating_sub(MAX_USER_CHANGES);
+        let waiting: Vec<Value> = waiting.into_iter().skip(skip).collect();
+        let updated_at = crate::now();
+        let history = json!({"schema_version":1,"session_id":sid,"revision":revision,
+            "updated_by":by,"updated_at":updated_at,"changes":changes,"list":list});
+        let mut document = history.clone();
+        document["user_changes"] = json!(waiting);
+        for (key, document) in [
+            (key.clone(), &document),
+            (format!("{key}:r{revision:010}"), &history),
+        ] {
+            let sealed = self.encode_user_record(document)?;
+            if sealed.len() > MAX_LIST_BYTES {
+                return Err(anyhow!("The task list would exceed 64 KiB"));
+            }
+            sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                .bind(key)
+                .bind(sealed)
+                .execute(&mut **tx)
+                .await?;
+        }
+        // Open chats re-read the session when its component revision moves.
+        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'base_task_artifact',?)")
+            .bind(sid)
+            .bind(self.encode_user_record(&json!({"kind":"tasks","revision":revision}))?)
+            .execute(&mut **tx)
+            .await?;
+        Ok(json!({"revision":revision,"changes":changes}))
+    }
+
+    /// Session `sid`'s current task list document, or `None` before the first write.
+    pub(crate) async fn task_list_current(&self, sid: &str) -> Result<Option<Value>> {
+        Ok(self
+            .get(&list_key(sid)?)
+            .await?
+            .filter(|document| document["session_id"] == sid))
+    }
+
+    /// Session `sid`'s task list revisions, newest first: each one's number, time, writer
+    /// (`"user"` or the agent's run) and changes.
+    pub(crate) async fn task_list_history(&self, sid: &str) -> Result<Vec<Value>> {
+        let key = list_key(sid)?;
+        let rows =
+            sqlx::query("SELECT value FROM docs WHERE key>? AND key<? ORDER BY key DESC LIMIT ?")
+                .bind(format!("{key}:r"))
+                .bind(format!("{key}:s"))
+                .bind(HISTORY_LIMIT)
+                .fetch_all(&self.pool)
+                .await?;
+        let mut history = Vec::with_capacity(rows.len());
+        for row in rows {
+            let document = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
+            if document["session_id"] != sid {
+                continue;
+            }
+            history.push(json!({"revision":document["revision"],
+                "updated_at":document["updated_at"],
+                "by":if document["updated_by"] == "user" {"user"} else {"agent"},
+                "changes":document["changes"]}));
+        }
+        Ok(history)
     }
 
     /// Task list context for one model call of `requester` in session `sid` at history
@@ -145,37 +294,65 @@ impl Store {
         basis: &str,
         calls: u64,
         filed: bool,
-    ) -> Result<(Vec<(String, String)>, Vec<String>)> {
+    ) -> Result<(Vec<(String, String)>, Vec<String>, Vec<(u64, String)>)> {
         if requester != self.current_user_id() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok((Vec::new(), Vec::new(), Vec::new()));
         }
         let key = list_key(sid)?;
-        let list: webagent_chat::task_list::List = match self.get(&key).await? {
-            Some(document) if document["session_id"] == sid => {
-                serde_json::from_value(document["list"].clone())?
-            }
-            _ => webagent_chat::task_list::List::default(),
+        let document = self.task_list_current(sid).await?.unwrap_or(Value::Null);
+        let list: webagent_chat::task_list::List = if document.is_null() {
+            webagent_chat::task_list::List::default()
+        } else {
+            serde_json::from_value(document["list"].clone())?
         };
         let texts = webagent_chat::task_list::texts();
         let view_key = format!("{key}:view");
         let saved = self.get(&view_key).await?;
-        let view = match saved {
+        let mut view = match saved.clone() {
             Some(view) if view["session_id"] == sid && view["history_basis"] == basis => view,
-            _ => {
-                let view = json!({"session_id":sid,"history_basis":basis,
-                    "revision":list.revision,
-                    "snapshot":webagent_chat::task_list::render_snapshot(&list, &texts)});
-                self.put(&view_key, &view).await?;
-                view
-            }
+            _ => json!({"session_id":sid,"history_basis":basis,"revision":list.revision,
+                "delivered":list.revision,
+                "snapshot":webagent_chat::task_list::render_snapshot(&list, &texts)}),
         };
+        // The user's changes after the snapshot reach the history once each, in order.
+        let delivered = view["delivered"].as_u64().unwrap_or(0);
+        let mut updates = Vec::new();
+        for change in document["user_changes"].as_array().into_iter().flatten() {
+            let revision = change["revision"].as_u64().unwrap_or(0);
+            if revision <= delivered {
+                continue;
+            }
+            let lines = change["changes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let heading = texts["user_change_heading"].as_str().unwrap_or("");
+            updates.push((
+                revision,
+                format!(
+                    "{}\n{lines}",
+                    heading.replace("{revision}", &revision.to_string())
+                ),
+            ));
+            view["delivered"] = json!(revision);
+        }
+        if saved.as_ref() != Some(&view) {
+            self.put(&view_key, &view).await?;
+        }
         let id = format!("session-tasks-{}", view["revision"].as_u64().unwrap_or(0));
         let snapshot = view["snapshot"].as_str().unwrap_or("").to_owned();
         let lines = [
             webagent_chat::task_list::step_line(&list, &texts),
             webagent_chat::task_list::unfiled_reminder(calls, filed, &texts),
         ];
-        Ok((vec![(id, snapshot)], lines.into_iter().flatten().collect()))
+        Ok((
+            vec![(id, snapshot)],
+            lines.into_iter().flatten().collect(),
+            updates,
+        ))
     }
 
     /// The end-of-turn reminder for `requester` in session `sid` when its task list still
@@ -293,7 +470,7 @@ mod tests {
         assert!(store.task_list("foreign", "r", None).await.is_err());
         // The snapshot stays as it was until the history basis changes.
         let user = store.current_user_id().to_owned();
-        let (first, _) = store
+        let (first, _, _) = store
             .task_list_context("owned", &user, "b1", 0, false)
             .await
             .unwrap();
@@ -311,22 +488,22 @@ mod tests {
             .task_list_write("owned", "r", "call-3", "g", "tasks", 2, &list(3), &changes)
             .await
             .unwrap();
-        let (same, _) = store
+        let (same, _, _) = store
             .task_list_context("owned", &user, "b1", 0, false)
             .await
             .unwrap();
         assert_eq!(same, first);
-        let (rebuilt, _) = store
+        let (rebuilt, _, _) = store
             .task_list_context("owned", &user, "b2", 0, false)
             .await
             .unwrap();
         assert_eq!(rebuilt[0].0, "session-tasks-3");
-        let (member, lines) = store
+        let (member, lines, _) = store
             .task_list_context("owned", "someone-else", "b2", 9, false)
             .await
             .unwrap();
         assert!(member.is_empty() && lines.is_empty());
-        let (_, lines) = store
+        let (_, lines, _) = store
             .task_list_context("owned", &user, "b2", 9, false)
             .await
             .unwrap();
@@ -335,6 +512,31 @@ mod tests {
             1,
             "an empty list still asks to file work: {lines:?}"
         );
+        // A user edit is fenced like the agent's, kept in history and delivered once.
+        assert!(store
+            .task_list_user_write("owned", "edit-1", 2, &list(4), &json!(["s1.2 added"]))
+            .await
+            .is_err());
+        let edit = store
+            .task_list_user_write("owned", "edit-1", 3, &list(4), &json!(["s1.2 added"]))
+            .await
+            .unwrap();
+        assert_eq!(edit["revision"], 4);
+        let (_, _, updates) = store
+            .task_list_context("owned", &user, "b2", 0, false)
+            .await
+            .unwrap();
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].1.ends_with("s1.2 added"), "{:?}", updates[0]);
+        let (_, _, again) = store
+            .task_list_context("owned", &user, "b2", 0, false)
+            .await
+            .unwrap();
+        assert!(again.is_empty());
+        let history = store.task_list_history("owned").await.unwrap();
+        assert_eq!(history[0]["revision"], 4);
+        assert_eq!(history[0]["by"], "user");
+        assert_eq!(history.last().unwrap()["revision"], 1);
         assert!(store
             .task_list_end_reminder("owned", &user)
             .await

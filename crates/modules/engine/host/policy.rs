@@ -166,8 +166,9 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
         basis: &'a str,
         calls: u64,
         filed: bool,
-    ) -> impl std::future::Future<Output = Result<(Vec<(String, String)>, Vec<String>)>> + Send + 'a
-    {
+    ) -> impl std::future::Future<Output = Result<webagent_engine::runtime::ports::TaskContext>>
+           + Send
+           + 'a {
         store.task_list_context(sid, requester, basis, calls, filed)
     }
     fn session_tasks_end<'a>(

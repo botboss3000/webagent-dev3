@@ -436,13 +436,24 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     let runs = public_runs(&app, app.store.recent_runs(Some(&id)).await?).await?;
     let components = app.store.base_chat_components(&id).await?;
     let artifacts = app.store.session_artifacts(&id).await?;
+    // The task panel is the owner's: shared chat members and observers do not get the list.
+    let task_list = if crate::shared_chat::actor(&app) == app.store.current_user_id()
+        && !crate::shared_projection::observer(&app)
+    {
+        app.store
+            .task_list_current(&id)
+            .await?
+            .map(|document| json!({"revision":document["revision"],"list":document["list"]}))
+    } else {
+        None
+    };
     let component_revision = app.store.base_component_revision(&id).await?;
     let app_view = tools::core_app_control::projection(&app, &id).await?;
     let queue = crate::followup_queue::public(&app.store.followup_queue(&id).await?);
     Ok(Json(
         json!({"access":{"observer":crate::shared_projection::observer(&app),"operator_reply":crate::shared_projection::observer(&app)&&_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true,
         "can_send":!crate::shared_projection::observer(&app)||(_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id(),"agent_operator":agent_operator},"usage":usage,"session":app.store.session_read_summary(&id).await?,
-        "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"artifacts":artifacts,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"],"repeat_similarity":webagent_engine::gates::repeat_similarity()}),
+        "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"artifacts":artifacts,"task_list":task_list,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"],"repeat_similarity":webagent_engine::gates::repeat_similarity()}),
     ))
 }
 #[derive(Deserialize)]

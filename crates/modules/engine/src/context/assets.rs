@@ -229,7 +229,7 @@ impl<
         let (calls, filed) = since_user.fold((0, false), |(calls, filed), item| {
             (calls + 1, filed || item["name"] == "task_list_write")
         });
-        let (tasks, task_lines) = Box::pin(self.native.session_tasks(
+        let (tasks, task_lines, task_updates) = Box::pin(self.native.session_tasks(
             self.store.records(),
             &sid,
             &requester,
@@ -260,6 +260,16 @@ impl<
                 json!({"since_version":version.saturating_sub(1),"changed_by":"another session"});
             rows.push(
                 json!({"type":"function_call","call_id":id,"name":"main_notes_read",
+                "arguments":arguments.to_string()}),
+            );
+            rows.push(json!({"type":"function_call_output","call_id":id,"output":text}));
+        }
+        // The user's task list edits join the history the same way, once each.
+        for (revision, text) in task_updates {
+            let id = format!("task_list_read-{}", uuid::Uuid::new_v4());
+            let arguments = json!({"revision":revision,"changed_by":"the user"});
+            rows.push(
+                json!({"type":"function_call","call_id":id,"name":"task_list_read",
                 "arguments":arguments.to_string()}),
             );
             rows.push(json!({"type":"function_call_output","call_id":id,"output":text}));

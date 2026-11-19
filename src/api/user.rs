@@ -334,6 +334,35 @@ async fn chip_app(app: App, sid: &str, write: bool) -> Result<App, crate::ApiErr
     guard_access(&app, write, false)?;
     Ok(app)
 }
+/// The chat's task panel: only the session's owner reads or edits its task list.
+async fn tasks_read(Extension(app): Extension<App>, Path(sid): Path<String>) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = guard_access(&app, false, true) {
+        return error.into_response();
+    }
+    crate::api::task_list::read(&app, &sid)
+        .await
+        .into_response()
+}
+async fn tasks_write(
+    Extension(app): Extension<App>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = guard_access(&app, true, true) {
+        return error.into_response();
+    }
+    crate::api::task_list::write(&app, &sid, &body)
+        .await
+        .into_response()
+}
 async fn build_tasks_list(Extension(app): Extension<App>, Path(sid): Path<String>) -> Response {
     match chip_app(app, &sid, false).await {
         Ok(app) => crate::api::build_tasks::list(&app, &sid)
@@ -777,6 +806,7 @@ pub(crate) fn router() -> Router<App> {
         )
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
         .route("/sessions/{sid}/issues", get(issues))
+        .route("/sessions/{sid}/tasks", get(tasks_read).post(tasks_write))
         .route("/sessions/{sid}/build-tasks", get(build_tasks_list))
         .route("/sessions/{sid}/build-tasks/clear", post(build_tasks_clear))
         .route(
