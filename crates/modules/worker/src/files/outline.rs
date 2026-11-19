@@ -35,9 +35,9 @@ pub(super) fn blocks(label: &str, text: &str) -> Vec<Block> {
     match extension.as_deref() {
         Some("md") => headings(&lines),
         Some("py") => python(&lines),
-        Some("css") => braces(&lines, css_header),
-        Some("rs") => braces(&lines, rust_header),
-        Some("js" | "mjs" | "cjs" | "ts" | "jsx" | "tsx") => braces(&lines, js_header),
+        Some("css") => braces(&lines, css_header, false),
+        Some("rs") => braces(&lines, rust_header, false),
+        Some("js" | "mjs" | "cjs" | "ts" | "jsx" | "tsx") => braces(&lines, js_header, true),
         _ => Vec::new(),
     }
 }
@@ -200,11 +200,39 @@ fn js_header(trimmed: &str) -> Option<String> {
     None
 }
 
-/// Net brace change on one line, skipping strings and `//` comments.
-fn brace_delta(line: &str) -> (i64, bool) {
+/// Whether a `/` after `before` (the line so far) starts a JavaScript regex literal
+/// rather than a division: it does after an operator, an opening bracket, a comma or
+/// `return`, and at the start of a line.
+fn starts_regex(before: &str) -> bool {
+    let before = before.trim_end();
+    before.is_empty()
+        || before.ends_with("return")
+        || before.ends_with(|c: char| "(,=:[!&|?{};+-*%<>~^".contains(c))
+}
+
+/// Net brace change on one line, skipping strings, `//` and `/* … */` comments and, with
+/// `regex` (JavaScript), regex literals, whose quotes and braces are not code. In
+/// JavaScript a `'` always opens a string; elsewhere only a closed one does (Rust lifetimes).
+fn brace_delta(line: &str, regex: bool) -> (i64, bool) {
     let (mut delta, mut opened, mut quote, mut escaped) = (0i64, false, None::<char>, false);
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
+    // Inside a regex literal: whether the scan is in a `[...]` class, where `/` does not end it.
+    let mut class = false;
+    let mut chars = line.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        if quote == Some('/') {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '[' {
+                class = true;
+            } else if c == ']' {
+                class = false;
+            } else if c == '/' && !class {
+                quote = None;
+            }
+            continue;
+        }
         if let Some(open) = quote {
             if escaped {
                 escaped = false;
@@ -218,8 +246,17 @@ fn brace_delta(line: &str) -> (i64, bool) {
         match c {
             '"' | '`' => quote = Some(c),
             // A Rust lifetime or char literal both start with '; only quote a closed one.
-            '\'' if line.matches('\'').count() % 2 == 0 => quote = Some(c),
-            '/' if chars.peek() == Some(&'/') => break,
+            '\'' if regex || line.matches('\'').count() % 2 == 0 => quote = Some(c),
+            '/' if chars.peek().map(|(_, next)| *next) == Some('/') => break,
+            '/' if chars.peek().map(|(_, next)| *next) == Some('*') => {
+                // A comment that ends on this line is skipped; one that runs on ends the scan.
+                let Some(end) = line[at + 2..].find("*/") else {
+                    break;
+                };
+                let stop = at + 2 + end + 2;
+                while chars.next_if(|(index, _)| *index < stop).is_some() {}
+            }
+            '/' if regex && starts_regex(&line[..at]) => quote = Some('/'),
             '{' => {
                 delta += 1;
                 opened = true;
@@ -231,7 +268,7 @@ fn brace_delta(line: &str) -> (i64, bool) {
     (delta, opened)
 }
 
-fn braces(lines: &[&str], header: fn(&str) -> Option<String>) -> Vec<Block> {
+fn braces(lines: &[&str], header: fn(&str) -> Option<String>, regex: bool) -> Vec<Block> {
     let mut found = Vec::new();
     // Open blocks: (index in `found`, depth the block closes at).
     let mut open: Vec<(usize, i64)> = Vec::new();
@@ -242,7 +279,7 @@ fn braces(lines: &[&str], header: fn(&str) -> Option<String>) -> Vec<Block> {
         if let Some(name) = header(trimmed) {
             pending = Some((index + 1, name, 0));
         }
-        let (delta, opened) = brace_delta(trimmed);
+        let (delta, opened) = brace_delta(trimmed, regex);
         if opened {
             if let Some((start, name, _)) = pending.take() {
                 found.push(Block {
@@ -296,6 +333,19 @@ mod tests {
                 (7, 9, "const close".into()),
                 (10, 14, "class A".into()),
                 (11, 13, "run".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn javascript_regex_quotes_and_braces_are_not_code() {
+        let text = "function esc(s) {\n  return s.replace(/[&<>\"'/]/g, c => ({ '&': 'a' }[c]));\n}\nconst half = (n) => {\n  return n / 2 / 1;\n};\nconst re = /}{/;\nfunction next() {\n  run(/* a/b { */ 1);\n}\n";
+        assert_eq!(
+            names("a.js", text),
+            vec![
+                (1, 3, "function esc(s)".into()),
+                (4, 6, "const half".into()),
+                (8, 10, "function next()".into()),
             ]
         );
     }
