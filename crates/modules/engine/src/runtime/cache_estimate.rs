@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Sessions whose last request fingerprints are kept in memory; older ones are dropped.
 const MAX_SESSIONS: usize = 256;
@@ -90,11 +91,43 @@ impl Fingerprint {
     }
 }
 
-/// The last dispatched request's fingerprints per session, oldest session first.
-fn last_requests() -> &'static Mutex<(HashMap<String, Fingerprint>, VecDeque<String>)> {
-    static LAST: OnceLock<Mutex<(HashMap<String, Fingerprint>, VecDeque<String>)>> =
-        OnceLock::new();
+/// One session's last dispatched request and when it was sent.
+struct LastCall {
+    fingerprint: Fingerprint,
+    at: Instant,
+}
+
+/// The last dispatched request per session, oldest session first.
+fn last_requests() -> &'static Mutex<(HashMap<String, LastCall>, VecDeque<String>)> {
+    static LAST: OnceLock<Mutex<(HashMap<String, LastCall>, VecDeque<String>)>> = OnceLock::new();
     LAST.get_or_init(Default::default)
+}
+
+/// Why this session's next call should reorder its context first: the provider cache has
+/// expired (`idle`, longer than `timeout` since the last call) or the tool definitions
+/// changed since it (`tools`). None before the first call this process has seen.
+pub fn reorder_reason(session: &str, schemas: &[Value], timeout: Duration) -> Option<&'static str> {
+    let guard = last_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last = guard.0.get(session)?;
+    if last.at.elapsed() > timeout {
+        Some("idle")
+    } else if last.fingerprint.tools != Some(part(&encoded(&schemas))) {
+        Some("tools")
+    } else {
+        None
+    }
+}
+
+/// Forget a session's last request after a reorder, so the next call starts a fresh
+/// comparison instead of reordering again.
+pub fn forget(session: &str) {
+    let mut guard = last_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.0.remove(session);
+    guard.1.retain(|known| known != session);
 }
 
 /// Estimate this session's request against its previous one and remember it for the next.
@@ -103,8 +136,12 @@ pub fn observe(session: &str, current: Fingerprint) -> Value {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (requests, order) = &mut *guard;
-    let estimate = current.estimate(requests.get(session));
-    if requests.insert(session.to_owned(), current).is_none() {
+    let estimate = current.estimate(requests.get(session).map(|last| &last.fingerprint));
+    let call = LastCall {
+        fingerprint: current,
+        at: Instant::now(),
+    };
+    if requests.insert(session.to_owned(), call).is_none() {
         order.push_back(session.to_owned());
         while order.len() > MAX_SESSIONS {
             if let Some(oldest) = order.pop_front() {
@@ -173,6 +210,24 @@ mod tests {
             request("prompt", &[]).estimate(None)["first_change"],
             "no_previous_call"
         );
+    }
+
+    #[test]
+    fn a_reorder_is_due_after_the_timeout_or_a_tool_change() {
+        let session = format!("cache-reorder-test-{}", uuid::Uuid::new_v4());
+        let tools = [json!({"name":"file_read"})];
+        assert_eq!(reorder_reason(&session, &tools, Duration::ZERO), None);
+        observe(&session, request("p", &["a"]));
+        let long = Duration::from_secs(3600);
+        assert_eq!(reorder_reason(&session, &tools, long), None);
+        assert_eq!(reorder_reason(&session, &[], long), Some("tools"));
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(
+            reorder_reason(&session, &tools, Duration::from_millis(1)),
+            Some("idle")
+        );
+        forget(&session);
+        assert_eq!(reorder_reason(&session, &tools, Duration::ZERO), None);
     }
 
     #[test]

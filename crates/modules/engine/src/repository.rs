@@ -410,7 +410,7 @@ impl<
                 .as_str()
                 .ok_or_else(|| anyhow!("Run has no id"))?
                 .to_owned();
-            let _context_guard = if kind == "context_compacted" {
+            let _context_guard = if reshapes_context(kind) {
                 Some(crate::send_future(self.records.context_gate().write()).await)
             } else {
                 None
@@ -517,7 +517,7 @@ impl<
             // Stage computation happened before writer admission. Ledger CAS and the
             // successful result checkpoint now share every existing run ownership fence.
             crate::send_future(self.apply_context_assets_write(&mut tx, run)).await?;
-            if kind == "context_compacted" {
+            if reshapes_context(kind) {
                 crate::send_future(
                     self.reset_context_asset_layouts(&mut tx, run["session_id"].as_str().unwrap()),
                 )
@@ -746,6 +746,30 @@ impl<
                 .await?;
             }
             crate::send_future(self.background_claim_delivery(&mut tx, run)).await?;
+            if kind == "context_reordered" {
+                // A reorder summarizes nothing, so there is no recall segment: it saves the
+                // reordered history as the checkpoint and rebuilds the Main Notes snapshot.
+                let session_key = format!("session:{sid}");
+                let row = sqlx::query("SELECT value FROM docs WHERE key=?")
+                    .bind(&session_key)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                let mut session = self.records.unseal(&row.get::<Vec<u8>, _>("value"))?;
+                let through = sqlx::query_scalar::<_, i64>(
+                    "SELECT COALESCE(MAX(seq),0) FROM interactions WHERE session_id=?",
+                )
+                .bind(sid)
+                .fetch_one(&mut *tx)
+                .await?;
+                session["checkpoint_input"] = run["input"].clone();
+                session["checkpoint_through"] = json!(through);
+                session["notes_front"] = json!(session["notes_front"].as_u64().unwrap_or(0) + 1);
+                sqlx::query("UPDATE docs SET value=? WHERE key=?")
+                    .bind(self.records.encode_user_record(&session)?)
+                    .bind(&session_key)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             if kind == "context_compacted" {
                 let session_key = format!("session:{sid}");
                 let row = sqlx::query("SELECT value FROM docs WHERE key=?")
@@ -906,7 +930,7 @@ impl<
                 format!("run:{}", run["id"].as_str().unwrap()),
                 format!("session:{}", run["session_id"].as_str().unwrap()),
             ]);
-            if kind == "context_compacted" {
+            if reshapes_context(kind) {
                 self.records.invalidate_context(sid);
             }
             // Retain staging after any failure; clear only after the complete transaction commits.
@@ -1185,6 +1209,11 @@ impl<
 }
 
 mod background;
+
+/// Events that replace the session's history checkpoint: a compaction or a major reorder.
+fn reshapes_context(kind: &str) -> bool {
+    matches!(kind, "context_compacted" | "context_reordered")
+}
 
 /// Name the failed provenance check of a compaction save, if any: the rejected payload is
 /// rolled back with its transaction, so the error is the only record of why.

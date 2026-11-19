@@ -1133,6 +1133,32 @@ fn retained_rows(range: &[Value], tail: &[Value]) -> (Vec<Value>, Vec<Value>) {
     (kept, tail)
 }
 
+/// Major reorder, once the provider cache is gone (idle past the cache timeout, or changed
+/// tool definitions): the retained rows kept ahead of each summary block leave the history,
+/// so their skills join the instructions and the Main Notes snapshot is rebuilt, and so do
+/// the server's Main Notes change rows, which the rebuilt snapshot already holds. Blocks
+/// keep their order and the rest of the history stays word for word; a mode no longer shown
+/// is added again at the end by the host.
+pub fn reorder(input: &[Value], config: &Config) -> Vec<Value> {
+    let start = leading_blocks(input, config);
+    let server_notes = input[start..]
+        .iter()
+        .filter(|item| item["type"] == "function_call" && is_notes_change(item))
+        .filter_map(call_id)
+        .filter(|id| id.starts_with("main_notes_read-"))
+        .collect::<HashSet<_>>();
+    input[..start]
+        .iter()
+        .filter(|item| is_summary(item, config))
+        .chain(
+            input[start..]
+                .iter()
+                .filter(|item| !call_id(item).is_some_and(|id| server_notes.contains(id))),
+        )
+        .cloned()
+        .collect()
+}
+
 /// Validate an untrusted live plan against host-owned policy and exact current input.
 /// Alternate safe boundaries are allowed; the service cannot choose looser safety limits.
 pub fn validate_external_plan(
@@ -1393,6 +1419,38 @@ mod tests {
         assert_eq!(&twice[..7], &once[..7]);
         assert_eq!(twice[8]["call_id"], "s2");
         assert_eq!(super::summary_blocks(&twice, &config), vec![6, 9]);
+    }
+
+    /// A major reorder keeps only the blocks at the start and drops the server's notes rows;
+    /// the agent's own writes and skills in the verbatim tail stay where they are.
+    #[test]
+    fn reorders_keep_blocks_and_the_verbatim_tail() {
+        let config = requested_config();
+        let block = |n: usize| turn(&format!("{}block {n}", config.summary_prefix));
+        let pair = |id: &str, name: &str| {
+            [
+                json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":id,"output":"x"}),
+            ]
+        };
+        let mut input = Vec::new();
+        input.extend(pair("s1", "load_skill"));
+        input.push(block(1));
+        input.extend(pair("m1", "set_execution_mode"));
+        input.push(block(2));
+        input.push(turn("tail"));
+        input.extend(pair("main_notes_read-a", "main_notes_read"));
+        input.extend(pair("w", "main_notes_write"));
+        input.extend(pair("s2", "load_skill"));
+        let reordered = super::reorder(&input, &config);
+        let ids: Vec<_> = reordered
+            .iter()
+            .map(|item| item["call_id"].clone())
+            .collect();
+        assert_eq!(reordered[..2], [block(1), block(2)]);
+        assert_eq!(reordered[2], turn("tail"));
+        assert_eq!(ids[3..], [json!("w"), json!("w"), json!("s2"), json!("s2")]);
+        assert_eq!(super::summary_blocks(&reordered, &config), vec![0, 1]);
     }
 
     /// A merge keeps the newest two blocks with the rows kept ahead of them.

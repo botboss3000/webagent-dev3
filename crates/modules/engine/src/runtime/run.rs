@@ -3697,6 +3697,32 @@ impl<
                         Err(error) => return Err(error),
                     }
                 }
+                // MAJOR REORDER: once the provider cache is gone (idle past the model's cache
+                // timeout, or changed tool definitions) moving things costs nothing, so the
+                // retained rows ahead of the blocks go to the instructions before this call.
+                let timeout = Duration::from_secs(
+                    60 * webagent_models::providers::cache_timeout_minutes(
+                        selection.provider,
+                        &selection.model,
+                    ),
+                );
+                if let Some(reason) = super::cache_estimate::reorder_reason(&sid, &schemas, timeout)
+                {
+                    let input = run["input"].as_array().cloned().unwrap_or_default();
+                    run["input"] = json!(context_compaction::reorder(&input, &compaction_config));
+                    run["tool_result_projection"]["rebase"] = json!(true);
+                    context_accounting.reset();
+                    super::cache_estimate::forget(&sid);
+                    tracing::info!(session_id=%sid, run_id=%id, reason, "context reordered");
+                    app.store
+                        .save_run_observed(
+                            &mut run,
+                            "context_reordered",
+                            &json!({"run_id":id,"reason":reason}),
+                        )
+                        .await?;
+                    continue;
+                }
                 let fingerprint = super::cache_estimate::Fingerprint::of(
                     &schemas,
                     &instructions,

@@ -31,6 +31,10 @@ pub struct Model {
     /// uses it until a call in the run reports real usage; absent uses the app default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub characters_per_token: Option<f64>,
+    /// How long the provider keeps this model's prompt cache, in minutes; absent uses the
+    /// provider's value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_timeout_minutes: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -46,6 +50,10 @@ pub struct Provider {
     pub efforts: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<String>,
+    /// How long the provider keeps a prompt cache, in minutes; absent uses
+    /// `DEFAULT_CACHE_TIMEOUT_MINUTES`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_timeout_minutes: Option<u64>,
     #[serde(default)]
     pub models: Vec<Model>,
 }
@@ -241,6 +249,21 @@ pub fn max_output(provider: ProviderId, model: &str) -> Option<usize> {
     listed(provider, model)?
         .max_output
         .and_then(|n| usize::try_from(n).ok())
+}
+
+/// Prompt cache lifetime used when neither the provider nor the model file sets one.
+pub const DEFAULT_CACHE_TIMEOUT_MINUTES: u64 = 60;
+
+/// How long the provider keeps a model's prompt cache, in minutes: the model's value, else
+/// the provider's, else `DEFAULT_CACHE_TIMEOUT_MINUTES`. After that much idle time the next
+/// call reorders the context, since nothing is left to reuse.
+pub fn cache_timeout_minutes(provider: ProviderId, model: &str) -> u64 {
+    let file = load(provider).ok().flatten();
+    file.as_ref()
+        .and_then(|file| file.models.iter().find(|row| row.id == model))
+        .and_then(|row| row.cache_timeout_minutes)
+        .or_else(|| file.as_ref().and_then(|file| file.cache_timeout_minutes))
+        .unwrap_or(DEFAULT_CACHE_TIMEOUT_MINUTES)
 }
 
 /// The provider's published context window (input plus output) for a model.
