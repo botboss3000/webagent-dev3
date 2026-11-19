@@ -69,10 +69,10 @@ pub(crate) async fn guidance_store(
     Ok((!text.trim().is_empty()).then_some(text))
 }
 /// Main Notes context for one model call of session `sid`: the section definitions (how to
-/// use the notes, then the whole notes, pinned until the history basis changes at
-/// compaction) and the updates this session has not received yet, one diff per later notes
+/// use the notes, then the whole notes, pinned until `basis` changes at a rewind or block
+/// merge) and the updates this session has not received yet, one diff per later notes
 /// version another session wrote. The caller adds each update to the session's history,
-/// where it stays (and stays cached) until compaction rebuilds the snapshot.
+/// where it stays (and stays cached); a fold keeps it ahead of its new summary block.
 pub(crate) async fn notes_context_store(
     store: &Store,
     agent: &str,

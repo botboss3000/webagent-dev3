@@ -209,7 +209,7 @@ impl<
             .get(&format!("session:{sid}"))
             .await?
             .ok_or_else(|| anyhow::anyhow!("Context session missing"))?;
-        let basis = webagent_context::assets::history_basis(&session);
+        let basis = webagent_context::assets::notes_basis(&session);
         let (notes, updates) = Box::pin(self.native.main_notes(
             self.store.records(),
             &agent,
@@ -219,7 +219,7 @@ impl<
         ))
         .await?;
         // Another session's Main Notes changes join the history as tool-call rows, once each,
-        // where they stay (and stay cached) until compaction rebuilds the notes.
+        // where they stay (and stay cached); a fold keeps them ahead of its block.
         let mut rows = Vec::new();
         // Each update reads as a main_notes_read of the changes since the version before it.
         for (version, text) in updates {

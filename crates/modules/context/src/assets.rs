@@ -252,6 +252,15 @@ pub fn history_basis(session: &Value) -> String {
         session["checkpoint_through"]
     ]))
 }
+/// The identity of the session's Main Notes snapshot. An ordinary fold keeps the notes
+/// changes in the history ahead of its new block, so only a rewind or a block merge (which
+/// rewrites the start of the history anyway) rebuilds the snapshot.
+pub fn notes_basis(session: &Value) -> String {
+    crate::digest(&json!([
+        session["history_revision"],
+        session["notes_front"]
+    ]))
+}
 /// Place `cap`'s definitions and the host's `extra` ones (id, body), such as Main Notes,
 /// around `history`. An extra body must stay unchanged while its ID is placed.
 pub async fn project_context(

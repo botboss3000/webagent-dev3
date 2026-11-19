@@ -246,9 +246,10 @@ impl Config {
     }
 }
 
-/// Drop the skill text from `load_skill` results and the diffs from the Main Notes update
-/// entries the server adds (`main_notes_read-…` call IDs; the agent's own reads stay) so a summary never keeps them; after compaction the loaded selector places the
-/// current skill text among the skills and the rebuilt snapshot carries the notes.
+/// Drop the skill text from `load_skill` results, Main Notes changes (the server's
+/// `main_notes_read-…` rows and the agent's own `main_notes_write` results; the agent's own
+/// reads stay) and mode changes so a summary never keeps them: a fold keeps them ahead of
+/// its new block (see `apply_summary`), and a merge leaves skills and notes to the prompt.
 pub fn omit_skill_bodies(input: &mut [Value]) {
     let loads = input
         .iter()
@@ -256,15 +257,13 @@ pub fn omit_skill_bodies(input: &mut [Value]) {
         .filter_map(call_id)
         .map(str::to_owned)
         .collect::<HashSet<_>>();
-    // Main Notes updates and mode changes are omitted too: compaction pins the current notes
-    // and mode ahead of the history again.
     let notes = input
         .iter()
         .filter(|item| {
             item["type"] == "function_call"
                 && (matches!(
                     item["name"].as_str(),
-                    Some("main_notes_update" | "mode_guidance" | "set_execution_mode")
+                    Some("main_notes_write" | "mode_guidance" | "set_execution_mode")
                 ) || item["call_id"]
                     .as_str()
                     .is_some_and(|id| id.starts_with("main_notes_read-")))
@@ -278,7 +277,7 @@ pub fn omit_skill_bodies(input: &mut [Value]) {
                 .as_str()
                 .is_some_and(|id| notes.contains(id))
         {
-            item["output"] = json!("Omitted; the notes and mode pinned after compaction carry it.");
+            item["output"] = json!("Omitted; kept ahead of this summary block or in the prompt.");
         }
     }
     for item in input {
@@ -454,19 +453,51 @@ fn is_user(item: &Value) -> bool {
     item.get("role").and_then(Value::as_str) == Some("user")
 }
 
-/// Leading summary blocks: the user items at the start of history that carry a summary
-/// prefix. Folds keep them byte-identical so a provider's cached prefix stays valid.
-pub fn leading_blocks(input: &[Value], config: &Config) -> usize {
-    input
-        .iter()
-        .take_while(|item| {
-            is_user(item)
-                && item["content"].as_str().is_some_and(|text| {
-                    text.starts_with(&config.summary_prefix)
-                        || text.starts_with(&config.active_summary_prefix)
-                })
+/// Whether `item` is a summary block: a user item carrying a summary prefix.
+fn is_summary(item: &Value, config: &Config) -> bool {
+    is_user(item)
+        && item["content"].as_str().is_some_and(|text| {
+            text.starts_with(&config.summary_prefix)
+                || text.starts_with(&config.active_summary_prefix)
         })
-        .count()
+}
+
+/// Tool calls a fold keeps ahead of its new block instead of summarizing: loaded skills,
+/// Main Notes changes and the execution mode.
+fn is_retained_call(item: &Value) -> bool {
+    item["type"] == "function_call"
+        && matches!(
+            item["name"].as_str(),
+            Some("load_skill" | "set_execution_mode" | "main_notes_read" | "main_notes_write")
+        )
+}
+
+/// Indices of the summary blocks at the start of history. Each block may follow the
+/// retained rows its fold kept ahead of it, so the start reads: rows, block, rows, block.
+pub fn summary_blocks(input: &[Value], config: &Config) -> Vec<usize> {
+    let mut retained = HashSet::new();
+    let mut blocks = Vec::new();
+    for (index, item) in input.iter().enumerate() {
+        if is_summary(item, config) {
+            blocks.push(index);
+        } else if is_retained_call(item) {
+            retained.extend(call_id(item).map(str::to_owned));
+        } else if !(item["type"] == "function_call_output"
+            && call_id(item).is_some_and(|id| retained.contains(id)))
+        {
+            break;
+        }
+    }
+    blocks
+}
+
+/// Where the history after the summary blocks starts: everything before it (the blocks and
+/// the rows kept ahead of each) stays byte-identical across folds, so a provider's cached
+/// prefix stays valid.
+pub fn leading_blocks(input: &[Value], config: &Config) -> usize {
+    summary_blocks(input, config)
+        .last()
+        .map_or(0, |last| last + 1)
 }
 
 /// Require usable exchange identities before treating a tool call or result as a safe boundary.
@@ -767,9 +798,11 @@ fn plan_measured(
     }
     // Earlier summaries stay as separate blocks ahead of new history. Once together they
     // outgrow `merge_tokens`, the oldest fold into one block first; the newest two stay.
-    if !force && blocks >= 3 {
-        let drop_until = blocks - 2;
-        let block_bytes = sizes[..blocks].iter().sum::<usize>();
+    let block_indices = summary_blocks(input, config);
+    if let (false, [.., third_last, _, _]) = (force, block_indices.as_slice()) {
+        // The newest two blocks and the rows kept ahead of them stay.
+        let drop_until = third_last + 1;
+        let block_bytes = block_indices.iter().map(|&i| sizes[i]).sum::<usize>();
         if block_bytes > config.token_bytes(config.merge_tokens)
             && config.summary_source(&input[..drop_until])?.len() <= config.max_source_bytes
         {
@@ -929,15 +962,26 @@ fn plan_measured(
     bail!("Context exceeds budget without a completed turn or tool exchange to summarize")
 }
 
+/// Whether a plan cuts the history at a safe point: before a user message for a prior turn
+/// (a merge may also stop before the rows kept ahead of the next block), or right after a
+/// tool output for a completed exchange.
+fn safe_cut(input: &[Value], plan: &Plan) -> bool {
+    match plan.boundary {
+        Boundary::PriorTurn => input.get(plan.drop_until).is_some_and(|item| {
+            is_user(item) || plan.kind == PlanKind::Merge && is_retained_call(item)
+        }),
+        Boundary::CompletedToolExchange => plan
+            .drop_until
+            .checked_sub(1)
+            .and_then(|index| input.get(index))
+            .is_some_and(|item| item["type"] == "function_call_output"),
+    }
+}
+
 /// Replace a planned prefix only after a summary has been generated and validated.
 /// The caller must persist this result before sending it to a provider.
 pub fn apply_summary(input: &[Value], plan: &Plan, summary: &str) -> Result<Vec<Value>> {
-    let valid_boundary = match plan.boundary {
-        Boundary::PriorTurn => plan.drop_until < input.len() && is_user(&input[plan.drop_until]),
-        Boundary::CompletedToolExchange => input
-            .get(plan.drop_until.saturating_sub(1))
-            .is_some_and(|item| item["type"] == "function_call_output"),
-    };
+    let valid_boundary = safe_cut(input, plan);
     if plan.drop_until <= plan.first
         || plan.drop_until > input.len()
         || !valid_boundary
@@ -958,16 +1002,135 @@ pub fn apply_summary(input: &[Value], plan: &Plan, summary: &str) -> Result<Vec<
         (PlanKind::Merge, _) | (_, Boundary::PriorTurn) => &plan.config.summary_prefix,
         (_, Boundary::CompletedToolExchange) => &plan.config.active_summary_prefix,
     };
-    // COMPACTION BLOCKS: earlier blocks stay byte-identical, the new block follows them,
-    // and the retained suffix remains verbatim for the loop to save.
+    // COMPACTION BLOCKS: everything before the new block stays byte-identical. A fold keeps
+    // the summarized range's retained rows just ahead of its block and the rest of the tail
+    // verbatim for the loop to save; a merge leaves skills and notes to the prompt.
     result.extend_from_slice(&input[..plan.first]);
-    result.push(json!({"role":"user","content":format!("{prefix}{summary}")}));
-    result.extend_from_slice(&input[plan.drop_until..]);
+    let block = json!({"role":"user","content":format!("{prefix}{summary}")});
+    match plan.kind {
+        PlanKind::Fold => {
+            let (kept, tail) = retained_rows(
+                &input[plan.first..plan.drop_until],
+                &input[plan.drop_until..],
+            );
+            result.extend(kept);
+            result.push(block);
+            result.extend(tail);
+        }
+        PlanKind::Merge => {
+            result.push(block);
+            result.extend_from_slice(&input[plan.drop_until..]);
+        }
+    }
     let result_bytes = encoded_len(&json!(&result))?;
     if result_bytes > plan.max_bytes && result_bytes >= encoded_len(&json!(input))? {
         bail!("Compacted context did not shrink toward the budget");
     }
     Ok(result)
+}
+
+/// Completed call/output exchanges in `items`, in call order.
+fn exchanges(items: &[Value]) -> Vec<(&Value, &Value)> {
+    let outputs = items
+        .iter()
+        .filter(|item| item["type"] == "function_call_output")
+        .filter_map(|item| Some((call_id(item)?, item)))
+        .collect::<std::collections::HashMap<_, _>>();
+    items
+        .iter()
+        .filter(|item| item["type"] == "function_call")
+        .filter_map(|call| Some((call, *outputs.get(call_id(call)?)?)))
+        .collect()
+}
+
+/// Whether a `load_skill` output still carries the skill text the model reads.
+fn skill_loaded(output: &Value) -> bool {
+    output["output"]
+        .as_str()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .is_some_and(|result| {
+            result["output"]["status"] == "loaded" && result["output"]["text"].is_string()
+        })
+}
+
+/// A Main Notes change: the server's `main_notes_read-…` rows (another session's writes)
+/// and this session's own `main_notes_write` results.
+fn is_notes_change(call: &Value) -> bool {
+    call["name"] == "main_notes_write"
+        || call["name"] == "main_notes_read"
+            && call_id(call).is_some_and(|id| id.starts_with("main_notes_read-"))
+}
+
+/// The rows a fold keeps ahead of its new block, and the tail without the ones it moved:
+/// each `load_skill` exchange still carrying its text (so the skill stays out of the
+/// prompt), the latest mode change unless the tail shows a newer one, and every Main Notes
+/// change from the range and the tail combined into one `main_notes_read` exchange.
+fn retained_rows(range: &[Value], tail: &[Value]) -> (Vec<Value>, Vec<Value>) {
+    let in_range = exchanges(range);
+    let mut kept = Vec::new();
+    for (call, output) in &in_range {
+        if call["name"] == "load_skill" && skill_loaded(output) {
+            kept.extend([(*call).clone(), (*output).clone()]);
+        }
+    }
+    let in_tail = exchanges(tail);
+    if !in_tail
+        .iter()
+        .any(|(call, _)| call["name"] == "set_execution_mode")
+    {
+        if let Some((call, output)) = in_range
+            .iter()
+            .rev()
+            .find(|(call, _)| call["name"] == "set_execution_mode")
+        {
+            kept.extend([(*call).clone(), (*output).clone()]);
+        }
+    }
+    let changes = in_range
+        .iter()
+        .chain(&in_tail)
+        .filter(|(call, _)| is_notes_change(call))
+        .collect::<Vec<_>>();
+    let moved = in_tail
+        .iter()
+        .filter(|(call, _)| is_notes_change(call))
+        .filter_map(|(call, _)| call_id(call))
+        .collect::<HashSet<_>>();
+    let tail = tail
+        .iter()
+        .filter(|item| !call_id(item).is_some_and(|id| moved.contains(id)))
+        .cloned()
+        .collect();
+    if !changes.is_empty() {
+        let text = changes
+            .iter()
+            .map(|(call, output)| {
+                let body = output["output"]
+                    .as_str()
+                    .map_or_else(|| output["output"].to_string(), str::to_owned);
+                if call["name"] == "main_notes_write" {
+                    format!("This session wrote: {body}")
+                } else {
+                    body
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let text = format!(
+            "Main Notes changes after the notes in the instructions, oldest first:\n\n{text}"
+        );
+        let id = format!(
+            "main_notes_read-{}",
+            &hex::encode(Sha256::digest(&text))[..16]
+        );
+        let arguments = json!({"changed_by":"combined at compaction"}).to_string();
+        kept.push(
+            json!({"type":"function_call","call_id":id,"name":"main_notes_read",
+            "arguments":arguments}),
+        );
+        kept.push(json!({"type":"function_call_output","call_id":id,"output":text}));
+    }
+    (kept, tail)
 }
 
 /// Validate an untrusted live plan against host-owned policy and exact current input.
@@ -1003,7 +1166,12 @@ pub fn validate_external_plan(
     let blocks = leading_blocks(input, config);
     let range = match plan.kind {
         PlanKind::Fold => plan.first == blocks && plan.drop_until > blocks,
-        PlanKind::Merge => plan.first == 0 && blocks >= 3 && plan.drop_until + 2 == blocks,
+        PlanKind::Merge => {
+            let indices = summary_blocks(input, config);
+            plan.first == 0
+                && indices.len() >= 3
+                && plan.drop_until == indices[indices.len() - 3] + 1
+        }
     };
     if !range {
         return Err(stale("summary blocks"));
@@ -1018,13 +1186,7 @@ pub fn validate_external_plan(
     }) {
         return Err(stale("summary model budget"));
     }
-    let valid_boundary = match plan.boundary {
-        Boundary::PriorTurn => input.get(plan.drop_until).is_some_and(is_user),
-        Boundary::CompletedToolExchange => {
-            input[plan.drop_until - 1]["type"] == "function_call_output"
-        }
-    };
-    if !valid_boundary {
+    if !safe_cut(input, plan) {
         return Err(stale("boundary"));
     }
     let mut seen = HashSet::new();
@@ -1184,6 +1346,91 @@ mod tests {
         assert!(super::plan_until(&input, 4, &small).unwrap().is_none());
     }
 
+    /// A fold keeps loaded skills, the latest mode and one combined Main Notes change ahead
+    /// of its block; the next fold leaves all of that and the first block byte-identical.
+    #[test]
+    fn folds_keep_retained_rows_ahead_of_each_block() {
+        let config = requested_config();
+        let skill = json!({"status":"success","output":{"status":"loaded","text":"SKILL"}});
+        let pair = |id: &str, name: &str, output: String| {
+            [
+                json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":id,"output":output}),
+            ]
+        };
+        let mut input = vec![turn(&"first task ".repeat(30))];
+        input.extend(pair("s", "load_skill", skill.to_string()));
+        input.extend(pair("m1", "set_execution_mode", "old".into()));
+        input.extend(pair("m2", "set_execution_mode", "new".into()));
+        input.extend(pair(
+            "main_notes_read-x",
+            "main_notes_read",
+            "other: +a".into(),
+        ));
+        input.extend(pair("r", "file_read", "x".repeat(200)));
+        input.push(turn("second task"));
+        input.extend(pair("w", "main_notes_write", "own: +b".into()));
+        let plan = super::plan_until(&input, 11, &config).unwrap().unwrap();
+        assert_eq!((plan.first, plan.drop_until), (0, 11));
+        let once = super::apply_summary(&input, &plan, "first task done").unwrap();
+        let names: Vec<_> = once.iter().map(|item| item["name"].clone()).collect();
+        assert_eq!(&once[..2], &input[1..3]);
+        assert_eq!(once[3]["output"], "new");
+        assert!(once[5]["output"]
+            .as_str()
+            .unwrap()
+            .contains("other: +a\n\nThis session wrote: own: +b"));
+        assert!(super::is_summary(&once[6], &config) && once[7] == input[11]);
+        assert_eq!(names.iter().filter(|n| *n == "main_notes_write").count(), 0);
+        assert_eq!(super::leading_blocks(&once, &config), 7);
+        let mut more = once.clone();
+        more.push(turn(&"third task ".repeat(30)));
+        more.extend(pair("s2", "load_skill", skill.to_string()));
+        more.push(turn("fourth task"));
+        let plan = super::plan_until(&more, 11, &config).unwrap().unwrap();
+        assert_eq!(plan.first, 7);
+        let twice = super::apply_summary(&more, &plan, "third task done").unwrap();
+        assert_eq!(&twice[..7], &once[..7]);
+        assert_eq!(twice[8]["call_id"], "s2");
+        assert_eq!(super::summary_blocks(&twice, &config), vec![6, 9]);
+    }
+
+    /// A merge keeps the newest two blocks with the rows kept ahead of them.
+    #[test]
+    fn merges_keep_the_newest_two_blocks_and_their_rows() {
+        let config = requested_config();
+        let block = |n: usize| {
+            turn(&format!(
+                "{}block {n} {}",
+                config.summary_prefix,
+                "x".repeat(400)
+            ))
+        };
+        let row = |id: &str| {
+            [
+                json!({"type":"function_call","call_id":id,"name":"set_execution_mode","arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":id,"output":"mode"}),
+            ]
+        };
+        let mut input = vec![block(1)];
+        input.extend(row("a"));
+        input.push(block(2));
+        input.extend(row("b"));
+        input.push(block(3));
+        input.push(turn("now"));
+        assert_eq!(super::summary_blocks(&input, &config), vec![0, 3, 6]);
+        let mut merging = config.clone();
+        merging.merge_tokens = 1;
+        let plan = super::plan_rolling(&input, 400, &merging).unwrap().unwrap();
+        assert_eq!(
+            (plan.kind, plan.first, plan.drop_until),
+            (super::PlanKind::Merge, 0, 1)
+        );
+        super::validate_external_plan(&input, &plan, &merging, 400).unwrap();
+        let merged = super::apply_summary(&input, &plan, "blocks one").unwrap();
+        assert_eq!(&merged[1..], &input[1..]);
+    }
+
     /// `/compact` keeps the configured tail verbatim and folds what lies before it.
     #[test]
     fn plan_command_keeps_the_tail() {
@@ -1230,7 +1477,7 @@ mod tests {
             json!({"type":"function_call","call_id":"s","name":"load_skill","arguments":"{}"}),
             json!({"type":"function_call_output","call_id":"s",
                 "output":json!({"status":"success","output":{"status":"loaded","text":"SKILL"}}).to_string()}),
-            json!({"type":"function_call","call_id":"n","name":"main_notes_update","arguments":"{}"}),
+            json!({"type":"function_call","call_id":"n","name":"main_notes_write","arguments":"{}"}),
             json!({"type":"function_call_output","call_id":"n","output":"- old line\n+ new line"}),
             json!({"type":"function_call","call_id":"f","name":"file_read","arguments":"{}"}),
             json!({"type":"function_call_output","call_id":"f","output":"kept"}),
@@ -1238,7 +1485,10 @@ mod tests {
         super::omit_skill_bodies(&mut input);
         let text = json!(input).to_string();
         assert!(!text.contains("SKILL") && text.contains("text_omitted"));
-        assert!(!text.contains("new line") && text.contains("Omitted; the notes and mode pinned"));
+        assert!(
+            !text.contains("new line")
+                && text.contains("Omitted; kept ahead of this summary block")
+        );
         assert_eq!(input[5]["output"], "kept");
     }
 }

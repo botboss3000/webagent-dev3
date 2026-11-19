@@ -2829,6 +2829,7 @@ impl<
                                     &json!({"run_id":id,"source_digest":plan.source_digest,
                                         "segment_id":segment_id,"source":plan.source,
                                         "dropped_items":plan.drop_until,
+                                        "merge":plan.kind == context_compaction::PlanKind::Merge,
                                         "summary_bytes":summary.len()}),
                                 )
                                 .await?;
@@ -3361,7 +3362,8 @@ impl<
                         "context_compacted",
                         &json!({"run_id":id,"source_digest":plan.source_digest,
                             "segment_id":segment_id,"source":plan.source,
-                            "dropped_items":plan.drop_until,"summary_bytes":summary.as_deref().map_or(0,str::len)}),
+                            "dropped_items":plan.drop_until,"merge":plan.kind == context_compaction::PlanKind::Merge,
+                            "summary_bytes":summary.as_deref().map_or(0,str::len)}),
                     )
                     .await?;
                     continue;

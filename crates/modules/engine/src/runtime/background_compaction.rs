@@ -110,11 +110,12 @@ pub fn cached_tokens(response: &Value) -> Option<u64> {
 /// History is never edited (that would break the cached prefix), so the range is named by
 /// what the model can see: the earlier blocks and the item where the range ends.
 pub fn fork_message(plan: &Plan, history: &[Value], config: &Config) -> String {
-    let start = match plan.first {
-        0 => "from the start of the conversation".to_owned(),
-        1 => "after the earlier summary block at the start".to_owned(),
-        n => format!("after the {n} earlier summary blocks at the start"),
-    };
+    let start =
+        match crate::context_compaction::summary_blocks(&history[..plan.first], config).len() {
+            0 => "from the start of the conversation".to_owned(),
+            1 => "after the earlier summary block at the start".to_owned(),
+            n => format!("after the {n} earlier summary blocks at the start"),
+        };
     let end = match plan.boundary {
         Boundary::CompletedToolExchange => {
             let call = history[plan.drop_until - 1]["call_id"]

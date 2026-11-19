@@ -761,6 +761,11 @@ impl<
                 .await?;
                 session["checkpoint_input"] = run["input"].clone();
                 session["checkpoint_through"] = json!(through);
+                // A merge drops the notes changes kept ahead of its blocks: rebuild the snapshot.
+                if payload["merge"] == true {
+                    session["notes_front"] =
+                        json!(session["notes_front"].as_u64().unwrap_or(0) + 1);
+                }
                 // The original source and the new checkpoint share this user-plane
                 // transaction. A recall segment cannot appear without its summary.
                 let source = payload["source"]
