@@ -27,6 +27,18 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufRead
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
+/// The argument names worker tool `tool` accepts, from the same lists its runtime check
+/// uses; `None` for a tool that checks no allowlist (it reads only the names it uses) or
+/// is not a worker tool. A test holds these equal to each tool.json.
+#[must_use]
+pub fn argument_names(tool: &str) -> Option<Vec<&'static str>> {
+    terminal::arguments(tool)
+        .or_else(|| tunnel::arguments(tool))
+        .or_else(|| git::arguments(tool))
+        .map(<[&str]>::to_vec)
+        .or_else(|| browser::rules::arguments(tool))
+}
+
 /// Longest request line accepted.
 const REQUEST_LIMIT: u64 = 2 * 1024 * 1024;
 /// A caller has this long to send its request line.
@@ -939,5 +951,136 @@ mod tests {
         assert_eq!(linked["result"], json!({"status":"success"}), "{linked}");
         assert!(std::fs::symlink_metadata(workspaces.join(deleted)).is_err());
         assert!(outside.join("keep.txt").is_file());
+    }
+
+    /// Worker tools that check no argument allowlist: they read only the names they use,
+    /// and the engine check refuses any name their tool.json does not declare.
+    const NO_ALLOWLIST: [&str; 13] = [
+        "decision_candidates",
+        "file_list",
+        "file_read",
+        "file_search",
+        "file_edit",
+        "file_write",
+        "checkout_edit",
+        "shell",
+        "python",
+        "sandbox_shell",
+        "sandbox_python",
+        "sandbox_file",
+        "sandbox_element",
+    ];
+    /// Requests the app sends itself, with no tool.json.
+    const INTERNAL: [&str; 4] = [
+        "administrator_git_watch",
+        "administrator_artifact_get",
+        "browser_protocol",
+        plugins::TOOL,
+    ];
+    /// Known differences: (tool, name, why). Each must still differ, so a fixed one is
+    /// removed here.
+    const DRIFT: [(&str, &str, &str); 2] = [
+        (
+            "browser_read",
+            "expected_sequence",
+            "code-only leftover, allowed only as 0 or blank; the engine refuses it first",
+        ),
+        (
+            "browser_input",
+            "expected_sequence",
+            "code-only leftover, allowed only as 0 or blank; the engine refuses it first",
+        ),
+    ];
+
+    /// The `parameters.properties` names of `tool`'s tool.json under `root`.
+    fn declared(root: &Path, tool: &str) -> Option<std::collections::BTreeSet<String>> {
+        for group in std::fs::read_dir(root).ok()?.flatten() {
+            for ability in std::fs::read_dir(group.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let path = ability
+                    .path()
+                    .join("tools")
+                    .join(tool)
+                    .join(format!("{tool}.tool.json"));
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    let json: Value = serde_json::from_str(&text).expect("tool.json parses");
+                    let properties = json["parameters"]["properties"]
+                        .as_object()
+                        .map(|properties| properties.keys().cloned().collect());
+                    return Some(properties.unwrap_or_default());
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn worker_tools_accept_exactly_their_declared_arguments() {
+        let root = std::env::var_os("V3_ABILITIES_ROOT").map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../abilities"),
+            PathBuf::from,
+        );
+        let tools = files::TOOLS
+            .iter()
+            .chain(&git::TOOLS)
+            .chain(&sandbox_tools::TOOLS)
+            .chain(&commands::TOOLS)
+            .chain(&terminal::TOOLS)
+            .chain(&tunnel::TOOLS)
+            .chain(&browser::TOOLS)
+            .chain(&[plugins::TOOL]);
+        let mut problems = Vec::new();
+        let mut drift_seen = Vec::new();
+        for &tool in tools {
+            let accepted = argument_names(tool);
+            if NO_ALLOWLIST.contains(&tool) || INTERNAL.contains(&tool) {
+                if accepted.is_some() {
+                    problems.push(format!(
+                        "{tool}: has an allowlist; remove it from the skip lists"
+                    ));
+                }
+                continue;
+            }
+            let Some(accepted) = accepted else {
+                problems.push(format!("{tool}: no allowlist from argument_names"));
+                continue;
+            };
+            let Some(declared) = declared(&root, tool) else {
+                problems.push(format!("{tool}: no tool.json under {}", root.display()));
+                continue;
+            };
+            let accepted: std::collections::BTreeSet<String> =
+                accepted.iter().map(|name| (*name).to_owned()).collect();
+            for (name, side) in accepted
+                .difference(&declared)
+                .map(|name| (name, "accepted by the worker, not declared in tool.json"))
+                .chain(
+                    declared
+                        .difference(&accepted)
+                        .map(|name| (name, "declared in tool.json, refused by the worker")),
+                )
+            {
+                if DRIFT.iter().any(|(t, n, _)| *t == tool && n == name) {
+                    drift_seen.push((tool, name.clone()));
+                } else {
+                    problems.push(format!("{tool}: {name} {side}"));
+                }
+            }
+        }
+        for (tool, name, _) in DRIFT {
+            if !drift_seen.iter().any(|(t, n)| *t == tool && n == name) {
+                problems.push(format!(
+                    "{tool}: {name} no longer differs; drop it from DRIFT"
+                ));
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "argument drift:\n{}",
+            problems.join("\n")
+        );
     }
 }

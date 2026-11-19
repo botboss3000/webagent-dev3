@@ -40,6 +40,18 @@ pub fn handles(name: &str) -> bool {
     TOOLS.contains(&name)
 }
 
+const START_ARGUMENTS: [&str; 2] = ["port", "duration_seconds"];
+
+/// The argument names tunnel tool `name` accepts; `get_tunnel_url` takes none.
+#[must_use]
+pub fn arguments(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "start_tunnel" => Some(&START_ARGUMENTS),
+        "get_tunnel_url" => Some(&[]),
+        _ => None,
+    }
+}
+
 /// Decides whether `port` belongs to the workspace `base` right now.
 pub type Validator =
     Arc<dyn Fn(PathBuf, u16) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
@@ -586,7 +598,7 @@ impl Tunnels {
         if name != "start_tunnel"
             || args
                 .keys()
-                .any(|key| key != "port" && key != "duration_seconds")
+                .any(|key| !START_ARGUMENTS.contains(&key.as_str()))
         {
             return Err(invalid("Invalid preview start"));
         }

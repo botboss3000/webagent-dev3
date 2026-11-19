@@ -653,6 +653,16 @@ pub(super) async fn network(
     Ok(output)
 }
 
+/// The arguments `commit_and_push` accepts.
+pub(super) const COMMIT_AND_PUSH_KEYS: [&str; 6] = [
+    "repo",
+    "paths",
+    "message",
+    "expected_head",
+    "expected_review_sha256",
+    "remote",
+];
+
 /// Commits exactly the reviewed paths and pushes them to a granted remote.
 pub(super) async fn commit_and_push(
     root: &Path,
@@ -662,14 +672,7 @@ pub(super) async fn commit_and_push(
     let args = without_empty(args, &["repo", "remote"]);
     exact(
         &args,
-        &[
-            "repo",
-            "paths",
-            "message",
-            "expected_head",
-            "expected_review_sha256",
-            "remote",
-        ],
+        &COMMIT_AND_PUSH_KEYS,
         &[
             "paths",
             "message",

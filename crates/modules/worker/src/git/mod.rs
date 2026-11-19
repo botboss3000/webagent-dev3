@@ -9,8 +9,8 @@ pub mod guard;
 pub mod manager;
 mod remote;
 
-use conflict::resolve_conflict;
-use remote::{commit_and_push, fence, network};
+use conflict::{resolve_conflict, RESOLVE_CONFLICT_KEYS};
+use remote::{commit_and_push, fence, network, COMMIT_AND_PUSH_KEYS};
 pub use remote::{connections, Connection};
 
 use crate::sandbox;
@@ -881,6 +881,18 @@ pub const TOOLS: [&str; 4] = [
 #[must_use]
 pub fn handles(name: &str) -> bool {
     TOOLS.contains(&name)
+}
+
+/// The argument names Git Control tool `name` accepts; the repository watch is not a
+/// model tool.
+#[must_use]
+pub fn arguments(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "git_tool" => Some(&GIT_TOOL_KEYS),
+        "resolve_conflict" => Some(&RESOLVE_CONFLICT_KEYS),
+        "commit_and_push" => Some(&COMMIT_AND_PUSH_KEYS),
+        _ => None,
+    }
 }
 
 /// The arguments that apply to `operation`; empty defaults of the others are dropped and

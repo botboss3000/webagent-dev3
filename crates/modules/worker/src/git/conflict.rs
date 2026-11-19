@@ -55,12 +55,15 @@ fn replace_source(
     result
 }
 
+/// The arguments `resolve_conflict` accepts.
+pub(super) const RESOLVE_CONFLICT_KEYS: [&str; 4] = ["repo", "path", "strategy", "expected_sha256"];
+
 /// `ours`/`theirs` takes that side's stage; `both` keeps both sides of every conflict.
 pub(super) async fn resolve_conflict(root: &Path, args: &Map<String, Value>) -> Outcome<Value> {
     let args = without_empty(args, &["repo", "remote"]);
     exact(
         &args,
-        &["repo", "path", "strategy", "expected_sha256"],
+        &RESOLVE_CONFLICT_KEYS,
         &["path", "strategy", "expected_sha256"],
     )?;
     let repo = repository(root, args.get("repo").unwrap_or(&json!("webagent-v3")))?;

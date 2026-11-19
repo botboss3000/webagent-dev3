@@ -720,6 +720,58 @@ fn permitted(action: &str) -> &'static [&'static str] {
     }
 }
 
+/// The fields one `browser_read` call accepts.
+const READ_ARGUMENTS: [&str; 21] = [
+    "action",
+    "url",
+    "signed_in",
+    "selector",
+    "offset",
+    "condition",
+    "text",
+    "timeout_ms",
+    "quiet_ms",
+    "duration_ms",
+    "ms",
+    "dx",
+    "dy",
+    "preset",
+    "height",
+    "color_scheme",
+    "reduced_motion",
+    "styles",
+    "points",
+    "expected_sequence",
+    "label",
+];
+/// The fields one `browser_input` call accepts.
+const INPUT_ARGUMENTS: [&str; 10] = [
+    "action",
+    "selector",
+    "text",
+    "key",
+    "vault",
+    "totp",
+    "origin",
+    "dx",
+    "dy",
+    "expected_sequence",
+];
+const RECORD_ARGUMENTS: [&str; 1] = ["action"];
+
+/// The argument names browser tool `name` accepts: one call's fields, plus `steps` for
+/// a `script` call of `browser_read` or `browser_input`.
+#[must_use]
+pub fn arguments(name: &str) -> Option<Vec<&'static str>> {
+    let (call, script): (&[&str], &[&str]) = match name {
+        "browser_read" => (&READ_ARGUMENTS, &["steps"]),
+        "browser_input" => (&INPUT_ARGUMENTS, &["steps"]),
+        "browser_record" => (&RECORD_ARGUMENTS, &[]),
+        _ => return None,
+    };
+    Some(call.iter().chain(script).copied().collect())
+}
+
 /// Rejects unknown or action-inapplicable fields before browser effects, dropping empty
 /// optional fields a schema may emit. Returns the action.
 ///
@@ -735,32 +787,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                     READ_ACTIONS.join(", ")
                 )));
             };
-            (
-                &[
-                    "action",
-                    "url",
-                    "signed_in",
-                    "selector",
-                    "offset",
-                    "condition",
-                    "text",
-                    "timeout_ms",
-                    "quiet_ms",
-                    "duration_ms",
-                    "ms",
-                    "dx",
-                    "dy",
-                    "preset",
-                    "height",
-                    "color_scheme",
-                    "reduced_motion",
-                    "styles",
-                    "points",
-                    "expected_sequence",
-                    "label",
-                ],
-                found,
-            )
+            (&READ_ARGUMENTS, found)
         }
         "browser_input" => {
             let Some(found) = INPUT_ACTIONS.iter().find(|known| **known == action) else {
@@ -768,21 +795,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                     "browser_input actions: click, type, press, touch, wheel, pinch, hover, save_login; everything else uses browser_read",
                 ));
             };
-            (
-                &[
-                    "action",
-                    "selector",
-                    "text",
-                    "key",
-                    "vault",
-                    "totp",
-                    "origin",
-                    "dx",
-                    "dy",
-                    "expected_sequence",
-                ],
-                found,
-            )
+            (&INPUT_ARGUMENTS, found)
         }
         "browser_record" => {
             let Some(found) = ["start", "stop", "status"]
@@ -791,7 +804,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
             else {
                 return Err(Fault::rejected("Unsupported recorder action"));
             };
-            (&["action"], found)
+            (&RECORD_ARGUMENTS, found)
         }
         _ => return Err(Fault::rejected("Unknown browser tool")),
     };

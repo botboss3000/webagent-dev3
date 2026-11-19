@@ -36,6 +36,20 @@ pub fn handles(name: &str) -> bool {
     TOOLS.contains(&name)
 }
 
+/// The argument names terminal tool `name` accepts; any other name is refused.
+#[must_use]
+pub fn arguments(name: &str) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "terminal_open" => &["command", "cols", "rows"],
+        "terminal_read" => &["terminal_id", "cursor"],
+        "terminal_send" => &["terminal_id", "expected_sequence", "text", "keys"],
+        "terminal_wait" => &["terminal_id", "cursor", "timeout_seconds"],
+        "terminal_list" => &[],
+        "terminal_close" => &["terminal_id"],
+        _ => return None,
+    })
+}
+
 fn key(name: &str) -> Option<&'static [u8]> {
     Some(match name {
         "enter" => b"\r",
@@ -284,14 +298,8 @@ impl Terminals {
         let Value::Object(args) = args else {
             return Err("arguments must be an object".into());
         };
-        let allowed: &[&str] = match name {
-            "terminal_open" => &["command", "cols", "rows"],
-            "terminal_read" => &["terminal_id", "cursor"],
-            "terminal_send" => &["terminal_id", "expected_sequence", "text", "keys"],
-            "terminal_wait" => &["terminal_id", "cursor", "timeout_seconds"],
-            "terminal_list" => &[],
-            "terminal_close" => &["terminal_id"],
-            _ => return Err("unknown tool or argument".into()),
+        let Some(allowed) = arguments(name) else {
+            return Err("unknown tool or argument".into());
         };
         if args.keys().any(|key| !allowed.contains(&key.as_str())) {
             return Err("unknown tool or argument".into());
