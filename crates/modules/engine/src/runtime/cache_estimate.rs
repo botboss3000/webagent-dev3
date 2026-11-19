@@ -115,6 +115,18 @@ pub fn observe(session: &str, current: Fingerprint) -> Value {
     estimate
 }
 
+/// Log one line per model call with the provider's cache figures beside the estimate.
+pub fn log_call(session: &str, run_id: &str, run: &Value) {
+    let (latest, estimate) = (&run["usage"]["latest"], &run["usage"]["cache_estimate"]);
+    tracing::info!(session_id=%session, run_id=%run_id,
+        input_tokens=latest["input_tokens"].as_u64(), cached_tokens=latest["cached_input_tokens"].as_u64(),
+        cache_write_tokens=latest["cache_write_tokens"].as_u64(),
+        matched_bytes=estimate["matched_bytes"].as_u64(), sent_bytes=estimate["sent_bytes"].as_u64(),
+        first_change=estimate["first_change"].as_str().unwrap_or(""),
+        first_change_entry=estimate["first_change_entry"].as_u64(),
+        compactions=run["compactions"].as_u64().unwrap_or(0), "model call cache");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

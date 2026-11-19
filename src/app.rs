@@ -840,7 +840,9 @@ async fn run_process() -> Result<()> {
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("webagent_v3=info".parse()?)
                 // Engine warnings say why a run was stopped, refused or deferred.
-                .add_directive("webagent_engine=warn".parse()?),
+                .add_directive("webagent_engine=warn".parse()?)
+                // One line per model call with cache statistics (cache_estimate.rs).
+                .add_directive("webagent_engine::runtime::cache_estimate=info".parse()?),
         )
         .init();
     if let Some(path) = std::env::args()

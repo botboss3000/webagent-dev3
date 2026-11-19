@@ -3983,14 +3983,7 @@ impl<
                     }
                     Ok(response) => {
                         X::record_usage(&mut run, &response);
-                        let (latest, estimate) =
-                            (&run["usage"]["latest"], &run["usage"]["cache_estimate"]);
-                        tracing::info!(session_id=%sid, run_id=%id,
-                            input_tokens=latest["input_tokens"].as_u64(), cached_tokens=latest["cached_input_tokens"].as_u64(),
-                            cache_write_tokens=latest["cache_write_tokens"].as_u64(),
-                            matched_bytes=estimate["matched_bytes"].as_u64(), sent_bytes=estimate["sent_bytes"].as_u64(),
-                            first_change=estimate["first_change"].as_str().unwrap_or(""),
-                            compactions=run["compactions"].as_u64().unwrap_or(0), "model call cache");
+                        super::cache_estimate::log_call(&sid, &id, &run);
                         // A completed reply ends this call's failover attempt: the next
                         // call starts with a fresh retry budget and no carried-over
                         // response or tool-effect flags. The pinned candidate and its
