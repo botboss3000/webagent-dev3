@@ -73,8 +73,27 @@ test('long press opens once, suppresses navigation, cancels on movement and tear
  await trigger.dispatchEvent('pointerup',{pointerType:'touch',pointerId:1});await trigger.dispatchEvent('click');assert.equal(await p.locator('#session-dropdown-menu').isVisible(),false);
  await p.keyboard.press('Escape');await p.waitForTimeout(1000);
  await trigger.dispatchEvent('pointerdown',{pointerType:'touch',pointerId:2,isPrimary:true,clientX:20,clientY:30});await p.locator('body').dispatchEvent('pointermove',{pointerType:'touch',pointerId:2,clientX:80,clientY:30});await p.waitForTimeout(320);assert.equal(await p.locator('.session-row-actions').count(),0);
- await openList(p);const row=p.locator('.session-row[data-id="s1"]');await row.dispatchEvent('pointerdown',{pointerType:'touch',pointerId:3,isPrimary:true,clientX:30,clientY:90});await p.waitForTimeout(320);assert.equal(await p.locator('.session-row-actions').count(),1);await row.dispatchEvent('click');assert.equal(await p.evaluate(()=>selectedCalls.length),0);
+ await openList(p);const row=p.locator('.session-row[data-id="s1"]');await row.dispatchEvent('pointerdown',{pointerType:'touch',pointerId:3,isPrimary:true,clientX:30,clientY:90});await p.waitForTimeout(320);assert.equal(await p.locator('.session-row-actions').count(),1);
+ const held=await p.locator('.session-row-actions').boundingBox();assert.ok(Math.abs(held.x-30)<=1&&Math.abs(held.y-90)<=1,JSON.stringify(held));
+ await row.dispatchEvent('click');assert.equal(await p.evaluate(()=>selectedCalls.length),0);
  await p.keyboard.press('Escape');await row.dispatchEvent('pointerdown',{pointerType:'touch',pointerId:4,isPrimary:true,clientX:30,clientY:90});await p.evaluate(()=>{list.destroy();controller.destroy();});await p.waitForTimeout(320);assert.equal(await p.locator('.session-row-actions').count(),0);
+});
+test('right-click opens the row action panel at the pointer and keeps it inside the viewport',async t=>{
+ const p=await fixture(t);await openList(p);
+ const row=p.locator('.session-row[data-id="s3"]'),box=await row.boundingBox();
+ await row.click({button:'right',position:{x:40,y:10}});
+ const menu=p.locator('.session-row-actions');await menu.waitFor();
+ const rect=await menu.boundingBox(),point={x:box.x+40,y:box.y+10};
+ assert.ok(Math.abs(rect.x-point.x)<=1&&Math.abs(rect.y-point.y)<=1,JSON.stringify({rect,point}));
+ assert.ok(rect.y>40,'the panel must not stay parked in the top-left corner');
+ assert.equal(await p.evaluate(()=>selectedCalls.length),0);
+ // A press at the viewport's bottom-right edge pulls the panel fully back inside it.
+ await p.keyboard.press('Escape');
+ assert.equal(await p.locator('.session-row-actions').count(),0);
+ await p.evaluate(()=>document.querySelector('.session-row[data-id="s17"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:1276,clientY:896})));
+ await p.locator('.session-row-actions').waitFor();
+ const edge=await p.locator('.session-row-actions').boundingBox();
+ assert.ok(edge.x>=4&&edge.y>=4&&edge.x+edge.width<=1280&&edge.y+edge.height<=900,JSON.stringify(edge));
 });
 test('configuration deep-merges surface overlays without consulting legacy chat settings',async t=>{
  const p=await fixture(t);await p.route('**/session-dropdown.json',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({common:{menu:{rename:true,delete:true},footer:{enabled:true}},mobile:{menu:{delete:false},footer:{enabled:false}}})}));

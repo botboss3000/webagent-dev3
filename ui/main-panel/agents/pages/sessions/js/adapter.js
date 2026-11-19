@@ -13,7 +13,13 @@ export const _formatRelativeTime = value => {
   return seconds+'s ago';
 };
 export const _fmtTime = value => value ? _formatRelativeTime(value) : '—';
-export function positionKebabPopup(popup,button){const r=button.getBoundingClientRect();popup.style.position='fixed';popup.style.zIndex='10000';popup.style.top=Math.max(4,Math.min(r.bottom,innerHeight-popup.offsetHeight-4))+'px';popup.style.left=Math.max(4,Math.min(r.right-popup.offsetWidth,innerWidth-popup.offsetWidth-4))+'px';}
+// Place a row action popup at the pointer, or under its button, inside the viewport.
+export function positionKebabPopup(popup,button,point){
+  const r=button.getBoundingClientRect();popup.style.position='fixed';popup.style.zIndex='10000';
+  const top=point?point.y:r.bottom,left=point?point.x:r.right-popup.offsetWidth;
+  popup.style.top=Math.max(4,Math.min(top,innerHeight-popup.offsetHeight-4))+'px';
+  popup.style.left=Math.max(4,Math.min(left,innerWidth-popup.offsetWidth-4))+'px';
+}
 // Main Chats form one recent-activity group regardless of their pin flags.
 export const compareSessionsByPinnedOrder = (a,b) => {
   const am=a.main_chat===true&&a._origin!=='archived',bm=b.main_chat===true&&b._origin!=='archived';

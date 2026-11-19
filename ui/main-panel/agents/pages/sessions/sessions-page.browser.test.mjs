@@ -43,6 +43,13 @@ let browser;try{
  await page.locator('#sessions-undo-btn').click();await page.waitForTimeout(500);await page.locator('#sessions-undo-btn').click();await page.waitForTimeout(300);
  assert.deepEqual(await page.evaluate(()=>fixture.writes.filter(w=>w.path.endsWith('/unarchive')).map(w=>w.id)),['b'],'unarchive acts on the retained just-archived context');
  await page.locator('[data-sessions-footer-view="archived"]').click();await page.waitForTimeout(300);
+ const archivedRow=page.locator('tr[data-session-id="c"]'),archivedBox=await archivedRow.boundingBox(),opensBefore=await page.evaluate(()=>fixture.opens.length);
+ await archivedRow.click({button:'right',position:{x:90,y:12}});
+ const rightMenu=page.locator('.session-row-actions');await rightMenu.waitFor();await page.waitForTimeout(60);
+ const rightBox=await rightMenu.boundingBox(),rightPoint={x:archivedBox.x+90,y:archivedBox.y+12};
+ assert.ok(Math.abs(rightBox.x-rightPoint.x)<=2&&Math.abs(rightBox.y-rightPoint.y)<=2,JSON.stringify({rightBox,rightPoint}));
+ assert.equal(await page.evaluate(()=>fixture.opens.length),opensBefore,'a right-click must not open the session');
+ await page.keyboard.press('Escape');assert.equal(await page.locator('.session-row-actions').count(),0);
  await page.locator('tr[data-session-id="c"] [data-session-row-more]').click();const remove=page.locator('.session-row-actions [data-action="delete"]');assert.equal(await remove.isDisabled(),false);
  await remove.click();await page.waitForTimeout(500);assert.equal(await page.evaluate(()=>fixture.writes.some(w=>w.method==='DELETE')),false,'the first press only arms the permanent delete');
  await remove.click();await page.waitForTimeout(300);

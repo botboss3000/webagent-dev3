@@ -1774,13 +1774,13 @@ function _copySessionRowId(value, label, row) {
   }).catch(() => {});
 }
 
-function _openSessionRowActions(sid, kebabBtn) {
+function _openSessionRowActions(sid, anchor, point) {
   const sess = _sessionRowById(sid);
-  if (!sess || !kebabBtn) return;
+  if (!sess || !anchor) return;
   _closeSessionRowActions();
   const toggle = flagToggle(sess);
   const lastSeen = '';
-  const tableRow = kebabBtn.closest('tr');
+  const tableRow = anchor.closest('tr');
   const popup = document.createElement('div');
   popup.className = 'session-row-actions';
   popup.dataset.id = sid;
@@ -1816,10 +1816,10 @@ function _openSessionRowActions(sid, kebabBtn) {
   popup.appendChild(info);
 
   document.body.appendChild(popup);
-  // Position under the kebab, right-aligned, clamped to the visual viewport.
+  // Position at the pointer, or under the kebab, clamped to the visual viewport.
   // Shared helper keeps this DESIGN SYNC CONTRACT copy identical to the chat
   // session dropdown's row-actions panel (controller.js).
-  positionKebabPopup(popup, kebabBtn);
+  positionKebabPopup(popup, anchor, point);
   _listen(popup,'click', async (e) => {
     e.stopPropagation();
     const action = e.target.closest('.session-row-action[data-action]');
@@ -2254,6 +2254,13 @@ function _wireDom() {
         return;
       }
       _onRowClick(e);
+    });
+    // Right-clicking a session row opens its action panel at the pointer.
+    _listen(tbody,'contextmenu', (e) => {
+      const row = e.target.closest('tr[data-session-id]');
+      if (!row || !_sessionRowById(row.dataset.sessionId)) return;
+      e.preventDefault(); e.stopPropagation();
+      _openSessionRowActions(row.dataset.sessionId, row, {x:e.clientX,y:e.clientY});
     });
   }
 

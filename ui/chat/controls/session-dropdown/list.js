@@ -197,8 +197,8 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } if (e.key === 'Escape') { e.preventDefault(); finish(false); } });
     input.addEventListener('blur', () => finish(true));
   }
-  /** Builds the row action popup and optional device display preferences; session mutations stay client-owned and display edits stay browser-local. Unsupported V3 actions remain visibly disabled. */
-  function actions(item, anchor) {
+  /** Builds the row action popup at the pointer or under its anchor; unsupported V3 actions stay visibly disabled. */
+  function actions(item, anchor, point) {
     const popup = document.createElement('div'); popup.className = 'session-row-actions'; popup.dataset.source = 'session-list'; popup.dataset.id = item.id;
     const archivedActions = [
       ['unarchive','Unarchive session','archive-restore',() => mutate(item,'unarchive')],
@@ -233,15 +233,16 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     popup.setAttribute('role','group'); popup.setAttribute('aria-label','Session actions');
     root._sessionDropdownController.setPopup(popup); document.body.append(popup);
     popup.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); root._sessionDropdownController.setPopup(null); anchor.focus?.(); } });
-    // Expanding device preferences changes height; keep the complete scrollable popup inside the viewport.
-    /** Reanchor the complete action popup after display preferences expand. */
+    /** Places the complete scrollable popup at the pointer, or under its anchor, inside the viewport. */
     function positionPopup() {
-      const r = anchor.getBoundingClientRect(); popup.style.position = 'fixed';
+      popup.style.position = 'fixed';
       const bounds = popup.getBoundingClientRect();
-      popup.style.left = Math.max(4,Math.min(r.right-bounds.width,innerWidth-bounds.width-4)) + 'px';
-      popup.style.top = Math.max(4,Math.min(r.bottom+4,innerHeight-bounds.height-4)) + 'px';
+      const r = point ? null : anchor.getBoundingClientRect();
+      const left = point ? point.x : r.right - bounds.width;
+      const top = point ? point.y : r.bottom + 4;
+      popup.style.left = Math.max(4,Math.min(left,innerWidth-bounds.width-4)) + 'px';
+      popup.style.top = Math.max(4,Math.min(top,innerHeight-bounds.height-4)) + 'px';
     }
-    displaySettings?.addEventListener('toggle', positionPopup);
     positionPopup(); window.lucide?.createIcons();
     popup.querySelector('button:not(:disabled)')?.focus({preventScroll:true});
   }
@@ -258,14 +259,14 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     if (event.target.closest('.session-dropdown-trigger') && root.contains(event.target)) return {item:items.find(item => item.id === selected),anchor:root.querySelector('.session-dropdown-trigger')};
     return null;
   }
-  /** Open actions with no session navigation; visibility flags still apply inside the popup. */
-  function openContext(target) { if (target?.item && !destroyed) { cancelHold(); actions(target.item,target.anchor); } }
+  /** Open actions at the pointer with no session navigation; visibility flags still apply inside the popup. */
+  function openContext(target, point) { if (target?.item && !destroyed) { cancelHold(); actions(target.item,target.anchor,point); } }
   for (const host of [root,menu]) {
     host.addEventListener('contextmenu', event => {
       const target = contextTarget(event);
       if (!target?.item || config.gestures?.right_click === false) return;
       event.preventDefault(); event.stopPropagation(); cancelHold();
-      if (Date.now() >= suppressClickUntil) openContext(target);
+      if (Date.now() >= suppressClickUntil) openContext(target,{x:event.clientX,y:event.clientY});
     }, {capture:true,signal:abort.signal});
     host.addEventListener('keydown', event => {
       if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
@@ -278,7 +279,7 @@ export function createSessionList(root, {guard, refresh, select, client, archive
       const target = contextTarget(event); if (!target?.item) return;
       const ms = Number(config.gestures?.long_press_ms);
       const pending = {id:event.pointerId,x:event.clientX,y:event.clientY,timer:0};
-      pending.timer = delay(() => { if (hold !== pending) return; hold = null; suppressClickUntil = Date.now()+1000; openContext(target); },Number.isFinite(ms) ? Math.max(250,Math.min(2000,ms)) : 550);
+      pending.timer = delay(() => { if (hold !== pending) return; hold = null; suppressClickUntil = Date.now()+1000; openContext(target,{x:pending.x,y:pending.y}); },Number.isFinite(ms) ? Math.max(250,Math.min(2000,ms)) : 550);
       hold = pending;
     }, {capture:true,signal:abort.signal});
     host.addEventListener('click', event => {
