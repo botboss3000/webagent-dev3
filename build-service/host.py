@@ -2606,12 +2606,6 @@ def call_labelled(label, function, *args):
 
 
 
-def never_started(job):
-    """Whether a job did nothing yet: no effect, no stage and no log line. A restart cancels such a job."""
-    observed = (job.get("execution_observation") or {}).get("events")
-    return not (job.get("effects_started") or job.get("execution_history") or job.get("phase_history") or observed
-                or job.get("phase") not in (None, "queued", "admitted"))
-
 class BrokerLock:
     """The broker's global RLock. Every request and job phase change waits on it, so holds and waits
     past SLOW_LOCK_SECONDS are logged with the holder, and each holder's longest hold is kept."""
@@ -3084,19 +3078,14 @@ class Broker:
                         job.get("isolated") and job["status"] == "queued"):
                     # A restart never repeats a build or external mutation.
                     job["status"] = ("uncertain" if job.get("effects_started") or job["operation"] == "deploy"
-                                     else "cancelled" if job.get("cancel_request") or never_started(job)
+                                     else "cancelled" if job.get("cancel_request") or scheduler_module.never_started(job)
                                      else "interrupted")
                     job["reason"] = ("broker restarted before the job started; nothing ran, finish again"
-                                     if job["status"] == "cancelled" and never_started(job)
+                                     if job["status"] == "cancelled" and scheduler_module.never_started(job)
                                      else "broker restarted; no automatic replay")
                     if job["status"] == "uncertain" and self._reconcile(job):
                         job["status"] = "completed"
                         job["reason"] = "recovered matching healthy deployment"
-                    self._save(job)
-                elif job["status"] == "interrupted" and job["operation"] != "deploy" and never_started(job):
-                    # Recorded before restarts told unstarted jobs apart: nothing ran, so the task may reopen.
-                    job["status"] = "cancelled"
-                    job["reason"] = "broker restarted before the job started; nothing ran, finish again"
                     self._save(job)
         if recover:
             for job in self.jobs.values():
@@ -4859,7 +4848,7 @@ class Broker:
         if not record:
             value=self.scheduler.ensure(item,trusted,workspace)
             if type(args.get("expected_revision")) is not int or type(args.get("expected_epoch")) is not int or value["revision"]!=args["expected_revision"] or value["epoch"]!=args["expected_epoch"]:raise ValueError("Stale ownership revision or epoch")
-            active=[j for j in self.jobs.values()if j.get("ownership_id")==item["key"]and j["status"]in {"queued","running","interrupted","uncertain","needs_decision"}]
+            active=[j for j in self.jobs.values()if j.get("ownership_id")==item["key"]and j["status"]in {"queued","running","interrupted","uncertain","needs_decision"}and not scheduler_module.unstarted_interruption(j)]
             if active:
                 job_id=args.get("frozen_job_id")
                 if len(active)!=1 or not isinstance(job_id,str) or active[0].get("job_id")!=job_id or item.get("job_id")!=job_id:
@@ -4879,7 +4868,7 @@ class Broker:
         result=self.scheduler.store.receipt(token)
         if result is None:
             try:
-                active=[j for j in self.jobs.values() if j.get("ownership_id")==item["key"] and j["status"] in {"queued","running","interrupted","uncertain","needs_decision"}]
+                active=[j for j in self.jobs.values() if j.get("ownership_id")==item["key"] and j["status"] in {"queued","running","interrupted","uncertain","needs_decision"} and not scheduler_module.unstarted_interruption(j)]
                 if active and frozen is None:raise ValueError("Reconcile task execution before releasing claims")
                 deployed=self.jobs.get(item.get("job_id"),{})
                 if frozen is not None:

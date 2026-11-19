@@ -1858,6 +1858,8 @@ class ClearPendingRequestsTests(unittest.TestCase):
         item["status"]="open"
         with self.assertRaisesRegex(ValueError,"Closed"):self.action(item["task_id"],"clear_pending_requests",reason="withdraw")
         item["status"]="closed"
+        # A job that ran a stage; an interruption before any stage counts as cancelled.
+        job["execution_history"]=[{"phase":"build"}]
         for status in ("queued","running","interrupted","uncertain","needs_decision"):
             job["status"]=status
             with self.assertRaisesRegex(ValueError,"execution"):self.action(item["task_id"],"clear_pending_requests",reason="withdraw")
@@ -2552,10 +2554,13 @@ class ObservationAuthorizationTests(MaintenanceTests):
   old=self.install_job();old.update(status="interrupted",phase="admitted",execution_observation={},
                                     reason="broker restarted; no automatic replay");self.broker._save(old)
   self.broker.shutdown();self.broker=fixtures.host.Broker(self.state,self.runner)
-  for row in (job,old):
-   result=self.broker.jobs[row['job_id']]
-   self.assertEqual(result['status'],'cancelled')
-   self.assertIn('before the job started',result['reason'])
+  result=self.broker.jobs[job['job_id']]
+  self.assertEqual(result['status'],'cancelled')
+  self.assertIn('before the job started',result['reason'])
+  # An earlier record keeps its receipt unchanged but counts as cancelled, so its task can reopen or end.
+  self.assertEqual(self.broker.jobs[old['job_id']]['status'],'interrupted')
+  self.assertTrue(fixtures.host.scheduler_module.unstarted_interruption(self.broker.jobs[old['job_id']]))
+  self.assertFalse(fixtures.host.scheduler_module.unstarted_interruption({**old,'execution_history':[{'phase':'build'}]}))
 
  def test_wait_state_and_expired_authority(self):
   job=self.install_job();job['status']='running';job['resource_waiting']={'state':'waiting','since':time.time(),'phase':'test'}

@@ -18,6 +18,15 @@ def operator_origin(user_id,summary):
     if user_id not in LOCAL_OPERATORS:return"v2"if user_id=="python-v2-admin"else"v3"
     found=re.search(r"\borigin=([a-z-]{1,20})",str(summary or"")[:260])
     return"t480/"+found.group(1)if found and found.group(1)in HARNESSES else"t480"
+def never_started(job):
+    """Whether a job did nothing yet: no effect, no stage and no log line. A restart cancels such a job."""
+    observed=(job.get("execution_observation")or{}).get("events")
+    return not(job.get("effects_started")or job.get("execution_history")or job.get("phase_history")or observed
+               or job.get("phase")not in(None,"queued","admitted"))
+def unstarted_interruption(job):
+    """An interrupted job a restart caught before it started (recorded before restarts cancelled those):
+    nothing ran, so it counts as cancelled and its task may reopen or end. Its receipt stays as written."""
+    return job.get("status")=="interrupted"and job.get("operation")!="deploy"and never_started(job)
 def sibling(name):
     """Load the exact paired installed implementation, never a model-selected path."""
     spec=importlib.util.spec_from_file_location("build_scheduler_"+name,Path(__file__).with_name(name+".py"))
@@ -94,11 +103,11 @@ class Scheduler:
         return [j for j in self.broker.jobs.values()if j.get("ownership_id")==item["key"]or(j.get("task_id")==item["task_id"]and j.get("user_id")==item.get("user_id")and j.get("workspace")==item.get("workspace"))]
     def settled(self,item):
         """No job of the task can still run, and none left an unreconciled deployment effect."""
-        return all(j.get("status")in {"failed","cancelled","stale","completed"}and not(j.get("effects_started")and j.get("status")!="completed")for j in self.task_jobs(item))
+        return all((j.get("status")in {"failed","cancelled","stale","completed"}or unstarted_interruption(j))and not(j.get("effects_started")and j.get("status")!="completed")for j in self.task_jobs(item))
     def failed_release(self,item):
         """A closed task whose latest release failed before any deployment effect; it may reopen for a fix."""
         job=self.broker.jobs.get(item.get("job_id"))or{}
-        return item.get("mode")=="isolated"and item.get("status")=="closed"and job.get("status")in {"failed","cancelled","stale"}and self.settled(item)
+        return item.get("mode")=="isolated"and item.get("status")=="closed"and(job.get("status")in {"failed","cancelled","stale"}or unstarted_interruption(job))and self.settled(item)
     def settle(self):
         """Closed tasks never keep queued requests. A failed release keeps its claims for the grace window so
         its owner can reopen, fix and resubmit; once that ends or the heartbeat lapses, every claim drops.
@@ -854,7 +863,7 @@ class Scheduler:
             # Closed proposals may withdraw a queue request without reviving their lease.
             if item.get("status")!="closed":raise ValueError("Closed terminal task required")
             jobs=[j for j in self.broker.jobs.values()if j.get("ownership_id")==item["key"]or(j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]) ]
-            if not jobs or any(j.get("status")not in {"cancelled","failed","stale","completed"}for j in jobs):
+            if not jobs or any(j.get("status")not in {"cancelled","failed","stale","completed"}and not unstarted_interruption(j)for j in jobs):
                 raise ValueError("Reconcile task execution before clearing requests")
             if any(j.get("effects_started")and j.get("status")!="completed"for j in jobs):
                 raise ValueError("Reconcile deployment effects before clearing requests")
