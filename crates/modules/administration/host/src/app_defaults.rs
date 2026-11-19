@@ -279,6 +279,9 @@ pub async fn save(
             return Err(bad(&problem));
         }
     }
+    if let Some(failed) = set.release.clone().filter(|r| r.status == "failed") {
+        end_failed(host, &failed.task_id).await?;
+    }
     let paths: Vec<String> = set.files.keys().cloned().collect();
     let started = now();
     let task_id = task_label(&user, started);
@@ -310,6 +313,31 @@ pub async fn save(
         return Err(error);
     }
     Ok(json!({"revision":set.revision,"release":set.release}))
+}
+
+/// End a failed Save's task so its reservations free before the next Save's task begins. The
+/// broker refuses while that release may have changed anything live; a task the Diagnose chat
+/// took over or that already ended is no longer this Save's to end.
+async fn end_failed(host: &dyn AdministrationHost, task_id: &str) -> Result<(), ApiError> {
+    let ended = broker(
+        host,
+        "build_work",
+        json!({"action":"abandon","task_id":task_id,"reason":"replaced by a new App Default Save",
+            "request_id":format!("{task_id}-abandon")}),
+    )
+    .await;
+    match ended {
+        Err(error) if !gone(&error.1) => Err(conflict(format!(
+            "The failed Save's broker task could not be ended: {}",
+            error.1
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// Whether a broker refusal says this Save no longer has the task (it was taken over or ended).
+fn gone(message: &str) -> bool {
+    message.contains("Unknown Broker ID")
 }
 
 /// Begin the task, write each draft into it, check and finish: returns the job ID.
@@ -399,4 +427,15 @@ pub async fn renew(host: &dyn AdministrationHost) -> anyhow::Result<()> {
     );
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), request).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gone;
+
+    #[test]
+    fn a_task_already_ended_or_taken_over_is_gone() {
+        assert!(gone("Unknown Broker ID in this caller session"));
+        assert!(!gone("only an open task, or a closed task whose release failed without effects, may be abandoned"));
+    }
 }

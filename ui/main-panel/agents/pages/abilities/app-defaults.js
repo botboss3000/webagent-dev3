@@ -146,7 +146,12 @@ export function buildAppDefaultsBar(app, { onStatus }) {
         diagnose.type = 'button';
         diagnose.title = 'Start a chat where the agent finds why this Save failed, fixes it and releases it';
         diagnose.onclick = () => diagnoseFailedSave(app, job, onStatus).catch(error => onStatus('Could not start the chat: ' + error.message));
-        release.append(' ', diagnose);
+        const retry = node('button', 'ac-btn ac-btn-sm', 'Retry Save');
+        retry.type = 'button';
+        retry.title = 'Save the same drafts again: the failed task is ended first, so the new one does not wait for it';
+        retry.disabled = save.disabled;
+        retry.onclick = () => save.click();
+        release.append(' ', retry, ' ', diagnose);
       }
     }
   };
@@ -303,9 +308,13 @@ async function diagnoseFailedSave(app, job, onStatus) {
   const message = ['An App Default Save failed and I need it diagnosed, fixed and released.',
     'Broker task: ' + job.task_id + (job.job_id ? ', job ' + job.job_id : '') + '.',
     'Reason: ' + (job.reason || 'not recorded; read the job with build_work status') + '.',
-    'Read the failed job (build_work status with its job_id) and the Broker card to find the cause. Then make the',
-    'same file changes on a new broker task (build_work, broker_id new), fix whatever made the release fail, run',
-    'the checks, finish and report the commit. The drafted files, as the administrator left them:',
+    'The failed task belongs to the App Default Save, not to this chat, so take it over first: open your own task',
+    '(build_work begin, broker_id new), call build_work takeover_preview with task_id ' + job.task_id + ', and if its',
+    'jobs show no live or effect-started release, call takeover with task_key (the preview\'s task.id), its',
+    'expected_revision and expected_epoch, target_task_id (your task) and a reason. Its reservations then move to',
+    'your task, so nothing waits. Read the Broker card to find the cause, make the same file changes on your task,',
+    'fix whatever made the release fail, run the checks, finish and report the commit. The drafted files, as the',
+    'administrator left them:',
     '', ...parts].join('\n');
   const session = await app.request('/sessions', 'POST', { agent_id: 'shared_default', client_request_id: crypto.randomUUID() });
   const id = session.id || session.session_id || session.session?.id;
