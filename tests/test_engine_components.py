@@ -236,6 +236,16 @@ class EngineTests(unittest.TestCase):
             self.assertNotEqual(before,engine.closure(root));self.assertIn('crates/context-contracts/src/lib.rs',before)
             contract.unlink();contract.symlink_to('/etc/passwd')
             with self.assertRaisesRegex(ValueError,"symlink"):engine.closure(root)
+    def test_closure_adds_embedded_config_files_only(self):
+        with tempfile.TemporaryDirectory()as temporary:
+            root=Path(temporary);(root/"Cargo.toml").write_text('[workspace]\n');(root/"Cargo.lock").write_text('version=4\n')
+            folder=root/"crates/context-service";(folder/"src").mkdir(parents=True)
+            (folder/"Cargo.toml").write_text('[package]\nname="context-service"\nversion="0.1.0"\n')
+            (root/"config/chat").mkdir(parents=True);(root/"config/chat/texts.json").write_text('{}');(root/"config/chat/live.json").write_text('{}')
+            (folder/"src/lib.rs").write_text('const T: &str = include_str!("../../../config/chat/texts.json");\n')
+            inputs=engine.closure(root)
+            self.assertIn("config/chat/texts.json",inputs);self.assertNotIn("config/chat/live.json",inputs)
+            (root/"config/chat/live.json").write_text('{"edited":1}');self.assertEqual(inputs,engine.closure(root))
     def test_sealed_binary_is_generation_local_and_tampering_rejected(self):
         with tempfile.TemporaryDirectory()as temporary:
             root=Path(temporary);generation=root/"releases/one";folder=generation/engine.ROOT/engine.ID;folder.mkdir(parents=True);(folder/"component.json").write_text(json.dumps(self.descriptor()))

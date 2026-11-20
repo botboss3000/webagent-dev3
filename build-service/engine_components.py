@@ -46,6 +46,22 @@ def nested_package(path,name,entries):
     parts=path[len("v3/"+name+"/"):].split("/")[:-1]
     return any("v3/"+name+"/"+"/".join(parts[:depth])+"/Cargo.toml"in entries for depth in range(1,len(parts)+1))
 
+EMBED=re.compile(r'include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)|concat!\(\s*env!\("CARGO_MANIFEST_DIR"\)\s*,\s*"(/[^"]+)"\s*\)')
+
+def embedded(root,crate,source):
+    """config/ files a crate source compiles in (include_str!/include_bytes!, or a
+    CARGO_MANIFEST_DIR path): compiler inputs, though the files sit outside the crate.
+    Other live settings never enter the closure, so editing them rebuilds nothing."""
+    found=set()
+    for relative,manifest in EMBED.findall(source.read_text(errors="replace")):
+        target=((source.parent/relative)if relative else(crate/manifest.lstrip("/"))).resolve()
+        if not target.is_relative_to(root.resolve()):continue
+        name=target.relative_to(root.resolve()).as_posix()
+        if not name.startswith("config/"):continue
+        if target.is_symlink()or not target.is_file()or target.stat().st_size>16*1024*1024:raise ValueError("Embedded engine input must be a bounded regular file")
+        found.add(name)
+    return found
+
 def closure(root,identity=ID):
     """Expand local Cargo path dependencies, rejecting undeclared outside-workspace inputs."""
     result={"Cargo.toml","Cargo.lock"};pending=[REGISTRY[identity]["inputs"][0]];seen=set()
@@ -66,6 +82,7 @@ def closure(root,identity=ID):
                 relative=path.relative_to(root).as_posix()
                 if path.stat().st_size>16*1024*1024:raise ValueError("Engine source bound")
                 result.add(relative)
+                if path.suffix==".rs":result.update(embedded(root,folder,path))
         groups=[parsed.get("dependencies",{}),parsed.get("build-dependencies",{}),parsed.get("dev-dependencies",{})]
         for target in parsed.get("target",{}).values():groups.extend(target.get(k,{})for k in ("dependencies","build-dependencies","dev-dependencies"))
         for group in groups:
