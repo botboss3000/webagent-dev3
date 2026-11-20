@@ -1,6 +1,6 @@
 //! The administrator build dashboard: a projection of the protected build broker and its
 //! targeted controls. Administrator authentication and CSRF are enforced by the root's
-//! router before these run, except for `task`, the public Broker card page's read.
+//! router before these run.
 use crate::{trusted, AdministrationHost};
 use axum::http::StatusCode;
 use serde_json::{json, Value};
@@ -85,10 +85,10 @@ pub async fn review_leftover(host: &dyn AdministrationHost, id: &str) -> Result<
     Ok(value)
 }
 
-/// Most jobs of one task the Broker card page shows, newest first.
+/// Most jobs of one task the Builds page shows, newest first.
 const TASK_JOBS: usize = 10;
-/// The public Broker card page's reads are served from memory for this long, so anonymous
-/// visits cost at most one broker feed read (and one task's progress reads) per interval.
+/// Task reads are served from memory for this long, so repeated Builds page polls cost at
+/// most one broker feed read (and one task's progress reads) per interval.
 const PUBLIC_CACHE: Duration = Duration::from_secs(10);
 /// Cached entries kept before the cache is emptied.
 const PUBLIC_CACHE_ENTRIES: usize = 256;
@@ -125,7 +125,7 @@ fn public_name(summary: &str) -> &str {
     summary.split(" [origin=").next().unwrap_or(summary).trim()
 }
 
-/// One broker task for the public Broker card page: its recent jobs (newest first) from the
+/// One broker task for the Builds page: its recent jobs (newest first) from the
 /// dashboard feed, each with its stage snapshot, in the shape the chat's Broker card reads.
 /// It needs an administrator sign-in and still carries only names, states and timings: no
 /// session names, failure reasons, logs or paths. `queued_behind` names the tasks ahead in the queue.

@@ -89,14 +89,19 @@ export function statusClass(status) {
   return status === 'completed' ? 'broker-ok' : FAILED.includes(status) && status !== 'needs_decision' ? 'broker-blocker' : '';
 }
 
-/** The jobs ahead of a queued one, in red, each linking to its task's Broker card page. */
+/** The Builds page, opened at one job when its ID is known. */
+function buildsHref(jobId) {
+  return '/app?tab=builds' + (jobId ? '&job_id=' + encodeURIComponent(jobId) : '');
+}
+
+/** The jobs ahead of a queued one, in red, each linking to its job on the Builds page. */
 function queueAhead(ahead) {
   const box = el('div', 'broker-queue'); box.append(el('strong', '', 'Queue ahead'));
   for (const other of ahead) {
     const row = el('div', 'broker-blocker');
     const name = other.name || other.task_id || other.job_id.slice(0, 8);
-    if (other.task_id) {
-      const link = el('a', '', name); link.href = '/ui/broker-card.html?task_id=' + encodeURIComponent(other.task_id); row.append(link);
+    if (other.job_id) {
+      const link = el('a', '', name); link.href = buildsHref(other.job_id); row.append(link);
     } else row.append(name);
     row.append(' · ' + (LABELS[other.status] || other.status) + (other.phase ? ' (' + other.phase + ')' : '') + (other.session ? ' · session ' + other.session : ''));
     box.append(row);
@@ -126,7 +131,7 @@ function stageRows(snapshot, age, slowNow, failed = false) {
 
 /** One task's card: its newest build (or newest job) with stages and Background, and the
  * other jobs under Advanced. `hold(job)` opens a job's menu on long-press; `pageLink` adds a
- * link to the task's Broker card page (ui/broker-card.html); `inline` renders it inside a
+ * link to the job on the Builds page; `inline` renders it inside a
  * list row instead of as its own popup, without the title the row already shows. Returns
  * the element, a `tick` that recomputes the counters, and whether the job is still active. */
 export function renderCard(task, detail, hold = () => {}, {pageLink = false, inline = false} = {}) {
@@ -177,8 +182,8 @@ export function renderCard(task, detail, hold = () => {}, {pageLink = false, inl
     box.append(advanced);
   }
   if (pageLink) {
-    const link = el('a', 'broker-page-link', 'Task progress page');
-    link.href = '/ui/broker-card.html?task_id=' + encodeURIComponent(task.task_id);
+    const link = el('a', 'broker-page-link', 'Open in Builds');
+    link.href = buildsHref(main.job_id);
     box.append(link);
   }
   // Recomputes every counter from the snapshot and the time since it was read.

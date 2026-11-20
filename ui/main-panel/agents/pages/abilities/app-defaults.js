@@ -132,11 +132,9 @@ export function buildAppDefaultsBar(app, { onStatus }) {
     release.replaceChildren();
     const job = drafts.release;
     if (job) {
-      const link = node('a', '', 'Broker card');
-      link.href = '/v3-ui/broker-card.html?task_id=' + encodeURIComponent(job.task_id);
-      link.target = '_blank';
-      link.rel = 'noopener';
-      const label = job.status === 'releasing' ? 'Releasing your last Save. ' : 'Your last Save did not release: ' + (job.reason || 'see the Broker card') + '. Drafts are kept. ';
+      const link = node('a', '', 'Open in Builds');
+      link.href = '/app?tab=builds' + (job.job_id ? '&job_id=' + encodeURIComponent(job.job_id) : '');
+      const label = job.status === 'releasing' ? 'Releasing your last Save. ' : 'Your last Save did not release: ' + (job.reason || 'see Builds') + '. Drafts are kept. ';
       release.append(node('span', job.status === 'releasing' ? '' : 'adf-failed', label), link);
       if (job.status === 'failed') {
         const diagnose = node('button', 'ac-btn ac-btn-sm', 'Diagnose in a new chat');

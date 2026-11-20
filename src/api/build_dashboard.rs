@@ -19,8 +19,8 @@ pub(super) fn admin_router() -> Router<App> {
             "/admin/production/{release_id}/decision",
             post(production_decide),
         )
-        // The Broker card page and the Builds page read one task; task labels are guessable,
-        // so it needs an administrator sign-in like the rest of the Builds data.
+        // The Builds page reads one task; task labels are guessable, so it needs an
+        // administrator sign-in like the rest of the Builds data.
         .route("/builds/tasks/{task_id}", get(task))
 }
 
@@ -167,7 +167,7 @@ mod tests {
         );
     }
 
-    /// The Broker card page's task read needs an administrator sign-in: an anonymous read is
+    /// The Builds page's task read needs an administrator sign-in: an anonymous read is
     /// refused before any broker call, and a signed-in administrator's malformed ID is refused.
     #[tokio::test]
     async fn task_route_requires_administrator_and_checks_the_task_id() {
