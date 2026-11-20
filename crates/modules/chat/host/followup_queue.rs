@@ -195,6 +195,12 @@ async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
     app.store.reconcile_requester_slots().await?;
     Ok(())
 }
+/// An empty, unheld ledger has nothing to review, release or deliver. Skipping it saves
+/// rereading its session every pass; a hold it would get (a failed last run, shutoff)
+/// is applied on the first pass after an entry arrives, before anything dispatches.
+fn idle_ledger(q: &Value) -> bool {
+    q["held"] != true && q["entries"].as_array().is_none_or(Vec::is_empty)
+}
 pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
     if let Err(error) = crate::session_messaging::deliver_notices(app).await {
         tracing::warn!("Session notice delivery deferred: {error}");
@@ -202,7 +208,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
     let queues = app.store.list("followup_queue:").await?;
     for q in queues {
         let s = q["session_id"].as_str().unwrap_or("").to_owned();
-        if s.is_empty() {
+        if s.is_empty() || idle_ledger(&q) {
             continue;
         }
         // One unreadable or failing ledger defers only its own session.
@@ -333,6 +339,17 @@ async fn tick_session(app: &App, s: &str) -> Result<()> {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    #[test]
+    fn only_empty_unheld_ledgers_are_skipped() {
+        assert!(idle_ledger(&json!({"session_id":"s","entries":[]})));
+        assert!(idle_ledger(&json!({"session_id":"s"})));
+        assert!(!idle_ledger(
+            &json!({"session_id":"s","entries":[],"held":true})
+        ));
+        assert!(!idle_ledger(
+            &json!({"session_id":"s","entries":[{"status":"pending"}]})
+        ));
+    }
     #[tokio::test]
     async fn inactive_ledgers_cannot_block_other_sessions_or_create_orphan_runs() {
         let (_root, app) = crate::runtime_tests::fixture().await;

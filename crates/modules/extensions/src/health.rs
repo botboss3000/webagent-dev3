@@ -144,10 +144,12 @@ pub fn idle(envelope: &Value, latest: i64, generation: &str) -> bool {
     !active && !unfinished
 }
 
-/// Milliseconds until the next tick: one second after any change or queued work,
-/// otherwise up to fifteen seconds but never past a schedule or retry deadline.
+/// Milliseconds until the next tick: one second after any change or unadmitted
+/// proposal, otherwise up to fifteen seconds but never past a schedule or retry deadline.
 /// The reducer bumps `revision` on every tick, so that field alone is not a change;
 /// counting it kept an idle user re-ticking every second.
+/// Queued and admitted occurrences wait on a run: its end sends a wake that ticks at
+/// once, so they do not poll every second (a stuck run kept that going for days).
 #[must_use]
 pub fn delay(before: &Value, after: &Value, next: Option<u64>, now_ms: u64) -> u64 {
     let occurrences = || {
@@ -167,9 +169,6 @@ pub fn delay(before: &Value, after: &Value, next: Option<u64>, now_ms: u64) -> u
         || after["pending"]
             .as_array()
             .is_some_and(|pending| !pending.is_empty())
-        || occurrences().any(|(_, occurrence)| {
-            matches!(occurrence["status"].as_str(), Some("queued" | "admitted"))
-        })
     {
         return 1000;
     }
@@ -240,6 +239,13 @@ mod tests {
         let mut bumped = before.clone();
         bumped["state"]["revision"] = json!(before["state"]["revision"].as_u64().unwrap_or(0) + 1);
         assert_eq!(delay(&before, &bumped, None, 1000), 15_000);
+        let mut waiting = before.clone();
+        waiting["state"]["occurrences"]["review"] = json!({"status":"admitted"});
+        waiting["state"]["occurrences"]["next"] = json!({"status":"queued"});
+        assert_eq!(delay(&waiting, &waiting, None, 1000), 15_000);
+        let mut proposed = waiting.clone();
+        proposed["pending"] = json!([{"occurrence_id":"next"}]);
+        assert_eq!(delay(&proposed, &proposed, None, 1000), 1000);
     }
 
     #[test]
