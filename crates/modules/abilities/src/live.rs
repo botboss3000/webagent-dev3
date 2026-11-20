@@ -19,6 +19,8 @@ struct State {
     checked: Instant,
     key: [u8; 32],
     root: PathBuf,
+    /// The publication `root` holds (itself, or the base its snapshot was built on).
+    base: PathBuf,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -31,7 +33,13 @@ fn editable(path: &Path) -> bool {
     )
 }
 
-/// Checkout-relative ability JSON, Markdown and icon files (symlinks are skipped).
+/// Root-installed executable packages inside the abilities tree. They are git-ignored and
+/// never released (the broker's `INSTALLED_PACKAGES`), so they are not ability edits;
+/// counting them kept the overlay on and API/loop could never acknowledge a publication.
+const INSTALLED_PACKAGES: &[&str] = &["Core/mcp/package"];
+
+/// Checkout-relative ability JSON, Markdown and icon files (symlinks and installed
+/// packages are skipped).
 fn files(checkout: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending = vec![checkout.to_path_buf()];
@@ -45,7 +53,12 @@ fn files(checkout: &Path) -> Vec<PathBuf> {
             };
             let path = entry.path();
             if kind.is_dir() {
-                pending.push(path);
+                let installed = path.strip_prefix(checkout).is_ok_and(|relative| {
+                    INSTALLED_PACKAGES.iter().any(|p| relative == Path::new(p))
+                });
+                if !installed {
+                    pending.push(path);
+                }
             } else if kind.is_file() && editable(&path) {
                 if let Ok(relative) = path.strip_prefix(checkout) {
                     found.push(relative.to_path_buf());
@@ -244,20 +257,21 @@ fn overlay_every(
                 return current.root.clone();
             }
         }
-        state
-            .as_ref()
-            .map_or_else(|| base.to_path_buf(), |s| s.root.clone())
+        state.as_ref().map_or_else(
+            || (base.to_path_buf(), base.to_path_buf()),
+            |s| (s.root.clone(), s.base.clone()),
+        )
     };
     let changed = changes(base, checkout, &listed);
-    let chosen = if changed.is_empty() {
-        base.to_path_buf()
+    let (chosen, built_on) = if changed.is_empty() {
+        (base.to_path_buf(), base.to_path_buf())
     } else {
         // The name carries the snapshot layout, so an older layout is never reused.
         let root = cache.join(format!("v3-{}", hex::encode(&key[..12])));
         match build(base, &changed, &root) {
             Ok(()) if valid(&root.join("abilities")) => {
                 prune(cache, &root);
-                root
+                (root, base.to_path_buf())
             }
             Ok(()) => {
                 eprintln!("Live ability edits do not load; keeping the previous abilities");
@@ -274,6 +288,7 @@ fn overlay_every(
         checked: Instant::now(),
         key,
         root: chosen.clone(),
+        base: built_on,
     });
     chosen
 }
@@ -292,6 +307,15 @@ fn state() -> std::sync::MutexGuard<'static, Option<State>> {
 /// process; tool definitions follow it so live edits reach every reader.
 pub fn selected() -> Option<PathBuf> {
     state().as_ref().map(|state| state.root.clone())
+}
+
+/// The publication that `root` holds when it is the catalog's last choice: `root` itself,
+/// or the release its live snapshot was built on (so adoption names that release).
+pub fn built_on(root: &Path) -> Option<PathBuf> {
+    state()
+        .as_ref()
+        .filter(|state| state.root == root)
+        .map(|state| state.base.clone())
 }
 
 /// Builds at `root` what the live snapshot would be once `edits` (checkout-relative ability
@@ -348,9 +372,19 @@ mod tests {
         let ok = |_: &Path| true;
         let now = Duration::ZERO;
         assert_eq!(overlay_every(now, &base, &checkout, &cache, ok), base);
+        // An installed package exists only in the checkout and is not an edit.
+        std::fs::create_dir_all(checkout.join("Core/mcp/package")).unwrap();
+        std::fs::write(checkout.join("Core/mcp/package/plugin.json"), "{}").unwrap();
+        assert_eq!(overlay_every(now, &base, &checkout, &cache, ok), base);
         std::fs::write(checkout.join("Core/demo/tool.json"), "{\"v\":2}").unwrap();
         let live = overlay_every(now, &base, &checkout, &cache, ok);
         assert!(live.starts_with(&cache));
+        assert_eq!(
+            built_on(&live),
+            Some(base.clone()),
+            "a snapshot names its release"
+        );
+        assert_eq!(built_on(&base), None, "only the current choice is answered");
         let tool = std::fs::read_to_string(live.join("abilities/Core/demo/tool.json")).unwrap();
         assert_eq!(tool, "{\"v\":2}");
         assert!(live.join("abilities/Core/demo/handler.rs").is_file());
@@ -368,6 +402,7 @@ mod tests {
             kept, live,
             "an edit that does not load keeps the last good snapshot"
         );
+        assert_eq!(built_on(&kept), Some(base.clone()));
         std::fs::write(checkout.join("Core/demo/tool.json"), "{\"v\":1}").unwrap();
         assert_eq!(overlay_every(now, &base, &checkout, &cache, ok), base);
         for root in [base.join("abilities"), checkout.clone()] {

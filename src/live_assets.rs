@@ -43,7 +43,15 @@ pub(crate) fn record_adoption(
     let Some(selected) = published_root() else {
         return Ok(());
     };
-    if catalog.snapshot_root() != selected.join("abilities") {
+    // A catalog holds the selected release either directly or as the live snapshot of
+    // checkout ability edits laid over it (checked against that release before use).
+    let loaded = catalog.snapshot_root();
+    let holds_selected = loaded == selected.join("abilities")
+        || loaded
+            .parent()
+            .and_then(webagent_abilities::live::built_on)
+            .is_some_and(|base| base == selected);
+    if !holds_selected {
         anyhow::bail!("Catalog adoption not confirmed");
     }
     let revision = selected
