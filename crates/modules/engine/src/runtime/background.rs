@@ -79,6 +79,17 @@ fn owned_elsewhere(task: &Value) -> bool {
     task["detached"] == true
         && (task["external_pending"].is_object() || task["parked_approval"] == true)
 }
+/// An open parked-approval placeholder whose run is no longer active. Only
+/// `finish_parked` (after a decision) closes placeholders, so a run cancelled, stopped
+/// or failed while parked left them running for good.
+fn orphaned_placeholder(task: &Value, active_runs: &std::collections::HashSet<&str>) -> bool {
+    task["detached"] == true
+        && task["parked_approval"] == true
+        && !finished(task)
+        && task["run_id"]
+            .as_str()
+            .is_some_and(|run| !active_runs.contains(run))
+}
 
 impl<
         S: ScopedStorage
@@ -686,6 +697,36 @@ impl<
                                         )
                                     })
                                     .collect::<Vec<_>>();
+                                // Active runs are read only while a placeholder is open.
+                                if tasks
+                                    .iter()
+                                    .any(|t| t["parked_approval"] == true && !finished(t))
+                                {
+                                    if let Ok(runs) =
+                                        crate::send_future(user.store.active_runs()).await
+                                    {
+                                        let active = runs
+                                            .iter()
+                                            .filter_map(|run| run["id"].as_str())
+                                            .collect::<std::collections::HashSet<_>>();
+                                        for task in tasks
+                                            .iter()
+                                            .filter(|t| orphaned_placeholder(t, &active))
+                                        {
+                                            let revision = task["revision"].as_u64().unwrap_or(0);
+                                            let mut closed = task.clone();
+                                            closed["status"] = json!("cancelled");
+                                            closed["result"] = json!({"status":"cancelled","output":"The run ended before this call was decided."});
+                                            closed["completed_at"] = json!(now());
+                                            closed["completed_at_ms"] = json!(timestamp_ms());
+                                            // A decision racing this close wins the revision check.
+                                            let _ = crate::send_future(
+                                                user.store.background_cas(&closed, Some(revision)),
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                }
                                 let mut held = std::collections::HashSet::new();
                                 for (task, id) in tasks.iter().zip(&identities) {
                                     if owned_elsewhere(task) {
@@ -979,5 +1020,20 @@ mod stop_tests {
         assert!(!owned_elsewhere(&json!({"detached":true})));
         assert!(!owned_elsewhere(&json!({"parked_approval":true})));
         assert!(!owned_elsewhere(&json!({"external_pending":{}})));
+    }
+
+    /// Only an open placeholder of a parked approval whose run left the active list.
+    #[test]
+    fn placeholders_of_ended_runs_are_orphaned() {
+        let active = std::collections::HashSet::from(["live"]);
+        let task = |run: &str, status: &str| json!({"detached":true,"parked_approval":true,"run_id":run,"status":status});
+        assert!(orphaned_placeholder(&task("gone", "running"), &active));
+        assert!(!orphaned_placeholder(&task("live", "running"), &active));
+        assert!(!orphaned_placeholder(&task("gone", "completed"), &active));
+        assert!(!orphaned_placeholder(&task("gone", "cancelled"), &active));
+        let mut external = task("gone", "running");
+        external["parked_approval"] = json!(false);
+        external["external_pending"] = json!({});
+        assert!(!orphaned_placeholder(&external, &active));
     }
 }
