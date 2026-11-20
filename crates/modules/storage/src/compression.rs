@@ -14,7 +14,11 @@ const MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 /// Decompressed size bound; larger than any record or attachment the app admits.
 const MAX_PLAIN: usize = 512 * 1024 * 1024;
 const REFRESH: Duration = Duration::from_secs(10);
-static FORCED: Mutex<Option<Compression>> = Mutex::new(None);
+thread_local! {
+    // Per thread: tests run in parallel threads, and one test's fixed settings must not
+    // leak into another's.
+    static FORCED: std::cell::RefCell<Option<Compression>> = const { std::cell::RefCell::new(None) };
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +39,14 @@ pub struct Compression {
     pub min_bytes: usize,
     /// Attachment media types (exact, or a `type/*` prefix) stored as is: already compressed.
     pub skip_media_types: Vec<String>,
+    /// Level for repacking the rows of sessions idle `compress_idle_days`: slower to write,
+    /// as fast to read.
+    #[serde(default = "default_idle_level")]
+    pub idle_level: i32,
+}
+
+fn default_idle_level() -> i32 {
+    19
 }
 
 impl Default for Compression {
@@ -45,6 +57,7 @@ impl Default for Compression {
             level: 3,
             min_bytes: 256,
             skip_media_types: Vec::new(),
+            idle_level: default_idle_level(),
         }
     }
 }
@@ -60,8 +73,8 @@ impl Compression {
         if self.algorithm != "zstd" {
             bail!("Unsupported compression algorithm");
         }
-        if !(1..=19).contains(&self.level) {
-            bail!("Compression level must be 1..19");
+        if !(1..=19).contains(&self.level) || !(1..=19).contains(&self.idle_level) {
+            bail!("Compression level and idle_level must be 1..19");
         }
         Ok(())
     }
@@ -82,14 +95,14 @@ impl Compression {
             .ok_or_else(|| anyhow!("Policy has no storage section"))?;
         Self::from_policy(&serde_json::to_vec(&storage)?)
     }
-    /// Fix the settings for this process, ignoring the policy file. For tests whose
+    /// Fix the settings for this thread, ignoring the policy file. For tests whose
     /// assertions depend on exact stored sizes.
     pub fn force(settings: Self) {
-        *FORCED.lock().unwrap_or_else(|e| e.into_inner()) = Some(settings);
+        FORCED.with(|forced| *forced.borrow_mut() = Some(settings));
     }
     /// Current settings; an unreadable policy keeps the last good settings (initially off).
     pub fn current() -> Self {
-        if let Some(forced) = FORCED.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(forced) = FORCED.with(|forced| forced.borrow().clone()) {
             return forced;
         }
         static CURRENT: Mutex<Option<(Instant, Compression)>> = Mutex::new(None);
@@ -120,12 +133,28 @@ impl Compression {
                     .is_some_and(|prefix| media.split('/').next() == Some(prefix))
         })
     }
+    pub fn on(&self) -> bool {
+        self.mode != Mode::Off
+    }
     /// Compressed plaintext when on and worthwhile; otherwise the input unchanged.
     pub fn pack(&self, plain: Vec<u8>) -> Result<Vec<u8>> {
+        self.pack_with(plain, None, None)
+    }
+    /// `pack` with an account's dictionary and a level other than the default, as given.
+    pub fn pack_with(
+        &self,
+        plain: Vec<u8>,
+        dictionary: Option<crate::dictionary::Id>,
+        level: Option<i32>,
+    ) -> Result<Vec<u8>> {
         if self.mode == Mode::Off || plain.len() < self.min_bytes {
             return Ok(plain);
         }
-        let packed = zstd::bulk::compress(&plain, self.level)?;
+        let level = level.unwrap_or(self.level);
+        let packed = match dictionary {
+            Some(id) => crate::dictionary::compress(&plain, &id, level)?,
+            None => zstd::bulk::compress(&plain, level)?,
+        };
         Ok(if packed.len() < plain.len() {
             packed
         } else {
@@ -136,6 +165,9 @@ impl Compression {
 
 /// Undo `pack`: zstd frames are decompressed, anything else is returned as is.
 pub fn unpack(plain: Vec<u8>) -> Result<Vec<u8>> {
+    if plain.starts_with(&crate::dictionary::MAGIC) {
+        return crate::dictionary::decompress(&plain, MAX_PLAIN);
+    }
     if !plain.starts_with(&MAGIC) {
         return Ok(plain);
     }

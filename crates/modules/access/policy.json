@@ -75,10 +75,11 @@
     }
   },
   "storage": {
-    "compress_idle_days": 30,
+    "compress_idle_days": 7,
     "critical_percent": 90,
     "compression": {
       "algorithm": "zstd",
+      "idle_level": 19,
       "level": 3,
       "min_bytes": 256,
       "mode": "on_save",

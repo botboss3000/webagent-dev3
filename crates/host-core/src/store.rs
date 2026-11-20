@@ -63,6 +63,20 @@ impl StoreCore {
             .encode_user_record(&self.root, &self.user_id, value)
     }
 
+    /// `encode_user_record` at compression `level` (idle repacking).
+    pub fn encode_user_record_at(&self, value: &Value, level: Option<i32>) -> Result<Vec<u8>> {
+        self.codec
+            .encode_user_record_at(&self.root, &self.user_id, value, level)
+    }
+
+    /// Whether this account stores authenticated plaintext (administrator troubleshooting).
+    pub fn plaintext_records(&self) -> Result<bool> {
+        Ok(self.user_id == "admin"
+            && !webagent_storage::settings::admin_encryption_enabled(
+                &webagent_storage::settings::read_settings(&self.root)?,
+            )?)
+    }
+
     /// Apply optional administrator plaintext policy only to user-plane records; other authorities always seal.
     pub fn encode_for_pool(&self, pool: &SqlitePool, value: &Value) -> Result<Vec<u8>> {
         if std::ptr::eq(pool, &self.agent_pool) {
@@ -85,7 +99,7 @@ impl StoreCore {
         if webagent_storage::codec::is_agent_envelope(data) {
             return self.unseal_agent(data);
         }
-        self.codec.unseal(data)
+        self.codec.unseal_for(&self.root, &self.user_id, data)
     }
 
     /// Reset the shared disposable caches, applying limits to existing and future

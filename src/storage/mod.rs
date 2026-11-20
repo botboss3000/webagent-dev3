@@ -36,6 +36,8 @@ pub(crate) use webagent_notifications as notifications;
 mod actions;
 #[path = "../../crates/modules/files/host/storage/attachments.rs"]
 mod attachments;
+#[path = "../../crates/modules/files/host/storage/compression_upkeep.rs"]
+mod compression_upkeep;
 pub(crate) mod context_assets;
 mod engine;
 #[path = "../../crates/modules/files/host/storage/history_retention.rs"]

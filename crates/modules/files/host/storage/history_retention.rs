@@ -43,11 +43,14 @@ impl Store {
             }
             sweeps.insert(self.user_id.clone(), Instant::now());
         }
-        let idle_days = webagent_files::storage_policy::StoragePolicy::live()
-            .map(|policy| policy.trim_idle_days)
-            .unwrap_or(7);
-        self.trim_history(idle_days, webagent_host_core::now() as i64)
-            .await
+        let (trim_days, compress_days) = webagent_files::storage_policy::StoragePolicy::live()
+            .map(|policy| (policy.trim_idle_days, policy.compress_idle_days))
+            .unwrap_or((7, 7));
+        let now = webagent_host_core::now() as i64;
+        let trimmed = self.trim_history(trim_days, now).await?;
+        // Repack after trimming, so trimmed rows are packed once.
+        self.compression_upkeep(compress_days, now).await?;
+        Ok(trimmed)
     }
 
     /// Trim every session's rows past its mark, up to its fold or, when idle, its last row.

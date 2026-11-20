@@ -10,6 +10,7 @@ use serde_json::Value;
 pub mod cache;
 pub mod codec;
 pub mod compression;
+pub mod dictionary;
 pub mod docs;
 pub mod migration;
 pub mod pool;

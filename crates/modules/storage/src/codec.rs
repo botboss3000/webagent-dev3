@@ -97,20 +97,38 @@ impl Codec {
     }
     /// Encode a JSON value with a fresh AES-GCM nonce and authenticated ciphertext.
     pub fn seal(&self, value: &Value) -> Result<Vec<u8>> {
+        self.seal_plain(
+            &crate::compression::Compression::current().pack(serde_json::to_vec(value)?)?,
+        )
+    }
+    /// Encrypt already packed plaintext with a fresh nonce.
+    fn seal_plain(&self, plain: &[u8]) -> Result<Vec<u8>> {
         let mut nonce = [0; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
         let mut data = nonce.to_vec();
         data.extend(
             self.cipher
-                .encrypt(
-                    Nonce::from_slice(&nonce),
-                    crate::compression::Compression::current()
-                        .pack(serde_json::to_vec(value)?)?
-                        .as_ref(),
-                )
+                .encrypt(Nonce::from_slice(&nonce), plain)
                 .map_err(|_| anyhow!("Encryption failed"))?,
         );
         Ok(data)
+    }
+    /// `unseal` for one account's records: a record packed with a dictionary this process
+    /// has not loaded yet loads it from the account's folder and is read again.
+    pub fn unseal_for(&self, root: &Path, user_id: &str, data: &[u8]) -> Result<Value> {
+        match self.unseal(data) {
+            Err(error) => {
+                let Some(crate::dictionary::Missing(id)) = error.downcast_ref() else {
+                    return Err(error);
+                };
+                let aad = crate::dictionary::aad(user_id);
+                crate::dictionary::load(root, user_id, id, |sealed| {
+                    self.unseal_bytes(&aad, sealed)
+                })?;
+                self.unseal(data)
+            }
+            read => read,
+        }
     }
     /// Seal raw file bytes with a fresh nonce; `aad` binds the owner so a file cannot move between accounts.
     pub fn seal_bytes(&self, aad: &[u8], data: &[u8]) -> Result<Vec<u8>> {
@@ -177,11 +195,32 @@ impl Codec {
     /// authenticated plaintext, and only while storage-settings disables encryption.
     /// Application/agent secrets and search cursors keep using `seal`.
     pub fn encode_user_record(&self, root: &Path, user_id: &str, value: &Value) -> Result<Vec<u8>> {
+        self.encode_user_record_at(root, user_id, value, None)
+    }
+    /// `encode_user_record` at a compression level other than the policy's (idle repacking).
+    /// Sealed records pack with the account's current dictionary.
+    pub fn encode_user_record_at(
+        &self,
+        root: &Path,
+        user_id: &str,
+        value: &Value,
+        level: Option<i32>,
+    ) -> Result<Vec<u8>> {
+        let sealed = || {
+            let aad = crate::dictionary::aad(user_id);
+            let dictionary =
+                crate::dictionary::current(root, user_id, |bytes| self.unseal_bytes(&aad, bytes));
+            self.seal_plain(&crate::compression::Compression::current().pack_with(
+                serde_json::to_vec(value)?,
+                dictionary,
+                level,
+            )?)
+        };
         if user_id != "admin" {
-            return self.seal(value);
+            return sealed();
         }
         if crate::settings::admin_encryption_enabled(&crate::settings::read_settings(root)?)? {
-            return self.seal(value);
+            return sealed();
         }
         let mut nonce = [0; 12];
         rand::thread_rng().fill_bytes(&mut nonce);

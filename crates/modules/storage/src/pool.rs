@@ -120,6 +120,9 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
         // Per-account app notifications (storage warnings, automatic cleanups).
         sqlx::query("CREATE TABLE IF NOT EXISTS user_notices(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,severity TEXT NOT NULL,body BLOB NOT NULL,created_at INTEGER NOT NULL,read_at INTEGER)")
             .execute(&pool).await?;
+        // Which dictionary and row each idle session was last repacked with.
+        sqlx::query("CREATE TABLE IF NOT EXISTS compress_marks(session_id TEXT PRIMARY KEY,dictionary TEXT NOT NULL,through INTEGER NOT NULL)")
+            .execute(&pool).await?;
         // How far each session's tool calls are trimmed to their tools' retention.
         sqlx::query("CREATE TABLE IF NOT EXISTS retention_marks(session_id TEXT PRIMARY KEY,through INTEGER NOT NULL)")
             .execute(&pool).await?;

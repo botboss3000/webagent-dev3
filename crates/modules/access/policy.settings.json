@@ -290,6 +290,48 @@
       "bounds": "validator"
     },
     {
+      "id": "storage.compress_idle_days",
+      "description": "Days a chat can sit unused before its saved history is packed tighter (slower to save, as fast to read).",
+      "type": "integer",
+      "pointer": "/storage/compress_idle_days",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "compress idle chats after 3 days",
+        "pack old chats tighter",
+        "when are unused chats compressed more"
+      ],
+      "areas": [
+        "storage",
+        "limits"
+      ],
+      "unit": "days",
+      "min": 1,
+      "bounds": "validator"
+    },
+    {
+      "id": "storage.compression.idle_level",
+      "description": "Compression level, 1 to 19, for chats unused longer than the idle days: higher saves more space and costs more processing time once; reading is as fast.",
+      "type": "integer",
+      "pointer": "/storage/compression/idle_level",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "compress idle chats harder",
+        "lower the idle compression level",
+        "idle chat compression strength"
+      ],
+      "areas": [
+        "storage",
+        "limits"
+      ],
+      "min": 1,
+      "max": 19,
+      "bounds": "validator"
+    },
+    {
       "id": "storage.trim_idle_days",
       "description": "Days a chat can sit unused before its stored tool results are shortened to what each tool keeps long term (lookups dropped, logs cut to their end). Chats that compacted are shortened behind the compaction point straight away.",
       "type": "integer",
@@ -387,7 +429,6 @@
     "/tiers/*/id": "Internal tier identity.",
     "/tiers/*/model_policy/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
     "/tiers/*/revision": "Internal tier identity.",
-    "/storage/compress_idle_days": "Reserved for compaction tiers, which are not built yet; changing it has no effect.",
     "/storage/compression/algorithm": "Only zstd is supported; not a choice.",
     "/storage/compression/skip_media_types/**": "List of already-compressed media types; technical, edited in its JSON file."
   }

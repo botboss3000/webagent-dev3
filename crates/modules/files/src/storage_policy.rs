@@ -19,7 +19,8 @@ pub struct StoragePolicy {
     /// Second, more urgent warning; at 100% the saved automatic cleanup runs.
     #[serde(default = "default_critical_percent")]
     pub critical_percent: u8,
-    /// Sessions idle this many days have their files compressed.
+    /// Sessions idle this many days have their history, messages and events repacked at
+    /// `compression.idle_level` with the account's dictionary.
     pub compress_idle_days: u32,
     /// Sessions idle this many days have their stored tool calls trimmed to each tool's
     /// `retention` in `tool.json`; compacted history is trimmed at the fold without waiting.
