@@ -178,7 +178,7 @@ OPENCODE_HOME = Path.home() / ".cache" / "opencode-bridge"
 MCP_PREFIX = "webagent_"
 
 
-def opencode_config(work, model):
+def opencode_config(work, model, stub=None):
     """Free OpenCode models answer only while the harness lists its own tools, so for them they stay listed
     but "ask" makes the headless run reject every use (never pass --auto). Paid models get "deny", which
     hides them, so the model cannot pick bash over webagent_shell. WebAgent's tools come from this script's
@@ -189,7 +189,7 @@ def opencode_config(work, model):
     own = "ask" if model.startswith("opencode/") else "deny"
     return json.dumps({
         "mcp": {"servers": {"webagent": {"type": "local", "codemode": False,
-                                         "command": [sys.executable, "-B", str(Path(__file__).resolve()), "mcp", str(work)]}}},
+                                         "command": [sys.executable, "-B", str(Path(__file__).resolve()), "mcp", str(stub or work)]}}},
         "agents": {"webagent-bridge": {"mode": "primary", "system": OPENCODE_PROMPT,
                                        "permissions": [{"action": "*", "resource": "*", "effect": own},
                                                        {"action": "skill", "resource": "*", "effect": "deny"},
@@ -334,11 +334,11 @@ def stub_connected(url, work):
     return any(s.get("name") == "webagent" and (s.get("status") or {}).get("status") == "connected" for s in servers)
 
 
-def start_server(work, model, port):
+def start_server(work, model, port, stub=None):
     command = [OPENCODE, "serve", "--hostname", "127.0.0.1", "--port", str(port)]
-    env = {"OPENCODE_CONFIG_CONTENT": opencode_config(work, model), "OPENCODE_SERVER_PASSWORD": server_password()}
+    env = {"OPENCODE_CONFIG_CONTENT": opencode_config(work, model, stub), "OPENCODE_SERVER_PASSWORD": server_password()}
     if shutil.which("systemd-run"):
-        name = "webagent-opencode-" + hashlib.sha256(str(work).encode()).hexdigest()[:12] + f"-{port}"
+        name = "webagent-opencode-" + hashlib.sha256(str(stub or work).encode()).hexdigest()[:12] + f"-{port}"
         started = subprocess.run(["systemd-run", "--user", "--quiet", "--collect", f"--unit={name}",
                                   f"--working-directory={work}", "--property=KillMode=control-group",
                                   *[f"--setenv={k}={v}" for k, v in env.items()], *command],
@@ -378,13 +378,15 @@ def reattach_servers():
         save_registry()
 
 
-def opencode_server(work, model):
+def opencode_server(work, model, stub=None):
     """URL of a ready server for this chat folder, started on first use and returned only once its
     MCP stub is connected, so the first step already has WebAgent's tools. The stub lists tools.json as
-    it was at start, so a changed tool set restarts the server."""
+    it was at start, so a changed tool set restarts the server. A fork server (`stub`, its own folder for
+    tools.json and calls.jsonl) still runs in the chat folder: OpenCode puts the working folder in its
+    system prompt, so only then does a fork's request start like the chat's and reuse its cache."""
     own = "ask" if model.startswith("opencode/") else "deny"
-    key = (str(work), own)
-    tools = hashlib.sha256((work / "tools.json").read_bytes()).hexdigest()
+    key = (str(work), own + (":fork" if stub else ""))
+    tools = hashlib.sha256(((stub or work) / "tools.json").read_bytes()).hexdigest()
     with SERVERS_LOCK:
         server = SERVERS.get(key)
         if server and server["tools"] == tools and server["handle"].alive():
@@ -397,7 +399,7 @@ def opencode_server(work, model):
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
         probe.close()
-        handle = start_server(work, model, port)
+        handle = start_server(work, model, port, stub)
         url = f"http://127.0.0.1:{port}"
         deadline = time.time() + 30
         while not stub_connected(url, work):
@@ -407,19 +409,19 @@ def opencode_server(work, model):
             time.sleep(0.2)
         # opencode fetches the stub's tool list when its first session starts, too late for that
         # session's first step; one tiny warm-up prompt makes it fetch them before the real call.
-        warm_up(url, work, model)
+        warm_up(url, work, model, stub)
         SERVERS[key] = {"handle": handle, "url": url, "used": time.time(), "tools": tools}
         save_registry()
         return url
 
 
-def warm_up(url, work, model):
+def warm_up(url, work, model, stub=None):
     """One-word prompt on a new server; its result does not matter. It runs through opencode_turn, so
     a failing provider ends it at opencode's first retry instead of after PROBE_SECS of silent retries;
     the real call then reports that failure."""
     command = [OPENCODE, "run", "--server", url, "--agent", "webagent-bridge", "-m", model, "--format", "json"]
     try:
-        opencode_turn(command, "Reply with the single word OK. Do not use tools.", work, model)
+        opencode_turn(command, "Reply with the single word OK. Do not use tools.", work, model, stub)
     except (HarnessFailure, RuntimeError, Stopped):
         pass
 
@@ -1104,13 +1106,14 @@ class StallWatch:
 DROPPED = ("socket connection was closed unexpectedly", "Broken pipe")
 
 
-def opencode_turn(command, prompt, work, model):
+def opencode_turn(command, prompt, work, model, stub=None):
     """`opencode_turn_once`, run again once when OpenCode dropped its connection before any tool call was
     recorded (the stub only records calls; WebAgent runs them, so a retry repeats no effect)."""
     try:
-        return opencode_turn_once(command, prompt, work, model)
+        return opencode_turn_once(command, prompt, work, model, stub)
     except (BrokenPipeError, RuntimeError) as error:
-        recorded = (work / "calls.jsonl").exists() and (work / "calls.jsonl").stat().st_size
+        calls = (stub or work) / "calls.jsonl"
+        recorded = calls.exists() and calls.stat().st_size
         if recorded or not any(text in str(error) or isinstance(error, BrokenPipeError) and text == "Broken pipe"
                                for text in DROPPED):
             raise
@@ -1124,11 +1127,11 @@ def opencode_turn(command, prompt, work, model):
                     if server["url"] == command[at]:
                         server["handle"].stop()
                         del SERVERS[key]
-            command = command[:at] + [opencode_server(work, model)] + command[at + 1:]
-        return opencode_turn_once(command, prompt, work, model)
+            command = command[:at] + [opencode_server(work, model, stub)] + command[at + 1:]
+        return opencode_turn_once(command, prompt, work, model, stub)
 
 
-def opencode_turn_once(command, prompt, work, model):
+def opencode_turn_once(command, prompt, work, model, stub=None):
     """Run one `opencode run`; return its session id, the final text and token usage.
 
     The run stops at the end of the first step that called a WebAgent tool: the stub only records the call,
@@ -1167,7 +1170,7 @@ def opencode_turn_once(command, prompt, work, model):
                 usage["output"] += tokens.get("output", 0)
                 usage["cached"] = cache.get("read", 0)
                 usage["cache_write"] = cache.get("write", 0)
-                if (work / "calls.jsonl").exists() and (work / "calls.jsonl").stat().st_size:
+                if ((stub or work) / "calls.jsonl").exists() and ((stub or work) / "calls.jsonl").stat().st_size:
                     stopped = True
                     stop()
                     break
@@ -1307,25 +1310,29 @@ def opencode_session_exists(server, work, session):
 
 
 def fork_opencode(call):
-    """Answer a fork call from a fork of the chat's OpenCode session, on the chat's own fork server and work
-    folder: the chat's server, session, state and tool files are left as they are."""
+    """Answer a fork call from a fork of the chat's OpenCode session, on the chat's own fork server: it runs
+    in the chat folder, so the fork's request starts like the chat's and reads its cache, but keeps its
+    tool files in its own stub folder, so the chat's server, session, state and tool files are left as
+    they are."""
     folder, state, delta = fork_delta(call)
     body = call["body"]
     model = body.get("model", "")
     session = state.get("opencode_session")
     delta = fork_plan(state, delta, body, session)
-    work = OPENCODE_HOME / (folder.name + ".fork")
+    work = OPENCODE_HOME / folder.name
+    stub = OPENCODE_HOME / (folder.name + ".fork")
     work.mkdir(parents=True, exist_ok=True)
-    (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
-    (work / "calls.jsonl").unlink(missing_ok=True)
-    server = opencode_server(work, model)
+    stub.mkdir(parents=True, exist_ok=True)
+    (stub / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    (stub / "calls.jsonl").unlink(missing_ok=True)
+    server = opencode_server(work, model, stub)
     if not opencode_session_exists(server, work, session):
         raise RuntimeError("the chat's OpenCode session is not visible to its fork server")
     prompt = prompt_for(call, delta, False, listed=False)
     command = [OPENCODE, "run", "--server", server, "--agent", "webagent-bridge", "-m", model, "--format", "json",
                "-s", session, "--fork"]
-    forked, text, usage = opencode_turn(with_images(command, prompt), prompt, work, model)
-    calls = opencode_calls(work)
+    forked, text, usage = opencode_turn(with_images(command, prompt), prompt, work, model, stub)
+    calls = opencode_calls(stub)
     message = parse_reply(json.dumps({"content": text, "tool_calls": calls}), body)
     post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": opencode_usage(usage)})
     print(f"{call['id']}: answered a fork of chat {call.get('session')} (session {session} -> {forked})")

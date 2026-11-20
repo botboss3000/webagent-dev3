@@ -139,6 +139,11 @@ pub fn apply_visit(timing: &mut Value, visit_at: u64) {
     }
 }
 
+/// Whether a ping failed because the bridge cannot fork the chat's harness session.
+pub fn unforkable(error: &str) -> bool {
+    error.contains("cannot be forked")
+}
+
 /// The ping request: the last request with the question appended, so every byte before
 /// it matches what the provider cached.
 pub fn ping_input(input: &[Value]) -> Vec<Value> {
@@ -280,6 +285,15 @@ impl<
                     tokio::spawn(async move {
                         let response = app.keep_alive_ping(&session, &saved).await;
                         log_ping(&session, &run_id, visit, &response);
+                        // A bridge that cannot fork the chat (no harness session yet, or the
+                        // chat's request has since changed) would fail every later ping too.
+                        if let Err(error) = &response {
+                            if unforkable(&error.to_string()) {
+                                if let Err(error) = app.keep_alive_stop(&session).await {
+                                    tracing::warn!(session_id = %session, error = %error, "keep-alive stop failed");
+                                }
+                            }
+                        }
                     });
                 }
             }
@@ -423,6 +437,10 @@ mod tests {
             decide(&timing, 1000 + 3500, limit, &State::Dismissed),
             Action::Stop
         );
+        assert!(unforkable(
+            "Bridge client failed: the chat's session cannot be forked: no harness session yet"
+        ));
+        assert!(!unforkable("Bridge client failed: upstream timeout"));
         let input = ping_input(&[json!({"role":"user","content":"hi"})]);
         assert_eq!(input.len(), 2);
         assert_eq!(input[1]["content"], PING);
