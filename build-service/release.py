@@ -73,7 +73,8 @@ def possible_credentials(data):
 
 def live_patterns(files):
     """Validated `v3/` patterns from a snapshot's live-files.json. The last segment may hold
-    `*` anywhere; a folder segment may be `*` alone (any one folder), never the first."""
+    `*` anywhere; a folder segment may be `*` alone (any one folder), never the first. Files
+    are .json or .md, and ability icons (.svg under abilities/), which the app checks on read."""
     item = files.get(LIVE_MANIFEST)
     if item is None:
         return ()
@@ -88,7 +89,7 @@ def live_patterns(files):
         parts = name.split("/") if isinstance(name, str) else []
         if (not parts or len(name) > 200 or any(part in ("", ".", "..") for part in parts)
                 or any("*" in part and part != "*" for part in parts[:-1]) or parts[0] == "*"
-                or not name.endswith((".json", ".md"))
+                or not (name.endswith((".json", ".md")) or name.startswith("abilities/") and name.endswith(".svg"))
                 or name.startswith(LIVE_DENIED) or name == "live-files.json"
                 or any(not (c.isalnum() or c in "._-*/") for c in name)):
             raise ValueError("invalid live-files.json entry")

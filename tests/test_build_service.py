@@ -32,7 +32,7 @@ class LiveFileTests(unittest.TestCase):
                          ("v3/crates/modules/models/providers/*.json","v3/ui/chat/chat.json"))
         self.assertEqual(release.live_patterns({}),())
         for bad in ("src/main.rs","build-service/scheduler-defaults.json","tests/a.json","data/config/chat.json",
-                    "crates/a*/x.json","*/x.json","ui/../src/a.json","live-files.json",".git/config.json","ui/a b.json"):
+                    "crates/a*/x.json","*/x.json","ui/icon.svg","ui/../src/a.json","live-files.json",".git/config.json","ui/a b.json"):
             with self.assertRaises(ValueError,msg=bad):parse(bad)
         with self.assertRaises(ValueError):parse(*[f"ui/{n}.json"for n in range(257)])
         patterns=parse("crates/modules/models/providers/*.json")
@@ -40,6 +40,7 @@ class LiveFileTests(unittest.TestCase):
         self.assertFalse(release.is_live("v3/crates/modules/models/providers/old/deepseek.json",patterns))
         self.assertFalse(release.is_live("v3/crates/modules/models/src/lib.rs",patterns))
         # A whole folder segment may be `*`: one folder, any name, never deeper or shallower.
+        self.assertTrue(release.is_live("v3/abilities/Core/base/base.svg",parse("abilities/*/*/*.svg")))
         tools=parse("abilities/*/*/tools/*/*.json")
         self.assertTrue(release.is_live("v3/abilities/Core/base/tools/calculate/calculate.tool.json",tools))
         self.assertFalse(release.is_live("v3/abilities/Core/base/tools/calculate.tool.json",tools))
