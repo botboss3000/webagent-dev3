@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::path::Path;
+pub use webagent_browser::pages::Pages;
 
 /// URL parameters the app itself writes. Invite and embed authentication parameters stay
 /// excluded.
@@ -241,6 +242,8 @@ pub struct Trusted {
     pub cookie: Option<String>,
     /// The signed-out site lists; `None` signed in.
     pub sites: Option<Sites>,
+    /// The app pages a signed-in browser may show; required signed in.
+    pub pages: Pages,
     /// `trusted["sites"]` as sent, compared when a browser is reused.
     pub sites_raw: Value,
     pub generation: String,
@@ -322,6 +325,15 @@ pub fn validate_trusted(base: &Path, trusted: &Value) -> Result<Trusted, Fault> 
     } else {
         None
     };
+    let pages = match map.get("pages") {
+        Some(pages) => Some(
+            Pages::from_authority(pages)
+                .ok_or_else(|| Fault::rejected("Invalid trusted page rules"))?,
+        ),
+        None if cookie.is_none() => None,
+        None => return Err(Fault::rejected("Invalid trusted page rules")),
+    }
+    .unwrap_or_default();
     let generation = text("generation")
         .filter(|generation| (1..=128).contains(&generation.chars().count()))
         .ok_or_else(|| Fault::rejected("Invalid trusted generation"))?;
@@ -352,6 +364,7 @@ pub fn validate_trusted(base: &Path, trusted: &Value) -> Result<Trusted, Fault> 
         agent_id: agent.to_owned(),
         cookie,
         sites,
+        pages,
         sites_raw,
         generation: generation.to_owned(),
         expires_at,
@@ -417,6 +430,7 @@ pub enum Scope<'a> {
     SignedIn {
         session_id: &'a str,
         agent_id: &'a str,
+        pages: &'a Pages,
     },
     SignedOut {
         sites: &'a Sites,
@@ -432,6 +446,7 @@ impl Trusted {
             _ => Scope::SignedIn {
                 session_id: &self.session_id,
                 agent_id: &self.agent_id,
+                pages: &self.pages,
             },
         }
     }
@@ -447,6 +462,7 @@ pub fn validate_url(url: &Value, scope: &Scope<'_>, origin: &str) -> Result<Stri
         Scope::SignedIn {
             session_id,
             agent_id,
+            pages,
         } => {
             let route = match url.as_str() {
                 Some(text) if text.starts_with(&format!("{origin}/")) => {
@@ -454,7 +470,7 @@ pub fn validate_url(url: &Value, scope: &Scope<'_>, origin: &str) -> Result<Stri
                 }
                 _ => url.clone(),
             };
-            return validate_path(&route, session_id, agent_id);
+            return validate_path(&route, session_id, agent_id, pages);
         }
         Scope::SignedOut { sites } => sites,
     };
@@ -497,6 +513,11 @@ pub fn validate_url(url: &Value, scope: &Scope<'_>, origin: &str) -> Result<Stri
     if !host.contains('.') || host_matches(host, &local) {
         return Err(internal());
     }
+    // The app opens only signed in, where its page rules apply; signed out it would offer
+    // its sign-in page to whatever credentials the agent can type.
+    if origin_of(origin).split_once("://").map(|(_, app)| app) == Some(host) {
+        return Err(Fault::rejected(APP_SIGNED_OUT));
+    }
     if host_matches(host, &sites.block) {
         return Err(Fault::rejected(format!(
             "This agent's site policy blocks {host}"
@@ -522,12 +543,22 @@ pub fn validate_url(url: &Value, scope: &Scope<'_>, origin: &str) -> Result<Stri
     ))
 }
 
-/// Confines navigation to the fixed development origin and the current session's
-/// implemented routes; returns the normalized route.
+/// Why a signed-out browser may not open this app.
+pub const APP_SIGNED_OUT: &str = "The WebAgent app opens only in a signed-in browser, and signing agent browsers in is turned off in config/browser/browser-pages.json";
+/// The start of the refusal for an app page agent browsers may not use.
+pub const PAGE_BLOCKED: &str = "This app page is closed to agent browsers";
+
+/// Confines navigation to the fixed development origin, the current session's
+/// implemented routes and the allowed app `pages`; returns the normalized route.
 ///
 /// # Errors
 /// A rejection naming the rule broken.
-pub fn validate_path(path: &Value, session_id: &str, agent_id: &str) -> Result<String, Fault> {
+pub fn validate_path(
+    path: &Value,
+    session_id: &str,
+    agent_id: &str,
+    pages: &Pages,
+) -> Result<String, Fault> {
     let invalid = || Fault::rejected("Invalid development route");
     let path = path
         .as_str()
@@ -591,11 +622,16 @@ pub fn validate_path(path: &Value, session_id: &str, agent_id: &str) -> Result<S
         if !shaped(get("tab").unwrap_or("chat"), 1, 40, kebab) {
             return Err(Fault::rejected("Unsupported development page"));
         }
-        // The browser signs in with the caller's own app cookie, so the app shows only that
-        // user's sessions: another user's id reads as missing there, never as their chat.
+        // The browser signs in as the caller, whose other conversations may hold their own
+        // approvals: it opens only the conversation it belongs to.
         let hex_id = |c: char| c.is_ascii_hexdigit() || c == '-';
         if get("session_id").is_some_and(|sid| !shaped(sid, 36, 36, hex_id)) {
             return Err(Fault::rejected("Invalid chat session id"));
+        }
+        if get("session_id").is_some_and(|sid| sid != session_id) {
+            return Err(Fault::rejected(format!(
+                "This browser opens only its own conversation; use session_id={session_id}"
+            )));
         }
         if get("agent").is_some_and(|agent| agent != agent_id) {
             return Err(Fault::rejected("Another agent is unavailable"));
@@ -603,8 +639,27 @@ pub fn validate_path(path: &Value, session_id: &str, agent_id: &str) -> Result<S
         if !shaped(get("agentView").unwrap_or("config"), 1, 40, lower_id) {
             return Err(Fault::rejected("Unsupported agent view"));
         }
+        let has_session = get("session_id").is_some();
+        // Without a tab the app opens its first main page; open the allowed landing page.
+        if get("tab").is_none() {
+            query.insert(0, ("tab".into(), pages.landing_tab.clone()));
+        }
+        if !pages.allows(&query) {
+            let named: Vec<String> = query
+                .iter()
+                .filter(|(name, value)| {
+                    ["tab", "agentView", "agentScope", "appView"].contains(&name.as_str())
+                        && shaped(value, 1, 40, lower_id)
+                })
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
+            return Err(Fault::rejected(format!(
+                "{PAGE_BLOCKED} ({}): agent settings, Administrator, Account, Builds and Host Admin pages never open here; config/browser/browser-pages.json lists the pages that do",
+                named.join("&")
+            )));
+        }
         // Avoid an unconstrained restored conversation on a bare app route.
-        if get("session_id").is_none() {
+        if !has_session {
             query.push(("session_id".into(), session_id.to_owned()));
         }
         return Ok(urlunsplit("", "", &parsed.path, &urlencode(&query), ""));
@@ -1062,14 +1117,20 @@ fn valid_points(points: &Value) -> bool {
 
 #[cfg(test)]
 mod preview_route_tests {
-    use super::validate_path;
-    use serde_json::Value;
+    use super::{validate_path, Pages};
+    use serde_json::{json, Value};
+
+    /// Every app tab, as a test of routes rather than of page rules.
+    fn any_tab() -> Pages {
+        Pages::from_authority(&json!({"landing_tab":"wiki","app_pages":[{"tab":"*"}]}))
+            .expect("rules")
+    }
 
     #[test]
     fn only_this_sessions_ui_preview_route_is_allowed() {
         let sid = "083cd9bb-7c27-4022-a9de-09e7110a9e92";
         let other = "21e5ab5f-89d9-46ee-a417-96b1de77c1a8";
-        let path = |p: String| validate_path(&Value::from(p), sid, "shared_default");
+        let path = |p: String| validate_path(&Value::from(p), sid, "shared_default", &any_tab());
         assert!(path(format!("/api/v3/sessions/{sid}/ui-preview/option-a")).is_ok());
         assert!(path(format!("/api/v3/sessions/{sid}/ui-preview/off")).is_ok());
         assert!(path(format!("/api/v3/sessions/{other}/ui-preview/option-a")).is_err());
@@ -1084,21 +1145,44 @@ mod preview_route_tests {
             &Value::from("/ui/chat/elements/activity-group/style.css"),
             sid,
             "shared_default",
+            &any_tab(),
         )
         .unwrap_err();
         assert!(format!("{fault:?}").contains("file_read"));
-        let api = validate_path(&Value::from("/api/v3/other"), sid, "shared_default").unwrap_err();
+        let api = validate_path(
+            &Value::from("/api/v3/other"),
+            sid,
+            "shared_default",
+            &any_tab(),
+        )
+        .unwrap_err();
         assert!(format!("{api:?}").contains("Unsupported current-session read route"));
     }
 
     #[test]
-    fn the_app_route_opens_any_well_formed_session_of_the_caller() {
+    fn the_app_route_opens_only_its_own_session_on_the_landing_tab() {
         let sid = "083cd9bb-7c27-4022-a9de-09e7110a9e92";
         let other = "21e5ab5f-89d9-46ee-a417-96b1de77c1a8";
-        let path = |p: String| validate_path(&Value::from(p), sid, "shared_default");
-        assert!(path(format!("/app?session_id={other}")).is_ok());
+        let path = |p: String| validate_path(&Value::from(p), sid, "shared_default", &any_tab());
+        assert!(path(format!("/app?session_id={sid}")).is_ok());
+        assert!(path(format!("/app?session_id={other}")).is_err());
         assert!(path("/app?session_id=not-a-session".into()).is_err());
-        assert_eq!(path("/".into()).unwrap(), format!("/app?session_id={sid}"));
+        assert_eq!(
+            path("/".into()).unwrap(),
+            format!("/app?tab=wiki&session_id={sid}")
+        );
+        let shipped = validate_path(
+            &Value::from("/app?tab=agents&agent=shared_default&agentView=abilities"),
+            sid,
+            "shared_default",
+            &Pages::default(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{shipped:?}").contains(super::PAGE_BLOCKED),
+            "{shipped:?}"
+        );
+        assert!(format!("{shipped:?}").contains("agentView=abilities"));
     }
 
     /// A URL for another session names both ids, so the caller can fix it in one step.
@@ -1110,6 +1194,7 @@ mod preview_route_tests {
             &Value::from(format!("/api/v3/sessions/{other}/ui-preview/step-rail")),
             sid,
             "shared_default",
+            &any_tab(),
         )
         .unwrap_err();
         let text = format!("{fault:?}");

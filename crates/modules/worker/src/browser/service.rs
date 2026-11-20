@@ -15,7 +15,7 @@
 use super::egress::Guard;
 use super::rules::{
     canonical_id, origin_of, truthy, validate_args, validate_path, validate_trusted, validate_url,
-    Scope, Site, Sites, Trusted,
+    Pages, Scope, Site, Sites, Trusted, APP_SIGNED_OUT,
 };
 use super::url::{quote, urlsplit, urlunsplit};
 use super::webdriver::{self as wd, Driver, Element, Factory, Launch};
@@ -107,6 +107,8 @@ struct State {
     signed_in: bool,
     sites: Option<Sites>,
     sites_raw: Value,
+    /// Signed in: the app pages it may show, as of the latest call.
+    pages: Pages,
     /// Signed out: the saved site whose cookies are loaded, the steps since the last
     /// navigation (what save_login keeps) and every vault value typed, scrubbed from
     /// results.
@@ -568,8 +570,9 @@ impl Service {
         }
     }
 
-    /// Checks the observed URL after browser effects, rejecting cross-origin or
-    /// cross-session state; returns the normalized URL.
+    /// Checks the observed URL before and after browser effects, rejecting cross-origin or
+    /// cross-session state; returns the normalized URL. A page agent browsers may not use
+    /// (reached by a click, a redirect or the app's own routing) closes the browser.
     async fn safe_url(&self, state: &State) -> Result<String, Fault> {
         let current = wd::current_url(state.driver()).await?;
         if !state.signed_in {
@@ -589,7 +592,11 @@ impl Service {
                 &Value::from(current),
                 &Scope::SignedOut { sites: &sites },
                 &self.origin,
-            );
+            )
+            .map_err(|fault| match fault {
+                Fault::Rejected(message) if message == APP_SIGNED_OUT => Fault::Blocked(message),
+                fault => fault,
+            });
         }
         let parsed = urlsplit(&current)?;
         if urlunsplit(&parsed.scheme, &parsed.netloc, "", "", "") != self.origin {
@@ -602,7 +609,12 @@ impl Service {
             &Value::from(urlunsplit("", "", &parsed.path, &parsed.query, "")),
             &state.sid,
             &state.agent,
+            &state.pages,
         )
+        .map_err(|fault| match fault {
+            Fault::Rejected(message) => Fault::Blocked(message),
+            fault => fault,
+        })
     }
 
     /// Authenticates a new private profile as the current caller, reusing only a browser
@@ -627,6 +639,7 @@ impl Service {
             if !changed {
                 // The API renews the lease of the same signed-in session on each call.
                 state.expires = trusted.expires_at;
+                state.pages = trusted.pages.clone();
                 return Ok(());
             }
             Self::drop_locked(states, sid).await;
@@ -715,6 +728,7 @@ impl Service {
             } else {
                 trusted.sites_raw.clone()
             },
+            pages: trusted.pages.clone(),
             site: None,
             steps: Vec::new(),
             login_url: String::new(),
@@ -776,8 +790,12 @@ impl Service {
         state.csrf = csrf;
         // A navigation that opened the browser loads its own route next.
         if land {
-            let route =
-                validate_path(&Value::from("/app"), &trusted.session_id, &trusted.agent_id)?;
+            let route = validate_path(
+                &Value::from("/app"),
+                &trusted.session_id,
+                &trusted.agent_id,
+                &trusted.pages,
+            )?;
             wd::get(state.driver(), &format!("{}{route}", self.origin)).await?;
             self.safe_url(state).await?;
         }
@@ -1423,6 +1441,7 @@ impl Service {
                 &Value::from(urlunsplit("", "", &parsed.path, &parsed.query, "")),
                 &state.sid,
                 &state.agent,
+                &state.pages,
             )?;
         }
         let element = wd::find_element(state.driver(), selector).await?;
@@ -1625,7 +1644,11 @@ impl Service {
                     match sent {
                         Ok(()) => {
                             state.acted(action);
-                            break self.safe_url(state).await.map(drop).map_err(drop);
+                            break match self.safe_url(state).await {
+                                Ok(_) => Ok(()),
+                                Err(fault @ Fault::Blocked(_)) => return Err(fault),
+                                Err(_) => Err(()),
+                            };
                         }
                         // WebDriver refuses these before dispatching any input, so nothing
                         // happened. A live page that redrew the target is looked up once more
@@ -1908,10 +1931,14 @@ impl Service {
             self.safe_url(state).await
         }
         .await;
-        if applied.is_err() {
-            return Err(Fault::Uncertain(
-                "Key outcome is uncertain; inspect the page before another action".into(),
-            ));
+        match applied {
+            Err(fault @ Fault::Blocked(_)) => return Err(fault),
+            Err(_) => {
+                return Err(Fault::Uncertain(
+                    "Key outcome is uncertain; inspect the page before another action".into(),
+                ))
+            }
+            Ok(_) => {}
         }
         let mut step = json!({"action":"press","key":key});
         if let Some(selector) = selector {
@@ -2421,6 +2448,11 @@ impl Service {
                 errors,
             })) => {
                 json!({"status":"error","error_kind":kind,"output":message,"page_errors":errors})
+            }
+            Ok(Err(Fault::Blocked(message))) => {
+                drop_session().await;
+                json!({"status":"error","error_kind":"browser_page_blocked",
+                    "output":format!("Private browser closed: {message}. Navigate to an allowed page to open a fresh browser.")})
             }
             // Rejection messages are fixed strings in this module, never page or credential
             // text.

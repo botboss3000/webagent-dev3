@@ -6,7 +6,9 @@ A private Chromium browser on the WebAgent server for looking at web pages: read
 
 - Signed out (the default): any public `http` or `https` site the agent's site policy allows, with a fresh private profile per chat session and nothing saved. Every request goes through an egress guard that refuses addresses that are not public: the server itself, private networks, Tailscale, cloud metadata and local names. A blocked page is rejected with its reason.
 - Signed in to a saved site: navigating to a site the user saved a sign-in for opens it with that sign-in (see Site sign-ins).
-- Signed in: navigating to the WebAgent app (`https://dev.webagent.live/...`) signs this browser in as the person chatting, with only their own permissions, unless the agent's Sign in to WebAgent setting is off or `navigate` passes `signed_in: false`. Nothing else is needed: no sign-in step or credentials. While signed in the browser stays on the app; navigating anywhere else switches to a separate signed-out browser. The sign-in renews itself while the browser is in use.
+- Signed in: only when an administrator has turned it on in `config/browser/browser-pages.json` (off by default) and the agent's Sign in to WebAgent setting is on, navigating to the WebAgent app (`https://dev.webagent.live/...`) signs this browser in as the person chatting, with only their own permissions; `navigate` with `signed_in: false` opts out. While signed in the browser stays on the app; navigating anywhere else switches to a separate signed-out browser. The sign-in renews itself while the browser is in use.
+- With sign-in off, the WebAgent app's address is refused to the browser altogether; check app UI another way (for example the code and its tests).
+- App pages: a signed-in browser shows only the app pages `browser-pages.json` lists (by default Session Metrics, which a bare `/app` opens) and only its own conversation. Agent settings pages (Config, Identity, Models, Abilities, Members, Artifacts), Sessions, App and Administrator pages, Account, Notifications, Builds and Host Admin are refused; a click that reaches one closes the browser (`browser_page_blocked`). Never try to change your own or another agent's tools or settings through the browser.
 
 ## Site sign-ins
 
@@ -35,7 +37,7 @@ One browser per chat session, at most two at once on the server; a session close
 - Main pages: the header tab buttons are `#tab-button-<page>` inside `#main-tabs` (pages include `app`, `agents`, `builds`, `account`, `session-metrics`, `wiki`, `automation`); each page mounts in `#tab-<page>`, loaded the first time it opens. On a phone the tabs are in a menu: `#mobile-nav-toggle` opens `#mobile-nav-menu`, whose buttons are `#mobile-nav-<page>`.
 - Scrolling: the page itself does not scroll; main pages scroll inside `#main-panel` and the chat inside its own panel.
 - Chat: messages are `.chat-bubble` elements, `.chat-bubble.user` and `.chat-bubble.agent`.
-- A URL naming a session opens the chat first; on a phone the page behind it loads when you switch to it.
+- A URL naming this session opens the chat first; on a phone the page behind it loads when you switch to it.
 - Widths: every UI change is checked at phone and desktop width; the `viewport` presets emulate both.
 
 ## Readable API routes

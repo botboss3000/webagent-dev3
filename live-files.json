@@ -18,6 +18,7 @@
     "config/agents/*.settings.json",
     "config/browser/*.settings.json",
     "config/browser/browser-limits.json",
+    "config/browser/browser-pages.json",
     "config/chat/*.settings.json",
     "config/configuration/prompts/*.json",
     "config/configuration/prompts/*.md",

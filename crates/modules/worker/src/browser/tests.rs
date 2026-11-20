@@ -35,6 +35,8 @@ struct Page {
     typed: Vec<String>,
     ready: String,
     escape_on_click: bool,
+    /// Where a click takes the page, as an app link or its own routing would.
+    click_url: Option<String>,
     /// WebDriver errors the next clicks answer with, before dispatching anything.
     click_errors: Vec<&'static str>,
     closed: bool,
@@ -190,6 +192,9 @@ impl Mock {
                 if page.escape_on_click {
                     page.current_url = "https://outside.invalid/".into();
                 }
+                if let Some(url) = page.click_url.clone() {
+                    page.current_url = url;
+                }
                 Value::Null
             }
             ("POST", _, Some((_, "value"))) => {
@@ -291,7 +296,8 @@ fn fixture_with(limits: Limits) -> Fixture {
     std::fs::create_dir_all(&base).expect("workspace");
     let trusted = json!({"session_id":sid,"user_id":"admin","agent_id":"shared_default",
         "cookie":uuid::Uuid::new_v4().to_string(),"generation":"first",
-        "expires_at":super::now() + 300.0,"allowed_session_ids":[sid]});
+        "expires_at":super::now() + 300.0,"allowed_session_ids":[sid],
+        "pages":{"landing_tab":"session-metrics","app_pages":[{"tab":"*"}]}});
     let drivers = Drivers::default();
     let launches = Launches::default();
     let start = Arc::new(Mutex::new(Start::default()));
@@ -529,8 +535,9 @@ async fn login_private_cookie_fixed_origin_and_current_routes() {
         "https://outside.invalid/".to_owned(),
         "//outside.invalid/".into(),
         "file:///etc/passwd".into(),
-        // Another session of the same user opens; a malformed id never does.
+        // Only this browser's own conversation opens, never another of the same user's.
         "/app?session_id=not-a-session".into(),
+        format!("/app?session_id={}", uuid::Uuid::new_v4()),
         "/app?tab=agents&agent=another".into(),
         format!("/api/v3/sessions/{}", uuid::Uuid::new_v4()),
         "/app?tab=account&cookie=x".into(),
@@ -579,14 +586,19 @@ async fn current_app_routes_viewport_page_errors_and_named_rejections() {
     // A page that drifted outside the routes blocks reads but navigation recovers.
     let driver = f.driver(0);
     driver.page().current_url = format!("{ORIGIN}/app?tab=agents&agent=another");
-    assert_eq!(
-        output(&f.call(json!({"action":"read"})).await),
-        "Private browser request rejected: Another agent is unavailable"
+    let drifted = f.call(json!({"action":"read"})).await;
+    assert_eq!(drifted["error_kind"], "browser_page_blocked", "{drifted}");
+    assert!(output(&drifted).contains("Another agent is unavailable"));
+    assert!(
+        driver.page().closed,
+        "the browser closes on a page it may not use"
     );
     let back = f
         .call(json!({"action":"navigate","path":"/app?tab=app"}))
         .await;
     assert_eq!(back["status"], "success");
+    // The navigation opened a fresh browser.
+    let driver = f.last();
     driver.page().cdp.clear();
     let phone = f.call(json!({"action":"viewport","preset":"phone"})).await;
     assert_eq!(
@@ -1879,7 +1891,8 @@ fn trusted_authority_rules() {
     let base = Path::new("/workspaces").join(sid);
     let good = json!({"session_id":sid,"user_id":"admin","agent_id":"shared_default",
         "cookie":"9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d","generation":"g",
-        "expires_at":super::now() + 60.0,"allowed_session_ids":[sid]});
+        "expires_at":super::now() + 60.0,"allowed_session_ids":[sid],
+        "pages":{"landing_tab":"wiki","app_pages":[{"tab":"wiki"}]}});
     assert!(validate_trusted(&base, &good).is_ok());
     let rejected = |change: &dyn Fn(&mut Value), message: &str| {
         let mut trusted = good.clone();
@@ -1903,6 +1916,19 @@ fn trusted_authority_rules() {
     rejected(
         &|t| t["generation"] = json!(""),
         "Invalid trusted generation",
+    );
+    // Signed in, the page rules are required and checked as the live file is.
+    rejected(
+        &|t| {
+            if let Some(t) = t.as_object_mut() {
+                t.remove("pages");
+            }
+        },
+        "Invalid trusted page rules",
+    );
+    rejected(
+        &|t| t["pages"] = json!({"landing_tab":"builds","app_pages":[{"tab":"wiki"}]}),
+        "Invalid trusted page rules",
     );
     rejected(
         &|t| t["expires_at"] = json!(super::now() + 700.0),
@@ -2089,4 +2115,96 @@ async fn uncertain_input_says_to_start_with_navigate() {
     let result = f.call(json!({"action":"click","selector":"#button"})).await;
     assert_eq!(result["status"], "uncertain", "{result}");
     assert!(output(&result).contains("start the next call or script with navigate"));
+}
+
+/// Rules like the shipped `browser-pages.json`, plus Wiki: agent settings, Administrator,
+/// Builds and Host Admin pages never open, by navigation, link or the app's own routing.
+#[tokio::test]
+async fn app_pages_outside_the_rules_are_refused_and_close_the_browser() {
+    let mut f = fixture();
+    f.trusted["pages"] = json!({"landing_tab":"session-metrics",
+        "app_pages":[{"tab":"session-metrics"},{"tab":"wiki"}]});
+    let landed = f.call(json!({"action":"navigate","url":"/app"})).await;
+    assert_eq!(landed["status"], "success", "{landed}");
+    assert!(
+        f.driver(0)
+            .page()
+            .current_url
+            .contains("tab=session-metrics"),
+        "a bare /app opens the landing tab"
+    );
+    for path in [
+        "/app?tab=agents&agent=shared_default&agentView=abilities",
+        "/app?tab=agents&agent=shared_default&agentView=model",
+        "/app?tab=agents&agent=shared_default&agentView=config",
+        "/app?tab=agents&agent=shared_default",
+        "/app?tab=app&appView=settings",
+        "/app?tab=app&appView=users",
+        "/app?tab=account",
+        "/app?tab=builds",
+        "/app?tab=host-admin",
+        "/app?tab=notifications",
+    ] {
+        let refused = f.call(json!({"action":"navigate","url":path})).await;
+        assert_eq!(
+            refused["error_kind"], "browser_invalid_request",
+            "{path} {refused}"
+        );
+        assert!(
+            output(&refused).contains(super::rules::PAGE_BLOCKED),
+            "{path} {refused}"
+        );
+    }
+    assert_eq!(f.started(), 1, "a refused navigation starts nothing");
+    let wiki = f
+        .call(json!({"action":"navigate","url":"/app?tab=wiki&article=a"}))
+        .await;
+    assert_eq!(wiki["status"], "success", "{wiki}");
+    // A link to a blocked page is refused before the click.
+    let driver = f.driver(0);
+    driver.on_script(Box::new(|source, _| {
+        source.contains("V3_TARGET").then(|| {
+            Ok(json!({"allowed":true,"secret":false,"credential":false,"tag":"a","label":"Abilities",
+                "href":format!("{ORIGIN}/app?tab=agents&agent=shared_default&agentView=abilities")}))
+        })
+    }));
+    f.call(json!({"action":"read"})).await;
+    let link = f.call(json!({"action":"click","selector":"#button"})).await;
+    assert!(output(&link).contains(super::rules::PAGE_BLOCKED), "{link}");
+    assert_eq!(driver.page().clicks, 0);
+    // A button whose app routing reaches a blocked page closes the browser after the click.
+    *driver.script.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    driver.page().click_url = Some(format!(
+        "{ORIGIN}/app?tab=agents&agent=shared_default&agentView=abilities&session_id={}",
+        f.sid
+    ));
+    f.call(json!({"action":"read"})).await;
+    let routed = f.call(json!({"action":"click","selector":"#button"})).await;
+    assert_eq!(routed["error_kind"], "browser_page_blocked", "{routed}");
+    assert!(driver.page().closed);
+    // A fresh browser opens again on an allowed page.
+    let again = f.call(json!({"action":"navigate","url":"/app"})).await;
+    assert_eq!(again["status"], "success", "{again}");
+    assert_eq!(f.started(), 2);
+}
+
+/// Signed out, the app's own address is refused, so no typed credential signs a browser in.
+#[tokio::test]
+async fn signed_out_browsers_never_open_the_app() {
+    let f = fixture();
+    let public = f.signed_out(json!({}));
+    for url in [
+        format!("{ORIGIN}/"),
+        format!("{ORIGIN}/app?tab=agents"),
+        "https://DEV.webagent.live/setup.html".to_owned(),
+    ] {
+        let refused = f
+            .call_with(json!({"action":"navigate","url":url}), &public)
+            .await;
+        assert!(
+            output(&refused).contains(super::rules::APP_SIGNED_OUT),
+            "{url} {refused}"
+        );
+    }
+    assert_eq!(f.started(), 0);
 }

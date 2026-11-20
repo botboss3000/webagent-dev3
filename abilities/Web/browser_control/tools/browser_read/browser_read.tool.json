@@ -41,7 +41,7 @@
       },
       "url": {
         "type": "string",
-        "description": "navigate only: a full http or https URL. A WebAgent app URL opens signed in as the current user and returns once the app has booted"
+        "description": "navigate only: a full http or https URL. A WebAgent app URL opens signed in as the current user, when sign-in is turned on, and only on allowed pages; it returns once the app has booted"
       },
       "signed_in": {
         "type": "boolean",

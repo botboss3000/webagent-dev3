@@ -402,7 +402,8 @@ async fn sign_in(
 }
 
 /// The authority for this session's private browser. A navigation to this app signs in as the
-/// caller (unless turned off); other calls keep a valid signed-in session, renewed near its end.
+/// caller when `browser-pages.json` and the agent's setting both allow it; other calls keep a
+/// valid signed-in session, renewed near its end. Turning sign-in off signs the next call out.
 /// A navigation anywhere else signs out, so the next browser carries the agent's site lists.
 async fn server_authority(
     host: &tools::native_host::Host<'_>,
@@ -433,6 +434,8 @@ async fn server_authority(
     let args = first_navigate.as_ref().unwrap_or(args);
     let navigating = args["action"] == "navigate";
     let agent = host.session_agent_id(sid).await?;
+    // Signing in needs the app-wide switch too; the signed-in browser carries its page rules.
+    let pages = rules::pages::Pages::live();
     // One sign-in at a time, so parallel calls share a session instead of revoking each other's.
     let _guard = app.gate.lock().await;
     let saved = app.store.get(&signed_key(sid)).await?.filter(|signed| {
@@ -440,8 +443,9 @@ async fn server_authority(
             && signed["generation"] == account["generation"]
             && signed["expires_at"].as_u64().unwrap_or(0) > now() + 5
     });
-    if rules::signs_in(args, &origin, &settings[rules::SIGN_IN_SETTING])
-        || (!navigating && saved.is_some())
+    if pages.sign_in_app
+        && (rules::signs_in(args, &origin, &settings[rules::SIGN_IN_SETTING])
+            || (!navigating && saved.is_some()))
     {
         let mut authority = match saved {
             Some(signed)
@@ -453,9 +457,10 @@ async fn server_authority(
         };
         let end = authority["expires_at"].as_u64().unwrap_or(0);
         authority["expires_at"] = json!(end.min(now() + SERVER_LEASE_SECS));
+        authority["pages"] = pages.authority();
         return Ok(authority);
     }
-    if navigating {
+    if navigating || !pages.sign_in_app {
         if let Some(old) = app.store.get(&signed_key(sid)).await? {
             if let Some(token) = old["cookie"].as_str() {
                 app.store.accounts_repository().logout(token).await?;

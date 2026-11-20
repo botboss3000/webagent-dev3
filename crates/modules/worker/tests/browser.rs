@@ -64,7 +64,8 @@ fn now() -> f64 {
 fn signed_in(cookie: &str) -> Value {
     json!({"session_id":SESSION,"user_id":"admin","agent_id":"shared_default",
         "cookie":cookie,"generation":"fixture","expires_at":now() + 300.0,
-        "allowed_session_ids":[SESSION]})
+        "allowed_session_ids":[SESSION],
+        "pages":{"landing_tab":"session-metrics","app_pages":[{"tab":"session-metrics"}]}})
 }
 
 impl Worker {

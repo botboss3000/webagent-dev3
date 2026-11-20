@@ -85,6 +85,9 @@ pub enum Fault {
     Rejected(String),
     /// An effect may have happened; the browser is closed and nothing is replayed.
     Uncertain(String),
+    /// The page is one agent browsers may not use; the browser is closed. Reported as
+    /// `browser_page_blocked`.
+    Blocked(String),
     /// Chromium could not start.
     Startup,
     /// The signed-in browser could not prove the caller's identity.

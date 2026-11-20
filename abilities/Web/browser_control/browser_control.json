@@ -3,8 +3,8 @@
   "kind": "ability",
   "icon": "app-window",
   "color": "#7aa2f7",
-  "description": "Look at web pages in a private server browser: read rendered text, measure element sizes and positions, sample exact colours, time page loads and interactions, inspect animations, check phone, tablet and desktop sizes and dark mode, click and type with approval, and attach screenshots to the reply. Public sites open signed out; the WebAgent app opens signed in as the current user; other sites can stay signed in with sign-ins the user saves from their vault.",
-  "skill_summary": "Private server browser: signed out on public sites behind an egress guard, signed in as the current user on the WebAgent app, and signed in to sites the user saved a sign-in for; read, measure, colours, timing, animations, viewport and screenshots.",
+  "description": "Look at web pages in a private server browser: read rendered text, measure element sizes and positions, sample exact colours, time page loads and interactions, inspect animations, check phone, tablet and desktop sizes and dark mode, click and type with approval, and attach screenshots to the reply. Public sites open signed out; the WebAgent app opens signed in as the current user, on allowed pages only, when an administrator turns that on; other sites can stay signed in with sign-ins the user saves from their vault.",
+  "skill_summary": "Private server browser: signed out on public sites behind an egress guard, signed in to the WebAgent app (allowed pages, when turned on), and signed in to sites the user saved a sign-in for; read, measure, colours, timing, animations, viewport and screenshots.",
   "order": 2,
   "placeholder": false,
   "readiness": "ready",
@@ -24,7 +24,7 @@
         "label": "Sign in to WebAgent",
         "type": "boolean",
         "default": true,
-        "hint": "Opening the WebAgent app signs the browser in as the person chatting, with only their own permissions. Turn off to open it signed out."
+        "hint": "Opening the WebAgent app signs the browser in as the person chatting, with only their own permissions, when config/browser/browser-pages.json also allows it (off by default); settings, Administrator, Builds and Host Admin pages stay closed. Turn off to keep this agent signed out."
       },
       {
         "key": "allow_sites",

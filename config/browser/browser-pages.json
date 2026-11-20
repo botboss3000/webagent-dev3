@@ -1,0 +1,11 @@
+{
+  "_instructions": "Which WebAgent app pages agent browsers (Browser Control) may use. sign_in_app: whether an agent's browser may open this app signed in as the person chatting, with that person's permissions (each agent's own Sign in to WebAgent setting must also be on). Off by default: agent browsers then never carry a person's app session, and the app's own address is refused to them. app_pages: the only /app pages a signed-in agent browser may show, each a set of URL parameters that must all match (tab, agentView, agentScope, appView, article, path, window; \"*\" means any value, \"\" means the parameter is left out). Every other page is refused before it opens, and a click that reaches one closes the browser: agent Config, Identity, Models, Abilities, Members and Artifacts pages, Sessions, the App and Administrator pages, Account, Notifications, Builds and Host Admin (approvals). A signed-in browser also opens only its own conversation. landing_tab: the main-panel tab a bare /app opens on; it must be one of app_pages. A security setting: change it only by a reviewed edit.",
+  "schema_version": 1,
+  "sign_in_app": false,
+  "landing_tab": "session-metrics",
+  "app_pages": [
+    {
+      "tab": "session-metrics"
+    }
+  ]
+}
