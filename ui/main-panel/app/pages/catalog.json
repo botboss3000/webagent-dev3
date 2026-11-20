@@ -36,6 +36,15 @@
       "type": "app_configuration"
     },
     {
+      "id": "all-settings",
+      "title": "All Settings",
+      "description": "Every described app setting, one row each, with a search box.",
+      "panelId": "app-all-settings-page",
+      "admin": true,
+      "order": 6,
+      "type": "app_configuration"
+    },
+    {
       "id": "files",
       "title": "File Manager",
       "description": "Browse and edit the live development checkout with Git Control.",

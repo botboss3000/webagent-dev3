@@ -5,9 +5,11 @@
 //! live configuration files through the administrator configuration save (validator, digest
 //! fence, broker write), agent settings through the agent identity update (its revision and
 //! management check), and the display name through the profile update. Nothing else writes.
+//! `GET /config/settings` lists every setting a page can change with its current value and
+//! revision, for the settings pages' rows; each row saves through `apply`.
 use std::path::Path as FilePath;
 
-use axum::extract::{Extension, Path};
+use axum::extract::{Extension, Path, Query};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Map, Value};
@@ -287,6 +289,81 @@ pub(crate) async fn propose(
     Ok(Json(result))
 }
 
+/// Every combination of a descriptor's parameter values (`{"tier": [...]}`); one empty map
+/// for a setting without parameters.
+fn combinations(parameters: &Value) -> Vec<Map<String, Value>> {
+    let mut all = vec![Map::new()];
+    for (name, values) in parameters.as_object().into_iter().flatten() {
+        let values = values.as_array().cloned().unwrap_or_default();
+        all = all
+            .into_iter()
+            .flat_map(|base| {
+                values.iter().map(move |value| {
+                    let mut next = base.clone();
+                    next.insert(name.clone(), value.clone());
+                    next
+                })
+            })
+            .collect();
+    }
+    all
+}
+
+/// `?page=` → every setting the page's layer holds, one entry per parameter value, each with
+/// its descriptor, `params`, owner file and either `value` plus the `revision` `apply` must
+/// send back, or the reason it can't be changed here (`unavailable`).
+pub(crate) async fn settings(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Api {
+    let page = query
+        .get("page")
+        .map(String::as_str)
+        .ok_or_else(|| bad("Page required"))?;
+    let layer = page_layer(&app, &identity, page).await?;
+    let mut out = Vec::new();
+    for (setting, descriptor, owner) in descriptors()? {
+        if !setting.layers.iter().any(|l| l == layer) {
+            continue;
+        }
+        for params in combinations(&descriptor["parameters"]) {
+            let mut entry = descriptor.clone();
+            if let Some(fields) = entry.as_object_mut() {
+                // Matcher wording and storage paths are not for the page.
+                for key in ["examples", "pointer", "agent_pointer"] {
+                    fields.remove(key);
+                }
+            }
+            entry["owner"] = json!(owner);
+            entry["params"] = Value::Object(params.clone());
+            let found = match pointer(&descriptor, layer, &params) {
+                Ok(pointer) => {
+                    current(
+                        &app,
+                        &identity,
+                        page,
+                        layer,
+                        (&descriptor, owner.as_str()),
+                        &pointer,
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
+            match found {
+                Ok(now) => {
+                    entry["value"] = now.value;
+                    entry["revision"] = now.revision;
+                }
+                Err(ApiError(_, reason)) => entry["unavailable"] = json!(reason),
+            }
+            out.push(entry);
+        }
+    }
+    Ok(Json(json!({"page": page, "layer": layer, "settings": out})))
+}
+
 /// `{"page", "setting", "value", "params"?, "revision"}` → the owner's save of that one value.
 pub(crate) async fn apply(
     State(app): State<App>,
@@ -366,6 +443,9 @@ fn check_kind(setting: &Setting, value: &Value) -> Result<(), ApiError> {
             value["width"].is_number() && matches!(value["unit"].as_str(), Some("px" | "%"))
         }
         "object" => value.is_object(),
+        "agent_id" => value
+            .as_str()
+            .is_some_and(|v| !v.is_empty() && v.len() <= 128),
         _ => false,
     };
     if ok {
@@ -397,5 +477,16 @@ mod tests {
             ),
             json!({"enabled": true, "voice": "a"})
         );
+    }
+
+    #[test]
+    fn parameters_expand_to_every_combination() {
+        assert_eq!(combinations(&Value::Null), vec![Map::new()]);
+        let tiers = combinations(&json!({"tier": ["operator", "basic"]}));
+        assert_eq!(
+            tiers.iter().map(|m| m["tier"].clone()).collect::<Vec<_>>(),
+            [json!("operator"), json!("basic")]
+        );
+        assert_eq!(combinations(&json!({"a": [1, 2], "b": [3, 4]})).len(), 4);
     }
 }

@@ -149,8 +149,7 @@
       "type": "string",
       "pointer": "/chat_common/composer/placeholder",
       "layers": [
-        "app",
-        "agent"
+        "app"
       ],
       "examples": [
         "change the message box hint to 'Ask me anything'",

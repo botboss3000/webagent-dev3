@@ -291,6 +291,7 @@ pub(super) fn router(app: App) -> Router {
         // Configuration composer: the page's settings matched to a request, then one confirmed save.
         .route("/config/propose", post(composer::propose))
         .route("/config/apply", post(composer::apply))
+        .route("/config/settings", get(composer::settings))
         .route("/browser/devices", get(crate::browser::devices))
         .route(
             "/browser/devices/{id}",

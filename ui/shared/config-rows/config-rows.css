@@ -13,3 +13,12 @@
 .cfr-form-state[data-state="dirty"] { color: var(--warning); }
 .cfr-form-state[data-state="error"] { color: var(--danger); }
 .cfr-read { width: 100%; min-width: 0; }
+/* Number rows' unit and the width row's number + px/% pair. */
+.cfr-unit { margin-left: 6px; font-size: 12px; color: var(--fg-3); white-space: nowrap; }
+.cfr-length { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* All Settings page (settings-page.js): search box, matched row and the can't-change list. */
+.stp-search { display: flex; gap: 8px; max-width: 750px; margin: 0 auto 12px; }
+.stp-search .ac-input { flex: 1; min-width: 0; }
+.stp-match { outline: var(--border-width) solid var(--brand); outline-offset: -2px; transition: outline-color .6s; }
+.stp-unavailable { max-width: 750px; margin: 12px auto 0; }
+.stp-unavailable ul { margin: 6px 0 0; padding-left: 18px; }

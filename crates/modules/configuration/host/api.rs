@@ -5,7 +5,7 @@ use super::{
 };
 use anyhow::Context;
 use webagent_configuration::{digest, read};
-const IDS: [&str; 14] = [
+const IDS: [&str; 15] = [
     "app_settings",
     "app_ui",
     "chat",
@@ -20,6 +20,7 @@ const IDS: [&str; 14] = [
     "browser_limits",
     "admin_alerts",
     "find_ranking",
+    "models_runtime",
 ];
 /// Live files (checkout-relative, listed in `live-files.json`) for configuration edited in place.
 pub(crate) fn live(id: &str) -> Option<&'static str> {
@@ -33,6 +34,7 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
         "voice" => webagent_media::settings::LIVE_VOICE,
         "browser_limits" => webagent_browser::limits::LIVE_LIMITS,
         "admin_alerts" => webagent_notifications::alerts::LIVE_CONFIG,
+        "models_runtime" => webagent_models::settings::LIVE,
         #[cfg(feature = "administrator")]
         "find_ranking" => webagent_administration::find_ranking::LIVE_RANKING,
         _ => return None,
@@ -108,6 +110,9 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         }
         "admin_alerts" => {
             webagent_notifications::alerts::Config::parse(&serde_json::to_vec(value)?)?;
+        }
+        "models_runtime" => {
+            webagent_models::settings::Settings::parse(&serde_json::to_vec(value)?)?;
         }
         #[cfg(feature = "administrator")]
         "find_ranking" => {

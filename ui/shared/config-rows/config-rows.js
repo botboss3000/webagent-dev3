@@ -128,8 +128,9 @@ export function createTextRow(list, {title, hint, tip, value = '', placeholder =
     setValue: next => { field.setValue(next); saved = next; }, setDisabled: field.setDisabled};
 }
 
-/** A number row drawn as the shared stepper (arrows inside the field, clamped to min/max). */
-export function createNumberRow(list, {title, hint, tip, value = 0, min, max, step = 1, disabled = false, key, form, onSave} = {}) {
+/** A number row drawn as the shared stepper (arrows inside the field, clamped to min/max);
+ *  unit, when given, is shown after the field. */
+export function createNumberRow(list, {title, hint, tip, value = 0, min, max, step = 1, unit = '', disabled = false, key, form, onSave} = {}) {
   const {row, control, error} = shell(list, {title, hint, tip});
   const commit = saver({key, form, onSave, control, error});
   let saved = Number(value);
@@ -143,9 +144,34 @@ export function createNumberRow(list, {title, hint, tip, value = 0, min, max, st
       commit(number, previous, prior => { stepper.setValue(prior); saved = prior; });
     }});
   control.append(stepper.element);
+  if (unit) control.append(node('span', 'cfr-unit', unit));
   if (form && key) form.set(key, saved, true);
   return {row, control: stepper.input, getValue: stepper.getValue,
     setValue: next => { stepper.setValue(next); saved = Number(next); }, setDisabled: stepper.setDisabled};
+}
+
+/** A width row: a stepper and a px/% dropdown; the value is {width, unit}. Saves the pair
+ *  whenever either part changes. min and max bound the number. */
+export function createLengthRow(list, {title, hint, tip, value = {width: 0, unit: 'px'}, min, max, disabled = false, onSave} = {}) {
+  const {row, control, error} = shell(list, {title, hint, tip});
+  const commit = saver({onSave, control, error});
+  let saved = {width: Number(value?.width ?? 0), unit: value?.unit === '%' ? '%' : 'px'};
+  const changed = () => {
+    const next = {width: stepper.getValue(), unit: select.getValue()};
+    if (next.width === saved.width && next.unit === saved.unit) return;
+    const previous = saved;
+    saved = next;
+    commit(next, previous, prior => { stepper.setValue(prior.width); select.setValue(prior.unit); saved = prior; });
+  };
+  const stepper = createStepper({label: title, value: saved.width, min, max, step: 1, disabled, onChange: changed});
+  const select = createSelect({label: title + ' unit', options: [['px', 'px'], ['%', '%']], value: saved.unit, disabled,
+    onChange: changed});
+  const pair = node('span', 'cfr-length');
+  pair.append(stepper.element, select.element);
+  control.append(pair);
+  return {row, control: stepper.input, getValue: () => ({...saved}),
+    setValue: next => { saved = {width: Number(next.width), unit: next.unit}; stepper.setValue(saved.width); select.setValue(saved.unit); },
+    setDisabled: off => { stepper.setDisabled(off); select.setDisabled(off); }};
 }
 
 /** A choice row: radio cards under the title; options are {value, title, hint}. */

@@ -16,6 +16,14 @@ configuration change therefore ships its descriptor change in the same patch. Th
 in `crates/modules/configuration/src/catalog.rs` fail when a live file or one of its values is
 neither described nor excluded with a reason.
 
+The descriptors also draw the **All Settings** pages (App → All Settings, and an agent's All
+Settings tab; `ui/shared/config-rows/settings-page.js`, fed by `GET /api/v3/config/settings`).
+Each setting gets one row picked by its `type`: `boolean` a switch, `enum` a dropdown,
+`integer`/`number` a stepper bounded by `min`/`max` with `unit` shown, `length` a number with
+px/%, `string` a text box. The row title comes from the id's last part, so name ids plainly,
+and the description is the row's hint. `object` settings and settings without a save path are
+listed as not changeable there.
+
 ## Standing rules
 
 Keep every live config file under `config/<module>/` (the owning module's name), with no
