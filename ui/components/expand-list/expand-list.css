@@ -11,9 +11,12 @@
 .xl-head:hover, .xl-sub-line:hover { background: color-mix(in oklab, var(--fg-1) 4%, transparent); }
 .xl-head:active, .xl-icon:active, .xl-remove:active, .xl-add-button:active, .xl-sub-title:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
 .expand-list :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.xl-title { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font-weight: 600; }
-.xl-meta { display: flex; flex: none; align-items: center; gap: 4px; font-size: 11px; }
+.xl-title { flex: 1 1 8em; min-width: 6em; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font-weight: 600; }
+/* Tags shrink with an ellipsis before the title does; the pill always shows in full. */
+.xl-meta { display: flex; flex: 0 1 auto; min-width: 0; max-width: 60%; align-items: center; gap: 4px; font-size: 11px; }
 .xl-pill, .xl-tag { display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.xl-meta .xl-tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.xl-meta .xl-pill { flex: none; }
 .xl-tag { background: color-mix(in oklab, var(--fg-1) 8%, transparent); color: var(--fg-2); }
 .xl-pill { background: color-mix(in oklab, var(--fg-1) 8%, transparent); color: var(--fg-2); }
 .xl-task.is-changed > .xl-head .xl-pill, .xl-sub.is-changed .xl-pill { animation: xl-pop .35s cubic-bezier(.34,1.56,.64,1); }
