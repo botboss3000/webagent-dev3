@@ -1,6 +1,6 @@
 //! App Default routes' work: read an editable ability file from the checkout, keep one
-//! administrator's drafts, and Save them. JSON and Markdown drafts are checked and written
-//! to the live ability files at once; drafts with an icon go through one broker task. The
+//! administrator's drafts, and Save them. Drafts are checked and written to the live ability
+//! files at once; a draft set no live file can hold would go through one broker task. The
 //! router admits only administrators before these run. A successful release is committed
 //! and closed by the broker itself; a failed one keeps the drafts and the task for repair.
 use crate::{trusted, AdministrationHost};
@@ -254,7 +254,7 @@ pub async fn discard(
     Ok(json!({"revision":set.revision}))
 }
 
-/// Save every draft: live when all are JSON or Markdown, else as one broker task whose
+/// Save every draft: live when every file is a live one, else as one broker task whose
 /// release starts here. Locked while a release runs.
 pub async fn save(
     host: &dyn AdministrationHost,

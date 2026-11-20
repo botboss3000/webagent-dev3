@@ -2,10 +2,10 @@
 //! Abilities page, each administrator's draft set, and the broker task a Save opens.
 //!
 //! Drafts are plain source text (tool definitions, skills, manifests, icons), kept per
-//! administrator in the app's state folder, never in agent databases. A Save of JSON and
-//! Markdown files only writes them to the live ability files once the release check passes
-//! on the result (the broker commits them); a Save with an icon writes the drafts into one
-//! broker task that releases them like any other source change.
+//! administrator in the app's state folder, never in agent databases. A Save writes them to
+//! the live ability files once the release check passes on the result (the broker commits
+//! them). The broker-task Save that releases drafts like any other source change remains
+//! for a draft set no live file can hold.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -50,10 +50,10 @@ pub fn editable(path: &str) -> bool {
     }
 }
 
-/// Whether a Save can write `path` straight to the live ability files: JSON and Markdown
-/// are live (`live-files.json`); icons are not.
+/// Whether a Save can write `path` straight to the live ability files (`live-files.json`):
+/// JSON, Markdown and icons, which the catalog checks again when it reads them.
 pub fn saves_live(path: &str) -> bool {
-    editable(path) && (path.ends_with(".json") || path.ends_with(".md"))
+    editable(path) && (path.ends_with(".json") || path.ends_with(".md") || path.ends_with(".svg"))
 }
 
 /// The checkout an administrator edits, as the broker task starts from it.
@@ -240,10 +240,11 @@ mod tests {
     }
 
     #[test]
-    fn json_and_markdown_save_live_icons_release() {
+    fn ability_files_save_live() {
         assert!(saves_live("abilities/Core/_group.json"));
         assert!(saves_live("abilities/Core/base/skills/notes.skill.md"));
-        assert!(!saves_live("abilities/Core/base/base.svg"));
+        assert!(saves_live("abilities/Core/base/base.svg"));
+        assert!(saves_live("abilities/Core/_group.svg"));
         assert!(!saves_live("src/main.json"));
     }
 

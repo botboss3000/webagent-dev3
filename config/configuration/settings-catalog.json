@@ -87,6 +87,8 @@
     "abilities/*/*/skills/*.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
     "abilities/*/*/skills/*.md": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
     "abilities/*/*/tools/*/*.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
-    "abilities/*/*/tools/*/*.md": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings."
+    "abilities/*/*/tools/*/*.md": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
+    "abilities/*/_group.svg": "Ability icons, edited on the Abilities page's App Default level, not composer settings.",
+    "abilities/*/*/*.svg": "Ability icons, edited on the Abilities page's App Default level, not composer settings."
   }
 }

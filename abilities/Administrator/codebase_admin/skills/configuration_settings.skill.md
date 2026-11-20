@@ -36,7 +36,8 @@ setting descriptor in the same patch as the value.
   check (`ability_problems` in `src/app.rs`: the catalog loads, schemas keep the argument
   check's rules and what the tool's code receives) is ignored and the last good version
   stays. The App Default Save runs the same check before writing, so it refuses instead.
-  Icons (`.svg`) and compiled plugin code still change only through a release.
+  Ability icons (`<ability>.svg`, `_group.svg`) are live too; the catalog ignores one that
+  fails `icons::svg_problem`. Compiled plugin code still changes only through a release.
 - Its descriptors sit in a `<name>.settings.json` beside it (for example
   `config/chat/chat.settings.json`). Owners whose module is busy may keep them in
   `config/configuration/settings/`.

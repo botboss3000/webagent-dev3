@@ -1,4 +1,5 @@
-//! Live ability edits. Ability JSON and Markdown in the checkout apply without a release:
+//! Live ability edits. Ability JSON, Markdown and icons (`.svg`, checked when the catalog
+//! reads them) in the checkout apply without a release:
 //! they are laid over the published abilities as a snapshot folder the catalog loads like a
 //! publication, so code and compiled plugins still come only from the release. A file the
 //! checkout deleted is left out. Rechecked at most once a second; an edit that does not load
@@ -26,11 +27,11 @@ static BUILDING: Mutex<()> = Mutex::new(());
 fn editable(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()),
-        Some("json" | "md")
+        Some("json" | "md" | "svg")
     )
 }
 
-/// Checkout-relative ability JSON and Markdown files (symlinks are skipped).
+/// Checkout-relative ability JSON, Markdown and icon files (symlinks are skipped).
 fn files(checkout: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending = vec![checkout.to_path_buf()];

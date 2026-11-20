@@ -35,7 +35,7 @@ export function buildPolicyControls({data,levelId,rerender,status,appDefaults=fa
   levelSelect.disabled=!canManage&&!appDefaults;
   levelSelect.onchange=()=>rerender({levelId:levelSelect.value}).catch(error=>{status.textContent=error.message;});
   selector.append(levelSelect,node('div','ac-hint',levelId==='app_default'
-    ? 'Editing the app\'s default tool and ability files. Edits are drafts until you Save; Save checks them and applies them at once (an icon change goes through a release).'
+    ? 'Editing the app\'s default tool and ability files. Edits are drafts until you Save; Save checks them and applies them at once.'
     : canManage
     ? 'Editing '+(levels[levelId]?.name||'Operator')+'. Higher agent levels and app account policy cap effective access.'
     : 'Read-only effective access for your agent membership.'));

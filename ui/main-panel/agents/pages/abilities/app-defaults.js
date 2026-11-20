@@ -101,9 +101,6 @@ export function buildAppDefaultsBar(app, { onStatus }) {
   discard.type = 'button';
   discard.title = 'Discard all drafts';
   discard.innerHTML = '<i data-lucide="trash-2"></i>';
-  const note = text('', 'Optional note for this Save');
-  note.placeholder = 'Optional note, for a Save that releases an icon';
-  note.maxLength = 120;
   const previewButton = node('button', 'ac-btn ac-btn-sm', 'Preview changes');
   previewButton.type = 'button';
   previewButton.setAttribute('aria-expanded', 'false');
@@ -113,7 +110,7 @@ export function buildAppDefaultsBar(app, { onStatus }) {
   const release = node('div', 'adf-release');
   const preview = node('div', 'adf-form');
   preview.hidden = true;
-  bar.append(row, note, list, preview, release);
+  bar.append(row, list, preview, release);
   const paint = drafts => {
     const paths = Object.keys(drafts.files || {});
     const releasing = drafts.release?.status === 'releasing';
@@ -181,11 +178,10 @@ export function buildAppDefaultsBar(app, { onStatus }) {
     save.disabled = true;
     await app.state.pending;
     try {
-      const saved = await app.request('/admin/app-defaults/save', 'POST', { note: note.value, expected_revision: app.state.drafts.revision });
-      note.value = '';
+      const saved = await app.request('/admin/app-defaults/save', 'POST', { note: '', expected_revision: app.state.drafts.revision });
       onStatus(saved.live
         ? 'Saved live: ' + (saved.live.length === 1 ? '1 file' : saved.live.length + ' files') + '. Agents use it from their next model call; Reload abilities to see it here.'
-        : 'Save started a release (an icon changed). Track it on the Broker card.');
+        : 'Save started a release. Track it on the Broker card.');
       app.state.drafts.revision = saved.revision;
     } catch (error) {
       onStatus('Save failed: ' + error.message);
