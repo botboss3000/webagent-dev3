@@ -1,6 +1,7 @@
 //! The local inference service's client. `webagent-v3 --inference-service` runs the embedding
-//! model (crates/modules/inference/src/service.rs); the loop warms it at start-up and it stays running
-//! (about 130 MB) so ranking is always fast; a crashed child restarts on the next request. The configuration composer asks it for
+//! model (crates/modules/inference/src/service.rs); the loop warms it at start-up. It holds about
+//! 130-200 MB, so it is stopped after [`IDLE`] without a request and, like a crashed child,
+//! starts again on the next one (about a second). The configuration composer asks it for
 //! setting matches ([`ask`]) and the abilities catalog for tool and skill scores ([`rank`]).
 use std::process::Stdio;
 use std::sync::OnceLock;
@@ -22,6 +23,10 @@ const ANSWER: Duration = Duration::from_secs(10);
 const RANK_ANSWER: Duration = Duration::from_secs(30);
 /// The start-up warm-up loads the model and embeds the whole catalog from cold.
 const WARM_ANSWER: Duration = Duration::from_secs(120);
+/// An unused service is stopped after this long, freeing its memory.
+const IDLE: Duration = Duration::from_secs(600);
+/// How often the idle check runs.
+const IDLE_CHECK: Duration = Duration::from_secs(60);
 
 struct Matcher {
     child: Child,
@@ -30,6 +35,28 @@ struct Matcher {
     next: u64,
     /// A request was dropped mid-write, so its line on stdin may be partial: start over.
     torn: bool,
+    /// When the last request was sent.
+    used: tokio::time::Instant,
+}
+
+/// Drop a service unused for [`IDLE`]; `kill_on_drop` ends its process.
+fn stop_if_idle(slot: &mut Option<Matcher>) {
+    if slot.as_ref().is_some_and(|m| m.used.elapsed() >= IDLE) {
+        *slot = None;
+    }
+}
+
+/// One background task per process stops the service once it has gone unused.
+fn watch_idle() {
+    static WATCHING: OnceLock<()> = OnceLock::new();
+    WATCHING.get_or_init(|| {
+        tokio::spawn(async {
+            loop {
+                tokio::time::sleep(IDLE_CHECK).await;
+                stop_if_idle(&mut *matcher_slot().lock().await);
+            }
+        });
+    });
 }
 
 /// Whether the slot holds a running service whose stdin is in step.
@@ -130,6 +157,7 @@ async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError>
         slot = matcher_slot().lock().await;
     }
     let matcher = slot.as_mut().ok_or_else(unavailable)?;
+    matcher.used = tokio::time::Instant::now();
     matcher.next += 1;
     let id = matcher.next;
     let mut request = request;
@@ -184,12 +212,14 @@ async fn start() -> std::io::Result<Matcher> {
     if ready["ready"] != true {
         return Err(std::io::Error::other("inference service did not start"));
     }
+    watch_idle();
     Ok(Matcher {
         child,
         stdin,
         replies,
         next: 0,
         torn: false,
+        used: tokio::time::Instant::now(),
     })
 }
 
@@ -231,5 +261,27 @@ mod tests {
             .as_ref()
             .and_then(|m| m.child.id());
         assert_eq!(before, after);
+        // A recently used service stays; one unused for IDLE is stopped and the next
+        // request starts a fresh one.
+        let mut slot = matcher_slot().lock().await;
+        stop_if_idle(&mut slot);
+        assert!(slot.is_some());
+        let matcher = slot.as_mut().unwrap();
+        matcher.used = tokio::time::Instant::now().checked_sub(IDLE).unwrap();
+        stop_if_idle(&mut slot);
+        assert!(slot.is_none());
+        drop(slot);
+        assert_eq!(
+            ask(json!({"text": "x", "page": "app"}))
+                .await
+                .map_err(|e| e.1),
+            Ok(json!({"outcome": "no_match"}))
+        );
+        let restarted = matcher_slot()
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|m| m.child.id());
+        assert!(restarted.is_some() && restarted != before);
     }
 }
