@@ -2960,7 +2960,7 @@ export function mountModelTable(host, opts = {}) {
       (v, cb) => persistRole('image_in', v, cb), locked, lockHint);
     _buildRoleToggle(rolesSection, !!p.image_out_capable, hasRole(p, 'image_out'), 'Image', 'Use to generate images',
       (v, cb) => persistRole('image_out', v, cb), locked, lockHint);
-    _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'system'), 'System', 'App misc. LLM tasks (session naming, context mgmt)',
+    _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'system'), 'System', 'App misc. LLM tasks (session naming, context mgmt, dictation cleanup)',
       (v, cb) => persistRole('system', v, cb), locked, lockHint);
     const liveVoiceCapable = !!p.voice_capable && !String(p.model || '').toLowerCase().endsWith(':batch');
     _buildRoleToggle(rolesSection, liveVoiceCapable, hasRole(p, 'voice'), 'Voice', 'Live voice input in chat',
@@ -2968,8 +2968,8 @@ export function mountModelTable(host, opts = {}) {
       String(p.model || '').toLowerCase().endsWith(':batch') ? 'batch-only models cannot serve live voice' : '');
     _buildRoleToggle(rolesSection, !!p.decision_capable, hasRole(p, 'decision'), 'Decision', 'Classifier model for tool relevance and routing',
       (v, cb) => persistRole('decision', v, cb), locked, lockHint);
-    _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'dictation'), 'Dictation', 'Cleans up voice dictation: fillers, repeated words, punctuation',
-      (v, cb) => persistRole('dictation', v, cb), locked, lockHint);
+    _buildRoleToggle(rolesSection, !!p.transcription_capable, hasRole(p, 'dictation'), 'Dictation', 'Speech-to-text model that transcribes voice dictation (empty: the local recognizer)',
+      (v, cb) => persistRole('dictation', v, cb), locked, lockHint, p.transcription_capable ? '' : 'speech-to-text models only');
     popover.appendChild(rolesSection);
 
     // ── Wire popover open/close ──

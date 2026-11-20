@@ -106,7 +106,7 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
  }
   // Stop typing into the composer and hand it back to the user with the caret after the dictated text.
  function release(){stopTyping();around=null;input.readOnly=false;if(!disposed&&document.activeElement!==input)input.focus();}
-  // After the final text is typed, the server's cleanup pass (the agent's Dictation model: fillers, repeated words, punctuation) replaces it in place. Clicking the composer or starting another dictation drops the pending cleanup, and a failed one keeps the typed text.
+  // After the final text is typed, the server's cleanup pass (the agent's System model: fillers, repeated words, punctuation) replaces it in place. Clicking the composer or starting another dictation drops the pending cleanup, and a failed one keeps the typed text.
  function tidy(text,sid){
   const mine=around;state('tidying');
   client.voiceAudio(sid,{op:'tidy',text}).then(r=>{if(around===mine&&!disposed&&r?.tidied&&typeof r.text==='string')dictate(r.text);}).catch(()=>{}).finally(()=>afterTyping(()=>{if(around===mine){state('idle');release();}}));

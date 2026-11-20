@@ -499,8 +499,8 @@ fn basic_tidy(settings: &webagent_media::settings::Dictation, text: String) -> S
     }
 }
 
-/// The dictation cleanup pass: the transcript edited once by the agent's Dictation model. It
-/// comes back unchanged (`tidied: false`) when cleanup is off, the agent has no Dictation model,
+/// The dictation cleanup pass: the transcript edited once by the agent's System model. It
+/// comes back unchanged (`tidied: false`) when cleanup is off, the agent has no System model,
 /// the text is too short, or the answer does not look like an edit of it; a model failure is an
 /// error, and the client keeps the transcript it typed.
 async fn tidy_dictation(app: &App, sid: &str, text: &str) -> Api {
@@ -512,8 +512,7 @@ async fn tidy_dictation(app: &App, sid: &str, text: &str) -> Api {
     if !VoiceSettings::live().dictation.tidy || !tidy::wanted(text) {
         return unchanged();
     }
-    let Ok(run) = media_lane::lane_run(app, sid, model_selection::ModelRole::Dictation).await
-    else {
+    let Ok(run) = media_lane::lane_run(app, sid, model_selection::ModelRole::System).await else {
         return unchanged();
     };
     let answer = media_lane::lane_answer(app, &run, tidy::input(text), tidy::INSTRUCTIONS).await?;

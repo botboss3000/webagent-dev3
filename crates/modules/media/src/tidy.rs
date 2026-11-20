@@ -1,4 +1,4 @@
-//! The cleanup pass after a dictation: the finished transcript goes once to the agent's Dictation
+//! The cleanup pass after a dictation: the finished transcript goes once to the agent's System
 //! model (none assigned: no cleanup), which removes fillers, stutters and repeated words and
 //! fixes punctuation, and the client replaces the typed transcript with the result. The
 //! model call itself is in `host/voice.rs`; these are its prompt and the check on its answer.

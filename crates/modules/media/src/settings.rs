@@ -42,7 +42,7 @@ pub struct Dictation {
     /// Decoder threads.
     pub threads: i32,
     /// Local rules drop um/uh and doubled words from every transcript; after stop, the agent's
-    /// Dictation model (if one is assigned) also removes other fillers and repeats and fixes
+    /// System model (if one is assigned) also removes other fillers and repeats and fixes
     /// punctuation, and the typed transcript is replaced by the result.
     pub tidy: bool,
     pub pause_detection: PauseDetection,

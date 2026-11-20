@@ -233,6 +233,7 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
                     model_selection::ModelRole::ImageOut => "image_out",
                     model_selection::ModelRole::Voice => "voice",
                     model_selection::ModelRole::Decision => "decision",
+                    model_selection::ModelRole::Dictation => "transcription",
                     _ => "text",
                 };
                 if !pin.entry.capabilities.contains(capability) {

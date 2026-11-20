@@ -47,7 +47,7 @@
     },
     {
       "id": "media.dictation.tidy",
-      "description": "After dictation stops, have the agent's Dictation model remove filler words and repeated words and fix punctuation in the dictated text.",
+      "description": "After dictation stops, have the agent's System model remove filler words and repeated words and fix punctuation in the dictated text.",
       "type": "boolean",
       "pointer": "/dictation/tidy",
       "layers": [

@@ -551,7 +551,8 @@ pub enum ModelRole {
     System,
     Voice,
     Decision,
-    /// Cleans up a finished voice dictation (fillers, repeated words, punctuation).
+    /// Transcribes voice dictation audio: a speech-to-text provider model. With none assigned
+    /// the local recognizer transcribes.
     Dictation,
 }
 impl ModelRole {
@@ -569,11 +570,12 @@ impl ModelRole {
     }
     pub fn supported_by(self, entry: &ModelEntry) -> bool {
         entry.capabilities.contains(match self {
-            Self::Standard | Self::Premium | Self::System | Self::Dictation => "text",
+            Self::Standard | Self::Premium | Self::System => "text",
             Self::ImageIn => "image_in",
             Self::ImageOut => "image_out",
             Self::Voice => "voice",
             Self::Decision => "decision",
+            Self::Dictation => "transcription",
         })
     }
 }
