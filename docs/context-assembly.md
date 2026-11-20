@@ -231,8 +231,11 @@ on again. Claude Code writes every cache entry with the 1-hour lifetime (1,796 o
 OpenCode models differ widely: qwen3.8-flash about 5 minutes, glm-5.3 10-20,
 big-pickle inconsistent (hits at 13 and 20, misses at 8 and 30), deepseek-v4.1-flash
 on Go hit through 20 and sometimes at 45 and 62 but missed at 30 and 40,
-deepseek-v4.1-flash-free and beam-free held past 60, and kimi-k3 mostly reports no
-usage. Per-model values wait for the longer probes to finish. Real sessions cannot
+deepseek-v4.1-flash-free hit at 57 and missed at 75, beam-free held to 62, and
+kimi-k3 mostly reports no
+usage. The OpenCode file sets per-model values from these (commit e636f9b):
+qwen3.8-flash 5, glm-5.3 10, deepseek-v4.1-flash 20, deepseek-v4.1-flash-free and
+beam-free 60; the rest keep the provider's 15. Real sessions cannot
 measure this: every session of an agent starts with the same instructions and tool
 definitions, so one session's call warms the cache for the others.
 
