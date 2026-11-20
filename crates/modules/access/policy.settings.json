@@ -267,6 +267,29 @@
       "bounds": "validator"
     },
     {
+      "id": "storage.critical_percent",
+      "description": "Share of the storage limit, in percent, for the second, more urgent storage warning. At 100 percent the user's saved automatic cleanup runs and new runs wait for space.",
+      "type": "integer",
+      "pointer": "/storage/critical_percent",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "second storage warning at 95 percent",
+        "urgent storage warning threshold",
+        "warn again when storage is almost full"
+      ],
+      "areas": [
+        "storage",
+        "limits",
+        "notifications"
+      ],
+      "unit": "%",
+      "min": 1,
+      "max": 100,
+      "bounds": "validator"
+    },
+    {
       "id": "storage.trim_idle_days",
       "description": "Days a chat can sit unused before its stored tool results are shortened to what each tool keeps long term (lookups dropped, logs cut to their end). Chats that compacted are shortened behind the compaction point straight away.",
       "type": "integer",

@@ -61,6 +61,12 @@ pub(crate) async fn send_message(
     } else {
         None
     };
+    if app.store.storage_full().await? {
+        return Err(ApiError(
+            StatusCode::INSUFFICIENT_STORAGE,
+            crate::api::storage_cleanup::STORAGE_FULL.into(),
+        ));
+    }
     if let Some(receipt) = app.store.get(&receipt_key).await?.or(legacy_receipt) {
         if receipt["digest"] != digest(&body) {
             return Err(conflict("Message identifier reused with different input"));

@@ -437,4 +437,7 @@ impl webagent_engine::runtime::ports::SessionRecords for Store {
             Ok(false)
         }
     }
+    fn storage_full(&self) -> impl std::future::Future<Output = Result<bool>> + Send {
+        Store::storage_full(self)
+    }
 }

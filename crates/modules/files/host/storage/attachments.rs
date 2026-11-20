@@ -92,6 +92,15 @@ impl Store {
     /// only administrator app-development tools write there, and that work is not the
     /// user's own storage.
     async fn worker_used(&self) -> Result<u64> {
+        Ok(self
+            .folder_bytes()
+            .await?
+            .values()
+            .fold(0, |total, bytes| total.saturating_add(*bytes)))
+    }
+    /// Bytes of each of this user's sessions' browser and Sandbox folders, as the worker
+    /// publishes them.
+    pub(crate) async fn folder_bytes(&self) -> Result<std::collections::HashMap<String, u64>> {
         let ids: Vec<String> =
             sqlx::query_scalar("SELECT key FROM docs WHERE key LIKE 'session:%'")
                 .fetch_all(&self.pool)
@@ -111,20 +120,21 @@ impl Store {
             published("V3_SANDBOX_USAGE", "sandbox-usage.json"),
         ];
         Ok(tokio::task::spawn_blocking(move || {
-            let mut total = 0u64;
+            let mut sessions = std::collections::HashMap::new();
             for usage in &files {
                 // Small (one number per session folder); missing until the worker first writes it.
                 let folders: std::collections::HashMap<String, u64> = std::fs::read(usage)
                     .ok()
                     .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                     .unwrap_or_default();
-                total = ids
-                    .iter()
-                    .filter_map(|key| key.strip_prefix("session:"))
-                    .filter_map(|sid| folders.get(sid).copied())
-                    .fold(total, u64::saturating_add);
+                for sid in ids.iter().filter_map(|key| key.strip_prefix("session:")) {
+                    if let Some(bytes) = folders.get(sid).filter(|bytes| **bytes > 0) {
+                        let total: &mut u64 = sessions.entry(sid.to_owned()).or_default();
+                        *total = total.saturating_add(*bytes);
+                    }
+                }
             }
-            total
+            sessions
         })
         .await?)
     }

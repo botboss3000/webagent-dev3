@@ -79,6 +79,8 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("administrator_host:")
         || key.starts_with("administrator_notice:")
         || key.starts_with("attachment:")
+        || key == "storage_state"
+        || key == "storage_cleanup_policy"
         || key.starts_with("session_usage:")
         || key == "attachment_quota"
         || key.starts_with("attachment_quota:")

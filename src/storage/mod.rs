@@ -50,6 +50,10 @@ mod review;
 mod scan;
 #[path = "../../crates/modules/chat/host/storage/shared_chat.rs"]
 pub(crate) mod shared_chat;
+#[path = "../../crates/modules/files/host/storage/storage_limits.rs"]
+pub(crate) mod storage_limits;
+#[path = "../../crates/modules/notifications/host/user_notices.rs"]
+mod user_notices;
 
 use crate::access;
 use anyhow::{anyhow, bail, Context, Result};

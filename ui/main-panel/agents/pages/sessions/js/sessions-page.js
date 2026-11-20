@@ -18,6 +18,7 @@
 import { blockHTML,bindNotes,flagToggle,isLive,rowFlag,setFlagCatalog,tickTimes } from '../../../../../chat/controls/session-dropdown/row.js';
 import { _esc,_escAttr,_fmtTime,_formatRelativeTime,positionKebabPopup,icon,claudeMark,codexMark,ICON_PICKER_ICONS,compareSessionsByPinnedOrder,createSessionAdapter } from './adapter.js';
 import { advanceDeleteBtn,resetDeleteBtn } from './delete-control.js';
+import { openStoragePanel,usedPercent } from './storage-panel.js';
 import { loadViewerConfig,getColumns,getGutterConfig,getDataSources,getBreakpointRules,getHiddenColumns,getStickyTotalWidth,respHideClass } from './column-config.js';
 
 export function mountSessions(host, options) {
@@ -1265,18 +1266,35 @@ function _renderSkeletonRows(count) {
 // so what a user reads here and the pressure the cleanup worker reacts to are
 // the same number — see GET historical storage usage endpoint in app/api/db_viewer.py.
 const _STORAGE_WARN_PERCENT = 80;   // amber from here — cleanup is getting close
-const _STORAGE_FULL_PERCENT = 95;   // red from here — session eviction imminent
+const _STORAGE_FULL_PERCENT = 100;  // red from here — new runs wait for space
 let _storageUsage = null;           // last payload that rendered successfully
 let _storagePending = null;         // in-flight fetch, shared by every caller
 
-async function _fetchStorageUsage() { return {available:false,reason:'pending_v3'}; }
+async function _fetchStorageUsage() {
+  const status = await options.request('/storage');
+  const percent = usedPercent(status);
+  const limited = percent !== null;
+  return {available:true, limit_enabled:limited, used_bytes:status.used_bytes, limit_bytes:status.limit_bytes,
+    remaining_bytes:limited ? Math.max(0, status.limit_bytes - status.used_bytes) : null,
+    used_percent:percent, full:status.full === true};
+}
+const _storageMeters = new WeakSet();
+function _bindStorageMeter(el) {
+  if (_storageMeters.has(el)) return;
+  _storageMeters.add(el);
+  el.setAttribute('role', 'button');
+  el.tabIndex = 0;
+  const open = () => openStoragePanel({request:options.request, onChanged:() => { void _loadAndRender('mutation'); }});
+  _listen(el, 'click', open);
+  _listen(el, 'keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+}
 
 function _storageState(data) {
   if (!data || data.available !== true) return 'unknown';
   if (!data.limit_enabled) return 'off';
   const pct = Number(data.used_percent);
   if (!isFinite(pct)) return 'ok';
-  if (pct >= _STORAGE_FULL_PERCENT) return 'full';
+  if (data.full || pct >= _STORAGE_FULL_PERCENT) return 'full';
   if (pct >= _STORAGE_WARN_PERCENT) return 'warn';
   return 'ok';
 }
@@ -1301,7 +1319,9 @@ function _renderStorageUsage(data) {
   const measured = !!(data && data.available === true);
   const summary = _storageSummary(data);
   document.querySelectorAll('[data-sessions-footer-storage]').forEach(el => {
+    _bindStorageMeter(el);
     el.dataset.storageState = _storageState(data);
+    el.dataset.label = (measured && data.limit_enabled) ? 'Storage ' + (Number(data.used_percent) || 0) + '%' : 'Storage';
     el.title = summary;
     el.setAttribute('aria-label', `Session storage: ${summary}`);
     const fill = el.querySelector('[data-storage-fill]');

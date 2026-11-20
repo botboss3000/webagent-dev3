@@ -395,6 +395,20 @@ impl<
                                     Ok(r) => r,
                                     Err(_) => continue,
                                 };
+                                // A full account starts no new run; runs already going finish.
+                                if run["calls"].as_array().is_none_or(Vec::is_empty)
+                                    && run["call_index"].as_u64().unwrap_or(0) == 0
+                                    && crate::send_future(user_app.store.storage_full())
+                                        .await
+                                        .unwrap_or(false)
+                                {
+                                    run["status"] = json!("failed");
+                                    run["error"] = json!(STORAGE_FULL);
+                                    if crate::send_future(user_app.save(&mut run)).await.is_err() {
+                                        tracing::warn!(run_id=%id, "Storage-full refusal deferred");
+                                    }
+                                    continue;
+                                }
                                 let mut active = crate::send_future(app.active.lock()).await;
                                 if active.contains_key(&id) {
                                     continue;
@@ -579,6 +593,8 @@ impl<
 
 /// Failed executions of one turn before the run pauses instead of being recovered again.
 const MAX_INTERRUPTS: u64 = 3;
+/// Shown on a new run the account's full storage kept from starting.
+const STORAGE_FULL: &str = "Storage is full, so this run did not start. Free space from the storage meter on the Sessions page, then send again.";
 
 /// Record a failed execution on an active run so the chat shows it. A run that fails the same
 /// turn `MAX_INTERRUPTS` times pauses with the error; a new turn starts the count again.

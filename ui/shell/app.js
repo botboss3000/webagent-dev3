@@ -209,7 +209,7 @@ async function loadAgentRoster(){
 }
 let mainPages=[];
 // Main pages only administrators see; their APIs enforce this too.
-const adminPages=['builds','notifications','host-admin'];
+const adminPages=['builds','host-admin'];
 // Lucide names for the mobile sidebar; pages without an entry use a plain square.
 const mobileNavIcons={app:'layout-grid',agents:'bot',account:'user-cog',builds:'hammer',notifications:'bell','session-metrics':'chart-line',wiki:'book-open'};
 let activeMainPage='';

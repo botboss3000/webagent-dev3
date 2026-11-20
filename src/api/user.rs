@@ -456,6 +456,50 @@ async fn storage_compact(Extension(app): Extension<App>, Json(body): Json<Value>
         .await
         .into_response()
 }
+/// The storage panel: preview (`dry_run`) or run cleanup actions on the caller's sessions.
+async fn storage_cleanup(Extension(app): Extension<App>, Json(body): Json<Value>) -> Response {
+    crate::api::storage_cleanup::cleanup(&app, &body)
+        .await
+        .into_response()
+}
+/// The caller's largest sessions, for picking in the storage panel.
+async fn storage_sessions(Extension(app): Extension<App>) -> Response {
+    crate::api::storage_cleanup::largest(&app)
+        .await
+        .into_response()
+}
+/// The caller's saved automatic cleanup.
+async fn storage_policy(Extension(app): Extension<App>) -> Response {
+    crate::api::storage_cleanup::policy_get(&app)
+        .await
+        .into_response()
+}
+async fn storage_policy_put(Extension(app): Extension<App>, Json(body): Json<Value>) -> Response {
+    crate::api::storage_cleanup::policy_put(&app, &body)
+        .await
+        .into_response()
+}
+/// The caller's own app notifications.
+async fn notices(Extension(app): Extension<App>) -> Response {
+    match app.store.notices().await {
+        Ok(page) => Json(page).into_response(),
+        Err(error) => crate::ApiError::from(error).into_response(),
+    }
+}
+/// Mark one notification (`{"id": n}`) or all (`{}`) read.
+async fn notices_read(Extension(app): Extension<App>, Json(body): Json<Value>) -> Response {
+    let id = match body.get("id") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_i64() {
+            Some(id) => Some(id),
+            None => return crate::bad("Invalid notification").into_response(),
+        },
+    };
+    match app.store.mark_notices_read(id).await {
+        Ok(marked) => Json(serde_json::json!({"marked": marked})).into_response(),
+        Err(error) => crate::ApiError::from(error).into_response(),
+    }
+}
 /// The signed-in user's storage use and tier limit.
 async fn storage(Extension(app): Extension<App>) -> Response {
     crate::api::uploads::storage_status(&app)
@@ -798,6 +842,14 @@ pub(crate) fn router() -> Router<App> {
         .route("/user/status", get(user_status))
         .route("/sessions", get(sessions).post(create_session))
         .route("/storage", get(storage))
+        .route("/storage/cleanup", post(storage_cleanup))
+        .route("/storage/sessions", get(storage_sessions))
+        .route(
+            "/storage/cleanup-policy",
+            get(storage_policy).put(storage_policy_put),
+        )
+        .route("/notices", get(notices))
+        .route("/notices/read", post(notices_read))
         .route("/storage/compact", post(storage_compact))
         .route("/sessions/search", get(session_search))
         .route("/sessions/stats", get(session_statistics))

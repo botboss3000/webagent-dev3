@@ -21,7 +21,7 @@ pub(crate) async fn limits_for(app: &App, agent: &str) -> Result<AttachmentLimit
         .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
 /// The storage owner's account tier; `None` for stores without an account (fixtures).
-async fn owner_tier(app: &App) -> Result<Option<String>, ApiError> {
+pub(crate) async fn owner_tier(app: &App) -> Result<Option<String>, ApiError> {
     let Some(account) = app.store.account_by_id(app.store.current_user_id()).await? else {
         return Ok(None);
     };
@@ -29,7 +29,7 @@ async fn owner_tier(app: &App) -> Result<Option<String>, ApiError> {
         crate::access::Principal::from_account(&account)?.tier_id,
     ))
 }
-fn live_policy() -> Result<webagent_files::storage_policy::StoragePolicy, ApiError> {
+pub(crate) fn live_policy() -> Result<webagent_files::storage_policy::StoragePolicy, ApiError> {
     webagent_files::storage_policy::StoragePolicy::live()
         .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
@@ -54,8 +54,15 @@ pub(crate) async fn storage_status(app: &App) -> Api {
     let near_limit = limit.is_some_and(|limit| {
         u128::from(used) * 100 >= u128::from(limit) * u128::from(policy.warning_percent)
     });
+    let full = app.store.storage_full().await?;
+    let auto_cleanup = app
+        .store
+        .get(crate::store::storage_limits::POLICY_KEY)
+        .await?
+        .map(|saved| saved["actions"].clone());
     Ok(Json(json!({"used_bytes":used,"limit_bytes":limit,
-        "warning_percent":policy.warning_percent,"near_limit":near_limit})))
+        "warning_percent":policy.warning_percent,"critical_percent":policy.critical_percent,
+        "near_limit":near_limit,"full":full,"auto_cleanup":auto_cleanup})))
 }
 /// Administrator-only: rewrite the caller's own records with current compression, optionally
 /// deleting all their attachments first. Body: `{"delete_attachments": bool}`.

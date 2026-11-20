@@ -1,12 +1,18 @@
 'use strict';
-// Administrator Notifications: security alerts raised under the live admin-alerts.json,
-// with that file's event rules and delivery channels shown read-only.
+// Notifications: every signed-in user's own notifications (storage nearly full, what an
+// automatic cleanup removed), then, for administrators, security alerts raised under the
+// live admin-alerts.json with that file's event rules and delivery channels shown read-only.
 
 const LABELS = {
   login_failed: 'Failed sign-ins',
   login_blocked: 'Sign-in blocks',
   rate_limited: 'Rate-limited requests',
   host_approval: 'Host actions waiting for approval',
+};
+const NOTICE_LABELS = {
+  storage_level: 'Storage',
+  storage_full: 'Storage full',
+  storage_cleanup: 'Automatic cleanup',
 };
 const CHANNELS = {in_app: 'In-app (this page)', ntfy: 'ntfy push', email: 'Email', twilio: 'SMS (Twilio)'};
 
@@ -45,10 +51,10 @@ export function start(mount) {
     }
   }
 
-  async function markRead(body, button) {
+  async function markRead(path, body, button) {
     button.disabled = true;
     try {
-      const response = await fetch('/api/v3/admin/alerts/read', {
+      const response = await fetch(path, {
         method: 'POST', credentials: 'same-origin',
         headers: {'Content-Type': 'application/json', 'x-csrf-token': me.csrf_token},
         body: JSON.stringify(body),
@@ -61,35 +67,53 @@ export function start(mount) {
     }
   }
 
-  function render(page) {
-    const wrap = el('div', 'alerts-wrap');
-    const head = el('div', 'alerts-head');
-    head.append(el('h2', '', 'Notifications' + (page.unread ? ' (' + page.unread + ' unread)' : '')));
-    if (page.unread) {
-      const all = el('button', '', 'Mark all read');
-      all.type = 'button';
-      all.onclick = () => markRead({}, all);
-      head.append(all);
-    }
-    wrap.append(head);
+  function list(items, path, label) {
     const list = el('ul', 'alerts-list');
-    for (const alert of page.alerts) {
-      const item = el('li', 'alert-item');
-      item.dataset.severity = alert.severity;
-      item.dataset.read = String(alert.read_at !== null);
+    for (const item of items) {
+      const row = el('li', 'alert-item');
+      row.dataset.severity = item.severity;
+      row.dataset.read = String(item.read_at !== null);
       const top = el('div', 'alert-top');
-      top.append(el('span', 'alert-message', alert.message));
-      if (alert.read_at === null) {
+      top.append(el('span', 'alert-message', item.message));
+      if (item.read_at === null) {
         const read = el('button', '', 'Mark read');
         read.type = 'button';
-        read.onclick = () => markRead({id: alert.id}, read);
+        read.onclick = () => markRead(path, {id: item.id}, read);
         top.append(read);
       }
-      item.append(top, el('span', 'alert-meta',
-        when(alert.created_at) + ' · ' + alert.severity + ' · ' + (LABELS[alert.kind] || alert.kind)));
-      list.append(item);
+      row.append(top, el('span', 'alert-meta', when(item.created_at) + ' · ' + label(item)));
+      list.append(row);
     }
-    wrap.append(page.alerts.length ? list : el('p', 'alerts-empty', 'No alerts in the last ' + page.config.retention_days + ' days.'));
+    return list;
+  }
+
+  function header(title, unread, path) {
+    const head = el('div', 'alerts-head');
+    head.append(el('h2', '', title + (unread ? ' (' + unread + ' unread)' : '')));
+    if (unread) {
+      const all = el('button', '', 'Mark all read');
+      all.type = 'button';
+      all.onclick = () => markRead(path, {}, all);
+      head.append(all);
+    }
+    return head;
+  }
+
+  function renderNotices(page) {
+    const section = el('section');
+    section.append(header('Your notifications', page.unread, '/api/v3/notices/read'));
+    section.append(page.notices.length
+      ? list(page.notices, '/api/v3/notices/read', item => NOTICE_LABELS[item.kind] || item.kind)
+      : el('p', 'alerts-empty', 'Nothing new. Storage warnings and automatic cleanups appear here.'));
+    return section;
+  }
+
+  function renderAlerts(page) {
+    const wrap = el('section');
+    wrap.append(header('Administrator alerts', page.unread, '/api/v3/admin/alerts/read'));
+    wrap.append(page.alerts.length
+      ? list(page.alerts, '/api/v3/admin/alerts/read', item => item.severity + ' · ' + (LABELS[item.kind] || item.kind))
+      : el('p', 'alerts-empty', 'No alerts in the last ' + page.config.retention_days + ' days.'));
 
     const rules = el('section');
     rules.append(el('h2', '', 'What raises an alert'),
@@ -117,16 +141,25 @@ export function start(mount) {
       channelRows.append(row);
     }
     channels.append(channelRows);
-    wrap.append(rules, channels);
-    mount.replaceChildren(wrap);
+    return [wrap, rules, channels];
+  }
+
+  async function read(path) {
+    const response = await fetch(path, {credentials: 'same-origin', cache: 'no-store'});
+    if (!response.ok) throw Error('Notifications unavailable');
+    return response.json();
   }
 
   async function load() {
-    const response = await fetch('/api/v3/admin/alerts', {credentials: 'same-origin', cache: 'no-store'});
-    if (!response.ok) throw Error('Notifications unavailable');
-    const page = await response.json();
-    setUnread(page.unread);
-    render(page);
+    const [notices, alerts] = await Promise.all([
+      read('/api/v3/notices'),
+      me.is_admin ? read('/api/v3/admin/alerts') : null,
+    ]);
+    setUnread(notices.unread + (alerts ? alerts.unread : 0));
+    const wrap = el('div', 'alerts-wrap');
+    wrap.append(renderNotices(notices));
+    if (alerts) wrap.append(...renderAlerts(alerts));
+    mount.replaceChildren(wrap);
   }
 
   async function syncIdentity() {
@@ -136,7 +169,7 @@ export function start(mount) {
     mount.replaceChildren();
     const response = await fetch('/api/v3/auth/me', {credentials: 'same-origin'});
     me = response.ok ? await response.json() : null;
-    if (!me?.is_admin) return;
+    if (!me?.csrf_token) return;
     const refresh = () => load().catch(error => { mount.textContent = error.message; });
     await refresh();
     timer = setInterval(refresh, 60000);

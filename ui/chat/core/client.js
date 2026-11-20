@@ -1,5 +1,4 @@
 import { createAdministratorNotices } from './administrator-notices.js';
-import { createStorageNotice } from './storage-notice.js';
 
 // V3 transport only: cookie/CSRF request policy is supplied by the shell.
 /**
@@ -14,7 +13,6 @@ import { createStorageNotice } from './storage-notice.js';
 export function createChatClient({request, note, issues, clearNoticeFrom = () => {}, createStream, EventSourceClass = EventSource,
   setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout}) {
   const administratorNotices = createAdministratorNotices({ request });
-  const storageNotice = createStorageNotice({ request });
   let source = null, epoch = 0, current = null;
   // Reflects connection state in the chat toggle when the shell control exists.
   function setConnecting(connecting) {
@@ -104,7 +102,6 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
       componentRevision:data.component_revision||0,appViewRevision:data.app_view?.revision||0,seen:new Set(data.messages.map(item => item.id)), runs:new Map((data.runs || []).map(run => [run.id,run.status])),
       inFlight:null, again:false, retry:null, failures:0};
     administratorNotices.start(id);
-    void storageNotice();
     // Opening counts as a visit for the experimental keep-alive; reconnects do not.
     void request('/sessions/' + encodeURIComponent(id) + '/visit', 'POST', {}).catch(() => {});
     const streamUrl='/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + state.last;

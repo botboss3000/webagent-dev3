@@ -16,6 +16,9 @@ const MIB: u64 = 1024 * 1024;
 pub struct StoragePolicy {
     /// Usage share at which the user is told storage is nearly full.
     pub warning_percent: u8,
+    /// Second, more urgent warning; at 100% the saved automatic cleanup runs.
+    #[serde(default = "default_critical_percent")]
+    pub critical_percent: u8,
     /// Sessions idle this many days have their files compressed.
     pub compress_idle_days: u32,
     /// Sessions idle this many days have their stored tool calls trimmed to each tool's
@@ -39,6 +42,10 @@ pub struct TierStorage {
     pub agent_storage_mb: Option<u64>,
 }
 
+fn default_critical_percent() -> u8 {
+    90
+}
+
 fn default_trim_idle_days() -> u32 {
     7
 }
@@ -46,8 +53,10 @@ fn default_trim_idle_days() -> u32 {
 impl StoragePolicy {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let policy: Self = serde_json::from_slice(bytes)?;
-        if !(1..=100).contains(&policy.warning_percent) {
-            bail!("warning_percent must be 1..100");
+        if !(1..=100).contains(&policy.warning_percent)
+            || !(policy.warning_percent..=100).contains(&policy.critical_percent)
+        {
+            bail!("warning_percent must be 1..100 and critical_percent from it to 100");
         }
         if policy.compress_idle_days == 0 || policy.trim_idle_days == 0 {
             bail!("compress_idle_days and trim_idle_days must be positive");

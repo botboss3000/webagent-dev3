@@ -1151,6 +1151,7 @@ async fn run_process() -> Result<()> {
         administrator_services::watch(app.clone()),
     ));
     tokio::spawn(crate::phase3_api::sweep_browser_folders(app.clone()));
+    tokio::spawn(api::storage_cleanup::service(app.clone()));
     tokio::spawn(api::host_admin::watch(app.clone()));
     let shutdown = app.clone();
     axum::serve(

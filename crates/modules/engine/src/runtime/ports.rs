@@ -268,6 +268,10 @@ pub trait SessionRecords: Sync {
     ) -> impl Future<Output = Result<Vec<Value>>> + Send + 'a;
     fn drain_message_queues(&self) -> impl Future<Output = Result<()>> + Send;
     fn cleanup_one_reasoning(&self) -> impl Future<Output = Result<bool>> + Send;
+    /// Whether the account is at its storage limit: new runs do not start.
+    fn storage_full(&self) -> impl Future<Output = Result<bool>> + Send {
+        async { Ok(false) }
+    }
 }
 /// Existing publication provenance is observed by its owner, with no Engine state decision.
 pub trait PublicationObservation<S, B>: Clone + Send + Sync + 'static {

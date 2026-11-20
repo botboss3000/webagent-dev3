@@ -102,6 +102,8 @@ mod session_deletion_tests;
 pub(crate) mod session_messaging;
 #[path = "../../crates/modules/chat/host/api/session_stop.rs"]
 pub(crate) mod session_stop;
+#[path = "../../crates/modules/files/host/api/storage_cleanup.rs"]
+pub(crate) mod storage_cleanup;
 mod system;
 #[path = "../../crates/modules/chat/host/api/task_list.rs"]
 pub(crate) mod task_list;

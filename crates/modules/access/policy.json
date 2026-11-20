@@ -76,6 +76,7 @@
   },
   "storage": {
     "compress_idle_days": 30,
+    "critical_percent": 90,
     "compression": {
       "algorithm": "zstd",
       "level": 3,
