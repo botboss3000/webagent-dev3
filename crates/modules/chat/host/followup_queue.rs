@@ -195,11 +195,18 @@ async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
     app.store.reconcile_requester_slots().await?;
     Ok(())
 }
-/// An empty, unheld ledger has nothing to review, release or deliver. Skipping it saves
+/// An unheld ledger whose entries are all finished (ledgers keep delivered, cancelled
+/// and rejected entries) has nothing to review, release or deliver. Skipping it saves
 /// rereading its session every pass; a hold it would get (a failed last run, shutoff)
-/// is applied on the first pass after an entry arrives, before anything dispatches.
+/// is applied on the first pass after a live entry arrives, before anything dispatches.
 fn idle_ledger(q: &Value) -> bool {
-    q["held"] != true && q["entries"].as_array().is_none_or(Vec::is_empty)
+    q["held"] != true
+        && q["entries"].as_array().into_iter().flatten().all(|e| {
+            matches!(
+                e["status"].as_str(),
+                Some("delivered" | "cancelled" | "rejected")
+            )
+        })
 }
 pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
     if let Err(error) = crate::session_messaging::deliver_notices(app).await {
@@ -340,15 +347,22 @@ async fn tick_session(app: &App, s: &str) -> Result<()> {
 mod lifecycle_tests {
     use super::*;
     #[test]
-    fn only_empty_unheld_ledgers_are_skipped() {
+    fn only_unheld_ledgers_with_finished_entries_are_skipped() {
         assert!(idle_ledger(&json!({"session_id":"s","entries":[]})));
         assert!(idle_ledger(&json!({"session_id":"s"})));
+        assert!(idle_ledger(&json!({"session_id":"s","entries":[
+            {"status":"delivered"},{"status":"cancelled"},{"status":"rejected"}]})));
         assert!(!idle_ledger(
             &json!({"session_id":"s","entries":[],"held":true})
         ));
-        assert!(!idle_ledger(
-            &json!({"session_id":"s","entries":[{"status":"pending"}]})
-        ));
+        for live in ["pending", "reviewing", "held", "queued"] {
+            assert!(
+                !idle_ledger(&json!({"session_id":"s","entries":[
+                {"status":"delivered"},{"status":live}]})),
+                "{live}"
+            );
+        }
+        assert!(!idle_ledger(&json!({"session_id":"s","entries":[{}]})));
     }
     #[tokio::test]
     async fn inactive_ledgers_cannot_block_other_sessions_or_create_orphan_runs() {
