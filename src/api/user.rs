@@ -348,6 +348,74 @@ async fn tasks_read(Extension(app): Extension<App>, Path(sid): Path<String>) -> 
         .await
         .into_response()
 }
+async fn actions_read(Extension(app): Extension<App>, Path(sid): Path<String>) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = guard_access(&app, false, false) {
+        return error.into_response();
+    }
+    match crate::actions::panel_list(&app.store, Some(&sid), None).await {
+        Ok(actions) => Json(serde_json::json!({"actions": actions})).into_response(),
+        Err(error) => crate::ApiError::from(error).into_response(),
+    }
+}
+async fn actions_resolve(
+    Extension(app): Extension<App>,
+    Path((sid, id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = guard_access(&app, true, true) {
+        return error.into_response();
+    }
+    resolved(
+        crate::actions::panel_resolve(
+            &app.store,
+            Some(&sid),
+            &id,
+            body["state"].as_str().unwrap_or(""),
+        )
+        .await,
+    )
+}
+/// The caller's own actions on one agent (`?agent=`) or all of them, for the agent and
+/// administrator pages.
+async fn actions_all(
+    Extension(app): Extension<App>,
+    Query(args): Query<HashMap<String, String>>,
+) -> Response {
+    match crate::actions::panel_list(&app.store, None, args.get("agent").map(String::as_str)).await
+    {
+        Ok(actions) => Json(serde_json::json!({"actions": actions})).into_response(),
+        Err(error) => crate::ApiError::from(error).into_response(),
+    }
+}
+async fn actions_resolve_own(
+    Extension(app): Extension<App>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    resolved(
+        crate::actions::panel_resolve(&app.store, None, &id, body["state"].as_str().unwrap_or(""))
+            .await,
+    )
+}
+fn resolved(result: anyhow::Result<Option<Value>>) -> Response {
+    match result {
+        Ok(Some(action)) => Json(serde_json::json!({"action": action})).into_response(),
+        Ok(None) => crate::ApiError(
+            axum::http::StatusCode::CONFLICT,
+            "Action is not uncertain".into(),
+        )
+        .into_response(),
+        Err(error) => crate::ApiError::from(error).into_response(),
+    }
+}
 async fn tasks_write(
     Extension(app): Extension<App>,
     Path(sid): Path<String>,
@@ -861,6 +929,13 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
         .route("/sessions/{sid}/issues", get(issues))
         .route("/sessions/{sid}/tasks", get(tasks_read).post(tasks_write))
+        .route("/sessions/{sid}/actions", get(actions_read))
+        .route(
+            "/sessions/{sid}/actions/{id}/resolve",
+            post(actions_resolve),
+        )
+        .route("/actions", get(actions_all))
+        .route("/actions/{id}/resolve", post(actions_resolve_own))
         .route("/sessions/{sid}/build-tasks", get(build_tasks_list))
         .route("/sessions/{sid}/build-tasks/clear", post(build_tasks_clear))
         .route(

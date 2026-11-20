@@ -202,6 +202,20 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(reconcile(&app, &run, &saved).await.unwrap().is_none());
+        // The session is told once, and the owner can then settle it from the panel.
+        let notices = app.store.list("background_notice:").await.unwrap();
+        assert_eq!(
+            notices
+                .iter()
+                .filter(|n| n["source"] == "action" && n["task_id"] == "unknown-action")
+                .count(),
+            1
+        );
+        let sid = saved["session_id"].as_str().unwrap();
+        assert_eq!(
+            panel_list(&app.store, Some(sid), None).await.unwrap()[0]["state"],
+            "uncertain"
+        );
         assert_eq!(
             app.store
                 .action_claim("unknown-action", true)
@@ -455,6 +469,9 @@ pub(crate) async fn finish_on(
         .action_get(field(action, "id")?)
         .await?
         .ok_or_else(|| anyhow!("Missing action outcome"))?;
+    if changed && saved["state"] == "uncertain" {
+        notify_uncertain(&store, &saved).await?;
+    }
     Ok(outcome::finished(changed, &saved, settled))
 }
 
@@ -567,11 +584,93 @@ pub(crate) async fn recover_results_on(base: &Store, run: &mut Value) -> Result<
     Ok(resolved)
 }
 
+/// Tell the action's session that its outcome is uncertain, through the background notice
+/// delivery that also reports finished builds; once per action revision.
+async fn notify_uncertain(store: &Store, action: &Value) -> Result<()> {
+    let (Some(sid), Some(id)) = (action["session_id"].as_str(), action["id"].as_str()) else {
+        return Ok(());
+    };
+    let event = format!("action:{id}:{}", action["revision"].as_u64().unwrap_or(0));
+    let key = format!("background_notice:{sid}:{event}");
+    if store.get(&key).await?.is_some() {
+        return Ok(());
+    }
+    store
+        .put(
+            &key,
+            &serde_json::json!({"source":"action","title":action["tool"],"status":"uncertain",
+                "task_id":id,"key":key,"event_key":event,"session_id":sid,"created_at":crate::now()}),
+        )
+        .await
+}
+
+/// One action as the Actions panels show it.
+fn panel_row(action: &Value) -> Value {
+    let mut row = summary(action);
+    for key in [
+        "session_id",
+        "agent_id",
+        "arguments",
+        "created_at",
+        "updated_at",
+        "critical",
+        "resolved_by",
+    ] {
+        row[key] = action[key].clone();
+    }
+    row
+}
+
+/// The caller's newest actions, those of session `sid` or agent `agent` when given.
+pub(crate) async fn panel_list(
+    base: &Store,
+    sid: Option<&str>,
+    agent: Option<&str>,
+) -> Result<Vec<Value>> {
+    let store = base.for_user(base.current_user_id()).await?;
+    Ok(store
+        .action_recent(200)
+        .await?
+        .iter()
+        .filter(|a| sid.is_none_or(|sid| a["session_id"] == sid))
+        .filter(|a| agent.is_none_or(|agent| a["agent_id"] == agent))
+        .map(panel_row)
+        .collect())
+}
+
+/// Mark the caller's uncertain action `id` done (`completed`) or failed (`confirmed_failed`)
+/// after checking its real outcome; `None` when it is not one of their uncertain actions.
+pub(crate) async fn panel_resolve(
+    base: &Store,
+    sid: Option<&str>,
+    id: &str,
+    state: &str,
+) -> Result<Option<Value>> {
+    if !valid_id(id) {
+        bail!("Invalid action ID");
+    }
+    let user = base.current_user_id().to_owned();
+    let store = base.for_user(&user).await?;
+    match store.action_get(id).await? {
+        Some(action) if sid.is_none_or(|sid| action["session_id"] == sid) => {}
+        _ => return Ok(None),
+    }
+    Ok(store
+        .action_resolve(id, state, &user)
+        .await?
+        .map(|a| panel_row(&a)))
+}
+
 /// Mark the run's running actions uncertain.
 pub(crate) async fn interrupt_run_on(base: &Store, run: &Value) -> Result<()> {
     let store = ledger_on(base, run).await?;
     for id in outcome::pending_action_ids(run) {
         store.action_interrupt(id).await?;
+        if let Some(action) = store.action_get(id).await? {
+            if action["state"] == "uncertain" {
+                notify_uncertain(&store, &action).await?;
+            }
+        }
     }
     Ok(())
 }

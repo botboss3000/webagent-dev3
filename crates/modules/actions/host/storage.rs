@@ -150,6 +150,19 @@ impl Store {
     pub(crate) async fn action_not_dispatched(&self, id: &str) -> Result<()> {
         self.action_ledger().not_dispatched(id).await
     }
+    /// See [`Ledger::recent`].
+    pub(crate) async fn action_recent(&self, limit: u32) -> Result<Vec<Value>> {
+        self.action_ledger().recent(limit).await
+    }
+    /// See [`Ledger::resolve`].
+    pub(crate) async fn action_resolve(
+        &self,
+        id: &str,
+        state: &str,
+        by: &str,
+    ) -> Result<Option<Value>> {
+        self.action_ledger().resolve(id, state, by).await
+    }
     /// See [`Ledger::interrupt`].
     pub(crate) async fn action_interrupt(&self, id: &str) -> Result<()> {
         self.action_ledger().interrupt(id).await
@@ -166,6 +179,38 @@ mod tests {
             "agent_id":"shared_default","session_id":"s","run_id":"r","pending_id":id,
             "arguments_digest":"original-arguments","intent_key":"same-intent","created_at":1,
             "origin":{"storage_owner":"admin","message_id":format!("user-{seq}"),"seq":seq,"created_at":1}})
+    }
+    #[tokio::test]
+    async fn only_an_uncertain_action_can_be_marked_done_or_failed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .action_prepare(&candidate("a", 1), None)
+            .await
+            .unwrap();
+        // A prepared action is not uncertain: nothing to resolve.
+        assert!(store
+            .action_resolve("a", "completed", "admin")
+            .await
+            .unwrap()
+            .is_none());
+        store.action_claim("a", false).await.unwrap();
+        store.action_interrupt("a").await.unwrap();
+        assert!(store.action_resolve("a", "started", "admin").await.is_err());
+        let failed = store
+            .action_resolve("a", "confirmed_failed", "admin")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed["state"], "confirmed_failed");
+        assert_eq!(failed["retry_safe"], true);
+        assert_eq!(failed["resolved_by"], "admin");
+        assert!(store
+            .action_resolve("a", "completed", "admin")
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(store.action_recent(10).await.unwrap()[0]["id"], "a");
     }
     #[tokio::test]
     async fn requester_and_actual_resource_boundaries_keep_separate_actions() {

@@ -10,6 +10,7 @@ import { mountAppSettings } from './pages/settings/page.js';
 import { mountFunctions } from './pages/functions/page.js';
 import { mountModules } from './pages/modules/page.js';
 import { mountAppModels } from './pages/models/page.js';
+import { mountAppActions } from './pages/actions/page.js';
 import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../../shared/page-tabs/page-tabs.js';
 import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './pages/files/page.js';
 
@@ -40,7 +41,7 @@ export async function start(mount) {
   const panelMounts=new Map();
   const panelLoaders={dashboard:mountDashboard,modules:mountModules,
     functions:mountFunctions,settings:mountAppSettings,users:mountUsers,
-    'user-policies':mountPolicies,'page-access':mountPageAccess,models:mountAppModels};
+    'user-policies':mountPolicies,'page-access':mountPageAccess,models:mountAppModels,actions:mountAppActions};
   function ensurePanel(id) {
     if(!me?.is_admin||!panelLoaders[id]||panelMounts.has(id))return;
     const descriptor=pages.find(page=>page.id===id);

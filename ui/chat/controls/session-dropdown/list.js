@@ -49,7 +49,7 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     walk(rootId);
     const wrap = tabs.querySelector('#chat-sub-scroll-wrap');
     // The Broker (broker-chip.js), Artifacts, Tasks and Main Notes chips keep their place after Spawns.
-    const kept = new Set(['chat-broker-chip', 'chat-artifacts-chip', 'chat-tasks-chip', 'chat-main-notes-chip']);
+    const kept = new Set(['chat-broker-chip', 'chat-artifacts-chip', 'chat-tasks-chip', 'chat-actions-chip', 'chat-main-notes-chip']);
     wrap.replaceChildren(...[...wrap.children].filter(node => kept.has(node.id)));
     tabs.toggleAttribute('data-empty', !members.length);
     if (!members.length) return;

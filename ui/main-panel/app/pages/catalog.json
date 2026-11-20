@@ -88,6 +88,15 @@
       "admin": true,
       "order": 2,
       "type": "app_configuration"
+    },
+    {
+      "id": "actions",
+      "title": "Actions",
+      "description": "Recorded actions that must not happen twice; settle uncertain ones.",
+      "panelId": "app-actions-page",
+      "order": 60,
+      "admin": true,
+      "type": "app_configuration"
     }
   ],
   "version": 2

@@ -1,0 +1,20 @@
+/* Actions list (actions-list.js): rows of recorded actions, uncertain ones first. */
+.actions-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.actions-row { padding: 8px 10px; border: var(--border-width) solid var(--border); border-radius: 8px; min-width: 0; }
+.actions-row[data-state="uncertain"] { border-color: var(--warning, #e0af68); }
+.actions-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.actions-tool { overflow-wrap: anywhere; }
+.actions-state, .actions-critical { font-size: 12px; padding: 0 6px; border-radius: 6px; border: var(--border-width) solid var(--border); color: var(--fg-2); }
+.actions-row[data-state="uncertain"] .actions-state { color: var(--warning, #e0af68); border-color: currentColor; }
+.actions-row[data-state="completed"] .actions-state { color: var(--success, #9ece6a); border-color: currentColor; }
+.actions-row[data-state="confirmed_failed"] .actions-state { color: var(--danger, #f7768e); border-color: currentColor; }
+.actions-meta { display: block; color: var(--fg-2); font-size: 12px; margin-top: 2px; }
+.actions-args summary { cursor: pointer; color: var(--fg-2); font-size: 12px; margin-top: 4px; }
+.actions-args-body { margin: 4px 0 0; padding: 6px; max-height: 200px; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: color-mix(in oklab, var(--fg-1) 5%, transparent); border-radius: 6px; }
+.actions-hint, .actions-error, .actions-empty { margin: 6px 0 0; font-size: 13px; color: var(--fg-2); }
+.actions-error { color: var(--danger, #f7768e); }
+.actions-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.actions-btn { min-height: 36px; padding: 4px 14px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.actions-btn:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
+.actions-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.actions-btn:disabled { opacity: .5; cursor: default; }

@@ -5,9 +5,9 @@ import assert from 'node:assert/strict';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(new URL('../../..',import.meta.url).pathname);
 const source=await fs.readFile(new URL('./app-page.js',import.meta.url),'utf8');
-const adapted=source.replace(/^import .* from '\.\/pages\/(?:users|user-policies|page-access|settings|functions|modules|models|files)\/[^']+';$/gm,line=>line.replace(/from '[^']+'/,"from '/stubs.js'"));
+const adapted=source.replace(/^import .* from '\.\/pages\/(?:users|user-policies|page-access|settings|functions|modules|models|actions|files)\/[^']+';$/gm,line=>line.replace(/from '[^']+'/,"from '/stubs.js'"));
 let preferences={page_ids:['config'],revision:0,configured:false};
-const stubs="export const mountUsers=async(host)=>{document.body.dataset.usersMounts=String(Number(document.body.dataset.usersMounts||0)+1);host.textContent='Users fixture pending';await new Promise(()=>{});},mountPolicies=async()=>{},mountPageAccess=async()=>{},mountAppSettings=()=>{},mountFunctions=()=>{},mountModules=async()=>{},mountAppModels=async()=>()=>{},startView=async()=>{},stopView=()=>{},resetExplorerForRemount=()=>{};";
+const stubs="export const mountUsers=async(host)=>{document.body.dataset.usersMounts=String(Number(document.body.dataset.usersMounts||0)+1);host.textContent='Users fixture pending';await new Promise(()=>{});},mountPolicies=async()=>{},mountPageAccess=async()=>{},mountAppSettings=()=>{},mountFunctions=()=>{},mountModules=async()=>{},mountAppModels=async()=>()=>{},mountAppActions=async()=>{},startView=async()=>{},stopView=()=>{},resetExplorerForRemount=()=>{};";
 const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');res.setHeader('content-type','application/json');
  if(url.pathname==='/api/v3/auth/me'){res.end(JSON.stringify({is_admin:true,user_id:'fixture',csrf_token:'fixture'}));return;}

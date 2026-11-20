@@ -261,6 +261,54 @@ impl<'a, C: RecordCodec> Ledger<'a, C> {
         Ok(())
     }
 
+    /// The newest `limit` records over every resource, newest first.
+    pub async fn recent(&self, limit: u32) -> Result<Vec<Value>> {
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM action_index ORDER BY rowid DESC LIMIT ?")
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?;
+        let mut records = Vec::new();
+        for id in ids {
+            records.extend(self.get(&id).await?);
+        }
+        Ok(records)
+    }
+
+    /// Settle an uncertain action from a person's check of the real outcome: `completed` or
+    /// `confirmed_failed` (a failure may then be retried). Returns the saved record, or
+    /// `None` when the action is missing or no longer uncertain.
+    pub async fn resolve(&self, id: &str, state: &str, by: &str) -> Result<Option<Value>> {
+        if !matches!(state, "completed" | "confirmed_failed") {
+            return Err(anyhow!("Invalid resolution"));
+        }
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(LOCK).execute(&mut *tx).await?;
+        let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+            .bind(record_key(id))
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let mut action = self.codec.unseal(&raw)?;
+        if action["state"] != "uncertain" {
+            return Ok(None);
+        }
+        let done = state == "completed";
+        action["state"] = json!(state);
+        action["result"] = json!({"status": if done {"success"} else {"denied"},
+            "output": if done {"A person checked and marked this action done"}
+                else {"A person checked and marked this action failed; it may be retried"}});
+        action["retry_safe"] = json!(!done);
+        action["resolved_by"] = json!(by);
+        action["revision"] = json!(action["revision"].as_u64().unwrap_or(0) + 1);
+        action["updated_at"] = json!(now());
+        self.write(&mut tx, &action).await?;
+        tx.commit().await?;
+        Ok(Some(action))
+    }
+
     /// Mark a running action uncertain; its effect may or may not have happened.
     pub async fn interrupt(&self, id: &str) -> Result<()> {
         if let Some(action) = self.get(id).await? {
