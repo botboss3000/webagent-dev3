@@ -49,6 +49,7 @@
   "sidekick": {
     "enabled": false,
     "pause_seconds": 1800,
-    "max_failures": 3
+    "max_failures": 3,
+    "trust_test_failures": true
   }
 }

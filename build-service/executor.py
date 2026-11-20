@@ -366,6 +366,33 @@ class Executor:
             job["sidekick"]={"decision":"paused","until":state["paused_until"],"reason":state.get("last_error","")[:300]};return None
         return value
     @staticmethod
+    def sidekick_test_failure(error):
+        """The failing test names and first panic line when the error is a finished test result (not a
+        disconnect, timeout or decline); otherwise None."""
+        if isinstance(error,(SidekickDeclined,TimeoutError))or Executor.sidekick_infrastructure(error):return None
+        text=getattr(error,"log",None)or str(error)
+        tests=list(dict.fromkeys(re.findall(r"^test (\S+) \.\.\. FAILED$",text,re.M)))
+        if not tests and "test result: FAILED" not in text:return None
+        line=next((row.strip()[:300]for row in text.splitlines()if "panicked at" in row),"")
+        return {"tests":tests[:10],"line":line}
+    @staticmethod
+    def sidekick_reason(error):
+        """A short reason: the failing tests for a test result, else the error's start and end (the start
+        alone is often compiler warnings that say nothing about the failure)."""
+        failure=Executor.sidekick_test_failure(error)
+        if failure:return ("failing tests: "+", ".join(failure["tests"])if failure["tests"]else"tests failed")+("; "+failure["line"]if failure["line"]else"")
+        text=str(error)
+        return text if len(text)<=600 else text[:120]+" ... "+text[-470:]
+    def sidekick_note(self,job,settings,error,state,step,**extra):
+        """Record why the sidekick did not finish. True when the error is a test failure in its suite that
+        fails the job as it stands (trust_test_failures, default on): its binaries and script were checked."""
+        failure=self.sidekick_test_failure(error)if step=="suite"else None
+        final=failure is not None and settings.get("trust_test_failures",True)is not False
+        job.setdefault("sidekick",{}).update(decision="declined"if isinstance(error,SidekickDeclined)else"failed"if final else"fallback",
+            reason=self.sidekick_reason(error),kept_steps=len(state.get("done")or[]),**extra,**({"failing_tests":failure["tests"]}if failure else{}))
+        self.sidekick_outcome(settings,error)
+        return final
+    @staticmethod
     def sidekick_infrastructure(error):
         """A connection, timeout, transfer or capacity problem, as opposed to a compile or test result or a decline."""
         if isinstance(error,SidekickDeclined):return False
@@ -502,7 +529,7 @@ class Executor:
     def sidekick_replay(self,job,application,output,artifacts,manifest,settings,state):
         """Replay the retained test executables on the sidekick, which holds them by sha256 (only missing ones are
         sent). A marker follows each one, so those that passed survive a disconnect; the caller replays the rest
-        here and confirms any failure. Staged hashes must equal the retained manifest's."""
+        here, except after a test failure, which fails the job unless trust_test_failures is off. Staged hashes must equal the retained manifest's."""
         jid=job["job_id"];record=job["sidekick"];record["mode"]="replay"
         image,digest_value,synced=self.sidekick_prepare(job,application,settings,record)
         record.update(image=image,source_sha256=digest_value,source_changed=synced.get("changed"))
@@ -548,7 +575,8 @@ class Executor:
         Runs beside the release compile. It fills state as it goes (manifest, smoke proof, selection, and the suite
         steps that passed), so the caller finishes here from the last completed step if anything fails. Passing
         results are trusted: same image by ID, same source by digest, staged binaries hash-checked against the
-        manifest built here. A failed step is always rerun here before it can fail the job."""
+        manifest built here, so a test that fails in the suite fails the job (trust_test_failures, default on);
+        anything else, or a failure with that setting off, is rerun here before it can fail the job."""
         jid=job["job_id"];record=job["sidekick"]
         image,digest_value,synced=self.sidekick_prepare(job,application,settings,record)
         key=(job.get("dependency_cache")or{}).get("key")
@@ -2034,9 +2062,9 @@ class Executor:
                         except PermissionError:
                             self.sidekick_release(sidekick,job,"cancelled");raise
                         except Exception as error:
-                            job.setdefault("sidekick",{}).update(decision="declined"if isinstance(error,SidekickDeclined)else"fallback",reason=str(error)[:600],
-                                mode="replay",kept_steps=len(state.get("done")or[]))
-                            self.sidekick_outcome(sidekick,error);self.sidekick_release(sidekick,job,"fallback")
+                            final=self.sidekick_note(job,sidekick,error,state,"suite"if state.get("held")else"claim",mode="replay")
+                            self.sidekick_release(sidekick,job,"fallback")
+                            if final:raise
                             replay=state.get("partial","");done=[name.removeprefix("tests/")for name in state.get("done")or[]]
                             logs+="Broker sidekick did not finish the replay ("+job["sidekick"]["reason"][:200]+"); "+("kept %d, the rest replay here.\n"%len(done)if done else"it replays here.\n")
                         else:
@@ -2100,9 +2128,8 @@ class Executor:
                 shutil.rmtree(release_cargo,ignore_errors=True)
         state={}
         def note_fallback(error):
-            job.setdefault("sidekick",{}).update(decision="declined"if isinstance(error,SidekickDeclined)else"fallback",reason=str(error)[:600],
-                failed_step="claim"if not state.get("held")else"suite"if state.get("selection")else"compile",kept_steps=len(state.get("done")or[]))
-            self.sidekick_outcome(sidekick,error)
+            step="claim"if not state.get("held")else"suite"if state.get("selection")else"compile"
+            return self.sidekick_note(job,sidekick,error,state,step,failed_step=step)
         if sidekick:
             try:self.sidekick_claim(job,sidekick,state)
             except PermissionError:raise
@@ -2124,7 +2151,8 @@ class Executor:
                 except PermissionError:raise
                 except Exception as error:
                     # Finish here at once, beside the release compile that is still running.
-                    note_fallback(error);self.sidekick_release(sidekick,job,"fallback")
+                    final=note_fallback(error);self.sidekick_release(sidekick,job,"fallback")
+                    if final:raise
                     state["logs"]=state.get("logs","")+"Broker sidekick did not finish ("+job["sidekick"]["reason"][:200]+"); the rest of the test half runs here.\n"
                     if state.get("manifest")is None:state.pop("logs",None);local_test_half();state["logs"]="Broker sidekick did not finish ("+job["sidekick"]["reason"][:200]+"); the test half runs here.\n"+state["logs"]
                     if state.get("proof")is None:state["logs"]+=self.linked_reference(job,application,output,state)

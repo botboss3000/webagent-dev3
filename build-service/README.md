@@ -655,7 +655,7 @@ its CPU for the app. Installation JSON (validation in `config.py`; the old name
     "sidekick": {"enabled": true, "host": "100.126.37.96", "user": "ar",
                  "key": "/etc/webagent/broker-sidekick/id_ed25519",
                  "known_hosts": "/etc/webagent/broker-sidekick/known_hosts",
-                 "pause_seconds": 1800, "max_failures": 3}
+                 "pause_seconds": 1800, "max_failures": 3, "trust_test_failures": true}
 
 **Live switch.** `buildctl sidekick status|on|off [--reason TEXT]` (on/off: local operator
 or administrator) writes `<state_root>/coordination/sidekick/state.json` (never a top-level `*.json`, which the broker reads as job receipts), read at every job start: no restart.
@@ -667,7 +667,8 @@ A release already running keeps its choice; switching off cancels nothing.
 **Failures.** A connection, timeout, transfer, disk or integrity problem pauses the sidekick
 for `pause_seconds`; after `max_failures` in a row it switches itself off with the reason
 (`status` shows it; `on` clears it). Busy or switched-off declines and real compile or
-test failures change nothing. The job's `sidekick` record has the decision and reason.
+test failures change nothing. The job's `sidekick` record has the decision and reason (for a test
+failure, the failing test names and first panic line, and `failing_tests`).
 
 **Per job.** Before the release compile starts, the server checks the sidekick's
 program hash (pushing this release's `sidekick.py` when it differs) and takes the job lock
@@ -683,7 +684,9 @@ suite there with a marker after each step. Phase timings keep their usual names 
 **Integrity.** Same image ID, same source digest, hash-checked binaries; passing steps are
 accepted. Anything the sidekick did not finish runs here at once, beside the
 release compile if it is still running: steps it passed before a disconnect or failure are
-kept, and the rest, including a failed step, run (and are confirmed) here. Control replies
+kept, and the rest run here. A test that fails in the sidekick's suite fails the job at once
+(decision `failed`), without a rerun here; set `trust_test_failures` to false to rerun and
+confirm such failures here instead. Compile failures and disconnects still finish here. Control replies
 are read raw (the log scrubber masks hash-like values); phase output is scrubbed as usual. Focused tests are skipped on the sidekick path (the release compile has
 already started; the full suite still gates). Stable releases always test here.
 
@@ -691,8 +694,8 @@ already started; the full suite still gates). Stable releases always test here.
 sidekick too (beside packaging, as before). The sidekick keeps executables it has staged or received
 by sha256 (`binaries/`, capped by `binaries_max_bytes`, oldest use first), so the server sends only
 missing ones; they run in a per-job replay folder, never the warm compile target. Staged hashes must
-equal the retained manifest's; executables it passed are kept after a disconnect and the rest, including
-a failed one, replay here.
+equal the retained manifest's; executables it passed are kept after a disconnect and the rest replay
+here. A test failure in a replay fails the job the same way (`trust_test_failures`).
 
 **Sync.** `sidekick.py` ships in the broker release (install list) and reaches the sidekick
 automatically at its next job or `sidekick on`, so a broker install covers both machines.

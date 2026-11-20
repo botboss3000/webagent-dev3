@@ -92,7 +92,7 @@ def validate(value):
  # "remote_tests" is its name before the rename, still accepted so existing installation files load.
  for name in ("sidekick","remote_tests"):
   remote=policy.get(name,{"enabled":False})
-  if not isinstance(remote,dict)or set(remote)-{"enabled","host","user","key","known_hosts","pause_seconds","max_failures"}or type(remote.get("enabled"))is not bool:raise ValueError("Invalid broker sidekick policy")
+  if not isinstance(remote,dict)or set(remote)-{"enabled","host","user","key","known_hosts","pause_seconds","max_failures","trust_test_failures"}or type(remote.get("enabled"))is not bool or type(remote.get("trust_test_failures",True))is not bool:raise ValueError("Invalid broker sidekick policy")
   if remote["enabled"]and(not re.fullmatch(r"[A-Za-z0-9.-]{1,253}",str(remote.get("host","")))or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}",str(remote.get("user","")))
       or not all(isinstance(remote.get(k),str)and re.fullmatch(r"/etc/webagent/[A-Za-z0-9_./-]+",remote[k])and".."not in remote[k]for k in ("key","known_hosts"))):
    raise ValueError("Broker sidekick policy requires a host, a user and protected key paths under /etc/webagent")

@@ -50,6 +50,30 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(executor.Executor.sidekick_infrastructure(failed(255)))
         self.assertFalse(executor.Executor.sidekick_infrastructure(failed(101)))
         self.assertFalse(executor.Executor.sidekick_infrastructure(executor.SidekickDeclined("off")))
+    def test_a_suite_test_failure_is_final_and_names_the_failing_tests(self):
+        """The first 600 characters of a failure were compiler warnings; the reason names the tests instead."""
+        def failed(code,text):
+            error=RuntimeError("fixed command failed: "+text);error.exit_code=code;return error
+        out=("warning: unused variable: `agent_id`\n"*40+"test runtime_tests::a ... ok\ntest runtime_tests::b ... FAILED\n"
+             "thread 'runtime_tests::b' panicked at src/runtime_tests.rs:10:5:\nfailures:\n    runtime_tests::b\ntest result: FAILED. 1 passed; 1 failed\n")
+        w=worker();state={"done":["doctests"]}
+        job={"sidekick":{}}
+        self.assertTrue(w.sidekick_note(job,SETTINGS,failed(101,out),state,"suite",failed_step="suite"))
+        self.assertEqual(job["sidekick"]["decision"],"failed");self.assertEqual(job["sidekick"]["failing_tests"],["runtime_tests::b"])
+        self.assertTrue(job["sidekick"]["reason"].startswith("failing tests: runtime_tests::b; thread 'runtime_tests::b' panicked at"))
+        self.assertEqual(job["sidekick"]["kept_steps"],1)
+        # The setting off, a compile step, a disconnect or a timeout keeps the rerun here.
+        job={}
+        self.assertFalse(w.sidekick_note(job,dict(SETTINGS,trust_test_failures=False),failed(101,out),state,"suite"))
+        self.assertEqual(job["sidekick"]["decision"],"fallback");self.assertEqual(job["sidekick"]["failing_tests"],["runtime_tests::b"])
+        self.assertFalse(w.sidekick_note({},SETTINGS,failed(101,out),state,"compile"))
+        self.assertFalse(w.sidekick_note({},SETTINGS,failed(255,out),state,"suite"))
+        timeout=TimeoutError("fixed build task timeout");timeout.log=out
+        self.assertFalse(w.sidekick_note({},SETTINGS,timeout,state,"suite"))
+        self.assertFalse(w.sidekick_note({},SETTINGS,failed(101,"error[E0425]: cannot find value"),state,"suite"))
+        # Other errors keep their start and end, bounded.
+        reason=executor.Executor.sidekick_reason(ValueError("x"*2000+"the cause"))
+        self.assertLessEqual(len(reason),600);self.assertTrue(reason.endswith("the cause"))
     def test_control_replies_skip_the_log_scrubber_and_phase_logs_do_not(self):
         """The scrubber masks hash-like values; a masked hash broke the status JSON on the first real job."""
         seen=[]
