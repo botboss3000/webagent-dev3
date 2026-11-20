@@ -13,6 +13,15 @@
       "window_seconds": 300
     }
   },
+  "pages": {
+    "app": {
+      "config": "admin"
+    },
+    "main": {
+      "app": "admin",
+      "host-admin": "admin"
+    }
+  },
   "registration": "open",
   "request_limits": {
     "new_accounts_per_day": 50,
@@ -31,11 +40,51 @@
       "upload": 30
     }
   },
-  "revision": 55,
+  "revision": 58,
+  "storage": {
+    "compress_idle_days": 7,
+    "compression": {
+      "algorithm": "zstd",
+      "idle_level": 19,
+      "level": 3,
+      "min_bytes": 256,
+      "mode": "on_save",
+      "skip_media_types": [
+        "image/*",
+        "video/*",
+        "audio/*",
+        "application/zip",
+        "application/gzip",
+        "application/x-7z-compressed",
+        "application/x-rar-compressed",
+        "application/zstd"
+      ]
+    },
+    "critical_percent": 90,
+    "tiers": {
+      "administrator": {
+        "agent_storage_mb": 50,
+        "max_published_agents": null,
+        "user_storage_mb": 500
+      },
+      "anonymous": {
+        "agent_storage_mb": 0,
+        "max_published_agents": 0,
+        "user_storage_mb": 10
+      },
+      "free": {
+        "agent_storage_mb": 50,
+        "max_published_agents": 5,
+        "user_storage_mb": 100
+      }
+    },
+    "trim_idle_days": 7,
+    "warning_percent": 80
+  },
   "tier_names": {
+    "administrator": "Administrator",
     "anonymous": "Anonymous",
-    "free": "Free",
-    "administrator": "Administrator"
+    "free": "Free"
   },
   "tier_order": [
     "administrator",
@@ -43,6 +92,16 @@
     "anonymous"
   ],
   "tiers": {
+    "administrator": {
+      "allowed_models": [
+        "*"
+      ],
+      "id": "administrator",
+      "max_active_runs": 200,
+      "max_sessions": 10000,
+      "model_policy": null,
+      "revision": 17
+    },
     "anonymous": {
       "allowed_models": [
         "deepseek-flash"
@@ -62,56 +121,6 @@
       "max_sessions": 10,
       "model_policy": null,
       "revision": 6
-    },
-    "administrator": {
-      "allowed_models": [
-        "*"
-      ],
-      "id": "administrator",
-      "max_active_runs": 200,
-      "max_sessions": 10000,
-      "model_policy": null,
-      "revision": 17
     }
-  },
-  "storage": {
-    "compress_idle_days": 7,
-    "critical_percent": 90,
-    "compression": {
-      "algorithm": "zstd",
-      "idle_level": 19,
-      "level": 3,
-      "min_bytes": 256,
-      "mode": "on_save",
-      "skip_media_types": [
-        "image/*",
-        "video/*",
-        "audio/*",
-        "application/zip",
-        "application/gzip",
-        "application/x-7z-compressed",
-        "application/x-rar-compressed",
-        "application/zstd"
-      ]
-    },
-    "tiers": {
-      "anonymous": {
-        "agent_storage_mb": 0,
-        "max_published_agents": 0,
-        "user_storage_mb": 10
-      },
-      "free": {
-        "agent_storage_mb": 50,
-        "max_published_agents": 5,
-        "user_storage_mb": 100
-      },
-      "administrator": {
-        "agent_storage_mb": 50,
-        "max_published_agents": null,
-        "user_storage_mb": 500
-      }
-    },
-    "trim_idle_days": 7,
-    "warning_percent": 80
   }
 }
