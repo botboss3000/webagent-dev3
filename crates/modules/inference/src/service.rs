@@ -251,12 +251,22 @@ fn grade(expect: &Value, got: &Value) -> (bool, bool) {
             (right, card && !right)
         }
         Some("multiple") => {
-            let multiple = got["outcome"] == "multiple";
-            let first = &got["first"];
-            let right =
-                multiple && same_card(first, &expect["first"]) && got["other"] == expect["other"];
+            // An expected part with a layer is a card; one without names only the setting.
+            let parts = got["parts"].as_array().cloned().unwrap_or_default();
+            let wanted = expect["parts"].as_array().cloned().unwrap_or_default();
+            let fits = |got: &Value, want: &Value| match want.get("layer") {
+                Some(_) => same_card(got, want),
+                None => {
+                    got["setting"] == want["setting"] || got["candidates"][0] == want["setting"]
+                }
+            };
+            let multiple = got["outcome"] == "multiple" && parts.len() == wanted.len();
+            let right = multiple && parts.iter().zip(&wanted).all(|(g, w)| fits(g, w));
             let wrong = card
-                || (multiple && first["outcome"] == "card" && !same_card(first, &expect["first"]));
+                || parts
+                    .iter()
+                    .zip(&wanted)
+                    .any(|(g, w)| g["outcome"] == "card" && !fits(g, w));
             (right, wrong)
         }
         Some(outcome @ ("out_of_range" | "other_page")) => (

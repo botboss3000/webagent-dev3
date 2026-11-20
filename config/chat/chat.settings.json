@@ -8,6 +8,7 @@
       "pointer": "/chat_common/message_bubbles/font_size_px",
       "layers": [
         "app",
+        "agent",
         "user"
       ],
       "examples": [
@@ -59,7 +60,8 @@
       "type": "boolean",
       "pointer": "/chat_common/execution_mode/confirm_auto_mode",
       "layers": [
-        "app"
+        "app",
+        "agent"
       ],
       "examples": [
         "warn me before switching to auto",
@@ -80,7 +82,8 @@
       "type": "number",
       "pointer": "/chat_limits/attachments/max_file_size_mb",
       "layers": [
-        "app"
+        "app",
+        "agent"
       ],
       "examples": [
         "allow bigger uploads",
@@ -104,7 +107,8 @@
       "type": "integer",
       "pointer": "/chat_limits/attachments/max_per_message",
       "layers": [
-        "app"
+        "app",
+        "agent"
       ],
       "examples": [
         "let people attach 20 files",
@@ -126,7 +130,8 @@
       "type": "integer",
       "pointer": "/chat_common/live_reload/interval_ms",
       "layers": [
-        "app"
+        "app",
+        "agent"
       ],
       "examples": [
         "refresh the chat every 5 seconds",
@@ -149,7 +154,8 @@
       "type": "string",
       "pointer": "/chat_common/composer/placeholder",
       "layers": [
-        "app"
+        "app",
+        "agent"
       ],
       "examples": [
         "change the message box hint to 'Ask me anything'",
@@ -170,6 +176,7 @@
       "pointer": "/chat_common/chat_header/controls/main_notes/enabled",
       "layers": [
         "app",
+        "agent",
         "user"
       ],
       "examples": [
@@ -190,7 +197,8 @@
       "type": "integer",
       "pointer": "/chat_mobile/transcript_window/messages_above",
       "layers": [
-        "app"
+        "app",
+        "agent"
       ],
       "examples": [
         "load more history on mobile",
@@ -212,7 +220,8 @@
       "type": "number",
       "pointer": "/chat_widget/window/width",
       "layers": [
-        "app"
+        "app",
+        "agent"
       ],
       "examples": [
         "make the chat widget wider",
@@ -233,7 +242,8 @@
       "type": "enum",
       "pointer": "/chat_widget/launcher/position",
       "layers": [
-        "app"
+        "app",
+        "agent"
       ],
       "examples": [
         "move the chat button to the left",

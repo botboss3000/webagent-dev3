@@ -2,8 +2,8 @@
 //! dashboard → app, an agent's dashboard → that agent, the user's own page → user), so only
 //! that page's settings are candidates. Scores rank them; a card is pre-selected only when the
 //! request carries strong evidence for the top setting's value and no close rival has the same.
-//! Otherwise the answer is a short pick list, or `other_page` when the best match lives
-//! elsewhere.
+//! Otherwise the answer is a pick list of every close match, or `other_page` when the best
+//! match lives elsewhere. A request with several changes gets one answer per change.
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -20,8 +20,9 @@ use crate::values::{self, Reading};
 const NONE: f32 = 0.65;
 const PRE: f32 = 0.75;
 const MARGIN: f32 = 0.10;
-/// Settings a pick list offers at most.
-const PICKS: usize = 4;
+/// A pick list offers the best four, then every other on-page setting scoring at least `NONE`,
+/// up to this many.
+const PICKS: usize = 12;
 
 const STOP: &str = "a an the to of for and or in on at my me i it is be should can please set \
     make change turn with by from as that this so let have when its are was will all";
@@ -179,29 +180,31 @@ impl<S: FnMut(&str) -> Result<Vec<f32>>> Matcher<S> {
                 .split(text)
                 .filter(|part| !words(part).is_empty())
                 .collect();
-            if let [first, second] = parts[..] {
-                // Two clauses whose own top settings differ and each accept a value: never one
-                // card for the whole request.
-                let mut tops = Vec::new();
-                for part in [first, second] {
+            if parts.len() >= 2 {
+                // Clauses whose own top settings differ and each accept a value are separate
+                // changes: one answer per clause, never one card for the whole request.
+                let mut tops: Vec<(usize, &str)> = Vec::new();
+                for part in &parts {
                     let (part_order, part_scores) = self.ranked(names, part)?;
                     let top = part_order
                         .into_iter()
-                        .find(|i| self.off_page(r, names, part, *i).is_none());
-                    tops.push(
-                        top.filter(|i| part_scores[*i] >= NONE && self.evidence(r, part, *i) > 0),
-                    );
+                        .find(|i| self.off_page(r, names, part, *i).is_none())
+                        .filter(|i| part_scores[*i] >= NONE && self.evidence(r, part, *i) > 0);
+                    if let Some(top) = top.filter(|top| tops.iter().all(|(t, _)| t != top)) {
+                        tops.push((top, *part));
+                    }
                 }
-                if let [Some(a), Some(b)] = tops[..] {
-                    if a != b {
-                        let id = self.settings[a].id.clone();
-                        let mut answer = self.decide_part(r, names, first, false)?;
+                if tops.len() >= 2 {
+                    let mut answers = Vec::new();
+                    for (top, part) in tops {
+                        let id = self.settings[top].id.clone();
+                        let mut answer = self.decide_part(r, names, part, false)?;
                         if answer["setting"] != json!(id) {
                             answer = json!({"outcome": "pick", "candidates": [id]});
                         }
-                        let other = &self.settings[b].id;
-                        return Ok(json!({"outcome": "multiple", "first": answer, "other": other}));
+                        answers.push(answer);
                     }
+                    return Ok(json!({"outcome": "multiple", "parts": answers}));
                 }
             }
         }
@@ -233,8 +236,10 @@ impl<S: FnMut(&str) -> Result<Vec<f32>>> Matcher<S> {
         if blocked {
             let candidates: Vec<&str> = on
                 .iter()
+                .enumerate()
+                .filter(|(n, i)| *n < 4 || scores[**i] >= NONE)
                 .take(PICKS)
-                .map(|i| self.settings[*i].id.as_str())
+                .map(|(_, i)| self.settings[*i].id.as_str())
                 .collect();
             return Ok(json!({"outcome": "pick", "candidates": candidates}));
         }

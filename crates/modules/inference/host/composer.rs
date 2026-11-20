@@ -4,7 +4,9 @@
 //! `POST /config/apply` writes one value the user confirmed, through the owner's existing save:
 //! live configuration files through the administrator configuration save (validator, digest
 //! fence, broker write), agent settings through the agent identity update (its revision and
-//! management check), and the display name through the profile update. Nothing else writes.
+//! management check), an agent's `chat.json` values through that agent's chat overlay (the
+//! chat module's per-agent overrides, which `reset` removes so the app value applies again),
+//! and the display name through the profile update. Nothing else writes.
 //! `GET /config/settings` lists every setting a page can change with its current value and
 //! revision, for the settings pages' rows; each row saves through `apply`.
 use std::path::Path as FilePath;
@@ -105,9 +107,15 @@ struct Current {
     /// The whole document the value sits in, as its save takes it.
     document: Value,
     revision: Value,
-    /// The administrator configuration id (app layer) or identity field (agent layer).
+    /// The administrator configuration id (app layer), identity field or `chat_overlay`
+    /// (agent layer).
     target: String,
+    /// For an agent's chat overlay: whether the agent overrides the app value.
+    overridden: Option<bool>,
 }
+
+/// Target of agent-layer values kept in the agent's `chat.json` overlay.
+const CHAT_OVERLAY: &str = "chat_overlay";
 
 async fn current(
     app: &App,
@@ -128,6 +136,27 @@ async fn current(
                 revision: json!({"digest": webagent_configuration::digest(&document)}),
                 document,
                 target: id.to_owned(),
+                overridden: None,
+            })
+        }
+        // chat.json values without an identity field live in the agent's chat overlay.
+        "agent"
+            if descriptor.get("agent_pointer").is_none()
+                && super::live_configuration::live("chat") == Some(owner) =>
+        {
+            let agent = page.trim_start_matches("agent:").to_owned();
+            let Json(record) =
+                crate::chat_config::get(State(app.clone()), Path((agent, "chat".to_owned())))
+                    .await?;
+            Ok(Current {
+                value: record["effective"]
+                    .pointer(pointer)
+                    .cloned()
+                    .ok_or_else(unsupported)?,
+                revision: json!({"overlay_revision": record["revision"]}),
+                overridden: Some(record["overlay"].pointer(pointer).is_some()),
+                document: Value::Null,
+                target: CHAT_OVERLAY.into(),
             })
         }
         "agent" => {
@@ -146,6 +175,7 @@ async fn current(
                 revision: json!({"revision": identity_doc["revision"]}),
                 document: identity_doc,
                 target: field,
+                overridden: None,
             })
         }
         _ => {
@@ -158,6 +188,7 @@ async fn current(
                 revision: json!({}),
                 document: json!({"username": me["user"]}),
                 target: "profile".into(),
+                overridden: None,
             })
         }
     }
@@ -237,40 +268,60 @@ pub(crate) async fn propose(
     let agents = app.store.agent_ids().await.unwrap_or_default();
     let mut result =
         ask(json!({"text": text, "page": page, "agents": agents, "limits": limits})).await?;
+    // Every setting the answer names: a card's, a pick list's, and each part's of a request
+    // with several changes.
     let describe = |id: &Value| {
         all.iter()
             .find(|(s, ..)| *id == s.id.as_str())
             .map(|(s, ..)| json!({"id": s.id, "description": s.description, "layers": s.layers}))
     };
-    let mut ids: Vec<Value> = result["candidates"].as_array().cloned().unwrap_or_default();
-    ids.extend(
-        [
-            &result["setting"],
-            &result["first"]["setting"],
-            &result["other"],
-        ]
-        .into_iter()
-        .filter(|id| id.is_string())
-        .cloned(),
-    );
+    let parts = result["parts"].as_array().cloned().unwrap_or_default();
+    let mut ids: Vec<Value> = Vec::new();
+    for answer in std::iter::once(&result).chain(&parts) {
+        ids.extend(
+            answer["candidates"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        ids.push(answer["setting"].clone());
+    }
+    ids.retain(Value::is_string);
+    ids.dedup();
     result["settings"] = ids.iter().filter_map(describe).collect();
-    // The card to confirm: the request's single change, or the first of two.
-    let card = if result["outcome"] == "card" {
-        Some(result.clone())
-    } else if result["first"]["outcome"] == "card" {
-        Some(result["first"].clone())
-    } else {
-        None
-    };
-    if let Some(card) = card {
-        let (setting, descriptor, owner) = all
-            .iter()
-            .find(|(s, ..)| card["setting"] == s.id.as_str())
-            .ok_or_else(|| bad("Unknown setting"))?;
-        let params = card["params"].as_object().cloned().unwrap_or_default();
-        let pointer = pointer(descriptor, layer, &params)?;
-        let found = current(&app, &identity, page, layer, (descriptor, owner), &pointer).await;
-        let review = match found {
+    // Each card to confirm gets its review: the request's single change, or every card part.
+    if result["outcome"] == "card" {
+        result["review"] = review(&app, &identity, page, layer, &all, &limits, &result).await?;
+    }
+    for (index, part) in parts.iter().enumerate() {
+        if part["outcome"] == "card" {
+            result["parts"][index]["review"] =
+                review(&app, &identity, page, layer, &all, &limits, part).await?;
+        }
+    }
+    Ok(Json(result))
+}
+
+/// A card's current value, proposed value, revision and range check, or why the setting
+/// can't be changed on this page.
+async fn review(
+    app: &App,
+    identity: &Value,
+    page: &str,
+    layer: &str,
+    all: &[(Setting, Value, String)],
+    limits: &Map<String, Value>,
+    card: &Value,
+) -> Result<Value, ApiError> {
+    let (setting, descriptor, owner) = all
+        .iter()
+        .find(|(s, ..)| card["setting"] == s.id.as_str())
+        .ok_or_else(|| bad("Unknown setting"))?;
+    let params = card["params"].as_object().cloned().unwrap_or_default();
+    let pointer = pointer(descriptor, layer, &params)?;
+    Ok(
+        match current(app, identity, page, layer, (descriptor, owner), &pointer).await {
             Ok(now) => {
                 let proposed = match card.get("value") {
                     Some(value) => Some(merged(&now.value, value)),
@@ -280,13 +331,12 @@ pub(crate) async fn propose(
                 let range = proposed
                     .as_ref()
                     .and_then(|p| values::out_of_range(setting, p, limit));
-                json!({"current": now.value, "proposed": proposed, "revision": now.revision, "out_of_range": range})
+                json!({"current": now.value, "proposed": proposed, "revision": now.revision,
+                    "out_of_range": range, "overridden": now.overridden})
             }
             Err(ApiError(_, reason)) => json!({"unavailable": reason}),
-        };
-        result["review"] = review;
-    }
-    Ok(Json(result))
+        },
+    )
 }
 
 /// Every combination of a descriptor's parameter values (`{"tier": [...]}`); one empty map
@@ -355,6 +405,9 @@ pub(crate) async fn settings(
                 Ok(now) => {
                     entry["value"] = now.value;
                     entry["revision"] = now.revision;
+                    if let Some(overridden) = now.overridden {
+                        entry["overridden"] = json!(overridden);
+                    }
                 }
                 Err(ApiError(_, reason)) => entry["unavailable"] = json!(reason),
             }
@@ -365,6 +418,7 @@ pub(crate) async fn settings(
 }
 
 /// `{"page", "setting", "value", "params"?, "revision"}` → the owner's save of that one value.
+/// `"reset": true` instead of a value removes an agent's chat override.
 pub(crate) async fn apply(
     State(app): State<App>,
     Extension(identity): Extension<Value>,
@@ -380,20 +434,52 @@ pub(crate) async fn apply(
     if !setting.layers.iter().any(|l| l == layer) {
         return Err(bad("This setting isn't changed on this page"));
     }
-    let value = body.get("value").ok_or_else(|| bad("Value required"))?;
+    let reset = body["reset"] == true;
     let params = body["params"].as_object().cloned().unwrap_or_default();
     let pointer = pointer(descriptor, layer, &params)?;
     let now = current(&app, &identity, page, layer, (descriptor, owner), &pointer).await?;
-    let value = merged(&now.value, value);
-    check_kind(setting, &value)?;
-    if let Some(limit) = values::out_of_range(setting, &value, None) {
-        return Err(bad(&format!("Out of range: {limit}")));
+    if reset && now.target != CHAT_OVERLAY {
+        return Err(bad(
+            "Only an agent's chat setting can be reset to the app value",
+        ));
     }
+    let value = if reset {
+        Value::Null
+    } else {
+        let value = body.get("value").ok_or_else(|| bad("Value required"))?;
+        let value = merged(&now.value, value);
+        check_kind(setting, &value)?;
+        if let Some(limit) = values::out_of_range(setting, &value, None) {
+            return Err(bad(&format!("Out of range: {limit}")));
+        }
+        value
+    };
     if body["revision"] != now.revision {
         return Err(conflict("Setting changed; review it again"));
     }
     let mut document = now.document;
     match layer {
+        "agent" if now.target == CHAT_OVERLAY => {
+            // A merge patch nested along the pointer; null drops the override.
+            let mut patch = value.clone();
+            for key in pointer
+                .split('/')
+                .skip(1)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
+                patch = json!({ key.replace("~1", "/").replace("~0", "~"): patch });
+            }
+            let body = serde_json::from_value(
+                json!({"patch": patch, "expected_revision": now.revision["overlay_revision"]}),
+            )
+            .map_err(anyhow::Error::from)?;
+            let agent = page.trim_start_matches("agent:").to_owned();
+            let _saved =
+                crate::chat_config::patch(State(app), Path((agent, "chat".to_owned())), Json(body))
+                    .await?;
+        }
         "app" => {
             *document
                 .pointer_mut(&pointer)
