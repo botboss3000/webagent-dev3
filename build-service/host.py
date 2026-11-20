@@ -2491,16 +2491,11 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         self.command(["docker", "start", name], timeout=30)
 
     def release_healthy(self):
-        """True when the API, loop and gate containers are healthy and readiness answers 200."""
+        """True when the API and loop containers are healthy and readiness answers 200."""
         for name in TARGETS:
             state = self.inspect(name)["State"]
             if state.get("Status") != "running" or state.get("Health", {}).get("Status") != "healthy":
                 return False
-        # The gate is outside inspect's targets; read only its state, never its configuration.
-        gate = self.command(["docker", "inspect", "-f", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}",
-                             CONFIG["gate_container"]], timeout=30, private_raw=True).split()
-        if gate != ["running", "healthy"]:
-            return False
         host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(CONFIG["bind_address"], CONFIG["bind_address"])
         connection = http.client.HTTPConnection(host, CONFIG["port"], timeout=15)
         try:

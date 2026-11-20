@@ -183,7 +183,7 @@ class Host:
     """Own recovery inputs, retry/crash deadlines, selective restoration and manual authority."""
     def __init__(self,cfg,home,docker=None,engine=None):
         self.cfg=cfg;self.home=home;home.mkdir(parents=True,exist_ok=True);home.chmod(0o755)
-        self.names=tuple(cfg[k] for k in ("api_container","loop_container","gate_container"))
+        self.names=tuple(cfg[k] for k in ("api_container","loop_container"))
         self.docker=docker or Docker(self.names);self.engine=engine or Engine(cfg,home)
         self.path=home/"state.json"
         self.lock_path=home/"effects.lock"

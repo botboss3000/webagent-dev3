@@ -21,23 +21,11 @@ def initialize_state(root,c):
   os.close(parent)
 
 def main():
- parser=argparse.ArgumentParser();parser.add_argument("action",choices=("build","build-loop","build-gate","start","start-loop","start-gate","start-browser"),default="build",nargs="?")
+ parser=argparse.ArgumentParser();parser.add_argument("action",choices=("build","build-loop","start","start-loop","start-browser"),default="build",nargs="?")
  args=parser.parse_args();c=cfg.load();root=Path(c["checkout_root"])
  if args.action=="start-browser":return start_browser(c)
- role="gate" if args.action.endswith("gate") else "loop" if args.action.endswith("loop") else "api";name=c[role+"_container"];live=cfg.layout(c)
+ role="loop" if args.action.endswith("loop") else "api";name=c[role+"_container"];live=cfg.layout(c)
  def run(argv,**kw):return subprocess.run(argv,check=True,**kw)
- if role=="gate":
-  gate=Path(live["/runtime/gate"]);gate.mkdir(exist_ok=True)
-  if args.action=="build-gate":
-   archive=subprocess.Popen(["tar","-C",str(root),"-cf","-","gate.Dockerfile","gate_worker.py","tests/test_gate_worker.py","plugins/gates/publication_size_guard_v1"],stdout=subprocess.PIPE)
-   try:run(["docker","build","-f","gate.Dockerfile","-t",name+":local","-"],stdin=archive.stdout)
-   finally:archive.stdout.close()
-   if archive.wait():raise RuntimeError("Gate source export failed")
-  else:
-   if subprocess.run(["docker","inspect",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:raise RuntimeError("Gate already exists")
-   run(["docker","run","--rm","--user","0:0","--network","none","--mount","type=bind,src="+str(gate)+",dst=/run/v3/gate","--entrypoint","/bin/sh",name+":local","-c","chown 1102:1100 /run/v3/gate && chmod 0770 /run/v3/gate"])
-   run(["docker","run","-d","--name",name,"--restart","unless-stopped","--network","none","--read-only","--user","1102:1100","--cap-drop","ALL","--security-opt","no-new-privileges:true","--pids-limit","32","--memory","64m","--cpus","0.25","--mount","type=bind,src="+str(gate)+",dst=/run/v3/gate",name+":local"])
-  return
  if args.action.startswith("build"):
   helper=Path(c["service_dir"])/"bootstrap.py"
   proc=subprocess.Popen(["sudo","-n","env","WEBAGENT_BUILD_CONFIG="+os.environ["WEBAGENT_BUILD_CONFIG"],"python3","-I",str(helper),"--snapshot"],stdout=subprocess.PIPE)

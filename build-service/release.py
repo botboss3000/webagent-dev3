@@ -24,7 +24,8 @@ MAX_CHANGED_PATHS = 1024
 RETIRED_CONTEXT = ("v3/data/config/gates/message_visibility_v1.json",
                    "v3/data/config/gates/closing_status_v1.json",
                    "v3/launch.py", "v3/ability_plugin_worker.py", "v3/worker.py",
-                   "v3/promote.py", "v3/ui-baseline.json")
+                   "v3/promote.py", "v3/ui-baseline.json",
+                   "v3/gate_worker.py", "v3/gate.Dockerfile", "v3/gate-deploy.sh")
 
 
 def retired(name):

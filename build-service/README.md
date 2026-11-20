@@ -267,8 +267,9 @@ checkout or v2 application data is required. The retired ui/ archive namespace
 of older releases is dropped from new candidates. Fresh chat
 configuration comes from the v3 template.
 
-For a new instance, run deploy.py build, build-loop and build-gate with
-WEBAGENT_BUILD_CONFIG, then start-gate, start and start-loop. The initial source
+For a new instance, run deploy.py build and build-loop with
+WEBAGENT_BUILD_CONFIG, then start and start-loop. There is no gate container: the
+optional publication-size gate runs inside the app. The initial source
 snapshot is indexed lazily by the service before the first workspace operation.
 First-start configuration is seeded only when absent. Subsequent releases use
 isolated broker tasks rather than direct deployment commands.

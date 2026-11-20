@@ -28,9 +28,9 @@ class BootTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         root=Path(self.tmp.name)
-        self.cfg={"api_container":"webagent-dev-v3","loop_container":"webagent-dev-v3-loop","gate_container":"webagent-dev-v3-gate","state_root":str(root/"jobs")}
+        self.cfg={"api_container":"webagent-dev-v3","loop_container":"webagent-dev-v3-loop","state_root":str(root/"jobs")}
         (root/"jobs").mkdir()
-        self.names=[self.cfg[k] for k in ("api_container","loop_container","gate_container")]
+        self.names=[self.cfg[k] for k in ("api_container","loop_container")]
         self.docker=FakeDocker(self.names);self.engine=FakeEngine();self.host=m.Host(self.cfg,root/"host",self.docker,self.engine)
     def test_shared_deployment_lease_fences_recovery(self):
         import fcntl,os
@@ -62,13 +62,16 @@ class BootTests(unittest.TestCase):
         self.docker.state[self.names[0]].update(running=False,restarting=True)
         self.host.reconcile(100);self.assertEqual(self.docker.effects,[]);self.assertIsNone(self.host.deadline)
     def test_withdrawal_retains_input_and_selective_restore(self):
-        for name in self.names:self.docker.state[name]["running"]=False
-        self.host.state["services"][self.names[1]]["desired"]=False
-        self.host.state["services"][self.names[2]]["uncertain"]=True
-        self.engine.available=False;self.host.reconcile(100)
-        self.assertTrue(self.host.state["pending"]);self.assertTrue(self.host.paused);self.assertEqual(self.docker.effects,[])
-        self.engine.available=True;self.host.reconcile(101)
-        self.assertEqual(self.docker.effects,[(self.names[0],"start")])
+        # The second service is withheld once as not desired and once as uncertain.
+        for field,value in (("desired",False),("uncertain",True)):
+            with self.subTest(field=field):
+                self.setUp()
+                for name in self.names:self.docker.state[name]["running"]=False
+                self.host.state["services"][self.names[1]][field]=value
+                self.engine.available=False;self.host.reconcile(100)
+                self.assertTrue(self.host.state["pending"]);self.assertTrue(self.host.paused);self.assertEqual(self.docker.effects,[])
+                self.engine.available=True;self.host.reconcile(101)
+                self.assertEqual(self.docker.effects,[(self.names[0],"start")])
     def test_manual_stop_persists_across_host_restart(self):
         name=self.names[0];self.host.manual(name,"stop")
         restored=m.Host(self.cfg,self.host.home,self.docker,self.engine);restored.reconcile(100)
