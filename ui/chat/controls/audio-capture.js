@@ -105,7 +105,9 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
   }catch(e){fail(c,e);return false;}
  }
   // Purpose: Invalidate the active generation immediately, stop local recording, and best-effort cancel the server capture.
+  // Purpose: Resume the audio context from a later user gesture: a touch press opens the microphone, but touch grants audio playback only when the finger lifts.
+ function resume(){active?.context?.resume().catch(()=>{});}
  function cancel(){const c=active;if(!c)return;quiet(c);active=null;++generation;stop(c);if(c.id)send(c.sid,{op:'cancel',capture_id:c.id}).catch(()=>{});onState('idle');}
   // Public API: start/finish/cancel control the single capture; active reflects whether one is still owned.
- return {start,finish,cancel,get active(){return !!active;}};
+ return {start,finish,cancel,resume,get active(){return !!active;}};
 }
