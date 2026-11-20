@@ -88,8 +88,31 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Gives the snapshot the base's other top-level entries (prompts, UI, assets), which
+/// callers read through the catalog's source root: links on Unix, copies elsewhere.
+fn share_rest(base: &Path, root: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(base)? {
+        let entry = entry?;
+        if entry.file_name() == "abilities" {
+            continue;
+        }
+        let target = root.join(entry.file_name());
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(entry.path(), &target)?;
+        #[cfg(not(unix))]
+        {
+            if entry.file_type()?.is_dir() {
+                copy_tree(&entry.path(), &target)?;
+            } else {
+                std::fs::copy(entry.path(), &target)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Builds the snapshot `root/abilities` = `base/abilities` with `changed` taken from
-/// `checkout`, unless it already exists.
+/// `checkout`, beside the base's other entries, unless it already exists.
 fn build(base: &Path, checkout: &Path, changed: &[PathBuf], root: &Path) -> std::io::Result<()> {
     if root.join("abilities").is_dir() {
         return Ok(());
@@ -103,6 +126,7 @@ fn build(base: &Path, checkout: &Path, changed: &[PathBuf], root: &Path) -> std:
     ));
     let result = (|| {
         copy_tree(&base.join("abilities"), &partial.join("abilities"))?;
+        share_rest(base, &partial)?;
         for relative in changed {
             let target = partial.join("abilities").join(relative);
             if let Some(folder) = target.parent() {
@@ -191,7 +215,8 @@ fn overlay_every(
     let chosen = if changed.is_empty() {
         base.to_path_buf()
     } else {
-        let root = cache.join(hex::encode(&key[..12]));
+        // The name carries the snapshot layout, so an older layout is never reused.
+        let root = cache.join(format!("v2-{}", hex::encode(&key[..12])));
         match build(base, checkout, &changed, &root) {
             Ok(()) if valid(&root.join("abilities")) => {
                 prune(cache, &root);
@@ -228,6 +253,8 @@ mod tests {
             dir.path().join("checkout"),
             dir.path().join("cache"),
         );
+        std::fs::create_dir_all(base.join("config")).unwrap();
+        std::fs::write(base.join("config/prompt.md"), "prompt").unwrap();
         for root in [base.join("abilities"), checkout.clone()] {
             std::fs::create_dir_all(root.join("Core/demo")).unwrap();
             std::fs::write(root.join("Core/demo/tool.json"), "{\"v\":1}").unwrap();
@@ -242,6 +269,11 @@ mod tests {
         let tool = std::fs::read_to_string(live.join("abilities/Core/demo/tool.json")).unwrap();
         assert_eq!(tool, "{\"v\":2}");
         assert!(live.join("abilities/Core/demo/handler.rs").is_file());
+        assert_eq!(
+            std::fs::read_to_string(live.join("config/prompt.md")).unwrap(),
+            "prompt",
+            "the release's other folders stay readable through the snapshot"
+        );
         std::fs::write(checkout.join("Core/demo/tool.json"), "{broken").unwrap();
         let kept = overlay_every(now, &base, &checkout, &cache, |root| {
             std::fs::read_to_string(root.join("Core/demo/tool.json"))
