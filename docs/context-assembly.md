@@ -252,6 +252,16 @@ Two minutes before the cache timeout (at most half of it) it resends the saved
 request with one short user question appended, so every earlier byte matches what
 the provider cached; the answer and any tool call in it are dropped and nothing is
 saved to the history. A bridge answers from a fork of the chat's harness session.
+A fork shares the chat's cache only when its request starts the same way: Claude
+forks run in the chat folder, and since commit 11f8e16 OpenCode forks do too (on a
+separate fork server whose tool files stay in the chat's `.fork` folder), because
+OpenCode puts the working folder in its system prompt. Before that an OpenCode ping,
+and an OpenCode background summary fork, read none of the chat's cache and kept only
+the fork's own copy warm. Measured after the fix: a new chat's first ping read 99.5%
+from cache, and a real call 26 minutes after the chat's last real call, past
+deepseek-v4.1-flash's ~20-minute lifetime with only pings between, read 99.6%. A
+ping that fails because the bridge cannot fork the chat (no harness session yet, for
+example after a stopped first turn, or a changed request) stops that session's pings.
 A forced tool call was not used: on Anthropic a `tool_choice` change invalidates the
 cached message blocks (Anthropic's prompt-caching documentation, "What invalidates
 the cache"), and bridges do not pass it on.
