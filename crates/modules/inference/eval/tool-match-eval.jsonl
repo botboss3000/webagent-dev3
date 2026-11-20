@@ -88,8 +88,8 @@
 {"id": "t88", "kind": "tool", "query": "what events did the webhook get", "expect": ["get_webhook_log"]}
 {"id": "t89", "kind": "tool", "query": "save task progress", "expect": ["task_list_write"]}
 {"id": "t90", "kind": "tool", "query": "where did I leave off", "expect": ["task_list_read", "main_notes_read"]}
-{"id": "t91", "kind": "tool", "query": "is the background job done", "expect": ["background_status"]}
-{"id": "t92", "kind": "tool", "query": "cancel the running background call", "expect": ["background_cancel"]}
+{"id": "t91", "kind": "tool", "query": "is the background job done", "expect": ["background_calls_read"]}
+{"id": "t92", "kind": "tool", "query": "cancel the running background call", "expect": ["background_calls_cancel"]}
 {"id": "t93", "kind": "tool", "query": "show the user a plan with steps", "expect": ["present_plan"]}
 {"id": "t94", "kind": "tool", "query": "give the user buttons to choose", "expect": ["present_chat_component", "offer_choices"]}
 {"id": "t95", "kind": "tool", "query": "ask the user to fill in a form", "expect": ["present_chat_component"]}

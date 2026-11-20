@@ -11,20 +11,21 @@ use tokio_util::sync::CancellationToken;
 use webagent_access as access;
 
 pub fn owns(name: &str) -> bool {
-    matches!(name, "background_status" | "background_cancel")
+    matches!(name, "background_calls_read" | "background_calls_cancel")
 }
 
-/// `background_status` and `background_cancel` arguments: the task to read or cancel.
+/// `background_calls_read` and `background_calls_cancel` arguments: the call to read or
+/// cancel, by the `call_id` its running result gave.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlArgs {
-    task_id: String,
+    call_id: String,
 }
 
 /// Argument types of this family's tools, checked against their tool.json by the root test.
 pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
-    webagent_abilities::argument_type!("background_cancel", ControlArgs),
-    webagent_abilities::argument_type!("background_status", ControlArgs),
+    webagent_abilities::argument_type!("background_calls_cancel", ControlArgs),
+    webagent_abilities::argument_type!("background_calls_read", ControlArgs),
 ];
 fn timestamp_ms() -> u64 {
     std::time::SystemTime::now()
@@ -321,7 +322,7 @@ impl<
             }
         }
         crate::wake::notify(&app.control_dir).await;
-        Ok(json!({"status":"task_start","task_id":id}))
+        Ok(json!({"status":"task_start","call_id":id}))
     }
     /// Record an executing foreground call as a detached task: it keeps running in this
     /// process and is never dispatched by the background service. None when at capacity.
@@ -349,7 +350,7 @@ impl<
         Ok(Some(id))
     }
     /// Own a detached call until it ends: renew its lease, cancel it when its task is
-    /// cancelled (background_cancel or Stop), then store its result for delivery.
+    /// cancelled (background_calls_cancel or Stop), then store its result for delivery.
     pub fn background_follow_detached(
         &self,
         id: String,
@@ -400,7 +401,7 @@ impl<
         });
     }
     /// Own a parallel batch's detached calls until each ends: renew their leases, cancel a
-    /// call when its task is cancelled (background_cancel or the second Stop), and report
+    /// call when its task is cancelled (background_calls_cancel or the second Stop), and report
     /// each result as a background notice.
     pub fn background_follow_batch(
         &self,
@@ -522,18 +523,18 @@ impl<
         if !owns(name) {
             return Err(anyhow!("Unknown task control"));
         }
-        let ControlArgs { task_id } = webagent_abilities::tool_arguments::read(name, args)?;
-        let id = task_id.as_str();
+        let ControlArgs { call_id } = webagent_abilities::tool_arguments::read(name, args)?;
+        let id = call_id.as_str();
         loop {
             let mut task = app
                 .store
                 .background_get(id)
                 .await?
-                .ok_or_else(|| anyhow!("Task not found"))?;
+                .ok_or_else(|| anyhow!("Background call not found"))?;
             if task["session_id"] != sid {
-                return Err(anyhow!("Task not found"));
+                return Err(anyhow!("Background call not found"));
             }
-            if name == "background_cancel" && !finished(&task) {
+            if name == "background_calls_cancel" && !finished(&task) {
                 let revision = task["revision"].as_u64().unwrap_or(0);
                 task["status"] = json!("cancelled");
                 if !app.store.background_cas(&task, Some(revision)).await? {
@@ -541,7 +542,7 @@ impl<
                 }
                 crate::wake::notify(&app.control_dir).await;
             }
-            return Ok(json!({"task_id":id,"status":task["status"]}));
+            return Ok(json!({"call_id":id,"status":task["status"]}));
         }
     }
     pub async fn background_collect(&self, run: &mut Value) -> Result<bool> {

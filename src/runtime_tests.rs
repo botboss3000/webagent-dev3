@@ -8968,7 +8968,7 @@ async fn background_approved_reads_pin_authority_and_claim_identity() {
             app.store.background_scan(Some(&sid)).await.unwrap().len(),
             1
         );
-        let task_id = handle["task_id"].as_str().unwrap();
+        let task_id = handle["call_id"].as_str().unwrap();
         let mut task = app.store.background_get(task_id).await.unwrap().unwrap();
         assert!(background_tasks::permitted(&app, &task).await.unwrap());
         for field in [
@@ -9222,7 +9222,7 @@ async fn background_auto_reads_reauthorize_live_grants_without_inheriting_approv
     .unwrap();
     let task = app
         .store
-        .background_get(handle["task_id"].as_str().unwrap())
+        .background_get(handle["call_id"].as_str().unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -9445,7 +9445,7 @@ async fn background_execution_journey(behavior: &str) {
         .collect::<Vec<_>>();
     assert_eq!(handles.len(), 1);
     assert_eq!(handles[0]["status"], "task_start");
-    assert_eq!(handles[0]["task_id"], task_id);
+    assert_eq!(handles[0]["call_id"], task_id);
     if behavior == "overlap" {
         reply
             .send(
@@ -9656,7 +9656,7 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
         )
         .await
         .unwrap();
-        let task_id = handle["task_id"].as_str().unwrap();
+        let task_id = handle["call_id"].as_str().unwrap();
         let original = app.store.background_get(task_id).await.unwrap().unwrap();
         set_tool_permission(&app, "file_read", access::Permission::Ask).await;
         let mut visibility = app.store.agent_abilities().await.unwrap();

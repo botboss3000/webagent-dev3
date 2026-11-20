@@ -245,7 +245,7 @@ impl<
     > Runtime<S, C, B, A, H, M, X>
 {
     /// A user message arrived during a batch: every call still running gets the "still
-    /// running as background task" stand-in and keeps running; finished calls keep their
+    /// running as background call" stand-in and keeps running; finished calls keep their
     /// results. The batch then completes and the model reads the message.
     async fn detach_batch(
         app: &Self,
@@ -286,11 +286,11 @@ impl<
                 &task_id,
                 &A::retry(&name),
             );
-            current["batch"][idx]["result"] = json!({"status":"running","task_id":task_id,"output":format!(
-                "Still running as background task {task_id}: the user sent a message, so this \
+            current["batch"][idx]["result"] = json!({"status":"running","call_id":task_id,"output":format!(
+                "Still running as background call {task_id}: the user sent a message, so this \
                  call continues in the background while you answer it. Its result is delivered \
                  to you automatically when it finishes. Do not repeat this call; if the user \
-                 asks to stop it, cancel it with background_cancel.")});
+                 asks to stop it, cancel it with background_calls_cancel.")});
             current["batch"][idx]["state"] = json!("done");
             if let Some(token) = tokens.remove(&handle) {
                 detached.insert(handle, (task_id, token));

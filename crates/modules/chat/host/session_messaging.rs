@@ -689,7 +689,7 @@ fn notice_text(n: &Value) -> String {
             }
         }
         "tool" => format!(
-            "Background call {} (task {}) finished: {}.\nResult:\n{}",
+            "Background call {} ({}) finished: {}.\nResult:\n{}",
             title.unwrap_or("tool"),
             n["task_id"].as_str().unwrap_or(""),
             n["status"].as_str().unwrap_or("completed"),
@@ -931,7 +931,7 @@ mod tests {
             "status":"success","reply":"SLEPT_OK"}));
         assert_eq!(
             tool,
-            "Background call python (task bg_1) finished: success.\nResult:\nSLEPT_OK"
+            "Background call python (bg_1) finished: success.\nResult:\nSLEPT_OK"
         );
         let failed = notice_text(&json!({"spawn":true,"child_title":"Option A",
             "child_session_id":"s1","status":"failed","reason":"Model call failed","reply":"Half done"}));

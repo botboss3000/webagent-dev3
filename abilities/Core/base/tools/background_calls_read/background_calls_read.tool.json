@@ -1,20 +1,23 @@
 {
-  "name": "background_cancel",
-  "description": "Cancel a caller-owned background task, for example when the user asks to stop a call that is still running in the background.",
+  "name": "background_calls_read",
+  "description": "Read the status of a caller-owned background call.",
   "parameters": {
     "type": "object",
     "properties": {
-      "task_id": {
+      "call_id": {
         "type": "string"
       }
     },
     "required": [
-      "task_id"
+      "call_id"
     ],
     "additionalProperties": false
   },
   "core": true,
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

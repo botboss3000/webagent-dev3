@@ -223,8 +223,8 @@ impl<
         let job = pending["external_job"]["job_id"]
             .as_str()
             .unwrap_or("unknown");
-        let result = json!({"status":"running","task_id":task_id,"output":format!(
-            "Build job {job} is still running as background task {task_id}: the user sent a \
+        let result = json!({"status":"running","call_id":task_id,"output":format!(
+            "Build job {job} is still running as background call {task_id}: the user sent a \
              message, so you can answer it now. You get a background notice when the job \
              ends or a stage runs slow or stalls. Do not submit this build again.")});
         Self::append_tool(run, &result)?;

@@ -79,7 +79,7 @@ mod tests {
     fn stable_identity_and_control_names() {
         assert_eq!(identity("r", "c"), identity("r", "c"));
         assert_ne!(identity("r", "c"), identity("r2", "c"));
-        assert!(owns("background_cancel"));
+        assert!(owns("background_calls_cancel"));
         assert!(!owns("task_wait"));
     }
     #[tokio::test]
@@ -231,7 +231,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let id = handle["task_id"].as_str().unwrap();
+        let id = handle["call_id"].as_str().unwrap();
         run = app.run(&rid).await.unwrap();
         run["pending"] = Value::Null;
         app.save(&mut run).await.unwrap();

@@ -659,8 +659,8 @@ mod tests {
         for name in [
             "load_skill",
             "list_skills",
-            "background_cancel",
-            "background_status",
+            "background_calls_cancel",
+            "background_calls_read",
             "present_chat_component",
             "search_this_session",
             "read_attachment",

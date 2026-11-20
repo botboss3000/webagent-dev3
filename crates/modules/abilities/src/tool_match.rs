@@ -358,16 +358,16 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
         &["webhook log", "webhook events"],
     ),
     (
-        "background_status",
+        "background_calls_read",
         &[
-            "is the background task finished",
+            "is the background call finished",
             "check on the running background call",
         ],
-        &["background task", "status"],
+        &["background call", "status"],
     ),
     (
-        "background_cancel",
-        &["stop the background task", "cancel the call still running"],
+        "background_calls_cancel",
+        &["stop the background call", "cancel the call still running"],
         &["cancel", "stop background"],
     ),
     (

@@ -161,9 +161,9 @@ impl<
 
 /// The recorded result of a call parked on its approval card.
 fn standin(task: &str) -> Value {
-    json!({"status":WAITING,"task_id":task,"output":format!(
-        "Waiting for the user's approval as background task {task}: the user sent a message, \
+    json!({"status":WAITING,"call_id":task,"output":format!(
+        "Waiting for the user's approval as background call {task}: the user sent a message, \
          so answer it now. The approval card stays open; when the user decides, this call \
          runs (or is declined) and its result is delivered to you automatically. Do not \
-         repeat this call; if the user asks to drop it, cancel it with background_cancel.")})
+         repeat this call; if the user asks to drop it, cancel it with background_calls_cancel.")})
 }

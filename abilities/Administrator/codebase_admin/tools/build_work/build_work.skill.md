@@ -37,7 +37,7 @@ Every build_work result has `status` at the top. On success `output` is an objec
 with the action's fields (`inputs_sha256`, `job_id`, ...). When a call failed, was
 held (`error_kind`) or is running in the background, `output` is a message string:
 read `status` first, and for a running release take `job_id`, `broker_task_id` and
-`inputs_sha256` from the top level (`task_id` there is the background task).
+`inputs_sha256` from the top level (`call_id` there is the background call).
 
 When a change alters what a route or query returns, lists or counts (for example
 hiding empty sessions), search the whole test suite for tests that assert the old

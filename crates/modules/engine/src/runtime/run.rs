@@ -1010,11 +1010,11 @@ impl<
     ) -> Result<std::ops::ControlFlow<()>> {
         let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
         tools::retry_guard::mark_running(&mut run, name, args, &call_id, task_id, &A::retry(name));
-        let result = json!({"status":"running","task_id":task_id,"output":format!(
-            "Still running as background task {task_id}: the user sent a message, so this \
+        let result = json!({"status":"running","call_id":task_id,"output":format!(
+            "Still running as background call {task_id}: the user sent a message, so this \
              call continues in the background while you answer it. Its result is delivered \
              to you automatically when it finishes. Do not repeat this call; if the user \
-             asks to stop it, cancel it with background_cancel.")});
+             asks to stop it, cancel it with background_calls_cancel.")});
         Self::append_tool(&mut run, &result)?;
         app.store
             .save_run_observed(
@@ -1743,19 +1743,19 @@ impl<
                             &A::retry(&name),
                         );
                         let job = value["output"]["job_id"].as_str().unwrap_or("unknown");
-                        // task_id is the background task; broker_task_id and inputs_sha256 name the release.
+                        // call_id is the background call; broker_task_id and inputs_sha256 name the release.
                         let result = if claims {
-                            json!({"status":"running","task_id":task_id,
+                            json!({"status":"running","call_id":task_id,
                             "broker_id":value["output"]["broker_id"],"output":
-                            "Your task is queued for its claims as a background task. You get a \
+                            "Your task is queued for its claims as a background call. You get a \
                              background notice when it holds them (then reread the files and apply \
                              your edits again), or if it closes or is still queued after 2 hours. \
                              End your turn now: do not retry or poll."})
                         } else {
-                            json!({"status":"running","task_id":task_id,"job_id":job,
+                            json!({"status":"running","call_id":task_id,"job_id":job,
                             "broker_task_id":args["task_id"],"inputs_sha256":args["expected_inputs_sha256"],
                             "output":format!(
-                            "Broker job {job} is running as background task {task_id}. You get a \
+                            "Broker job {job} is running as background call {task_id}. You get a \
                              background notice when it ends, and if a stage runs slow or stalls. End \
                              your turn now: do not poll or wait. Use build_work status only if the \
                              user asks how it is going, and build_work cancel to stop it.")})
@@ -2361,7 +2361,7 @@ impl<
                     if tool_execution::background_capable(name)
                         && tool_execution::resolve::<A>(&visibility, name)?.mode == "model"
                     {
-                        schema["parameters"]["properties"]["_execution_mode"] = json!({"type":"string","enum":["foreground","background"],"description":"Return a durable task handle immediately when background is selected"});
+                        schema["parameters"]["properties"]["_execution_mode"] = json!({"type":"string","enum":["foreground","background"],"description":"Return a durable background call id immediately when background is selected"});
                     }
                 }
                 let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
