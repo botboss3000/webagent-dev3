@@ -1446,7 +1446,10 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         # The app deliberately serves the checkout in live-editing mode.
         # Once this release is active/healthy, promote only conflict-free UI
         # before checking served bytes. Final full promotion stays checked.
-        settings = self.source / "crates/modules/webapp/app-settings.json"
+        # Live settings moved to config/ (2026-11-20); the old place stays a fallback.
+        settings = next((p for p in (self.source / "config/webapp/app-settings.json",
+                                     self.source / "crates/modules/webapp/app-settings.json") if p.exists()),
+                        self.source / "config/webapp/app-settings.json")
         try:
             enabled = json.loads(settings.read_text())["development"]["live_ui_editing"] is True
         except (OSError, ValueError, KeyError, TypeError):

@@ -554,6 +554,14 @@ class BuildTests(unittest.TestCase):
             runner.promote_live_ui(before,after,["v3/ui/app.js"])
         self.assertEqual("another writer",(root/"ui/app.js").read_text())
 
+    def test_live_ui_setting_is_read_from_config_first(self):
+        root=Path(self.temp.name)/"config-checkout"
+        (root/"config/webapp").mkdir(parents=True)
+        (root/"crates/modules/webapp").mkdir(parents=True)
+        (root/"config/webapp/app-settings.json").write_text('{"development":{"live_ui_editing":false}}')
+        (root/"crates/modules/webapp/app-settings.json").write_text('{"development":{"live_ui_editing":true}}')
+        self.assertFalse(host.Runner(source=root).promote_live_ui(context(),context(),[]))
+
     def test_proceed_does_not_overwrite_promotion_conflict(self):
         before=context(extra={"v3/README.md":"old"})
         after=context(extra={"v3/README.md":"new"})
