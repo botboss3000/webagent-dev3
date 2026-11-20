@@ -1,0 +1,44 @@
+# Production repository only: a production release copies this file to
+# .github/workflows/release-macos.yml. On each release tag it builds the macOS app on a Mac
+# runner and adds the .dmg to that tag's GitHub release; the build broker adds the Linux,
+# Windows and Android installers to the same release.
+name: Release macOS
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain (the server image's pinned version)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --target aarch64-apple-darwin
+          rustup default 1.99.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-tauri
+            target
+            crates/app-shell/target
+          key: macos-${{ hashFiles('Cargo.lock', 'crates/app-shell/Cargo.lock') }}
+          restore-keys: macos-
+      - name: Tauri CLI
+        run: command -v cargo-tauri || cargo install tauri-cli --version 2.12.6 --locked
+      - name: Build the app
+        run: python3 crates/app-shell/package.py macos
+      - name: Add the .dmg to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "WebAgent $TAG" --notes "Release $TAG"
+          gh release upload "$TAG" crates/app-shell/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg --clobber
