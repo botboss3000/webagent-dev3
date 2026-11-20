@@ -227,7 +227,9 @@ Measured lifetimes (2026-11-19). Each probe started its own harness session with
 unique ~30k-token message, resumed it after a set wait and read how much came back
 from cache; a hit restarts the provider's clock, so a resumed session can be waited
 on again. Claude Code writes every cache entry with the 1-hour lifetime (1,796 of
-1,796 bridge calls), and Opus, Sonnet and Haiku hit at 56 minutes and missed at 66.
+1,796 bridge calls), and Opus, Sonnet and Haiku hit 60 minutes after their last call
+and missed at 61; a hit restarts the hour (each session hit again 60 minutes after a
+58-minute hit).
 OpenCode models differ widely: qwen3.8-flash about 5 minutes, glm-5.3 10-20,
 big-pickle inconsistent (hits at 13 and 20, misses at 8 and 30), deepseek-v4.1-flash
 on Go hit through 20 and sometimes at 45 and 62 but missed at 30 and 40,
