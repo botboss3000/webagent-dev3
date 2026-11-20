@@ -109,6 +109,7 @@
         "user_storage_mb": 500
       }
     },
+    "trim_idle_days": 7,
     "warning_percent": 80
   }
 }

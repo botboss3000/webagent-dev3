@@ -2,6 +2,10 @@
   "name": "sandbox_shell",
   "description": "Run a shell command in this conversation's sandbox folder: no network, nothing outside the folder, resource limits.",
   "effect": "write",
+  "retention": {
+    "output": "log",
+    "tail_lines": 40
+  },
   "repeat_guard": {
     "risk": "low"
   },

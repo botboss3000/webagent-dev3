@@ -2,6 +2,9 @@
   "name": "mcp_list_connections",
   "description": "List this agent's enabled MCP connections and their revision",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

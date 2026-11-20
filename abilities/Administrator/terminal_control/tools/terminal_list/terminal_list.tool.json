@@ -2,6 +2,9 @@
   "name": "terminal_list",
   "description": "List only this session persistent PTYs",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "require_approval",

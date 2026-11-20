@@ -2,6 +2,10 @@
   "name": "build_work",
   "description": "Manage isolated broker work: begin, continue or release a task and its jobs.",
   "effect": "write",
+  "retention": {
+    "output": "log",
+    "tail_lines": 40
+  },
   "default_policy": {
     "operator": "require_approval",
     "member": "deny",

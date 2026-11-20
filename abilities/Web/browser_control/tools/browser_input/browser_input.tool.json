@@ -2,6 +2,13 @@
   "name": "browser_input",
   "description": "Click, type or press a key in the private server browser, scroll it with the wheel, pinch or hover, or save the site's sign-in.",
   "effect": "write",
+  "retention": {
+    "output": "log",
+    "keep_fields": [
+      "target",
+      "artifacts"
+    ]
+  },
   "repeat_guard": {
     "risk": "none",
     "hint": "read the page again to see whether the earlier click or typing already took effect; every input needs its own fresh read, so input cannot repeat blindly"

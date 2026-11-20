@@ -117,6 +117,9 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
             .execute(&pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS reasoning_cleanup(segment_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,payload BLOB NOT NULL)")
             .execute(&pool).await?;
+        // How far each session's tool calls are trimmed to their tools' retention.
+        sqlx::query("CREATE TABLE IF NOT EXISTS retention_marks(session_id TEXT PRIMARY KEY,through INTEGER NOT NULL)")
+            .execute(&pool).await?;
         let interaction_columns = sqlx::query("PRAGMA table_info(interactions)")
             .fetch_all(&pool)
             .await?;

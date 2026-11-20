@@ -2,6 +2,9 @@
   "name": "sandbox_elements",
   "description": "List this agent's saved UI elements for the user and the shared ones.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

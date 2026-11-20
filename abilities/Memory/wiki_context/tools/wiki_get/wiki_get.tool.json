@@ -2,6 +2,9 @@
   "name": "wiki_get",
   "description": "Read one full Wiki article by slug, including its current revision.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

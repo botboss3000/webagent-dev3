@@ -428,6 +428,13 @@ impl webagent_engine::runtime::ports::SessionRecords for Store {
         Store::drain_message_queues(self)
     }
     fn cleanup_one_reasoning(&self) -> impl std::future::Future<Output = Result<bool>> + Send {
-        Store::cleanup_one_reasoning(self)
+        async move {
+            if Store::cleanup_one_reasoning(self).await? {
+                return Ok(true);
+            }
+            // The same background worker trims tool calls the conversation has moved past.
+            self.trim_history_when_due().await?;
+            Ok(false)
+        }
     }
 }

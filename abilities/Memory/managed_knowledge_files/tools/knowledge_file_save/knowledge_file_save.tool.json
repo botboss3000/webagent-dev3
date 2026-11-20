@@ -2,6 +2,11 @@
   "name": "knowledge_file_save",
   "description": "Staff only: create or replace a text or Markdown knowledge file.",
   "effect": "write",
+  "retention": {
+    "drop_input_fields": [
+      "content"
+    ]
+  },
   "default_policy": {
     "operator": "require_approval",
     "member": "require_approval",

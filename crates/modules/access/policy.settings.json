@@ -267,6 +267,27 @@
       "bounds": "validator"
     },
     {
+      "id": "storage.trim_idle_days",
+      "description": "Days a chat can sit unused before its stored tool results are shortened to what each tool keeps long term (lookups dropped, logs cut to their end). Chats that compacted are shortened behind the compaction point straight away.",
+      "type": "integer",
+      "pointer": "/storage/trim_idle_days",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "trim old tool results after 3 days",
+        "keep tool output longer in idle chats",
+        "when are old tool results shortened"
+      ],
+      "areas": [
+        "storage",
+        "limits"
+      ],
+      "unit": "days",
+      "min": 1,
+      "bounds": "validator"
+    },
+    {
       "id": "storage.compression.mode",
       "description": "Whether saved chat text and files are compressed to save space.",
       "type": "enum",

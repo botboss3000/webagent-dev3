@@ -2,6 +2,9 @@
   "name": "find_setting",
   "description": "Find which setting a plain-language request means on a user, agent or app layer; changes nothing.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

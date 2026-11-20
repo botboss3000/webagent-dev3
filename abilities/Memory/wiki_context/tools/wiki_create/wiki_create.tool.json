@@ -2,6 +2,11 @@
   "name": "wiki_create",
   "description": "App administrators only: create a Wiki article.",
   "effect": "write",
+  "retention": {
+    "drop_input_fields": [
+      "body"
+    ]
+  },
   "default_policy": {
     "operator": "allow"
   },

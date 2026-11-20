@@ -2,6 +2,9 @@
   "name": "wiki_search",
   "description": "Search the shared server Wiki by keywords; search before answering from or writing to it.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

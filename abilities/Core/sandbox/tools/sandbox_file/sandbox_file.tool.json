@@ -2,6 +2,13 @@
   "name": "sandbox_file",
   "description": "Read, write, list or delete a file in this conversation's sandbox folder.",
   "effect": "write",
+  "retention": {
+    "output": "log",
+    "tail_lines": 20,
+    "drop_input_fields": [
+      "content"
+    ]
+  },
   "repeat_guard": {
     "risk": "low"
   },

@@ -2,6 +2,9 @@
   "name": "list_event_sources",
   "description": "list event sources through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

@@ -2,6 +2,10 @@
   "name": "git_tool",
   "description": "Typed Git operations in a workspace repository, or administrator inspection and push of the published V3 checkout.",
   "effect": "write",
+  "retention": {
+    "output": "log",
+    "tail_lines": 40
+  },
   "default_policy": {
     "operator": "require_approval",
     "member": "deny",

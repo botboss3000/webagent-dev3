@@ -38,6 +38,8 @@ mod actions;
 mod attachments;
 pub(crate) mod context_assets;
 mod engine;
+#[path = "../../crates/modules/files/host/storage/history_retention.rs"]
+mod history_retention;
 #[path = "../../crates/modules/chat/host/storage/main_notes.rs"]
 mod main_notes;
 mod module_records;

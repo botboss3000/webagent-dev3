@@ -13,6 +13,7 @@ pub mod selection;
 pub mod tool_arguments;
 pub mod tool_definitions;
 pub mod tool_match;
+pub mod tool_retention;
 pub mod user_files;
 pub use cache::CatalogCache;
 pub use catalog::{

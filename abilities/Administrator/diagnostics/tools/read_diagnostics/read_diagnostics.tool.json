@@ -2,6 +2,9 @@
   "name": "read_diagnostics",
   "description": "Read bounded content-free diagnostics for the current session run, or with issues=true the grouped tool-failure issues of this conversation tree",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "require_approval",

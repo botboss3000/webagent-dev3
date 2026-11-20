@@ -2,6 +2,9 @@
   "name": "list_my_agents",
   "description": "List agents currently visible to this caller, including whether this caller can manage them.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

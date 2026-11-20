@@ -18,6 +18,10 @@ pub struct StoragePolicy {
     pub warning_percent: u8,
     /// Sessions idle this many days have their files compressed.
     pub compress_idle_days: u32,
+    /// Sessions idle this many days have their stored tool calls trimmed to each tool's
+    /// `retention` in `tool.json`; compacted history is trimmed at the fold without waiting.
+    #[serde(default = "default_trim_idle_days")]
+    pub trim_idle_days: u32,
     pub tiers: BTreeMap<String, TierStorage>,
     /// Compression before encryption; read and validated by `webagent_storage::compression`.
     #[serde(default)]
@@ -35,14 +39,18 @@ pub struct TierStorage {
     pub agent_storage_mb: Option<u64>,
 }
 
+fn default_trim_idle_days() -> u32 {
+    7
+}
+
 impl StoragePolicy {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let policy: Self = serde_json::from_slice(bytes)?;
         if !(1..=100).contains(&policy.warning_percent) {
             bail!("warning_percent must be 1..100");
         }
-        if policy.compress_idle_days == 0 {
-            bail!("compress_idle_days must be positive");
+        if policy.compress_idle_days == 0 || policy.trim_idle_days == 0 {
+            bail!("compress_idle_days and trim_idle_days must be positive");
         }
         for tier in policy.tiers.values() {
             for mb in [tier.user_storage_mb, tier.agent_storage_mb]

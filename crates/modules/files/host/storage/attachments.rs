@@ -236,6 +236,12 @@ impl Store {
             let _ = std::fs::remove_dir_all(self.blob_dir());
         }
         let (runs_trimmed, progress_removed) = self.prune_finished_runs().await?;
+        let idle_days = webagent_files::storage_policy::StoragePolicy::live()
+            .map(|policy| policy.trim_idle_days)
+            .unwrap_or(7);
+        let tool_calls_trimmed = self
+            .trim_history(idle_days, webagent_host_core::now() as i64)
+            .await?;
         let mut rewritten = 0u64;
         for (table, id, column) in [
             ("docs", "rowid", "value"),
@@ -312,7 +318,8 @@ impl Store {
             json!({"used_bytes_before":before,"used_bytes_after":self.storage_used().await?,
             "database_bytes_before":database_before,"database_bytes_after":self.database_bytes(),
             "records_rewritten":rewritten,"recovery_manifests_refreshed":manifests,"attachments_deleted":removed_attachments,
-            "finished_runs_trimmed":runs_trimmed,"progress_updates_removed":progress_removed,"vacuum_error":vacuum}),
+            "finished_runs_trimmed":runs_trimmed,"progress_updates_removed":progress_removed,
+            "tool_calls_trimmed":tool_calls_trimmed,"vacuum_error":vacuum}),
         )
     }
     /// Bring records saved before finished runs were trimmed to the current shape: empty each

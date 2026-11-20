@@ -2,6 +2,9 @@
   "name": "wiki_history",
   "description": "Staff only. List an article's saved versions, newest first, with revision IDs.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

@@ -86,6 +86,9 @@ pub struct ToolDefinition {
     /// Example requests and exact keywords that list_skills ranking uses for this tool.
     #[serde(default, rename = "match")]
     pub match_data: Option<ToolMatch>,
+    /// What stored calls keep once the conversation has moved past them; absent keeps all.
+    #[serde(default)]
+    pub retention: crate::tool_retention::Retention,
 }
 
 /// Discovery hints: short example requests (embedded) and exact words (keyword evidence).
@@ -170,6 +173,7 @@ impl ToolDefinition {
         {
             bail!("Invalid repeat_guard hint/warning or usage_hint: {folder}");
         }
+        self.retention.validate(&self.parameters, folder)?;
         if let Some(hints) = &self.match_data {
             if hints.examples.len() > 8
                 || hints.keywords.len() > 12

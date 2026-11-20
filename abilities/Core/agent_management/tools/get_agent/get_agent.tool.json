@@ -2,6 +2,9 @@
   "name": "get_agent",
   "description": "Read one accessible agent's identity and current revision.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

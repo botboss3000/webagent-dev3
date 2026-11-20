@@ -2,6 +2,10 @@
   "name": "terminal_wait",
   "description": "Wait for bounded PTY output",
   "effect": "read",
+  "retention": {
+    "output": "log",
+    "tail_lines": 40
+  },
   "default_policy": {
     "operator": "allow",
     "member": "require_approval",

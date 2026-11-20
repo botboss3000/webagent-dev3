@@ -2,6 +2,9 @@
   "name": "read_user_file",
   "description": "Read a bounded byte page of a private saved file as base64 and UTF-8 text when valid.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

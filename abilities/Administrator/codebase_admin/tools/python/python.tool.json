@@ -19,6 +19,10 @@
     "additionalProperties": false
   },
   "effect": "write",
+  "retention": {
+    "output": "log",
+    "tail_lines": 40
+  },
   "repeat_guard": {
     "risk": "low"
   },

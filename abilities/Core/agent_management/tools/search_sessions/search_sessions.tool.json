@@ -2,6 +2,9 @@
   "name": "search_sessions",
   "description": "Search user and agent messages of the sessions in scope by keywords.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

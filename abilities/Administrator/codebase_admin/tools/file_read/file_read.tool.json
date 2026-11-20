@@ -38,6 +38,9 @@
     "additionalProperties": false
   },
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

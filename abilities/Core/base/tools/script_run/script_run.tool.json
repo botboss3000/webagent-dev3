@@ -30,6 +30,10 @@
     "additionalProperties": false
   },
   "effect": "read",
+  "retention": {
+    "output": "log",
+    "tail_lines": 40
+  },
   "default_policy": {
     "operator": "allow",
     "member": "require_approval",

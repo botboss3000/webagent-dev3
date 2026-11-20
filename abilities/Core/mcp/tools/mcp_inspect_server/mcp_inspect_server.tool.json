@@ -2,6 +2,9 @@
   "name": "mcp_inspect_server",
   "description": "Inspect a public HTTPS MCP server before adding it; never accepts credentials",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

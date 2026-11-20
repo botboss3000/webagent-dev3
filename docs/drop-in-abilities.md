@@ -48,6 +48,13 @@ it, naming exactly its tool folders. `<tool>.tool.json` holds:
 - `repeat_guard` (optional): `risk` (`none`, `low`, `high`; a write defaults to high),
   `hint` (what the agent verifies before repeating) and `warning` (what the user is told).
 - `usage_hint` (optional): one line added to argument errors to guide the next call.
+- `retention` (optional): what stored calls keep once the conversation has moved past them
+  (behind the compaction fold, or in a session idle for the storage policy's
+  `trim_idle_days`). `output` is `disposable` (re-runnable lookups: only the outcome
+  fields stay), `log` (outcome, short fields, `keep_fields`, and long text cut to its last
+  `tail_lines` lines) or `record` (kept whole; the default). `drop_input_fields` names
+  arguments replaced by their size, such as a written file's content. A read whose `path` a
+  later call in the same pass wrote is trimmed as disposable whatever its level.
 
 `<tool>.skill.md` is its optional guidance. The handler stays compiled Rust and lists the
 tool in its adapter's `TOOLS`. At startup every listed handler must have a valid folder

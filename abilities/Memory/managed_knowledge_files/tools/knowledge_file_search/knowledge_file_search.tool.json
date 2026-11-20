@@ -2,6 +2,9 @@
   "name": "knowledge_file_search",
   "description": "Search this agent's knowledge files by words and return the best-matching files with short excerpts. Use before answering questions about the business.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

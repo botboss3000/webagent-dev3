@@ -34,6 +34,11 @@
     "additionalProperties": false
   },
   "effect": "write",
+  "retention": {
+    "drop_input_fields": [
+      "content"
+    ]
+  },
   "default_policy": {
     "operator": "require_approval"
   }

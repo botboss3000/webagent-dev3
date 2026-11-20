@@ -2,6 +2,11 @@
   "name": "wiki_update",
   "description": "App administrators only: edit a Wiki article; only passed fields change.",
   "effect": "write",
+  "retention": {
+    "drop_input_fields": [
+      "body"
+    ]
+  },
   "default_policy": {
     "operator": "allow"
   },

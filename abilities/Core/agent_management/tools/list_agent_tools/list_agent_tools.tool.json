@@ -2,6 +2,9 @@
   "name": "list_agent_tools",
   "description": "Read an accessible agent's effective ability/tool catalog and revisions.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

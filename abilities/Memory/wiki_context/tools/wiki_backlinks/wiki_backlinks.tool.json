@@ -2,6 +2,9 @@
   "name": "wiki_backlinks",
   "description": "List the Wiki articles that link to this one with [[...]]. Check before renaming or deleting an article.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

@@ -2,6 +2,9 @@
   "name": "source_site_status",
   "description": "Inspect saved remote sites, exact build receipts and unresolved effects. With no site_id, lists your sites. No site source is stored locally.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "require_approval",
     "member": "require_approval",

@@ -2,6 +2,9 @@
   "name": "staff_message_list",
   "description": "Staff only. List the newest visitor messages, optionally filtered by status.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

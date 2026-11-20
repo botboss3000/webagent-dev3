@@ -2,6 +2,9 @@
   "name": "repository_access",
   "description": "Report current-agent repository configuration and bounded GitHub metadata; never prints credentials or infers push permission from token presence",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "require_approval",

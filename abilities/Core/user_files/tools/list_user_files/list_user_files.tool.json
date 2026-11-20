@@ -2,6 +2,9 @@
   "name": "list_user_files",
   "description": "List private saved-file metadata in bounded pages.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

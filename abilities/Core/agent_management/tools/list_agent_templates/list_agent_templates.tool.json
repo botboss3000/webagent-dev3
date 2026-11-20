@@ -2,6 +2,9 @@
   "name": "list_agent_templates",
   "description": "List available safe agent creation templates.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

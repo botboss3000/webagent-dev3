@@ -2,6 +2,9 @@
   "name": "read_session",
   "description": "Read a session in scope: its status, turn count and a range of turns.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

@@ -2,6 +2,9 @@
   "name": "browser_extension_status",
   "description": "Whether the user's browser extension is linked and online and which sites it may control.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

@@ -45,6 +45,10 @@
     "additionalProperties": false
   },
   "effect": "write",
+  "retention": {
+    "output": "log",
+    "tail_lines": 20
+  },
   "default_policy": {
     "operator": "require_approval",
     "member": "require_approval",

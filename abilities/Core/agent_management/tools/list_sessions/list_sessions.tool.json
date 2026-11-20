@@ -2,6 +2,9 @@
   "name": "list_sessions",
   "description": "List sessions in scope, newest first, with ID, title, agent, last activity, run status and relation.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",

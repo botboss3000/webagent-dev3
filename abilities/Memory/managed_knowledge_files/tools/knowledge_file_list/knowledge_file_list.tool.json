@@ -2,6 +2,9 @@
   "name": "knowledge_file_list",
   "description": "List this agent's knowledge files with names, sizes and revisions.",
   "effect": "read",
+  "retention": {
+    "output": "disposable"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "allow",
