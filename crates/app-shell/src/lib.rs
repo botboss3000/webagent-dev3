@@ -161,17 +161,19 @@ fn stop(mut child: Child) {
     let _ = child.wait();
 }
 
-/// `app/` is replaced whenever the bundle changes; `checkout/` files are written only
-/// where missing, so settings the user changed survive upgrades.
+/// `app/` is replaced whenever the bundle changes. `checkout/` holds the editable files:
+/// an upgrade replaces one only while it still equals the version last shipped (kept in
+/// `.shipped/`), so files the user changed survive and unchanged ones get the new version.
 fn unpack(data: &Path) -> std::io::Result<()> {
     let marker = data.join("app").join(".bundle-id");
     let id = format!("{:016x}-{}", fnv(BUNDLE), BUNDLE.len());
     let fresh = std::fs::read_to_string(&marker).is_ok_and(|current| current == id);
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(BUNDLE))
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-    if !fresh {
-        let _ = std::fs::remove_dir_all(data.join("app"));
+    if fresh {
+        return Ok(());
     }
+    let _ = std::fs::remove_dir_all(data.join("app"));
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -179,22 +181,31 @@ fn unpack(data: &Path) -> std::io::Result<()> {
         let Some(relative) = entry.enclosed_name() else {
             continue;
         };
-        let target = data.join(&relative);
-        let in_app = relative.starts_with("app");
-        if (in_app && fresh) || (!in_app && target.exists()) || entry.is_dir() {
+        if entry.is_dir() {
             continue;
+        }
+        let target = data.join(&relative);
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut bytes)?;
+        if relative.starts_with("checkout") {
+            let shipped = data.join(".shipped").join(&relative);
+            let current = std::fs::read(&target).ok();
+            let unchanged = current.is_none() || current == std::fs::read(&shipped).ok();
+            if let Some(parent) = shipped.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&shipped, &bytes)?;
+            if !unchanged {
+                continue;
+            }
         }
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut bytes)?;
         std::fs::write(&target, bytes)?;
     }
-    if !fresh {
-        std::fs::create_dir_all(data.join("app"))?;
-        std::fs::write(marker, id)?;
-    }
+    std::fs::create_dir_all(data.join("app"))?;
+    std::fs::write(marker, id)?;
     Ok(())
 }
 

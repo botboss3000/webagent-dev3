@@ -8,9 +8,37 @@ pub(crate) type Catalog = webagent_abilities::Catalog<NativeHost>;
 pub(crate) use webagent_abilities::{
     near_word, public_context, search_words, AbilityContext, AbilityInclusion, SkillInclusion,
 };
+/// The folder holding the shipped abilities of a desktop install (`V3_ABILITIES_ROOT` is
+/// its `abilities/`), only in the desktop process role.
+fn desktop_base() -> Option<PathBuf> {
+    if std::env::var_os("V3_PROCESS_ROLE").is_none_or(|role| role != "desktop") {
+        return None;
+    }
+    let abilities = PathBuf::from(std::env::var_os("V3_ABILITIES_ROOT")?);
+    let base = abilities.parent()?.to_path_buf();
+    (base.join("abilities") == abilities).then_some(base)
+}
+
 impl webagent_abilities::Host for NativeHost {
+    /// The published release, with the checkout's ability JSON and Markdown laid over it
+    /// when they differ (ability files are live; see `webagent_abilities::live`).
+    /// An installed desktop app has no publication: its shipped `app/abilities` is the base.
     fn selected_source() -> Result<Option<PathBuf>> {
-        webagent_configuration::prompts::default_source(None)
+        let checkout = webagent_configuration::paths::checkout().join("abilities");
+        let base = match webagent_configuration::prompts::default_source(None)? {
+            Some(base) if !checkout.is_dir() => return Ok(Some(base)),
+            Some(base) => base,
+            None => match desktop_base() {
+                Some(base) if checkout.is_dir() => base,
+                _ => return Ok(None),
+            },
+        };
+        Ok(Some(webagent_abilities::live::overlay(
+            &base,
+            &checkout,
+            &webagent_configuration::paths::runtime().join("ability-live"),
+            |root| Catalog::load_snapshot(root).is_ok(),
+        )))
     }
     fn native_schemas_for_catalog(root: &std::path::Path, publication: bool) -> Result<Vec<Value>> {
         crate::live_assets::native_schemas_for_catalog(root, publication)

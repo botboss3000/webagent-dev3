@@ -26,7 +26,13 @@ setting descriptor in the same patch as the value.
 ## Where things live
 
 - One live file per owner in `config/<module>/` (for example `config/engine/loop-runtime.json`),
-  listed in `live-files.json`. No seeded copies. UI settings go in `config/ui/`.
+  listed in `live-files.json`. No seeded copies. UI settings go in `config/ui/` (served
+  at `/config/ui/<path>`); page folders keep their own `page.json` and page data.
+- Ability JSON and Markdown (`tool.json`, `plugin.json`, `_group.json`, skills) stay in
+  `abilities/` and are live too: the app lays the checkout's versions over the published
+  release within a second (`webagent_abilities::live`), including permission fields. An
+  edit that does not load is ignored and the last good version stays. Compiled plugin
+  code still changes only through a release.
 - Its descriptors sit in a `<name>.settings.json` beside it (for example
   `config/chat/chat.settings.json`). Owners whose module is busy may keep them in
   `config/configuration/settings/`.

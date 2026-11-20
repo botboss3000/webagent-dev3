@@ -6,6 +6,7 @@ mod catalog;
 pub mod controls;
 pub mod drift;
 pub mod icons;
+pub mod live;
 pub mod package;
 mod ports;
 pub mod scripts;

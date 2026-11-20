@@ -119,8 +119,16 @@ def build_server(triple, debug, env):
     return target_dir / triple / ("debug" if debug else "release") / f"webagent-v3{suffix}"
 
 
+def editable(relative):
+    """Files the installed app keeps editable in checkout/: every config/ file, the
+    live-files.json entries, and ability JSON and Markdown (read live over app/abilities)."""
+    return relative.startswith("config/") or (
+        relative.startswith("abilities/") and relative.endswith((".json", ".md")))
+
+
 def bundle():
-    """app/ is replaced on upgrade; checkout/ seeds the editable settings files."""
+    """app/ is replaced on upgrade; checkout/ holds the editable files, which an upgrade
+    replaces only where the user has not changed them."""
     out = SHELL / "bundle" / "app-bundle.zip"
     out.parent.mkdir(exist_ok=True)
     spec = json.loads((ROOT / "live-files.json").read_text())
@@ -132,10 +140,15 @@ def bundle():
                     continue
                 if path.is_file() and "__pycache__" not in path.parts:
                     archive.write(path, Path("app") / path.relative_to(ROOT))
+                    if editable(relative):
+                        archive.write(path, Path("checkout") / relative)
         archive.write(ROOT / "live-files.json", "checkout/live-files.json")
+        written = {name for name in archive.namelist() if name.startswith("checkout/")}
         for pattern in spec["files"]:
             for name in sorted(glob.glob(pattern, root_dir=ROOT)):
-                archive.write(ROOT / name, Path("checkout") / name)
+                excluded = any(name == x or name.startswith(x + "/") for x in APP_EXCLUDE)
+                if "checkout/" + name not in written and not excluded:
+                    archive.write(ROOT / name, Path("checkout") / name)
     print("bundle", out, out.stat().st_size // 1024, "KiB")
 
 

@@ -11,13 +11,17 @@ plugins linked in).
 1. The shell unpacks its bundled app files into the user's app-data folder
    (`%APPDATA%\live.webagent.app`, `~/.local/share/live.webagent.app`, the Android app's
    data folder): `app/` (UI, abilities, configuration, gate and engine descriptors) is
-   replaced whenever the bundle changes; `checkout/` (the live settings files from
-   `live-files.json`) is only filled in where files are missing, so settings changed in
-   the app survive upgrades.
+   replaced whenever the bundle changes. `checkout/` holds the editable files: every
+   `config/` file and every ability JSON and Markdown file. An upgrade replaces an
+   editable file only while it still equals the version last shipped (kept in
+   `.shipped/`), so files the user changed survive and unchanged ones get the update.
 2. It starts the server with `V3_PROCESS_ROLE=desktop` on a free `127.0.0.1` port.
    Desktop mode runs the API and the agent loop in one process, creates the run-control
    files itself, and saves live settings files directly into `checkout/` (no broker).
-   The data roots come from `V3_STATE_ROOT`, `V3_RUNTIME_ROOT`, `V3_WORKSPACE_ROOT`,
+   Settings under `checkout/config/` apply live; ability JSON and Markdown under
+   `checkout/abilities/` are laid over `app/abilities` as a snapshot in
+   `runtime/ability-live/` within a second of an edit (an edit that does not load keeps
+   the last good snapshot). The data roots come from `V3_STATE_ROOT`, `V3_RUNTIME_ROOT`, `V3_WORKSPACE_ROOT`,
    `V3_APP_ROOT`, `V3_ABILITIES_ROOT` and `V3_CHECKOUT_ROOT`; `V3_SECURE_COOKIE=false`
    because the page is plain HTTP on loopback.
 3. The window shows a loading page until `/health/ready` answers, then opens `/app`.
