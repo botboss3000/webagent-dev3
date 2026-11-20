@@ -90,6 +90,13 @@
           "required": [],
           "additionalProperties": false
         }
+      },
+      "fold_earlier": {
+        "type": "boolean"
+      },
+      "fold_focus": {
+        "type": "string",
+        "maxLength": 300
       }
     },
     "required": [

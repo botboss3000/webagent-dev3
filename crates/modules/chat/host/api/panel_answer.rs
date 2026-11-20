@@ -1,7 +1,7 @@
 //! Answers to chat panels and requested compaction. A panel answer is checked against the
 //! stored panel and admitted as the user's message in the same transaction that marks the
-//! panel answered. The agent's Compact/Keep panel and `/compact` store a fold request the
-//! run loop starts in the background; on an idle chat they start a compaction-only run.
+//! panel answered. `/compact` stores a fold request the run loop starts in the background;
+//! on an idle chat it starts a compaction-only run.
 use super::{
     bad, conflict, json, now, required, status, terminal, uuid, ApiError, App, Json, Result,
     StatusCode, Value,
@@ -9,7 +9,7 @@ use super::{
 
 type Answer = std::result::Result<(StatusCode, Json<Value>), ApiError>;
 
-/// Longest `/compact` focus or panel focus, in characters.
+/// Longest `/compact` focus, in characters.
 const MAX_FOCUS: usize = 300;
 
 fn only_fields(body: &Value, allowed: &[&str]) -> std::result::Result<(), ApiError> {
@@ -80,7 +80,7 @@ async fn compaction_free(app: &App, sid: &str) -> std::result::Result<(), ApiErr
     Ok(())
 }
 
-/// Store a fold request; `until` names the panel's new-task message, absent for `/compact`.
+/// Store a `/compact` fold request.
 async fn request_fold(app: &App, sid: &str, source: &str, focus: &str, until: Value) -> Result<()> {
     app.store
         .put(
@@ -117,9 +117,6 @@ pub(crate) async fn answer(app: App, sid: String, cid: String, body: Value) -> A
     }
     let text = webagent_native_tools::task::answer_text(card, &body["answer"])
         .map_err(|error| bad(&error.to_string()))?;
-    if card["server_action"]["kind"] == "compact" {
-        return compact_answer(app, sid, cid, &panel, &body["answer"], request_id).await;
-    }
     let mut message = json!({"text":text,"client_message_id":request_id,
         "component_id":cid,"component_revision":revision,"component_answer":body["answer"]});
     if let Some(ids) = body.get("attachment_ids") {
@@ -131,77 +128,6 @@ pub(crate) async fn answer(app: App, sid: String, cid: String, body: Value) -> A
         .base_component_changed(&sid, &cid, revision + 1)
         .await;
     Ok(sent)
-}
-
-/// The agent's Compact/Keep panel. Keep and a Compact on a busy chat send no message: the
-/// agent reads a note with its next message. A Compact on an idle chat starts a
-/// compaction-only run with a short visible message.
-async fn compact_answer(
-    app: App,
-    sid: String,
-    cid: String,
-    panel: &Value,
-    answer: &Value,
-    request_id: String,
-) -> Answer {
-    let action = &panel["artifact"]["server_action"];
-    let earlier = action["earlier_task"]
-        .as_str()
-        .unwrap_or("the earlier task");
-    let compact = answer["option_id"] == "compact";
-    if compact {
-        compaction_free(&app, &sid).await?;
-    }
-    let note = if compact {
-        format!("[The user chose Compact: \"{earlier}\" folds into a summary in the background.]")
-    } else {
-        format!(
-            "[The user chose Keep for compacting \"{earlier}\". Keep the earlier context and \
-             do not ask again about it.]"
-        )
-    };
-    let settled = app
-        .store
-        .base_component_settle(&sid, &cid, answer, &note)
-        .await
-        .map_err(|error| conflict(&error.to_string()))?;
-    if !settled {
-        return Err(ApiError(StatusCode::NOT_FOUND, "Panel not found".into()));
-    }
-    app.store
-        .put(
-            &format!("compaction_panel:{sid}"),
-            &json!({"state":"answered","panel_id":cid}),
-        )
-        .await?;
-    if !compact {
-        return Ok((
-            StatusCode::OK,
-            Json(json!({"answered":true,"compact":false})),
-        ));
-    }
-    let focus = action["focus"].as_str().unwrap_or("");
-    request_fold(
-        &app,
-        &sid,
-        "panel",
-        focus,
-        json!({"turn_key":action["turn_key"]}),
-    )
-    .await?;
-    if busy(&app, &sid).await? {
-        return Ok((
-            StatusCode::OK,
-            Json(json!({"answered":true,"compact":true,"boundary":"next_model_call"})),
-        ));
-    }
-    super::chat::send_message(
-        app,
-        sid,
-        json!({"text":"Compact earlier context","client_message_id":request_id,
-            "compaction_only":true}),
-    )
-    .await
 }
 
 /// `POST /sessions/{id}/compact`: fold the oldest history now and keep the agent's tail.

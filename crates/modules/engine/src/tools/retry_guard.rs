@@ -18,7 +18,6 @@ const MAX_DECISIONS: usize = 64;
 /// repeat-guarded and no `<tool>.tool.json` or admin setting can change that.
 pub const EXEMPT: &[&str] = &[
     "publish_main_message",
-    "compact_context",
     "set_execution_mode",
     "load_skill",
     "list_skills",

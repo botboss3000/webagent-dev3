@@ -22,8 +22,6 @@ use webagent_models::model_selection::{Catalog, ModelRole, SelectionPlan};
 pub mod app_control;
 #[path = "../../../../../abilities/Core/base/tools/shared/base_extras.rs"]
 pub mod base_extras;
-#[path = "../../../../../abilities/Core/base/tools/compact_context/compact_context.rs"]
-pub mod compaction;
 #[path = "../../../../../abilities/Core/base/tools/context_assets/context_assets.rs"]
 pub mod context_assets;
 #[path = "../../../../../abilities/Core/decision/tools/decide_with_jev/decide_with_jev.rs"]
@@ -516,7 +514,6 @@ pub fn argument_types(
     [
         app_control::ARGUMENT_TYPES,
         base_extras::ARGUMENT_TYPES,
-        compaction::ARGUMENT_TYPES,
         context_assets::ARGUMENT_TYPES,
         decision::ARGUMENT_TYPES,
         directory_decision::ARGUMENT_TYPES,

@@ -125,7 +125,7 @@
     },
     {
       "id": "context.compaction.min_fold_tokens",
-      "description": "Smallest amount of earlier conversation, in tokens, that /compact or the agent's compaction panel will summarize.",
+      "description": "Smallest amount of earlier conversation, in tokens, that /compact or the agent's task fold will summarize.",
       "type": "integer",
       "pointer": "/min_fold_tokens",
       "layers": [

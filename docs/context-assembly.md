@@ -346,6 +346,16 @@ never past the turn that created the oldest task kept, so a task still being dis
 planned keeps its predecessor verbatim. The trigger and ceiling still fold by size. Panel
 edits and plan seeding carry no marks.
 
+**Agent fold at a task start.** In any fold mode, the `task_list_write` that starts a
+section's first step may set `fold_earlier` (and `fold_focus`): the agent judges the earlier
+work unrelated. `task_fold_cut` cuts at the first user message after the last closed
+section, never past the turn that created the new one, and the tool stores a
+`compaction_request` naming that message; the next model call summarizes it in the
+background like `/compact`, with no user approval. The result's `fold` says whether it was
+requested. While a section with steps waits to start after a closed one, the step line adds
+`fold_hint`. This replaced the `compact_context` Compact/Keep panel; automatic compaction
+stays the fallback when the agent keeps too much.
+
 ### API provider profiles
 
 The host assembles one request per call and the provider profile places it

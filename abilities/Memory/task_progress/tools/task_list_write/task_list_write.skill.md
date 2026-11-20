@@ -14,6 +14,14 @@ one piece of work: a user's request (`"origin":"user"`) or your own investigatio
   it); add a one-line `outcome` when it finishes. Tool calls made while a step is in
   progress count as its evidence; `evidence` may narrow that to the result ids that matter.
 - `notes` keeps the section's decisions and constraints.
+- Fold earlier work when a new task begins: on the write that starts a section's first
+  step, set `"fold_earlier":true` if this task does not need the details of the work before
+  it (a separate request, not a follow-up or the next step of the same work). Everything
+  before the task folds into a summary in the background and this task's messages stay word
+  for word; `fold_focus` names what the summary must keep (decisions, file paths, open
+  questions). Folded messages stay recallable with `recall_compacted`. Leave it out to keep
+  everything; automatic compaction still folds old work when the conversation grows. The
+  result's `fold` says whether a fold was requested or why not; never retry it.
 - Close a finished section with `"status":"done"` and a `summary` of what was done,
   decisions and where results live; every step must be done, blocked or cancelled first.
   `cancelled` drops the whole section. Reopen a closed section with `"status":"open"`

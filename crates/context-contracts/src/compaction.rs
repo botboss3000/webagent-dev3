@@ -44,7 +44,7 @@ pub struct Config {
     /// Summary blocks larger than this together merge their oldest blocks into one.
     #[serde(default = "default_merge_tokens")]
     pub merge_tokens: usize,
-    /// A requested fold (`compact_context` panel or `/compact`) that would summarize less
+    /// A requested fold (the agent's task fold or `/compact`) that would summarize less
     /// than this is refused: it would save little and cost a model call.
     #[serde(default = "default_min_fold_tokens")]
     pub min_fold_tokens: usize,
@@ -610,7 +610,7 @@ pub fn plan_trigger(
     )
 }
 /// Stable identity of a user message in history: the digest of its content. The
-/// `compact_context` panel names the message that starts a new task by this key, so the
+/// agent's task fold names the message that starts a new task by this key, so the
 /// fold still finds it after later items arrive.
 pub fn turn_key(item: &Value) -> Option<String> {
     is_user(item).then(|| hex::encode(Sha256::digest(item["content"].to_string().as_bytes())))
@@ -698,7 +698,7 @@ fn requested_plan(
 }
 
 /// Fold everything after the earlier summary blocks up to the user message at `until`,
-/// which starts a new task (the `compact_context` panel). Everything from it on stays
+/// which starts a new task (the agent's task fold). Everything from it on stays
 /// verbatim. `None` when there is too little to fold; an error when `until` is not a
 /// completed user-turn boundary.
 pub fn plan_until(input: &[Value], until: usize, config: &Config) -> Result<Option<Plan>> {
@@ -797,6 +797,42 @@ pub fn plan_tasks(input: &[Value], retained: usize, config: &Config) -> Result<O
         return Ok(None);
     }
     requested_plan(input, blocks, cut, Boundary::PriorTurn, config)
+}
+
+/// The agent's fold at a task start: the agent is starting `section`'s first step and says
+/// the earlier work is unrelated, so everything after the summary blocks folds up to the
+/// first user message after the last section that closed, but never past the turn that
+/// created `section` (the turn before the call when this write creates it). Returns that
+/// user message's index; `None` when it would fold nothing past the blocks or less than
+/// `min_fold_tokens`, and an error for a malformed exchange or an oversized range.
+pub fn task_fold_cut(input: &[Value], section: &str, config: &Config) -> Result<Option<usize>> {
+    config.validate()?;
+    let blocks = leading_blocks(input, config);
+    let boundaries = requested_boundaries(input, blocks)
+        .ok_or_else(|| anyhow!("Context has an unfinished or malformed tool exchange"))?;
+    let turns = boundaries
+        .iter()
+        .filter(|&&(_, kind)| kind == Boundary::PriorTurn)
+        .map(|&(index, _)| index)
+        .collect::<Vec<_>>();
+    let marks = task_marks(input, blocks);
+    let kept_from = marks
+        .iter()
+        .find(|(_, kind, id)| *kind == "created" && id == section)
+        .map_or(input.len(), |(index, _, _)| *index);
+    let Some(&limit) = turns.iter().rev().find(|&&turn| turn <= kept_from) else {
+        return Ok(None);
+    };
+    let after_close = marks
+        .iter()
+        .rev()
+        .find(|(index, kind, id)| *kind == "closed" && id != section && *index < kept_from)
+        .and_then(|(closed, _, _)| turns.iter().copied().find(|&turn| turn > *closed));
+    let cut = after_close.map_or(limit, |turn| turn.min(limit));
+    if cut <= blocks {
+        return Ok(None);
+    }
+    Ok(requested_plan(input, blocks, cut, Boundary::PriorTurn, config)?.map(|_| cut))
 }
 
 /// `/compact`: fold the oldest history after the earlier blocks and keep the agent's tail
@@ -1595,6 +1631,50 @@ mod tests {
         assert_eq!(plan.boundary, super::Boundary::PriorTurn);
         // Keeping one finished task behind the current one folds nothing yet.
         assert!(super::plan_tasks(&input, 1, &config).unwrap().is_none());
+    }
+
+    /// The agent's fold at a task start cuts at the first user message after the last closed
+    /// section, never past the turn that created the new one.
+    #[test]
+    fn agent_task_fold_cuts_after_the_last_closed_section() {
+        let config = requested_config();
+        let write = |id: &str, marks: Value| {
+            let output = json!({"status":"success","output":marks}).to_string();
+            [
+                json!({"type":"function_call","call_id":id,"name":"task_list_write",
+                    "arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":id,"output":output}),
+            ]
+        };
+        let work = |id: &str| {
+            [
+                json!({"type":"function_call","call_id":id,"name":"file_read","arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":id,"output":"x".repeat(300)}),
+            ]
+        };
+        let mut input = vec![turn("first task")];
+        input.extend(write("a1", json!({"created":["s1"],"started":["s1"]})));
+        input.extend(work("r1"));
+        input.extend(write("a2", json!({"closed":["s1"]})));
+        input.push(turn("let us discuss a second task"));
+        let discussing = input.len() - 1;
+        input.extend(write("b1", json!({"created":["s2"]})));
+        input.push(turn("go ahead"));
+        assert_eq!(
+            super::task_fold_cut(&input, "s2", &config).unwrap(),
+            Some(discussing)
+        );
+        // A section created by the starting write itself cuts at the latest turn at most.
+        let mut fresh = input[..discussing].to_vec();
+        fresh.push(turn("something else entirely"));
+        assert_eq!(
+            super::task_fold_cut(&fresh, "s9", &config).unwrap(),
+            Some(discussing)
+        );
+        // Nothing earlier than the first turn: nothing to fold.
+        assert!(super::task_fold_cut(&input[..1], "s1", &config)
+            .unwrap()
+            .is_none());
     }
 
     /// A fold combines the session's task list changes from its range and the tail into one

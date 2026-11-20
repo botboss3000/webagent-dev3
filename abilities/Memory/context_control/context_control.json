@@ -13,9 +13,9 @@
       "key": "self_compaction_posture",
       "default": "balanced",
       "levels": {
-        "off": "Do NOT call compact_context — leave compaction to the automatic threshold and the user's /compact.",
-        "balanced": "Call compact_context only when the user starts a clearly separate task after a long, finished one whose details the new task will not need.",
-        "eager": "Call compact_context whenever the user starts a separate task after a long one (still once per earlier task, never mid-task)."
+        "off": "Never set fold_earlier — leave compaction to the automatic threshold and the user's /compact.",
+        "balanced": "Set fold_earlier only when a clearly separate task starts after a long, finished one whose details the new task will not need.",
+        "eager": "Set fold_earlier whenever a separate task starts after a long one (never mid-task)."
       }
     },
     "settings": [
@@ -27,18 +27,18 @@
         "options": [
           {
             "value": "off",
-            "label": "Off — never ask to compact"
+            "label": "Off — never fold earlier tasks"
           },
           {
             "value": "balanced",
-            "label": "Balanced — ask only after a long finished task"
+            "label": "Balanced — fold only after a long finished task"
           },
           {
             "value": "eager",
-            "label": "Eager — ask at each separate new task"
+            "label": "Eager — fold at each separate new task"
           }
         ],
-        "hint": "How willing the agent is to offer a Compact/Keep panel when a new task starts (separate from automatic compaction and /compact).",
+        "hint": "How willing the agent is to fold earlier work when it starts a new task (separate from automatic compaction and /compact).",
         "scope": "agent"
       },
       {

@@ -664,7 +664,6 @@ mod tests {
             "present_chat_component",
             "search_this_session",
             "read_attachment",
-            "compact_context",
             "recall_compacted",
         ] {
             assert!(is_core(name), "{name}");

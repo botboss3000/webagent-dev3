@@ -20,7 +20,6 @@ pub const TOOLS: &[&str] = &[
     "get_date",
     "calculate",
     "read_attachment",
-    "compact_context",
     "recall_compacted",
     "search_this_session",
     "read_own_prompt",

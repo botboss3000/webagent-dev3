@@ -1073,7 +1073,6 @@ impl<
                         call["name"].as_str(),
                         Some(
                             "publish_main_message"
-                                | "compact_context"
                                 | "v3_build_work"
                                 | "build_work"
                                 | "set_execution_mode"
@@ -1575,12 +1574,8 @@ impl<
             run["pending"]["policy_version"].as_u64().unwrap_or(0),
             call_cancel.clone(),
         ));
-        // Build calls keep their broker-job path; the compaction panel call is short and
-        // records its guards inside its step.
-        let detachable = !matches!(
-            name.as_str(),
-            "v3_build_work" | "build_work" | "compact_context"
-        );
+        // Build calls keep their broker-job path.
+        let detachable = !matches!(name.as_str(), "v3_build_work" | "build_work");
         let grace =
             Duration::from_millis(app.runtime.read().await.scheduler.message_detach_grace_ms);
         let mut message_since: Option<std::time::Instant> = None;
@@ -2774,7 +2769,7 @@ impl<
                             "mode":"background"}),
                     );
                     // After a same-model failure the next summary uses System. A requested
-                    // fold (Compact click, `/compact`) is queued again so System retries it
+                    // fold (the agent's task fold, `/compact`) is queued again so System retries it
                     // now; the user sees a failure only when System fails too.
                     let same_model = job["summarizer"] == "self";
                     let request_key = background_compaction::request_key(&sid);
@@ -3392,7 +3387,7 @@ impl<
                 let job_free = job["state"] != "running"
                     && background_compaction::running(&sid).is_none()
                     && run["closing_turn"].is_null();
-                // REQUESTED COMPACTION: a Compact click on the agent's panel or `/compact`
+                // REQUESTED COMPACTION: the agent's task fold or `/compact`
                 // folds in the background like the trigger's summary. A request is used once;
                 // one that finds nothing to fold leaves a notice row.
                 let request_key = background_compaction::request_key(&sid);
@@ -3678,7 +3673,7 @@ impl<
                     }
                     continue;
                 }
-                // COMPACTION-ONLY RUN: `/compact` (or a Compact click) on an idle chat makes
+                // COMPACTION-ONLY RUN: `/compact` on an idle chat makes
                 // no model call. It waits for its summary, applies it on the next pass and
                 // ends with a short reply. Messages sent meanwhile wait for it unless the
                 // user chooses "Send now", which turns this into an ordinary run; the
@@ -4417,7 +4412,7 @@ struct BackgroundRequest<'a> {
 }
 
 /// One background summary to start: its plan, the private message a same-model fork adds,
-/// why it runs (`automatic` at the trigger, `requested` by the panel or `/compact`) and the
+/// why it runs (`automatic` at the trigger, `requested` by the agent's task fold or `/compact`) and the
 /// user's focus, if any.
 struct BackgroundFold {
     plan: context_compaction::Plan,

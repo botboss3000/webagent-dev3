@@ -523,8 +523,23 @@ pub fn step_line(list: &List, texts: &Value) -> Option<String> {
         })
         .collect::<Vec<_>>();
     let template = text_field(texts, "step_line");
-    (!parts.is_empty() && !template.is_empty())
-        .then(|| template.replace("{sections}", &parts.join("; ")))
+    // A section waiting to start after finished work: its first write may fold that work.
+    let closed = list
+        .sections
+        .iter()
+        .any(|section| matches!(section.status, Status::Done | Status::Cancelled));
+    let waiting = list.sections.iter().find(|section| {
+        section.status == Status::Open && !section.steps.is_empty() && !started(section)
+    });
+    let hint = text_field(texts, "fold_hint");
+    (!parts.is_empty() && !template.is_empty()).then(|| {
+        let mut line = template.replace("{sections}", &parts.join("; "));
+        if let Some(section) = waiting.filter(|_| closed && !hint.is_empty()) {
+            line.push(' ');
+            line.push_str(&hint.replace("{section}", &section.id));
+        }
+        line
+    })
 }
 
 /// The end-of-turn reminder when open sections still have open or in-progress steps (up to
@@ -819,6 +834,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(marks(&two, &three), serde_json::json!({"closed":["s1"]}));
+    }
+
+    /// A section waiting to start after a closed one carries the fold hint until it starts.
+    #[test]
+    fn step_line_offers_the_fold_before_a_new_task_starts() {
+        let texts = texts();
+        let (one, _) = apply(
+            &List::default(),
+            write(
+                serde_json::json!({"section":{"title":"Old work","status":"done",
+                "summary":"Old work finished and checked"},
+                "steps":[{"label":"Only step","status":"done"}]}),
+            ),
+            1,
+        )
+        .unwrap();
+        let (two, _) = apply(
+            &one,
+            write(serde_json::json!({"section":{"title":"New work"},
+                "steps":[{"label":"First"}]})),
+            2,
+        )
+        .unwrap();
+        let line = step_line(&two, &texts).unwrap();
+        assert!(
+            line.contains("Before starting s2") && line.contains("fold_earlier"),
+            "{line}"
+        );
+        let (three, _) = apply(
+            &two,
+            write(serde_json::json!({"section":{"id":"s2"},
+                "steps":[{"id":"s2.1","status":"in_progress"}]})),
+            3,
+        )
+        .unwrap();
+        assert!(!step_line(&three, &texts).unwrap().contains("fold_earlier"));
     }
 
     #[test]

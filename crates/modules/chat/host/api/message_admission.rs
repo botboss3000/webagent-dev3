@@ -9,7 +9,7 @@ use super::{
 };
 
 /// Fields only the server sets: a panel answer (`/components/{cid}/answer`) and a
-/// compaction-only run (`/compact` or a Compact click on an idle chat).
+/// compaction-only run (`/compact` on an idle chat).
 const SERVER_FIELDS: [&str; 4] = [
     "component_id",
     "component_answer",

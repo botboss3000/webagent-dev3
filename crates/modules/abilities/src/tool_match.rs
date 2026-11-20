@@ -280,14 +280,6 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
         &["attachment", "uploaded file", "attached file", "attached"],
     ),
     (
-        "compact_context",
-        &[
-            "summarise older messages to save context",
-            "the conversation is too long, compact it",
-        ],
-        &["compact", "summarise context"],
-    ),
-    (
         "recall_compacted",
         &[
             "recall what was said before compaction",

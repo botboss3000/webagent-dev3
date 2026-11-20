@@ -24,8 +24,8 @@ pub fn key(sid: &str) -> String {
 }
 
 /// Store key holding a session's pending fold request: `state` is `pending` until a run
-/// starts it (`started`). `until.turn_key` names the user message a panel fold stops at;
-/// without it the fold is `/compact`'s, which keeps the tail. `focus` steers the summary.
+/// starts it (`started`). `until.turn_key` names the user message an agent's task fold stops
+/// at; without it the fold is `/compact`'s, which keeps the tail. `focus` steers the summary.
 pub fn request_key(sid: &str) -> String {
     format!("compaction_request:{sid}")
 }
@@ -187,10 +187,10 @@ mod tests {
         .unwrap()
     }
 
-    /// A panel request finds its new-task message by key; a missing, repeated or tiny range
+    /// A task fold request finds its new-task message by key; a missing, repeated or tiny range
     /// is refused with a reason the notice row shows.
     #[test]
-    fn a_panel_request_folds_up_to_its_message() {
+    fn a_task_fold_request_folds_up_to_its_message() {
         let history = vec![
             json!({"role":"user","content":"old task ".repeat(40)}),
             json!({"role":"user","content":"new task"}),

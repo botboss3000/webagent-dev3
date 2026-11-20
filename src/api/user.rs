@@ -1052,21 +1052,7 @@ async fn component_dismiss(
         .base_component_settle(&sid, &cid, &serde_json::Value::Null, &note)
         .await
     {
-        Ok(removed) => {
-            // A dismissed Compact/Keep panel no longer blocks the agent's next ask.
-            if let Ok(Some(open)) = app.store.get(&format!("compaction_panel:{sid}")).await {
-                if open["panel_id"] == cid.as_str() {
-                    let _ = app
-                        .store
-                        .put(
-                            &format!("compaction_panel:{sid}"),
-                            &serde_json::json!({"state":"dismissed","panel_id":cid}),
-                        )
-                        .await;
-                }
-            }
-            Json(serde_json::json!({"dismissed":removed})).into_response()
-        }
+        Ok(removed) => Json(serde_json::json!({"dismissed":removed})).into_response(),
         Err(error) => {
             crate::ApiError(axum::http::StatusCode::BAD_REQUEST, error.to_string()).into_response()
         }
