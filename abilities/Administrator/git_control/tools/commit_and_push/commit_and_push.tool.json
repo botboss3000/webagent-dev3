@@ -52,5 +52,16 @@
       "push",
       "git"
     ]
-  }
+  },
+  "duplicate_protection": {
+    "key": [
+      "repo",
+      "paths",
+      "message",
+      "expected_head",
+      "remote"
+    ],
+    "window": "forever"
+  },
+  "critical": true
 }

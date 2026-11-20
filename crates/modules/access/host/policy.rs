@@ -113,6 +113,9 @@ mod tests {
 
     #[tokio::test]
     async fn new_ability_follows_tool_json_without_a_level_grant() {
+        // Tier checks are a process-wide hook; this test must not depend on another test
+        // having installed them first.
+        crate::tools::install_tool_defaults();
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         store

@@ -105,6 +105,28 @@ pub fn intent_key(name: &str, clean: &Value) -> String {
     digest(&effect)
 }
 
+/// Digest of the semantic effect of a tool whose `tool.json` names its key `fields`: two calls
+/// with equal values in those fields are the same action.
+#[must_use]
+pub fn declared_key(name: &str, fields: &[String], clean: &Value) -> String {
+    let values: serde_json::Map<String, Value> = fields
+        .iter()
+        .map(|field| (field.clone(), clean[field].clone()))
+        .collect();
+    digest(&json!({"family":name,"fields":values}))
+}
+
+/// The intent key of `base` limited to `scope` (a session, a time slot, one call); an empty
+/// scope keeps `base`, so the match lasts forever.
+#[must_use]
+pub fn scoped_key(base: &str, scope: &str) -> String {
+    if scope.is_empty() {
+        base.to_owned()
+    } else {
+        digest(&json!([base, scope]))
+    }
+}
+
 /// The resource an action of `name` affects for `agent`.
 #[must_use]
 pub fn resource(agent: &str, name: &str) -> String {

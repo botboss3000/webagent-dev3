@@ -132,5 +132,16 @@
       "github commit",
       "draft branch"
     ]
-  }
+  },
+  "duplicate_protection": {
+    "key": [
+      "site_id",
+      "branch",
+      "expected_head",
+      "message",
+      "changes"
+    ],
+    "window": "forever"
+  },
+  "critical": true
 }

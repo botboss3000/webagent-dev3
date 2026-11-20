@@ -53,5 +53,14 @@
       "publish",
       "production"
     ]
-  }
+  },
+  "duplicate_protection": {
+    "key": [
+      "site_id",
+      "commit_sha",
+      "expected_production_sha"
+    ],
+    "window": "forever"
+  },
+  "critical": true
 }

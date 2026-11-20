@@ -49,6 +49,29 @@ pub struct RepeatGuard {
     pub warning: Option<String>,
 }
 
+/// How long two calls with the same key count as one action.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Window {
+    /// Only when no other recorded action of the agent came in between.
+    Consecutive,
+    /// For the rest of the session.
+    Session,
+    /// Until someone resolves or clears it.
+    Forever,
+    /// Within this many seconds of the earlier call.
+    Seconds(u64),
+}
+
+/// The action ledger's repeat protection: the argument fields that make two calls the same
+/// action, and how long they stay the same.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DuplicateProtection {
+    pub key: Vec<String>,
+    pub window: Window,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolDefinition {
@@ -89,6 +112,13 @@ pub struct ToolDefinition {
     /// What stored calls keep once the conversation has moved past them; absent keeps all.
     #[serde(default)]
     pub retention: crate::tool_retention::Retention,
+    /// Ledger repeat protection, on unless the agent owner switches it off.
+    #[serde(default)]
+    pub duplicate_protection: Option<DuplicateProtection>,
+    /// The ledger records every call and reports uncertain outcomes, whatever the
+    /// repeat protection setting says.
+    #[serde(default)]
+    pub critical: bool,
 }
 
 /// Discovery hints: short example requests (embedded) and exact words (keyword evidence).
@@ -174,6 +204,22 @@ impl ToolDefinition {
             bail!("Invalid repeat_guard hint/warning or usage_hint: {folder}");
         }
         self.retention.validate(&self.parameters, folder)?;
+        if (self.duplicate_protection.is_some() || self.critical) && self.is_read() {
+            bail!("A read tool cannot use the action ledger: {folder}");
+        }
+        if let Some(protection) = &self.duplicate_protection {
+            let properties = self.parameters["properties"].as_object();
+            if protection.key.is_empty()
+                || protection.key.len() > 16
+                || protection
+                    .key
+                    .iter()
+                    .any(|field| !properties.is_some_and(|known| known.contains_key(field)))
+                || matches!(protection.window, Window::Seconds(0))
+            {
+                bail!("duplicate_protection key must list tool parameters and seconds be positive: {folder}");
+            }
+        }
         if let Some(hints) = &self.match_data {
             if hints.examples.len() > 8
                 || hints.keywords.len() > 12
@@ -540,6 +586,48 @@ mod tests {
         json!({"name":name,"description":"Look something up","effect":"read",
             "parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false},
             "default_policy":{"operator":"allow","member":"require_approval"}})
+    }
+
+    #[test]
+    fn duplicate_protection_keys_name_parameters_of_a_write() {
+        let parse = |extra: Value| {
+            let mut tool = body("push");
+            tool["effect"] = json!("write");
+            tool.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            ToolDefinition::parse(&serde_json::to_vec(&tool).unwrap(), "push")
+        };
+        let ok = parse(json!({"critical":true,
+            "duplicate_protection":{"key":["q"],"window":{"seconds":60}}}))
+        .unwrap();
+        assert!(ok.critical);
+        assert_eq!(ok.duplicate_protection.unwrap().window, Window::Seconds(60));
+        for window in ["consecutive", "session", "forever"] {
+            assert!(parse(json!({"duplicate_protection":{"key":["q"],"window":window}})).is_ok());
+        }
+        for bad in [
+            json!({"duplicate_protection":{"key":["missing"],"window":"forever"}}),
+            json!({"duplicate_protection":{"key":[],"window":"forever"}}),
+            json!({"duplicate_protection":{"key":["q"],"window":{"seconds":0}}}),
+            json!({"duplicate_protection":{"key":["q"],"window":"daily"}}),
+        ] {
+            assert!(parse(bad).is_err());
+        }
+        let read = ToolDefinition::parse(
+            &serde_json::to_vec(
+                &json!({"critical":true})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+                    .into_iter()
+                    .chain(body("push").as_object().unwrap().clone())
+                    .collect::<serde_json::Map<_, _>>(),
+            )
+            .unwrap(),
+            "push",
+        );
+        assert!(read.is_err());
     }
 
     #[test]

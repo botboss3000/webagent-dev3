@@ -4,9 +4,24 @@
 use crate::{access, tools, App, Store};
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
+use webagent_abilities::tool_definitions::{self, Window};
 use webagent_actions::intent::{self, field, valid_id};
 use webagent_actions::outcome;
-pub(crate) use webagent_actions::{default_on, response, strip, summary, supported, Protection};
+pub(crate) use webagent_actions::{response, strip, summary, Protection};
+
+/// Whether the ledger handles `name`: its `tool.json` declares repeat protection or marks it
+/// critical (or it is the owner-purchase fixture).
+pub(crate) fn supported(name: &str) -> bool {
+    webagent_actions::supported(name)
+        || tool_definitions::get(name)
+            .is_some_and(|d| d.duplicate_protection.is_some() || d.critical)
+}
+
+/// Whether repeat protection is on for `name` when no setting chooses otherwise.
+pub(crate) fn default_on(name: &str) -> bool {
+    webagent_actions::default_on(name)
+        || tool_definitions::get(name).is_some_and(|d| d.duplicate_protection.is_some())
+}
 
 async fn ledger(app: &App, run: &Value) -> Result<Store> {
     ledger_on(&app.store, run).await
@@ -303,7 +318,54 @@ pub(crate) async fn prepare_on(
         pending_id,
         created_at: crate::now(),
     });
-    if settings.duplicate_protection == Some(Protection::Off)
+    let mut candidate = candidate;
+    if let Some(definition) = tool_definitions::get(name) {
+        let resource = field(&candidate, "resource")?.to_owned();
+        let protection = definition
+            .duplicate_protection
+            .as_ref()
+            .filter(|_| settings.duplicate_protection != Some(Protection::Off));
+        if protection.is_none() && !definition.critical {
+            return Ok(None);
+        }
+        let base = protection.map_or_else(
+            || intent::intent_key(name, &clean),
+            |p| intent::declared_key(name, &p.key, &clean),
+        );
+        // A critical call without protection is recorded under a key no other call shares.
+        let key = match protection.map(|p| p.window) {
+            None => intent::scoped_key(&base, &format!("call:{pending_id}")),
+            Some(Window::Forever) => base.clone(),
+            Some(Window::Session) => intent::scoped_key(&base, &format!("session:{sid}")),
+            Some(Window::Seconds(seconds)) => {
+                let now = crate::now();
+                let slot = now / seconds;
+                let previous =
+                    intent::scoped_key(&base, &format!("slot:{}", slot.saturating_sub(1)));
+                let recent = store
+                    .action_match(&resource, &previous)
+                    .await?
+                    .is_some_and(|old| {
+                        now.saturating_sub(old["created_at"].as_u64().unwrap_or(0)) < seconds
+                    });
+                if recent {
+                    previous
+                } else {
+                    intent::scoped_key(&base, &format!("slot:{slot}"))
+                }
+            }
+            Some(Window::Consecutive) => {
+                let latest = store.action_list(&resource).await?.into_iter().next();
+                match latest.filter(|old| old["intent_base"] == base.as_str()) {
+                    Some(old) => field(&old, "intent_key")?.to_owned(),
+                    None => intent::scoped_key(&base, &format!("after:{pending_id}")),
+                }
+            }
+        };
+        candidate["intent_base"] = base.into();
+        candidate["intent_key"] = key.into();
+        candidate["critical"] = definition.critical.into();
+    } else if settings.duplicate_protection == Some(Protection::Off)
         && existing.is_none()
         && store
             .action_match(
