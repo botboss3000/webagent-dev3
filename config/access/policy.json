@@ -15,7 +15,8 @@
   },
   "pages": {
     "app": {
-      "config": "admin"
+      "config": "admin",
+      "files": "admin"
     },
     "main": {
       "app": "admin",
@@ -40,7 +41,7 @@
       "upload": 30
     }
   },
-  "revision": 58,
+  "revision": 59,
   "storage": {
     "compress_idle_days": 7,
     "compression": {
