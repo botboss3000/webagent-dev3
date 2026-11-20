@@ -157,6 +157,11 @@ name = "webagent-outbound-notifications"
 path = "src/plugin_packages/outbound_notifications/main.rs"
 required-features = ["server-bins"]
 
+# Keep the symbol table (not debug info) so `perf` can name hot functions in the
+# live binaries. It is not loaded at runtime; it only adds file size.
+[profile.release]
+strip = "none"
+
 # The root crate is mostly HTTP/serde glue and dominates every Rust build
 # (about 83% of its compile is LLVM code generation). Level 2 cuts its release
 # compile by about a sixth; module and dependency crates keep level 3.
