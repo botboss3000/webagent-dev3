@@ -447,7 +447,7 @@ pub(crate) async fn voice_audio(
             }
             d.used = Instant::now();
         }
-        let text = d.text.borrow().clone();
+        let text = basic_tidy(&settings, d.text.borrow().clone());
         return Ok(Json(json!({
             "seq": sequence,
             "replayed": replayed,
@@ -483,10 +483,20 @@ pub(crate) async fn voice_audio(
         return Err(dictation_stopped());
     };
     d.slot = None;
+    let text = basic_tidy(&settings, text);
     d.done = Some(text.clone());
     Ok(Json(
         json!({"text": text, "capture_id": id, "ephemeral": true}),
     ))
+}
+
+/// The recognizer's transcript after the local filler and stutter rules, when cleanup is on.
+fn basic_tidy(settings: &webagent_media::settings::Dictation, text: String) -> String {
+    if settings.tidy {
+        tidy::basic(&text)
+    } else {
+        text
+    }
 }
 
 /// The dictation cleanup pass: the transcript edited once by the agent's Dictation model. It
