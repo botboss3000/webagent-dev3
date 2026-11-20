@@ -72,6 +72,13 @@ pub(super) fn finished(task: &Value) -> bool {
         Some("completed" | "cancelled" | "failed")
     )
 }
+/// A detached task that `background_run_task` never acts on: its approval decision or
+/// its broker job owns it. Dispatching one is a no-op whose completion wakes the scan
+/// again at once, so an expired lease would otherwise spin the scan without pause.
+fn owned_elsewhere(task: &Value) -> bool {
+    task["detached"] == true
+        && (task["external_pending"].is_object() || task["parked_approval"] == true)
+}
 
 impl<
         S: ScopedStorage
@@ -681,6 +688,10 @@ impl<
                                     .collect::<Vec<_>>();
                                 let mut held = std::collections::HashSet::new();
                                 for (task, id) in tasks.iter().zip(&identities) {
+                                    if owned_elsewhere(task) {
+                                        held.insert(id.clone());
+                                        continue;
+                                    }
                                     if matches!(task["status"].as_str(), Some("queued" | "running"))
                                         && crate::send_future(
                                             user.run(task["run_id"].as_str().unwrap_or("")),
@@ -950,5 +961,23 @@ mod stop_tests {
         assert!(ended(&json!({"status":"paused","stopped_by":"user"})));
         assert!(!ended(&json!({"status":"cancelled"})));
         assert!(!ended(&json!({"status":"running","stopped_by":"user"})));
+    }
+
+    /// Parked approvals and broker waits are never dispatched; other detached calls are
+    /// still settled after a restart, and undetached tasks dispatch as before.
+    #[test]
+    fn only_parked_or_external_detached_tasks_are_owned_elsewhere() {
+        assert!(owned_elsewhere(
+            &json!({"detached":true,"parked_approval":true})
+        ));
+        assert!(owned_elsewhere(
+            &json!({"detached":true,"external_pending":{}})
+        ));
+        assert!(!owned_elsewhere(
+            &json!({"detached":true,"parked_approval":false})
+        ));
+        assert!(!owned_elsewhere(&json!({"detached":true})));
+        assert!(!owned_elsewhere(&json!({"parked_approval":true})));
+        assert!(!owned_elsewhere(&json!({"external_pending":{}})));
     }
 }
