@@ -12,6 +12,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 8px 12px 12px;
+  --wa-scroll-pad: 12px;
   font-size: 13px;
   line-height: 1.45;
   -webkit-tap-highlight-color: transparent;
@@ -22,7 +23,6 @@
 .task-tab[aria-selected="true"] { color: var(--fg-1); border-color: var(--accent); }
 .task-tab:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
 .task-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.task-history { list-style: none; margin: 0; padding: 0; }
-.task-history-entry + .task-history-entry { margin-top: 8px; }
-.task-history-changes { margin: 2px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
 .task-history-empty { color: var(--fg-2); }
+/* History rows log changes, so finished steps keep their plain text. */
+.plan-log .plan-sub .plan-sub-title { color: var(--fg-1); text-decoration: none; }

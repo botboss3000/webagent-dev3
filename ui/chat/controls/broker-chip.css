@@ -12,8 +12,10 @@
 .broker-menu { min-width: 200px; }
 .broker-menu .chip-status svg, .broker-list .chip-status svg { width: 14px; height: 14px; }
 .broker-menu .broker-confirm { color: var(--danger, #d04545); }
-.broker-list { max-height: min(60vh, 420px); overflow-y: auto; }
-.broker-row .family-menu-text small { color: var(--fg-2); }
+.broker-list.family-spawn-menu { width: min(460px, calc(100vw - 16px)); max-width: none; max-height: min(70vh, 560px); overflow-y: auto; padding-top: 6px; padding-bottom: 6px; padding-left: 6px; --wa-scroll-pad: 10px; }
+/* A card opened inside its list row: no popup frame, and the row already shows its title. */
+.broker-card.broker-card-inline { width: auto; max-height: none; overflow: visible; padding: 2px 0 6px; }
+.broker-card-inline .broker-card-head { display: none; }
 
 .broker-card {
   width: min(460px, calc(100vw - 16px));

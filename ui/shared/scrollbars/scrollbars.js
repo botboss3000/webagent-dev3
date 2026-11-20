@@ -2,7 +2,12 @@
    wa-scrollbar layer in /ui/shell/app.css. Firefox offers only auto/thin widths and
    its GTK overlay bars fade when idle, so on fine-pointer desktops each scroller's
    native bar is hidden and the same persistent 6px thumb is drawn as a positioned
-   child, keeping the scroller's own clipping and stacking. */
+   child, keeping the scroller's own clipping and stacking.
+
+   FOR AGENTS ADDING A SCROLLER: so content does not shift sideways when its bar
+   appears, give the scroller class `wa-scroll-gutter` and set `--wa-scroll-pad` to its
+   right padding instead of `padding-right` (app.css). The bar then sits inside that
+   padding, not in extra space beside it. */
 
 /** Thumb length and offset along one axis, or null when nothing overflows. */
 function scrollThumb(view, content, pos, min = 24) {

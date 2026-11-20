@@ -1,9 +1,11 @@
 // Broker chip: a header session-tab chip (beside Spawns) for the broker tasks this chat's
 // builds and checks ran. The engine records each job's stage snapshot while it follows
 // the job (crates/modules/engine/src/runtime/build_tasks.rs); the chip loads the task list
-// on session open and on build events, and a task's card loads only when opened. While a
-// card is open its counters tick in the browser and it re-reads the task every 15 s.
+// on session open and on build events. The list is a task-plan (ui/components/tasks): each
+// task is a row whose card loads only when that row is opened, under it. While a card is
+// open its counters tick in the browser and a live one re-reads the task every 15 s.
 import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
+import {createTaskPlan} from '../../components/tasks/task-plan.js';
 
 const ACTIVE = ['queued','running','needs_decision'];
 const FAILED = ['failed','stale','cancelled','uncertain','interrupted','needs_decision'];
@@ -124,10 +126,13 @@ function stageRows(snapshot, age, slowNow, failed = false) {
 
 /** One task's card: its newest build (or newest job) with stages and Background, and the
  * other jobs under Advanced. `hold(job)` opens a job's menu on long-press; `pageLink` adds a
- * link to the task's Broker card page (ui/broker-card.html). Returns the
- * element, a `tick` that recomputes the counters, and whether the job is still active. */
-export function renderCard(task, detail, hold = () => {}, {pageLink = false} = {}) {
-  const box = el('div', 'sub-chip-menu broker-card'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Broker task ' + (task.name || task.task_id));
+ * link to the task's Broker card page (ui/broker-card.html); `inline` renders it inside a
+ * list row instead of as its own popup, without the title the row already shows. Returns
+ * the element, a `tick` that recomputes the counters, and whether the job is still active. */
+export function renderCard(task, detail, hold = () => {}, {pageLink = false, inline = false} = {}) {
+  const box = el('div', inline ? 'broker-card broker-card-inline' : 'sub-chip-menu broker-card wa-scroll-gutter');
+  if (!inline) box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', 'Broker task ' + (task.name || task.task_id));
   const jobs = detail.task.jobs || [];
   const main = jobs.find(job => job.kind === 'build') || jobs[0];
   const checks = jobs.filter(job => job !== main);
@@ -203,12 +208,15 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
   const chip = document.createElement('button');
   chip.type = 'button'; chip.id = 'chat-broker-chip'; chip.className = 'sub-chip chip-broker';
   chip.setAttribute('aria-haspopup', 'dialog'); chip.setAttribute('aria-expanded', 'false');
-  let sid = '', tasks = [], popup = null, cardTimer = null, tickTimer = null, epoch = 0, pending = null;
+  let sid = '', tasks = [], popup = null, epoch = 0, pending = null, plan = null, shown = 0;
+  const cards = new Map(); // task_id -> timers of an open card
 
   const path = (id, rest = '') => '/sessions/' + encodeURIComponent(id) + '/build-tasks' + rest;
 
+  function stopCard(id) { const timers = cards.get(id); if (timers) { clearInterval(timers.tick); clearInterval(timers.refresh); cards.delete(id); } }
   function close() {
-    clearInterval(cardTimer); clearInterval(tickTimer); cardTimer = tickTimer = null;
+    for (const id of [...cards.keys()]) stopCard(id);
+    plan = null;
     popup?.remove(); popup = null; chip.setAttribute('aria-expanded', 'false');
   }
   /** Places a body-mounted popup under the chip; phone widths get a full-width panel (CSS). */
@@ -243,6 +251,7 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
       if (turn !== epoch) return;
       tasks = lists.flat().sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
       renderChip();
+      if (plan && popup?.classList.contains('broker-list')) plan.update(tasks.slice(0, Math.max(shown, Math.min(tasks.length, PAGE))).map(planRow));
     } catch (error) { note('Broker tasks unavailable: ' + error.message); }
   }
 
@@ -299,53 +308,64 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
       await Promise.all([...new Set(tasks.map(task => task.sid))].map(id => request(path(id, '/clear'), 'POST', {}))); await refresh(); }}]);
   }
 
-  function taskRow(task) {
-    const row = el('button', 'family-menu-item broker-row'); row.type = 'button'; row.setAttribute('role', 'menuitem');
-    const text = el('span', 'family-menu-text');
-    text.append(el('span', '', task.name || task.task_id), el('small', '', [task.spawn, LABELS[task.status] || task.status].filter(Boolean).join(' · ')));
-    row.append(icon(taskIcon(task)), text);
-    pressable(row, () => void openCard(task), () => void taskMenu(task));
-    return row;
+  /** A broker task as a task-plan row; its card is the row's lazy content. */
+  const STATES = {done: 'completed', error: 'failed', warning: 'need-help', running: 'in-progress'};
+  function planRow(task) {
+    return {id: task.task_id, title: task.name || task.task_id, lazy: true, task,
+      status: task.status === 'cancelled' ? 'cancelled' : STATES[taskIcon(task)],
+      pill: LABELS[task.status] || task.status || 'Waiting', badges: task.spawn ? [task.spawn] : []};
   }
 
-  function openList() {
-    const box = el('div', 'sub-chip-menu family-spawn-menu broker-list'); box.setAttribute('role', 'menu'); box.setAttribute('aria-label', 'Broker tasks');
-    let shown = 0;
-    const more = () => { for (const task of tasks.slice(shown, shown + PAGE)) box.append(taskRow(task)); shown = Math.min(tasks.length, shown + PAGE); draw(); };
-    more();
-    // Load the next ten as the list scrolls to its end.
-    box.addEventListener('scroll', () => { if (shown < tasks.length && box.scrollTop + box.clientHeight >= box.scrollHeight - 24) more(); });
-    show(box);
-  }
-
-
-
-  async function openCard(task) {
-    const opened = sid;
+  /** Fills an opened row's slot with its card; a live card re-reads every REFRESH_MS. */
+  async function loadCard(task, slot) {
+    const opened = sid, id = task.task_id, url = path(task.sid, '/' + encodeURIComponent(id));
+    slot.replaceChildren(el('p', 'broker-note', 'Loading…'));
+    const put = detail => {
+      const keep = slot.querySelector('details')?.open;
+      const view = renderCard(task, detail, job => jobMenu(task, job, detail.can_control), {pageLink: detail.can_control, inline: true});
+      if (keep) view.box.querySelector('details')?.setAttribute('open', '');
+      slot.replaceChildren(view.box); draw();
+      const timers = cards.get(id) || {}; clearInterval(timers.tick);
+      timers.tick = setInterval(view.tick, 1000); cards.set(id, timers);
+      return view.live;
+    };
     let detail;
-    try { detail = await request(path(task.sid, '/' + encodeURIComponent(task.task_id))); } catch (error) { note(error.message); return; }
-    if (sid !== opened) return;
-    let view = renderCard(task, detail, job => jobMenu(task, job, detail.can_control), {pageLink: detail.can_control});
-    show(view.box);
-    tickTimer = setInterval(view.tick, 1000);
-    if (view.live) cardTimer = setInterval(async () => {
-      if (popup !== view.box) return;
-      const open = view.box.querySelector('details')?.open;
+    try { detail = await request(url); } catch (error) { slot.replaceChildren(el('p', 'broker-note', error.message)); delete slot.dataset.loaded; return; }
+    if (sid !== opened || !slot.isConnected) return;
+    if (!put(detail)) return;
+    cards.get(id).refresh = setInterval(async () => {
+      if (!slot.isConnected) return stopCard(id);
       try {
-        const next = await request(path(task.sid, '/' + encodeURIComponent(task.task_id)));
-        if (popup !== view.box) return;
-        const fresh = renderCard(task, next, job => jobMenu(task, job, next.can_control), {pageLink: next.can_control});
-        if (open) fresh.box.querySelector('details')?.setAttribute('open', '');
-        // Replace in place: same position, timers moved to the fresh card.
-        fresh.box.style.top = view.box.style.top; fresh.box.style.left = view.box.style.left;
-        clearInterval(tickTimer); view.box.replaceWith(fresh.box); popup = fresh.box; view = fresh; draw();
-        tickTimer = setInterval(fresh.tick, 1000);
-        if (!fresh.live) { clearInterval(cardTimer); cardTimer = null; void refresh(); }
+        const next = await request(url);
+        if (cards.has(id) && slot.isConnected && !put(next)) { clearInterval(cards.get(id).refresh); void refresh(); }
       } catch {}
     }, REFRESH_MS);
   }
 
-  pressable(chip, () => { if (popup) return close(); if (tasks.length === 1) void openCard(tasks[0]); else openList(); }, chipMenu);
+  function openList() {
+    const box = el('div', 'sub-chip-menu family-spawn-menu broker-list wa-scroll-gutter'); box.setAttribute('aria-label', 'Broker tasks');
+    show(box); // show() closes any earlier popup, so the list's state starts after it
+    plan = createTaskPlan({
+      label: 'Broker tasks',
+      defaultOpen: () => tasks.length === 1,
+      onHold: row => void taskMenu(row.task),
+      onExpand: (row, open, slot) => {
+        if (open) return void loadCard(row.task, slot);
+        // Closed: stop its timers and load it fresh when reopened.
+        stopCard(row.id); delete slot.dataset.loaded; slot.replaceChildren();
+      }
+    });
+    shown = Math.min(tasks.length, PAGE);
+    const list = plan;
+    box.append(plan.element);
+    plan.update(tasks.slice(0, shown).map(planRow));
+    // Show the next ten as the list scrolls to its end.
+    box.addEventListener('scroll', () => {
+      if (shown < tasks.length && box.scrollTop + box.clientHeight >= box.scrollHeight - 24) { shown = Math.min(tasks.length, shown + PAGE); list.update(tasks.slice(0, shown).map(planRow)); }
+    });
+  }
+
+  pressable(chip, () => { if (popup) return close(); openList(); }, chipMenu);
 
   return {
     open(id) { close(); sid = id; tasks = []; renderChip(); void refresh(); },

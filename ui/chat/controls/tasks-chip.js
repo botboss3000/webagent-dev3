@@ -79,24 +79,26 @@ export function createTasksChip({session = () => '', request, note = () => {}, c
     onRemove: (task, sub) => edit(task.id, [{id: sub.id, status: 'cancelled'}]),
     onAdd: (task, label) => { if (label.length < 3) note('A step needs at least 3 characters'); else void edit(task.id, [{label}]); }
   });
+  /** A History change line's status, read from its wording ("s2.3 done", "s2 added: …"). */
+  const changeStatus = line => /\bdone\b/.test(line) ? 'completed' : /in_progress/.test(line) ? 'in-progress'
+    : /\bblocked\b/.test(line) ? 'need-help' : /cancelled|removed/.test(line) ? 'cancelled' : 'pending';
+  /** History: each revision a collapsible task-plan row (newest open), its changes as steps. */
   async function historyView(box) {
-    const list = el('ol', 'task-history');
-    box.append(list);
     try {
-      const data = await request(path());
-      for (const entry of data.history || []) {
-        const item = el('li', 'task-history-entry');
-        const when = entry.updated_at ? new Date(entry.updated_at * 1000).toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : '';
-        item.append(el('small', 'task-history-meta', ['Revision ' + entry.revision, entry.by === 'user' ? 'You' : 'Agent', when].filter(Boolean).join(' · ')));
-        const lines = el('ul', 'task-history-changes');
-        for (const line of entry.changes || []) lines.append(el('li', '', String(line)));
-        item.append(lines); list.append(item);
-      }
-      if (!list.children.length) list.append(el('li', 'task-history-empty', 'No revisions yet.'));
-    } catch (error) { list.append(el('li', 'task-history-empty', error.message)); }
+      const entries = (await request(path())).history || [];
+      if (!entries.length) { box.append(el('p', 'task-history-empty', 'No revisions yet.')); return; }
+      const log = createTaskPlan({label: 'Task list history', defaultOpen: task => task.id === 'r' + entries[0].revision});
+      log.element.classList.add('plan-log');
+      log.update(entries.map(entry => ({
+        id: 'r' + entry.revision, title: 'Revision ' + entry.revision, status: 'pending', icon: 'History', pill: false,
+        badges: [entry.by === 'user' ? 'You' : 'Agent', entry.updated_at ? new Date(entry.updated_at * 1000).toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : ''].filter(Boolean),
+        subtasks: (entry.changes || []).map((line, i) => ({id: String(i), title: String(line), status: changeStatus(String(line))}))
+      })));
+      box.append(log.element);
+    } catch (error) { box.append(el('p', 'task-history-empty', error.message)); }
   }
   function open() {
-    const box = el('div', 'sub-chip-menu task-panel'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Session tasks');
+    const box = el('div', 'sub-chip-menu task-panel wa-scroll-gutter'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Session tasks');
     const switcher = el('div', 'task-tabs'); switcher.setAttribute('role', 'tablist');
     for (const [id, label] of [['tasks', 'Tasks'], ['history', 'History']]) {
       const tab = button('task-tab', label, '', () => { view = id; open(); });

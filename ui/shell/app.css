@@ -269,6 +269,18 @@ body {
 }
 .wa-scrollbar:hover, .wa-scrollbar.dragging { background: var(--wa-scrollbar-thumb-hover); }
 .wa-scrollbar[hidden] { display: none !important; }
+/* Scroll gutter inside the padding. Put .wa-scroll-gutter on a scroller and set
+   --wa-scroll-pad to the right padding you want (default 12px; set it instead of
+   padding-right). Where the 6px desktop bar takes layout width (Chromium/Safari, fine
+   pointer) its space is always reserved and taken out of that padding, so content keeps
+   its place when the bar appears and the right edge stays --wa-scroll-pad wide. Firefox
+   and touch bars overlay the padding, which then stays whole. */
+.wa-scroll-gutter.wa-scroll-gutter { padding-right: var(--wa-scroll-pad, 12px); }
+@supports selector(::-webkit-scrollbar) {
+  @media (hover: hover) and (pointer: fine) {
+    .wa-scroll-gutter.wa-scroll-gutter { scrollbar-gutter: stable; padding-right: max(0px, calc(var(--wa-scroll-pad, 12px) - var(--wa-scrollbar-size))); }
+  }
+}
 /* Firefox scrollers the component leaves native (text editors, touch): full
    width instead of design-system.css's scrollbar-width:thin hairline. */
 @supports not selector(::-webkit-scrollbar) {

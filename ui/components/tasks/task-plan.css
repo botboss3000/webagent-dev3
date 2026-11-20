@@ -65,6 +65,8 @@ button.plan-sub-title { cursor: pointer; border-radius: 4px; }
 .plan-sub-detail { margin: 0 0 4px 17px; padding: 2px 0 2px 18px; border-left: var(--border-width) dashed color-mix(in oklab, var(--fg-1) 20%, transparent); color: var(--fg-2); font-size: 12px; }
 .plan-sub-detail p { margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0; }
+.plan-slot { margin-left: 26px; }
+.plan-slot:empty { display: none; }
 .plan-add { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px 34px; }
 .plan-add-input { flex: 1 1 160px; min-width: 0; min-height: 32px; padding: 4px 8px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); }
 .plan-add-button { min-height: 32px; padding: 4px 12px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); cursor: pointer; }
