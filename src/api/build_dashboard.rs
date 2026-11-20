@@ -14,6 +14,11 @@ pub(super) fn admin_router() -> Router<App> {
         .route("/admin/builds/{job_id}/result", get(result))
         .route("/admin/builds/{job_id}/cancel", post(cancel))
         .route("/admin/builds/leftovers/{id}/review", post(review_leftover))
+        .route("/admin/production", get(production))
+        .route(
+            "/admin/production/{release_id}/decision",
+            post(production_decide),
+        )
 }
 
 /// The Broker card page reads one task without sign-in (names, states and timings only).
@@ -44,6 +49,27 @@ pub(crate) async fn cancel(
 ) -> Api {
     Ok(Json(
         dashboard::cancel(&Host(&app), &job_id, &request).await?,
+    ))
+}
+
+pub(crate) async fn production(State(app): State<App>) -> Api {
+    Ok(Json(dashboard::production(&Host(&app)).await?))
+}
+
+/// A production release decision from the Host Admin page.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProductionDecision {
+    decision: String,
+}
+
+pub(crate) async fn production_decide(
+    State(app): State<App>,
+    Path(release_id): Path<String>,
+    Json(request): Json<ProductionDecision>,
+) -> Api {
+    Ok(Json(
+        dashboard::production_decide(&Host(&app), &release_id, &request.decision).await?,
     ))
 }
 

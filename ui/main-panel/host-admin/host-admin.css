@@ -27,3 +27,4 @@
 #tab-host-admin .host-allow-toggle{display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}
 #tab-host-admin .host-allow-toggle input{width:20px;height:20px;accent-color:var(--accent)}
 #tab-host-admin .host-allow-all .host-meta{flex:1 1 100%}
+#tab-host-admin .host-releases{display:grid;gap:10px;min-width:0}

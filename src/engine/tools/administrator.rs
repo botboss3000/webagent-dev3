@@ -176,7 +176,7 @@ pub(crate) async fn host_fingerprint(
     // A deploy (finish or decide) asks first unless the session runs in Auto mode, even
     // when build_work itself is allowed: this gate is fixed, not a policy rule.
     let mut deploy =
-        access.tool_decision_for_abilities("build_work", &["codebase_admin".into()], true, true);
+        access.tool_decision_for_abilities("build_work", &["host_admin".into()], true, true);
     if deploy.permission == access::Permission::Auto {
         deploy = access::ToolDecision {
             permission: access::Permission::Ask,

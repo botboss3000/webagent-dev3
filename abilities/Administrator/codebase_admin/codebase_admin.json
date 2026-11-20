@@ -14,7 +14,6 @@
     "file_search",
     "file_edit",
     "file_write",
-    "build_work",
     "state_inspect",
     "prompt_slot_read",
     "prompt_slot_write",

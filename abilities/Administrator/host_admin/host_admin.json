@@ -3,13 +3,14 @@
   "kind": "ability",
   "icon": "server",
   "color": "#e0af68",
-  "description": "Change the server itself (host files, services, containers, OS updates) through the root host helper. Every change waits for an administrator's approval on the Host Admin page. Not for app code: use Codebase Admin.",
-  "skill_summary": "Request host changes with host_admin; each waits for approval on the Host Admin page and a background notice wakes the chat when it is decided and finished.",
+  "description": "Change the server itself (host files, services, containers, OS updates) through the root host helper, and run build broker work (build_work: isolated source tasks, checks and releases). Host changes wait for an administrator's approval on the Host Admin page. Development-server only: never part of a production release.",
+  "skill_summary": "Request host changes with host_admin; each waits for approval on the Host Admin page and a background notice wakes the chat when it is decided and finished. Use build_work for broker tasks, checks and releases of the app source.",
   "migration_note": "How it works: a root service on the server (webagent-host-helper.service) does every host change. The app and SSH release keys only file requests to it over a local socket, never over the network. Each change appears on the Host Admin page (Administrator > Host Admin) with its exact effect, and nothing runs until an administrator approves it there. Requests wait with no time limit. Reads (host status) run at once. Boot loader and disk changes also need the host approval passphrase, which is set at the server console. An allow-all window lets one chat's changes through for up to 24 hours, but never covers boot, disk or no-undo changes. File writes and broker installs keep a snapshot and can be reverted once; broker installs are health-tested and restored automatically if the test fails. Requests, decisions, snapshots and the log stay on the server under /var/lib/webagent-host. Which files, services and containers may be touched comes from /etc/webagent/host-profile.json. SSH access to the server is keys only, from Tailscale addresses only; see the host_security skill.",
   "order": 7,
   "placeholder": false,
   "tools": [
-    "host_admin"
+    "host_admin",
+    "build_work"
   ],
   "readiness": "ready",
   "owner_tier": [

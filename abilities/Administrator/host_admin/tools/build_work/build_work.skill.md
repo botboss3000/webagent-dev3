@@ -175,3 +175,18 @@ resubmitting a finish.
 
 When a provider requires optional fields, pass null for unused task_id,
 request_id and digest fields; never invent placeholder values.
+
+## Production releases
+
+When the user asks for a production release, call `production_request` with an
+optional `bump` (patch by default; minor or major only when the user says so) and
+short release `notes`. It records the current dev commit and the next version and
+waits: only an administrator's decision on the Host Admin page starts it, so tell
+the user to approve it there; you cannot approve it. Once approved, the broker
+exports the production files (no broker, tests, Host Admin ability or dev
+documents), runs the credential guard, builds the stable app and its tests, then
+pushes one "Release vX.Y.Z" commit and tag to the public repository. Follow it with
+`production_status` and the returned `release_id`; `production_list` shows recent
+releases and the published version. Only one release can wait or run at a time.
+A `failed` release names its cause (for example a missing production token, which
+only the user can provide); fix the cause and request again.

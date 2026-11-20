@@ -3338,7 +3338,6 @@ pub mod registered_tests {
                     "file_search",
                     "file_edit",
                     "file_write",
-                    "build_work",
                     "state_inspect",
                     "prompt_slot_read",
                     "prompt_slot_write",
@@ -3347,6 +3346,13 @@ pub mod registered_tests {
                     "checkout_edit"
                 ]
             );
+            // The build broker tool belongs to Host Admin, which never ships in production.
+            let host = catalog
+                .abilities
+                .iter()
+                .find(|ability| ability.id == "host_admin")
+                .unwrap();
+            assert_eq!(host.tools, ["host_admin", "build_work"]);
             assert!(catalog
                 .abilities
                 .iter()

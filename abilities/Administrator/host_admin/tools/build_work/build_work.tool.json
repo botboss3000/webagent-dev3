@@ -42,7 +42,7 @@
       },
       "action": {
         "type": "string",
-        "description": "Arguments each action takes besides broker_id: begin label, summary (broker_id new); check check, expected_inputs_sha256, optional test_filter, feature_profile, timeout_seconds; preflight none (offset pages); finish expected_inputs_sha256; decide sync_decision, expected_sync_digest; status optional job_id; wait and cancel job_id; receipt request_id; review and reservations none; abandon and suspend none, or as an administrator task_key (task.id from takeover_preview) and reason to act on any caller's task; maintenance mode (status, drain or resume; administrators only); note target_task_id and reason (a note on another task's blocker board, signed with your broker_id); notes optional target_task_id (another task's notes) and archived; note_remove note_id, kind (retract, resolve or clear) and reason (required to clear). Any other argument is refused by name.",
+        "description": "Arguments each action takes besides broker_id: begin label, summary (broker_id new); check check, expected_inputs_sha256, optional test_filter, feature_profile, timeout_seconds; preflight none (offset pages); finish expected_inputs_sha256; decide sync_decision, expected_sync_digest; status optional job_id; wait and cancel job_id; receipt request_id; review and reservations none; abandon and suspend none, or as an administrator task_key (task.id from takeover_preview) and reason to act on any caller's task; maintenance mode (status, drain or resume; administrators only); note target_task_id and reason (a note on another task's blocker board, signed with your broker_id); notes optional target_task_id (another task's notes) and archived; note_remove note_id, kind (retract, resolve or clear) and reason (required to clear). Any other argument is refused by name; production_request optional bump (patch, minor or major) and notes (asks for a production release; an administrator approves it on the Host Admin page); production_status release_id; production_list none.",
         "enum": [
           "status",
           "begin",
@@ -75,7 +75,10 @@
           "maintenance",
           "note",
           "notes",
-          "note_remove"
+          "note_remove",
+          "production_request",
+          "production_status",
+          "production_list"
         ]
       },
       "archived": {
@@ -227,6 +230,26 @@
         "type": "integer",
         "minimum": 1,
         "maximum": 600
+      },
+      "bump": {
+        "type": "string",
+        "enum": [
+          "patch",
+          "minor",
+          "major"
+        ],
+        "description": "production_request: which part of the version to raise (default patch)."
+      },
+      "notes": {
+        "type": "string",
+        "maxLength": 4000,
+        "description": "production_request: release notes for the release commit."
+      },
+      "release_id": {
+        "type": "string",
+        "minLength": 36,
+        "maxLength": 36,
+        "description": "production_status: the id production_request returned."
       }
     },
     "required": [
@@ -240,7 +263,8 @@
       "run the checks on my source edits",
       "release the change to the dev app",
       "check the build status",
-      "is my build done"
+      "is my build done",
+      "make a production release"
     ],
     "keywords": [
       "build",
@@ -248,7 +272,8 @@
       "release",
       "broker",
       "build status",
-      "check the build"
+      "check the build",
+      "production release"
     ]
   }
 }

@@ -3,8 +3,10 @@
 Changes to the server itself go through the root host helper, never through shell or
 file tools. You file a request with `host_admin`; an administrator approves or denies it
 on the Host Admin page (https://dev.webagent.live/app?tab=host-admin). Nothing changes
-until they do. Use this ability only when the user asks for host work; app code, prompts
-and configuration belong to Codebase Admin.
+until they do. This ability also owns `build_work`, the build broker tool (isolated source
+tasks, checks and releases; see its tool skill). Both are development-server tools and
+never ship in a production release. Editing app code, prompts and configuration stays in
+Codebase Admin.
 
 ## Working with requests
 

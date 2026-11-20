@@ -229,3 +229,53 @@ pub async fn scheduler(
         .ok_or_else(|| bad("Invalid scheduler request"))?;
     broker(host, "v3_build_scheduler", arguments).await
 }
+
+/// A production-release broker call; the broker's refusal reaches the page as a conflict.
+async fn production_call(
+    host: &dyn AdministrationHost,
+    name: &str,
+    arguments: Value,
+) -> Result<Value, ApiError> {
+    let user = host.store().current_user_id();
+    let fingerprint = json!(digest(&json!(["v3_production", user])));
+    let identity = trusted(user, DASHBOARD_SESSION, &fingerprint, true);
+    let response = host
+        .broker(
+            name,
+            &arguments,
+            DASHBOARD_SESSION,
+            Some(identity),
+            CancellationToken::new(),
+        )
+        .await?;
+    if response["status"] != "success" {
+        let message = response["output"]
+            .as_str()
+            .unwrap_or("Production release request refused");
+        return Err(ApiError(StatusCode::CONFLICT, message.to_owned()));
+    }
+    Ok(response["output"].clone())
+}
+
+/// Recent production releases and the newest published version.
+pub async fn production(host: &dyn AdministrationHost) -> Result<Value, ApiError> {
+    production_call(host, "v3_production", json!({"action":"list"})).await
+}
+
+/// Approve or deny a waiting production release. Only this administrator route reaches the
+/// broker's `v3_production_decide`; agents and the local operator can only request.
+pub async fn production_decide(
+    host: &dyn AdministrationHost,
+    release_id: &str,
+    decision: &str,
+) -> Result<Value, ApiError> {
+    if !valid_job_id(release_id) || !matches!(decision, "approve" | "deny") {
+        return Err(bad("Invalid production release decision"));
+    }
+    production_call(
+        host,
+        "v3_production_decide",
+        json!({"release_id":release_id,"decision":decision}),
+    )
+    .await
+}

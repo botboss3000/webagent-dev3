@@ -11,10 +11,7 @@ use webagent_administration::notices::{reviewed, valid_notice_id, valid_page};
 use webagent_host_core::{bad, digest, ApiError};
 
 /// The tools whose access decides which notices a caller sees.
-const TOOLS: [(&str, &str); 2] = [
-    ("git_tool", "git_control"),
-    ("build_work", "codebase_admin"),
-];
+const TOOLS: [(&str, &str); 2] = [("git_tool", "git_control"), ("build_work", "host_admin")];
 
 /// What a caller may see now, and the fingerprint to compare after I/O.
 struct Visible {
