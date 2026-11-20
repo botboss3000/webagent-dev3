@@ -38,6 +38,17 @@ impl Store {
         Ok(state)
     }
     async fn reconcile_main_chat(&self) -> Result<()> {
+        // Almost every call finds no pending journal: check with a plain read first, so a
+        // model call does not take the agent database's write lock for nothing (staging new
+        // notes notifications writes only when there are some). A transition not yet
+        // committed stays invisible either way; its writer finishes it.
+        let pending: Option<i64> = sqlx::query_scalar("SELECT 1 FROM docs WHERE key=? LIMIT 1")
+            .bind(PENDING)
+            .fetch_optional(&self.agent_pool)
+            .await?;
+        if pending.is_none() {
+            return self.emit_main_notes().await;
+        }
         let mut agent_tx = self.agent_pool.begin().await?;
         sqlx::query("UPDATE docs SET key=key WHERE key IN (?,?)")
             .bind(KEY)
