@@ -56,8 +56,10 @@ export function createSettingRow(list, setting, {onSave, agents = []} = {}) {
         options: (setting.enum || []).map(choice => [choice, capital(words(String(choice)))]), onSave});
     case 'integer':
     case 'number':
+      // Arrows move by 1 unless the setting holds fractions (a ratio like 0.5).
       return createNumberRow(list, {title, hint, value: value ?? '', min: setting.min, max: setting.max,
-        step: setting.type === 'integer' ? 1 : 0.01, unit: setting.unit, onSave});
+        step: [setting.min, setting.max, value].every(n => n == null || Number.isInteger(n)) ? 1 : 0.1,
+        unit: setting.unit, onSave});
     case 'length':
       return createLengthRow(list, {title, hint, value, min: setting.min, max: setting.max, onSave});
     case 'string':
@@ -146,6 +148,8 @@ export async function mountSettingsPage(host, {page}) {
   const unavailable = [];
   for (const setting of data.settings) {
     if (setting.unavailable) { unavailable.push(setting); continue; }
+    // Settings stored on the agent or the account itself have no owner file.
+    if (!setting.owner) setting.owner = data.layer === 'user' ? 'user_profile' : 'agent_metadata';
     const id = setting.owner.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
     if (!groups.has(id)) groups.set(id, {id, title: groupTitle(setting.owner), settings: []});
     groups.get(id).settings.push(setting);
@@ -170,7 +174,7 @@ export async function mountSettingsPage(host, {page}) {
   register.present();
   if (unavailable.length) {
     const note = node('details', 'stp-unavailable');
-    note.append(node('summary', 'ac-hint', unavailable.length + ' more settings can’t be changed on this page'));
+    note.append(node('summary', 'ac-hint', unavailable.length + (unavailable.length === 1 ? ' more setting' : ' more settings') + ' can’t be changed on this page'));
     const items = node('ul', 'ac-hint');
     for (const setting of unavailable) items.append(node('li', '', settingTitle(setting) + ': ' + setting.unavailable));
     note.append(items);
