@@ -164,34 +164,8 @@ update row or its own last write result. The write and read tool skills say to w
 directly and read only after a revision conflict or for entries not shown (commits
 c56c939, 1409289).
 
-**Session task list through its changes.** The list follows the same rules as Main
-Notes, at the same basis: the instructions carry one snapshot of the session's task list
-(`base_tasks:{sid}:view`, keyed by `notes_basis`) right after the notes, frozen between
-merges. The agent's own `task_list_write` results stay in the history; changes made
-elsewhere (the user's edits) arrive as server-added `task_list_read-<id>` rows. A fold
-combines every task list change from its range and the tail into one `task_list_read`
-exchange among its retained rows, after the Main Notes one; a merge or major reorder drops
-them and rebuilds the snapshot. The per-step guidance message adds one line naming each
-open section, its open count and its steps in progress; it carries no revision, so it
-changes only when work starts or finishes (bridge clients re-send it only then). Two
-reminders join it: once a turn's tool calls since the user's last message reach
-`unfiled_after_calls` with no `task_list_write`, a line asks the agent to file the work;
-and the first final reply of a run while open steps remain is held for one more call (the
-history, which ends with the draft reply, plus a reminder naming the open steps, kept out of
-history like the closer). An answer that calls no tool is dropped and the draft publishes;
-one that calls tools continues the run, and its later final reply publishes. Texts are in
-`prompts/task_list.json`. The list is the session's: every participant's runs get it,
-everyone in the chat sees its progress, and anyone who can send in the chat edits it.
-
-**Fold by tasks (Identity "Fold boundary").** An agent can fold whole tasks instead of
-by the verbatim tail (`compaction_thresholds.fold_tasks_retained`, 0 to 9; absent is the
-verbatim limit). Each `task_list_write` result names the sections it `created`, `started`
-(first step began) and `closed`. Once a task starts, `plan_tasks` folds the task
-`retained + 1` behind it, and everything before, in the background: the cut is the first
-user message after that task closed, but never past the turn that created the oldest task
-kept, so a task still being discussed or planned keeps its predecessor verbatim. The
-trigger and ceiling still fold by size as a safety limit. Panel edits and plan seeding
-carry no marks; a section an approved plan created starts when its first step does.
+**Session task list.** Its snapshot, step line, reminders, change rows and task folds
+follow the rules above; see **Session task list in context** below.
 
 **Execution mode.** The mode arrives as a `set_execution_mode` result: at session
 start, when the user changes it, and when the agent changes it. A fold keeps the
@@ -309,6 +283,95 @@ the provider's reported cached tokens over its input tokens, as the bridge read 
 cache has really expired. The estimate appears only in the row's copied details and
 the context statistics panel. A bridge's figures describe the bridge's own request,
 which adds its harness prompt and tools, so they can differ from the estimate.
+
+## Session task list in context
+
+The session task list (Task Progress ability) is one list per session, split into
+sections of steps. This section is the whole path from storage to the model, for API
+providers and for bridge harnesses.
+
+### Data and tools
+
+| Part | Where | What |
+| --- | --- | --- |
+| Rules | `crates/modules/chat/src/task_list.rs` | Sections (`s1`) and steps (`s1.2`) with server-assigned ids; statuses `open`, `in_progress`, `blocked`, `done`, `cancelled`; section notes, closing summary and plan flag; step outcome, evidence ids and `started_at`/`finished_at` (ms); one write adds or updates one section (`apply`), with the change lines and the sections it `created`, `started` and `closed` (`marks`); snapshot, step line and reminder texts |
+| Storage | `crates/modules/chat/host/storage/task_list.rs` | Current list `base_tasks:{sid}` and every revision `base_tasks:{sid}:r{n}` in the session owner's user plane, erased with the session; revision-fenced writes with a receipt per tool call (`task_list_write`) or user request (`task_list_user_write`); the user's changes wait in the current document until delivered; the snapshot view `base_tasks:{sid}:view` |
+| Tools | `abilities/Memory/task_progress/tools/` | `task_list_read` (overview, one section, an old revision, or the changes between two) and `task_list_write` (one section and its steps, `expected_revision` required); both core and allowed for every role |
+| Plan seeding | `set_execution_mode` | Leaving Plan with an approved plan adds a user-requested section from its checklist (plan flag set, no step started) and reports it as `task_list` in the result; the plan artifact's checklist follows that section's progress, from agent writes and panel edits |
+| Panel | `ui/chat/controls/tasks-chip.js`, `GET/POST /api/v3/sessions/{sid}/tasks` | The Tasks chip (done/total) and panel with History; everyone who can view the chat reads it, anyone who can send edits it (observers read-only); every write adds a session event so open chats refresh |
+| Texts | `crates/modules/configuration/prompts/task_list.json` | Snapshot heading and rule, empty text, step line, end reminder, unfiled reminder and its `unfiled_after_calls` threshold, user change heading; read live, no compile |
+
+### What reaches the model
+
+| Item | Placement | Lifetime | Changes when |
+| --- | --- | --- | --- |
+| Snapshot | Instructions, right after Main Notes (definition `session-tasks-{revision}`) | Frozen per `notes_basis` | A rewind, a merge or a major reorder rebuilds it from the current list |
+| Agent writes | The agent's own `task_list_write` call and result in the history (new revision, change lines, `created`/`started`/`closed`) | Durable | Each write |
+| User edits | A server-added `task_list_read-<id>` exchange (`changed_by: the user`, the revision and its change lines) at the end of the history before the next call | Durable, delivered once each | Each panel edit |
+| Step line | Per-step guidance message: `Session tasks: s1 "Title", 2 open, active s1.2 "Label".` (each open section with unfinished steps) | One call, never saved | A step starts or finishes; it carries no revision |
+| Unfiled reminder | Per-step guidance message, after the step line | One call, never saved | `unfiled_after_calls` (default 8) tool calls since the user's last message with no `task_list_write` among them |
+| End reminder | One extra call: the history (ending with the draft reply) plus a user message naming the open steps | One call, never saved | The first final reply of a run while open sections have open or in-progress steps |
+
+The list belongs to the session: every participant's runs get the snapshot, step line and
+reminders, and the agent's tool calls write the session owner's list.
+
+**End-of-turn reminder.** When the agent's final reply leaves open steps, the run saves
+`task_reminder` (`draft`, `message`, `pending: true`) and makes one more call instead of
+publishing. The run is reloaded before a response is handled, so the response is recognised
+by the saved `pending` flag, which it clears. An answer that calls no tool is dropped and
+the draft publishes (the closer, when enabled, then runs on the draft); an answer that calls
+tools continues the run, and its later final reply publishes. It fires at most once per run.
+
+**Compaction.** A fold keeps every task list change from its range and the verbatim tail
+(agent writes and user-edit rows) as one combined `task_list_read` exchange among its
+retained rows, after the Main Notes one; summaries leave them out. A merge or major reorder
+drops them and rebuilds the snapshot. With Identity's **Fold boundary** set to tasks
+(`compaction_thresholds.fold_tasks_retained`, 0 to 9; absent is the verbatim limit), a task
+starting (its first step begins) folds, in the background, the task `retained + 1` behind it
+and everything before; `plan_tasks` cuts at the first user message after that task closed,
+never past the turn that created the oldest task kept, so a task still being discussed or
+planned keeps its predecessor verbatim. The trigger and ceiling still fold by size. Panel
+edits and plan seeding carry no marks.
+
+### API provider profiles
+
+The host assembles one request per call and the provider profile places it
+(**Provider-specific projection**): OpenAI subscription sends Responses items with the
+instructions, snapshot included, in the developer role; DeepSeek and other compatible chat
+endpoints send chat completions with them as leading system messages.
+
+- The per-step guidance message, with the step line and the unfiled reminder, is appended
+  after the history in the profile's instruction role for that call only, so the cached
+  prefix ends just before it.
+- The end reminder call replaces that message with the user-role reminder after the
+  history, which already ends with the draft; nothing of it is saved, and the next call's
+  history again ends where the draft left it.
+- Agent writes and user-edit rows are ordinary function call and output items, so they
+  extend the cached prefix like any tool exchange.
+- The snapshot changes the instructions only at a rewind, merge or major reorder, which
+  rewrite the start of the request anyway.
+
+### Bridge harnesses (Claude, OpenCode, Muse)
+
+The server sends bridge calls the same assembled request as a chat-completions body; the
+paired client (`ui/shared/models/harness-bridge.py`) turns it into prompts for its own
+harness session, which it resumes while the history only grows.
+
+- The snapshot travels in the instructions; on a resumed session a changed instruction text
+  is sent to the harness as a text diff.
+- The per-step guidance message is stripped from the recorded history and re-sent only when
+  there is a new user message, its text differs from the last copy, or the session is fresh;
+  each copy stays in the harness transcript. Because the step line has no revision and
+  changes only when a step starts or finishes, copies appear only at those points; the
+  unfiled reminder adds one copy when it first appears and one when it clears.
+- Agent writes and user-edit rows reach the harness as new items rendered as text; the
+  harness model sees ids on tool results (`[tool result <id>]`) but not on its own calls, so
+  `evidence` should name result ids. Step times record the evidence window without ids.
+- The end reminder call reaches the client as an ordinary call whose new item is the
+  reminder message, so the harness records it; the next call's history lacks it, the client
+  sees a changed prefix and starts a fresh harness session.
+- A fold changes the history prefix, so the next call starts a fresh harness session with
+  the compacted history (or a fork of a checkpoint session where the harness supports it).
 
 ## Provider-specific projection
 
