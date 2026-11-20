@@ -1,6 +1,8 @@
 import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 // Agent voice output: the toggle shows the chat's voice reply control for this agent, and the
-// chosen Kokoro voice speaks its replies. The server validates voices against its catalog.
+// chosen Kokoro voice speaks its replies. The server validates voices against its catalog. The
+// dictation row chooses whether the System model cleans up finished dictations in this agent's
+// chats; until it is changed the agent follows dictation.editor in voice.json.
 export function renderVoiceOutput(content, agent, persist) {
   if (!agent.voice_output || !Array.isArray(agent.voice_catalog)) return;
   const {body, toggle} = createSubpage(content, {id:'voice-output', title:'Voice output', toggleLabel:'Enable voice output'});
@@ -16,7 +18,21 @@ export function renderVoiceOutput(content, agent, persist) {
   list.setAttribute('role', 'radiogroup');
   list.setAttribute('aria-label', 'Voice');
   list.style.cssText = 'display:flex;flex-direction:column;gap:4px;margin:8px 0';
-  body.append(hint, list, status);
+  const dictationHeading = document.createElement('div');
+  dictationHeading.className = 'ac-label';
+  dictationHeading.style.cssText = 'margin-top:12px';
+  dictationHeading.textContent = 'Dictation';
+  const cleanupRow = document.createElement('label');
+  cleanupRow.style.cssText = 'display:flex;align-items:center;gap:8px;min-height:32px;cursor:pointer;-webkit-tap-highlight-color:transparent';
+  const cleanup = document.createElement('input');
+  cleanup.type = 'checkbox';
+  cleanup.dataset.dictationCleanup = '';
+  cleanupRow.append(cleanup, document.createTextNode('Clean up dictation with the System model'));
+  const cleanupHint = document.createElement('p');
+  cleanupHint.className = 'ac-hint';
+  cleanupHint.textContent = 'After you stop dictating, the System model removes filler words and repeated words and fixes punctuation. You can keep typing meanwhile; the cleaned text replaces the dictation only if you have not changed it. App default: ' + (agent.dictation_cleanup_default ? 'on' : 'off') + '.';
+  cleanup.addEventListener('change', () => { void commit({dictation_cleanup: cleanup.checked}); });
+  body.append(hint, list, dictationHeading, cleanupRow, cleanupHint, status);
 
   const player = new Audio();
   let playing = null;
@@ -81,6 +97,8 @@ export function renderVoiceOutput(content, agent, persist) {
       radio.checked = radio.value === saved.voice;
       radio.disabled = !agent.can_manage || busy;
     }
+    cleanup.checked = saved.dictation_cleanup ?? agent.dictation_cleanup_default === true;
+    cleanup.disabled = !agent.can_manage || busy;
   };
   async function commit(change) {
     if (busy) return;

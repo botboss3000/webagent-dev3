@@ -348,11 +348,11 @@ pub(crate) async fn voice_audio(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> Api {
-    session_agent_id(&app, &sid).await?;
+    let agent = session_agent_id(&app, &sid).await?;
     let op = required(&body, "op", 16)?;
     if op == "tidy" {
         let text = required(&body, "text", tidy::MAX_CHARS * 4)?;
-        return tidy_dictation(&app, &sid, text).await;
+        return tidy_dictation(&app, &sid, &agent, text).await;
     }
     let k = dictation_key(&app, &sid);
     let settings = VoiceSettings::live().dictation;
@@ -500,16 +500,20 @@ fn basic_tidy(settings: &webagent_media::settings::Dictation, text: String) -> S
 }
 
 /// The dictation cleanup pass: the transcript edited once by the agent's System model. It
-/// comes back unchanged (`tidied: false`) when cleanup is off, the agent has no System model,
+/// comes back unchanged (`tidied: false`) when cleanup is off (the agent's Identity voice
+/// setting, else `dictation.editor`), the agent has no System model,
 /// the text is too short, or the answer does not look like an edit of it; a model failure is an
 /// error, and the client keeps the transcript it typed.
-async fn tidy_dictation(app: &App, sid: &str, text: &str) -> Api {
+async fn tidy_dictation(app: &App, sid: &str, agent: &str, text: &str) -> Api {
     let unchanged = || {
         Ok(Json(
             json!({"text": text, "tidied": false, "ephemeral": true}),
         ))
     };
-    if !VoiceSettings::live().dictation.tidy || !tidy::wanted(text) {
+    let chosen = crate::agents_api::voice_output(&app.store, agent)
+        .await?
+        .dictation_cleanup;
+    if !chosen.unwrap_or(VoiceSettings::live().dictation.editor) || !tidy::wanted(text) {
         return unchanged();
     }
     let Ok(run) = media_lane::lane_run(app, sid, model_selection::ModelRole::System).await else {

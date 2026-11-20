@@ -148,11 +148,17 @@ fn voice_output_accepts_only_listed_voices_and_exact_fields() {
     let saved = VoiceOutput::from_value(&json!({"enabled": true, "voice": "bm_george"})).unwrap();
     assert_eq!(saved.voice, "bm_george");
     assert_eq!(VoiceOutput::from_value(&saved.to_value()).unwrap(), saved);
+    assert_eq!(saved.dictation_cleanup, None);
+    let cleanup = json!({"enabled": false, "voice": "af_sarah", "dictation_cleanup": true});
+    let parsed = VoiceOutput::from_value(&cleanup).unwrap();
+    assert_eq!(parsed.dictation_cleanup, Some(true));
+    assert_eq!(parsed.to_value(), cleanup);
     for bad in [
         json!({"enabled": true, "voice": "zf_xiaobei"}),
         json!({"enabled": "yes", "voice": "af_sarah"}),
         json!({"enabled": true}),
         json!({"enabled": true, "voice": "af_sarah", "speed": 2}),
+        json!({"enabled": true, "voice": "af_sarah", "dictation_cleanup": "on"}),
         json!("af_sarah"),
     ] {
         assert!(VoiceOutput::from_value(&bad).is_err(), "{bad}");

@@ -101,15 +101,19 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
  let voiceState='idle',voiceLagging=false;
  function state(value){
   voiceState=value;if(value==='idle')voiceLagging=false;
-  const recording=['listening','reconnecting'].includes(value),busy=value!=='idle'&&!recording;mic.classList.toggle('recording',recording);mic.classList.toggle('transcribing',busy);mic.classList.toggle('lagging',voiceLagging);mic.setAttribute('aria-pressed',String(value!=='idle'));mic.title=(recording?'Stop dictation':busy?{requesting_microphone:'Waiting for microphone permission…',reconnecting:'Reconnecting…',tidying:'Tidying dictation…'}[value]||'Finishing dictation…':'Dictate')+(voiceLagging?' (slow connection, catching up)':'');mic.setAttribute('aria-label',mic.title);pill.classList.toggle('dictating',value!=='idle');
+  const recording=['listening','reconnecting'].includes(value),busy=value!=='idle'&&!recording;mic.classList.toggle('recording',recording);mic.classList.toggle('transcribing',busy);mic.classList.toggle('lagging',voiceLagging);mic.setAttribute('aria-pressed',String(value!=='idle'));mic.title=(recording?'Stop dictation':busy?{requesting_microphone:'Waiting for microphone permission…',reconnecting:'Reconnecting…',tidying:'Tidying dictation…'}[value]||'Finishing dictation…':'Dictate')+(voiceLagging?' (slow connection, catching up)':'');mic.setAttribute('aria-label',mic.title);pill.classList.toggle('dictating',value!=='idle'&&value!=='tidying');
   if(value==='idle'){stopTyping();input.readOnly=false;}changed?.();
  }
   // Stop typing into the composer and hand it back to the user with the caret after the dictated text.
  function release(){stopTyping();around=null;input.readOnly=false;if(!disposed&&document.activeElement!==input)input.focus();}
-  // After the final text is typed, the server's cleanup pass (the agent's System model: fillers, repeated words, punctuation) replaces it in place. Clicking the composer or starting another dictation drops the pending cleanup, and a failed one keeps the typed text.
+  // After the final text is typed, the composer is handed back at once and the server's cleanup pass (the agent's System model when its Identity voice setting or voice.json turns it on: fillers, repeated words, punctuation) runs meanwhile. Its result replaces the dictated text only if the composer is unchanged and no other dictation started; an edit, a send, another dictation or a failure keeps what is there.
+ let pendingTidy=null;
  function tidy(text,sid){
-  const mine=around;state('tidying');
-  client.voiceAudio(sid,{op:'tidy',text}).then(r=>{if(around===mine&&!disposed&&r?.tidied&&typeof r.text==='string')dictate(r.text);}).catch(()=>{}).finally(()=>afterTyping(()=>{if(around===mine){state('idle');release();}}));
+  const a=around,typed=input.value,token={};pendingTidy=token;release();state('tidying');
+  client.voiceAudio(sid,{op:'tidy',text}).then(r=>{
+   if(pendingTidy!==token||disposed||around||!r?.tidied||typeof r.text!=='string'||input.value!==typed)return;
+   const head=a.before+(a.lead||'')+r.text;input.value=head+(a.trail||'')+a.after;input.setSelectionRange(head.length,head.length);input.dispatchEvent(new Event('input',{bubbles:true}));
+  }).catch(()=>{}).finally(()=>{if(pendingTidy===token){pendingTidy=null;if(voiceState==='tidying')state('idle');}});
  }
   // Run once the letter-by-letter typing has caught up.
  function afterTyping(fn){if(typingTimer)setTimeout(()=>afterTyping(fn),30);else fn();}
@@ -117,7 +121,7 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
  const capture=createAudioCapture({send:(id,b)=>client.voiceAudio(id,b),onState:state,onLag:on=>{voiceLagging=!!on;state(voiceState);},onText:dictate,onComplete:(text,sid)=>{dictate(text);afterTyping(()=>{if(!around)return;if(!String(text||'').trim())note('No speech detected.');if(String(text||'').trim().split(/\s+/).length>=3)tidy(String(text),sid);else release();});},onError:e=>{release();note(e.name==='NotAllowedError'?'Microphone permission is blocked. Allow it in the browser site controls and try again.':e.message);}});
    // The microphone opens at the tap, before a new conversation exists; its audio waits for ensureSession, and open() adopts that conversation instead of cancelling.
   // Start a dictation at the cursor once availability and session-generation checks pass.
- const begin=guard(async()=>{if(!available)return;const epoch=generation,origin=session;adopting=!session;const sid=ensureSession().then(sid=>{adopting=false;if(disposed||(origin&&origin!==session)||(epoch!==generation&&session!==sid))throw Error('Conversation changed; dictate again.');return sid;},e=>{adopting=false;throw e;});around={before:input.value.slice(0,input.selectionStart),after:input.value.slice(input.selectionEnd),targetTranscript:'',shown:0,lastTarget:'',lead:'',trail:''};input.readOnly=true;try{if(!await capture.start(sid))release();}catch(e){release();throw e;}});
+ const begin=guard(async()=>{if(!available)return;pendingTidy=null;const epoch=generation,origin=session;adopting=!session;const sid=ensureSession().then(sid=>{adopting=false;if(disposed||(origin&&origin!==session)||(epoch!==generation&&session!==sid))throw Error('Conversation changed; dictate again.');return sid;},e=>{adopting=false;throw e;});around={before:input.value.slice(0,input.selectionStart),after:input.value.slice(input.selectionEnd),targetTranscript:'',shown:0,lastTarget:'',lead:'',trail:''};input.readOnly=true;try{if(!await capture.start(sid))release();}catch(e){release();throw e;}});
   // The microphone starts opening when the press goes down, not when it lifts; the click that follows only resumes audio (touch allows it at release), and a press that turns into a scroll cancels. Other clicks toggle: stop the active dictation, or start one.
  let pressed=false;
  mic.addEventListener('pointerdown',e=>{pressed=false;if(e.button||mic.disabled||capture.active||!available)return;pressed=true;begin();},{signal:abort.signal});
@@ -125,7 +129,7 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
  mic.onclick=guard(async()=>{if(pressed){pressed=false;capture.resume();return;}if(capture.active){await capture.finish();return;}await begin();});
  input.addEventListener('click',()=>{if(!around)return;const start=input.selectionStart,end=input.selectionEnd;stopTyping();capture.cancel();if(voiceState==='tidying')state('idle');around=null;input.readOnly=false;input.setSelectionRange(start,end);},{signal:abort.signal});
   // Cancel any dictation before displaying a new session, except the conversation a dictation started without one is waiting for.
- function open(id){if(adopting&&!session&&capture.active){adopting=false;session=id;paint();return;}stopTyping();capture.cancel();if(voiceState==='tidying')state('idle');around=null;input.readOnly=false;++generation;session=id;paint();}
+ function open(id){if(adopting&&!session&&capture.active){adopting=false;session=id;paint();return;}stopTyping();capture.cancel();pendingTidy=null;if(voiceState==='tidying')state('idle');around=null;input.readOnly=false;++generation;session=id;paint();}
   // Return staged upload IDs for submission, refusing while any file is pending, failed, or not uploaded.
  function snapshot(sid=session){const files=staged.get(sid)||[];if(files.some(i=>i.pending||i.error||!i.uploaded))throw Error('Finish or remove failed uploads before sending.');return files.map(i=>i.id);}
   // Retire only the submitted IDs and revoke their preview URLs after the message is accepted.

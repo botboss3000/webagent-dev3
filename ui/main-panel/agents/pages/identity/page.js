@@ -37,7 +37,7 @@ const HINTS = {
   'chat-modes': 'Default mode and the instructions each mode adds.',
   'review-incoming-messages': 'Screen visitors’ messages before the agent answers.',
   'final-response': 'Promote all messages, completion flag and statement.',
-  'voice-output': 'Choose the voice that reads replies aloud.',
+  'voice-output': 'Choose the voice that reads replies aloud, and dictation cleanup.',
 };
 
 // List order, one-line description and icon tile for each Identity category.

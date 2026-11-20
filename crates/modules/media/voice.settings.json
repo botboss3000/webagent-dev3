@@ -47,16 +47,36 @@
     },
     {
       "id": "media.dictation.tidy",
-      "description": "After dictation stops, have the agent's System model remove filler words and repeated words and fix punctuation in the dictated text.",
+      "description": "Drop um, uh and accidentally doubled words from dictated text (local rules, no model).",
       "type": "boolean",
       "pointer": "/dictation/tidy",
       "layers": [
         "app"
       ],
       "examples": [
-        "stop cleaning up my dictation",
         "keep um and uh in dictated text",
+        "stop removing repeated words from dictation",
         "tidy voice dictation"
+      ],
+      "areas": [
+        "voice",
+        "dictation",
+        "microphone"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "media.dictation.editor",
+      "description": "Default for agents that do not choose: after dictation stops, have the agent's System model remove filler words and repeated words and fix punctuation in the dictated text.",
+      "type": "boolean",
+      "pointer": "/dictation/editor",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "clean up my dictation with the model",
+        "turn on the dictation editor",
+        "stop the model editing my dictation"
       ],
       "areas": [
         "voice",

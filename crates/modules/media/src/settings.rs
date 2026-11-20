@@ -41,10 +41,12 @@ pub struct Dictation {
     pub max_recording_seconds: u32,
     /// Decoder threads.
     pub threads: i32,
-    /// Local rules drop um/uh and doubled words from every transcript; after stop, the agent's
-    /// System model (if one is assigned) also removes other fillers and repeats and fixes
-    /// punctuation, and the typed transcript is replaced by the result.
+    /// Local rules drop um/uh and doubled words from every transcript.
     pub tidy: bool,
+    /// After stop, the agent's System model (if one is assigned) removes other fillers and
+    /// repeats and fixes punctuation, and the typed transcript is replaced by the result. The
+    /// default for agents whose Identity voice settings do not choose.
+    pub editor: bool,
     pub pause_detection: PauseDetection,
 }
 
@@ -95,6 +97,7 @@ impl Default for VoiceSettings {
                 max_recording_seconds: 300,
                 threads: 4,
                 tidy: true,
+                editor: false,
                 pause_detection: PauseDetection {
                     threshold: 0.5,
                     min_silence_seconds: 0.4,

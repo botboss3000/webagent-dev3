@@ -202,6 +202,9 @@ pub struct VoiceOutput {
     pub enabled: bool,
     /// One of [`VOICES`].
     pub voice: String,
+    /// Whether the System model cleans up this agent's finished dictations; `None` follows
+    /// `dictation.editor` in `voice.json`.
+    pub dictation_cleanup: Option<bool>,
 }
 
 /// A submitted or stored voice output setting that is not `{enabled: bool, voice: <known id>}`.
@@ -221,13 +224,14 @@ impl Default for VoiceOutput {
         Self {
             enabled: false,
             voice: DEFAULT_VOICE.into(),
+            dictation_cleanup: None,
         }
     }
 }
 
 impl VoiceOutput {
-    /// Parse a setting; null (never set) is off with the default voice. Unknown fields and
-    /// voices are rejected.
+    /// Parse a setting; null (never set) is off with the default voice. `dictation_cleanup` is
+    /// optional (true, false or null); other unknown fields and voices are rejected.
     pub fn from_value(value: &serde_json::Value) -> Result<Self, InvalidVoiceOutput> {
         if value.is_null() {
             return Ok(Self::default());
@@ -235,13 +239,20 @@ impl VoiceOutput {
         let fields = value.as_object().ok_or(InvalidVoiceOutput)?;
         let enabled = fields.get("enabled").and_then(|v| v.as_bool());
         let voice = fields.get("voice").and_then(|v| v.as_str());
+        let cleanup = match fields.get("dictation_cleanup") {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::Bool(on)) => Ok(Some(*on)),
+            Some(_) => Err(InvalidVoiceOutput),
+        }?;
+        let known = 2 + usize::from(fields.contains_key("dictation_cleanup"));
         match (enabled, voice) {
             (Some(enabled), Some(voice))
-                if fields.len() == 2 && VOICES.iter().any(|(id, _)| *id == voice) =>
+                if fields.len() == known && VOICES.iter().any(|(id, _)| *id == voice) =>
             {
                 Ok(Self {
                     enabled,
                     voice: voice.into(),
+                    dictation_cleanup: cleanup,
                 })
             }
             _ => Err(InvalidVoiceOutput),
@@ -250,6 +261,10 @@ impl VoiceOutput {
 
     /// The stored and public form.
     pub fn to_value(&self) -> serde_json::Value {
-        serde_json::json!({"enabled": self.enabled, "voice": self.voice})
+        let mut value = serde_json::json!({"enabled": self.enabled, "voice": self.voice});
+        if let Some(on) = self.dictation_cleanup {
+            value["dictation_cleanup"] = on.into();
+        }
+        value
     }
 }
