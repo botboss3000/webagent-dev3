@@ -43,6 +43,26 @@
       "bounds": "proposed"
     },
     {
+      "id": "loop.tools.approval_expiry_seconds",
+      "description": "Seconds a tool approval may wait undecided before it counts as declined; 0 means approvals never expire.",
+      "type": "integer",
+      "pointer": "/tools/approval_expiry_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "expire tool approvals after a day",
+        "never expire approvals"
+      ],
+      "areas": [
+        "tools",
+        "approvals"
+      ],
+      "min": 0,
+      "max": 2592000,
+      "bounds": "proposed"
+    },
+    {
       "id": "loop.tools.scripts.max_steps",
       "description": "Most tool calls one saved session script may contain.",
       "type": "integer",
