@@ -747,6 +747,8 @@ async fn perform(
         return Err(anyhow!("Module health unavailable"));
     }
     let mut envelope = app.store.module_state(id).await?;
+    // Internal host calls compare against this copy to skip rewriting an unchanged envelope.
+    let loaded = internal.then(|| envelope.clone());
     let (_, descriptor) = manifest(id)?;
     if !internal
         && !descriptor["public_operations"]
@@ -850,9 +852,15 @@ async fn perform(
             }
         }
     }
-    let unchanged = readonly
-        && envelope["generation"] == gen
-        && envelope["state"] == app.store.module_state(id).await?["state"];
+    // An internal call without a receipt that left the envelope as loaded (apart from the
+    // reducer's revision bump) has nothing to persist; idle ticks otherwise rewrite it each second.
+    let unchanged = if let Some(loaded) = loaded.as_ref().filter(|_| receipt.is_none()) {
+        envelope["generation"] == gen && webagent_extensions::health::unchanged(loaded, &envelope)
+    } else {
+        readonly
+            && envelope["generation"] == gen
+            && envelope["state"] == app.store.module_state(id).await?["state"]
+    };
     let mut public = json!({"result":result["result"],"revision":if unchanged{revision}else{revision+1},"available":true});
     if automation_ability_host(id) {
         public["implementation_generation"] = result["_host_implementation"].clone();
@@ -1675,6 +1683,16 @@ fn event_scan_cursor(id: &str, envelope: &Value, latest: i64) -> i64 {
     persisted.max(oldest_active.unwrap_or(latest))
 }
 
+/// Whether `bootstrap_main` would be a no-op: the reducer already holds this agent's
+/// Main Notes review for `sid` under the current generation. Skipping it avoids
+/// launching the sandboxed reducer every tick; any mismatch still goes to the reducer.
+fn main_notes_registered(envelope: &Value, gen: &str, agent: &str, sid: &str) -> bool {
+    let definition = &envelope["state"]["definitions"][crate::main_chat::review_id(agent)];
+    envelope["generation"] == gen
+        && definition["agent_id"] == agent
+        && definition["trigger"]["kind"] == "main_notes"
+        && definition["destination"]["session_id"] == sid
+}
 pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u64> {
     if !available(id) {
         return Ok(15000);
@@ -1691,11 +1709,20 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
     }
     let mut notes_by_agent = json!({});
     if id == "automation" {
+        let mut loaded = None;
         for agent in app.store.main_chat_agent_ids().await? {
             let notes = app.store.for_agent(&agent).await?.main_chat_state().await?;
             if notes["settings"]["enabled"] == true {
                 if let Some(sid) = notes["session_id"].as_str() {
                     if let Ok(scope) = execution_scope(app, &agent, Some(sid), false).await {
+                        if loaded.is_none() {
+                            loaded = Some(app.store.module_state(id).await?);
+                        }
+                        let envelope = loaded.as_ref().unwrap_or(&Value::Null);
+                        if main_notes_registered(envelope, &gen, &agent, sid) {
+                            notes_by_agent[agent] = notes;
+                            continue;
+                        }
                         if perform(
                             app,
                             id,
@@ -1860,6 +1887,7 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
         }
     }
     let mut envelope = app.store.module_state(id).await?;
+    let loaded = envelope.clone();
     let expected = envelope["revision"].as_u64().unwrap_or(0);
     let mut remaining = Vec::new();
     if !envelope["admission_results"].is_object() {
@@ -1885,7 +1913,10 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
             envelope["event_gap"] = json!({"code":"cursor_expired","pruned_through":page["pruned_through"],"resumed_at":page["latest_seq"]});
         }
     }
-    app.store.module_cas(id, expected, &envelope).await?;
+    // No admission, cursor or gap change: skip the write an idle tick would repeat each second.
+    if !webagent_extensions::health::unchanged(&loaded, &envelope) {
+        app.store.module_cas(id, expected, &envelope).await?;
+    }
     for (oid, attempt) in acknowledged {
         perform(
             app,
@@ -2156,6 +2187,19 @@ mod tests {
             ),
             700
         );
+    }
+    #[test]
+    fn registered_main_notes_review_skips_only_an_exact_match() {
+        let id = crate::main_chat::review_id("agent");
+        let mut envelope = json!({"generation":"g","state":{"definitions":{}}});
+        envelope["state"]["definitions"][&id] = json!({"agent_id":"agent","trigger":{"kind":"main_notes"},"destination":{"session_id":"s"}});
+        assert!(main_notes_registered(&envelope, "g", "agent", "s"));
+        assert!(!main_notes_registered(&envelope, "h", "agent", "s"));
+        assert!(!main_notes_registered(&envelope, "g", "agent", "other"));
+        assert!(!main_notes_registered(&envelope, "g", "other", "s"));
+        envelope["state"]["definitions"][&id]["trigger"]["kind"] = json!("cron");
+        assert!(!main_notes_registered(&envelope, "g", "agent", "s"));
+        assert!(!main_notes_registered(&json!({}), "g", "agent", "s"));
     }
     #[tokio::test]
     async fn fresh_activation_above_retention_floor_receives_future_events() {

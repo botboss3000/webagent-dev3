@@ -185,6 +185,20 @@ pub fn delay(before: &Value, after: &Value, next: Option<u64>, now_ms: u64) -> u
         })
 }
 
+/// Whether a stored module envelope is unchanged apart from the reducer's per-call
+/// `state.revision` bump, so an idle tick can skip rewriting it.
+#[must_use]
+pub fn unchanged(before: &Value, after: &Value) -> bool {
+    let without_revision = |envelope: &Value| {
+        let mut envelope = envelope.clone();
+        if let Some(state) = envelope["state"].as_object_mut() {
+            state.remove("revision");
+        }
+        envelope
+    };
+    without_revision(before) == without_revision(after)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -259,5 +273,25 @@ mod tests {
         assert!(binding_current(&health, "epoch", None, 100));
         assert!(current(&health, "epoch", 115));
         assert!(!current(&health, "epoch", 116));
+    }
+
+    #[test]
+    fn only_a_state_revision_bump_counts_as_unchanged() {
+        let before = json!({"revision":4,"generation":"g","pending":[],"state":{"revision":7,"definitions":{}}});
+        let mut after = before.clone();
+        after["state"]["revision"] = json!(8);
+        assert!(unchanged(&before, &after));
+        for (field, value) in [
+            ("revision", json!(5)),
+            ("generation", json!("h")),
+            ("pending", json!([{}])),
+            ("event_cursor", json!(9)),
+        ] {
+            let mut changed = after.clone();
+            changed[field] = value;
+            assert!(!unchanged(&before, &changed), "{field}");
+        }
+        after["state"]["definitions"]["d"] = json!({});
+        assert!(!unchanged(&before, &after));
     }
 }
