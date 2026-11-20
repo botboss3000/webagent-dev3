@@ -1,0 +1,47 @@
+# Installable app builds that need a platform runner (see docs/desktop-app.md).
+# Linux, Windows and Android are built on the development server with
+# crates/app-shell/package.py; macOS needs a Mac, so it is built here.
+name: App builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "crates/app-shell/**"
+      - ".github/workflows/app-builds.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain (the server image's pinned version)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --target aarch64-apple-darwin
+          rustup default 1.99.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-tauri
+            target
+            crates/app-shell/target
+          key: macos-${{ hashFiles('Cargo.lock', 'crates/app-shell/Cargo.lock') }}
+          restore-keys: macos-
+      - name: Tauri CLI
+        run: command -v cargo-tauri || cargo install tauri-cli --version "^2" --locked
+      - name: Build the app
+        run: python3 crates/app-shell/package.py macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webagent-macos
+          path: |
+            crates/app-shell/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            crates/app-shell/target/aarch64-apple-darwin/release/bundle/macos/*.app
+          if-no-files-found: error
