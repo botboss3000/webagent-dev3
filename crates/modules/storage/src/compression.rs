@@ -152,7 +152,9 @@ impl Compression {
         }
         let level = level.unwrap_or(self.level);
         let packed = match dictionary {
-            Some(id) => crate::dictionary::compress(&plain, &id, level)?,
+            // A dictionary dropped from memory since `current` named it: pack without one.
+            Some(id) => crate::dictionary::compress(&plain, &id, level)
+                .or_else(|_| -> Result<Vec<u8>> { Ok(zstd::bulk::compress(&plain, level)?) })?,
             None => zstd::bulk::compress(&plain, level)?,
         };
         Ok(if packed.len() < plain.len() {

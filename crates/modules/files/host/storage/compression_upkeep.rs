@@ -12,7 +12,8 @@ const FIRST_TRAINING_ROWS: i64 = 1_000;
 /// Samples read for training, newest first, each cut to this many bytes.
 const SAMPLE_ROWS: i64 = 4_000;
 const SAMPLE_BYTES: usize = 16 * 1024;
-/// Rows repacked in one pass at most, in batches of `BATCH` per transaction.
+/// Rows read in one pass at most (a session is finished once started), in batches of
+/// `BATCH` per transaction.
 const PASS_ROWS: usize = 2_000;
 const BATCH: i64 = 128;
 const DAY_SECONDS: i64 = 86_400;
@@ -103,17 +104,17 @@ impl Store {
         .bind(&current)
         .fetch_all(&self.pool)
         .await?;
-        let mut rewritten = 0u64;
+        let (mut read, mut rewritten) = (0usize, 0u64);
         for row in sessions {
-            if rewritten as usize >= PASS_ROWS {
+            if read >= PASS_ROWS {
                 break;
             }
             let sid: String = row.get("sid");
             let last: i64 = row.get("last");
             for (table, column) in TABLES {
-                rewritten += self
-                    .repack_rows(&sid, table, column, settings.idle_level)
-                    .await?;
+                let (rows, changed) = self.repack_rows(&sid, table, column, &settings).await?;
+                read += rows;
+                rewritten += changed;
             }
             sqlx::query(
                 "INSERT INTO compress_marks(session_id,dictionary,through) VALUES(?,?,?)
@@ -128,10 +129,18 @@ impl Store {
         Ok(rewritten)
     }
 
-    /// Rewrite one session's rows of `table` at `level`; values are unchanged.
-    async fn repack_rows(&self, sid: &str, table: &str, column: &str, level: i32) -> Result<u64> {
+    /// Rewrite one session's rows of `table` at the idle level; values are unchanged.
+    /// Returns the rows read and the rows rewritten.
+    async fn repack_rows(
+        &self,
+        sid: &str,
+        table: &str,
+        column: &str,
+        settings: &webagent_storage::compression::Compression,
+    ) -> Result<(usize, u64)> {
+        let level = settings.idle_level;
         let mut cursor = 0i64;
-        let mut rewritten = 0u64;
+        let (mut read, mut rewritten) = (0usize, 0u64);
         loop {
             let rows = sqlx::query(&format!(
                 "SELECT seq,{column} AS value FROM {table} WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?"
@@ -146,8 +155,9 @@ impl Store {
             };
             let blobs: Vec<(i64, Vec<u8>)> = rows
                 .iter()
-                .map(|row| (row.get("seq"), row.get("value")))
+                .map(|row| (row.get("seq"), row.get::<Vec<u8>, _>("value")))
                 .collect();
+            read += blobs.len();
             // Packing at a high level is CPU work: keep it off the async workers.
             let store = self.clone();
             let packed = tokio::task::spawn_blocking(move || {
@@ -177,7 +187,7 @@ impl Store {
             tx.commit().await?;
             cursor = end;
         }
-        Ok(rewritten)
+        Ok((read, rewritten))
     }
 
     /// Train and repack when due; called with the history trim.
