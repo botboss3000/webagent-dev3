@@ -7,6 +7,7 @@
   "models": [
     {
       "id": "opencode/beam-free",
+      "cache_timeout_minutes": 60,
       "name": "beam-free (free)",
       "input": ["text", "image"],
       "context": 256000
@@ -19,6 +20,7 @@
     },
     {
       "id": "opencode/deepseek-v4.1-flash-free",
+      "cache_timeout_minutes": 60,
       "name": "deepseek-v4.1-flash-free (free)",
       "input": ["text", "image"],
       "context": 256000
@@ -43,6 +45,7 @@
     },
     {
       "id": "opencode-go/deepseek-v4.1-flash",
+      "cache_timeout_minutes": 20,
       "name": "deepseek-v4.1-flash (Go)",
       "input": ["text", "image"],
       "context": 256000
@@ -61,6 +64,7 @@
     },
     {
       "id": "opencode-go/glm-5.3",
+      "cache_timeout_minutes": 10,
       "name": "glm-5.3 (Go)",
       "input": ["text", "image"],
       "context": 256000
@@ -187,6 +191,7 @@
     },
     {
       "id": "opencode-go/qwen3.8-flash",
+      "cache_timeout_minutes": 5,
       "name": "qwen3.8-flash (Go)",
       "input": ["text", "image"],
       "context": 256000
