@@ -60,6 +60,9 @@ impl<
     pub async fn recent_runs(&self, sid: Option<&str>) -> Result<Vec<Value>> {
         self.repository().recent_runs(sid).await
     }
+    pub async fn newest_run_id(&self, sid: &str) -> Result<Option<String>> {
+        self.repository().newest_run_id(sid).await
+    }
     pub async fn last_other_run_at(&self, sid: &str, rid: &str) -> Result<Option<i64>> {
         self.repository().last_other_run_at(sid, rid).await
     }

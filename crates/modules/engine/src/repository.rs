@@ -307,6 +307,16 @@ impl<
 
     /// When this session's other runs last changed (Unix seconds); after a restart this
     /// stands in for the forgotten time of the session's last model call.
+    /// The session's newest run, by admission order.
+    pub async fn newest_run_id(&self, sid: &str) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT id FROM run_index WHERE session_id=? ORDER BY COALESCE(enqueue_seq,rowid) DESC LIMIT 1",
+        )
+        .bind(sid)
+        .fetch_optional(self.pool)
+        .await?)
+    }
+
     pub async fn last_other_run_at(&self, sid: &str, rid: &str) -> Result<Option<i64>> {
         Ok(
             sqlx::query_scalar(

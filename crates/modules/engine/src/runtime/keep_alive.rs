@@ -258,7 +258,13 @@ impl<
                 }
             }
             let run_id = timing["run_id"].as_str().unwrap_or_default().to_owned();
-            let run = self.run(&run_id).await.unwrap_or(Value::Null);
+            // The newest run, not the one behind the saved request: a new message's run counts
+            // as live from admission, before its first model call saves a new request.
+            let newest = self.store.newest_run_id(&session).await?;
+            let run = self
+                .run(newest.as_deref().unwrap_or(&run_id))
+                .await
+                .unwrap_or(Value::Null);
             let record = self
                 .store
                 .get(&format!("session:{session}"))
@@ -364,6 +370,7 @@ mod tests {
         assert_eq!(of("stopped"), State::Settled(false));
         assert_eq!(of("failed"), State::Settled(false));
         assert_eq!(of("running"), State::Live);
+        assert_eq!(of("queued"), State::Live, "a new message waits for its own call");
         let flagged = |flag: &str| state(&s, &json!({"status":"completed"}), &json!({"flag":flag}));
         assert_eq!(flagged("needs_input"), State::Settled(true));
         assert_eq!(
