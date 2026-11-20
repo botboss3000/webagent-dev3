@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "publication_size_guard_v1",
   "checkpoint": "publication",
-  "runtime": "python_gate",
+  "runtime": "rust",
   "config": {
     "max_text_bytes": 8192
   }

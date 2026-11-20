@@ -16,7 +16,6 @@ pub const PUBLICATION_SIZE: &str = "publication_size_guard_v1";
 #[serde(rename_all = "snake_case")]
 pub enum Runtime {
     Rust,
-    PythonGate,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -120,7 +119,7 @@ pub fn validate_manifest(id: &str, item: &Manifest) -> Result<()> {
             serde_json::from_value::<ClosingConfig>(item.config.clone())?.validate()?;
         }
         PUBLICATION_SIZE => {
-            if item.checkpoint != Checkpoint::Publication || item.runtime != Runtime::PythonGate {
+            if item.checkpoint != Checkpoint::Publication || item.runtime != Runtime::Rust {
                 bail!("Invalid publication-size gate binding");
             }
             let config: SizeConfig = serde_json::from_value(item.config.clone())?;
@@ -159,7 +158,9 @@ pub fn parse_selection(checkpoint: Checkpoint, configured: &str) -> Result<Selec
         None => (false, configured),
     };
     let item = manifest(id)?;
-    if item.checkpoint != checkpoint || (optional && item.runtime != Runtime::PythonGate) {
+    // `optional:` stays accepted for the size gate, which ran in a separate process that
+    // could be unavailable; it now runs in the app, so optional and required act alike.
+    if item.checkpoint != checkpoint || (optional && id != PUBLICATION_SIZE) {
         bail!("Gate module cannot run at this checkpoint or in optional mode");
     }
     Ok(Selection {
@@ -203,10 +204,7 @@ mod tests {
         let closer = closing_config().unwrap();
         assert_eq!(closer.fallback_flag.as_deref(), Some("unflagged"));
         assert!(closer.notification.max_chars <= 1000);
-        assert_eq!(
-            manifest(PUBLICATION_SIZE).unwrap().runtime,
-            Runtime::PythonGate
-        );
+        assert_eq!(manifest(PUBLICATION_SIZE).unwrap().runtime, Runtime::Rust);
         assert!(closer.notification.target_words <= 50);
     }
     #[test]
@@ -1008,27 +1006,11 @@ mod closing {
     }
 }
 pub mod protocol {
-    //! Speak to the optional Python checker over a small, versioned local message.
-    //! It receives reply metadata, not the reply text. Rust still makes the final
-    //! decision and is the only process that can publish an assistant message.
-    use anyhow::{bail, Context, Result};
-    use serde::{Deserialize, Serialize};
-    use sha2::{Digest, Sha256};
-    use std::{path::Path, time::Duration};
-    use tokio::{
-        io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-        net::UnixStream,
-        time::timeout,
-    };
+    //! The publication-size gate: checks a proposed final reply's byte count against the
+    //! configured descriptor. It sees only the size, never the text, and cannot publish.
+    use anyhow::Result;
 
-    pub const MODULE_ID: &str = "publication_size_guard_v1";
-    /// The gate socket under the runtime root.
-    pub fn socket_path() -> std::path::PathBuf {
-        webagent_configuration::paths::runtime().join("gate/gate.sock")
-    }
-    const PROTOCOL_VERSION: u32 = 1;
-    const MAX_FRAME: usize = 16 * 1024;
-    const GATE_UID: u32 = 1102;
+    pub const MODULE_ID: &str = crate::gates::PUBLICATION_SIZE;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum GateOutcome {
@@ -1037,315 +1019,68 @@ pub mod protocol {
             module_id: String,
             reason_code: String,
         },
-        Skipped {
-            module_id: String,
-            reason_code: String,
-        },
     }
 
-    #[derive(Debug, Clone)]
-    pub struct PublicationGateInput {
-        pub run_id: String,
-        pub generation: String,
-        pub policy_revision: String,
-        pub input_digest: String,
-        pub turn: u64,
-        pub call_index: u64,
-        pub text_bytes: usize,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum ErrorPolicy {
-        Mandatory,
-        Optional,
-    }
-
-    #[derive(Serialize)]
-    #[serde(deny_unknown_fields)]
-    struct Request<'a> {
-        protocol_version: u32,
-        request_id: String,
-        module_id: &'a str,
-        checkpoint: &'static str,
-        run_id: &'a str,
-        generation: &'a str,
-        policy_revision: &'a str,
-        input_digest: &'a str,
-        turn: u64,
-        call_index: u64,
-        facts: Facts,
-    }
-
-    #[derive(Serialize)]
-    #[serde(deny_unknown_fields)]
-    struct Facts {
-        text_bytes: usize,
-    }
-
-    #[derive(Debug, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Response {
-        protocol_version: u32,
-        request_id: String,
-        module_id: String,
-        decision: Decision,
-        reason_code: Option<String>,
-    }
-
-    #[derive(Debug, Deserialize, PartialEq, Eq)]
-    #[serde(rename_all = "snake_case")]
-    enum Decision {
-        Pass,
-        Reject,
-    }
-
-    /// Python modules inspect bounded facts only. Rust owns activation, error policy,
-    /// native checks, and the final chat write; a worker response cannot publish.
-    pub async fn evaluate_publication(
-        socket: &Path,
+    /// Rejects a reply larger than any selected size gate's `max_text_bytes`.
+    pub fn evaluate_publication(
         policy: &crate::workflow::Policy,
-        input: &PublicationGateInput,
+        text_bytes: usize,
     ) -> Result<GateOutcome> {
-        let selections = crate::gates::selected(policy, crate::workflow::Checkpoint::Publication)?;
-        for selected in selections {
-            if selected.manifest.runtime != crate::gates::Runtime::PythonGate {
+        for selected in crate::gates::selected(policy, crate::workflow::Checkpoint::Publication)? {
+            if selected.id != MODULE_ID {
                 continue;
             }
-            let error_policy = if selected.optional {
-                ErrorPolicy::Optional
-            } else {
-                ErrorPolicy::Mandatory
-            };
-            match timeout(
-                Duration::from_secs(1),
-                exchange(socket, input, &selected.id, GATE_UID),
-            )
-            .await
-            {
-                Ok(Ok(GateOutcome::Pass)) => {}
-                Ok(Ok(other)) => return Ok(other),
-                Ok(Err(_)) | Err(_) => {
-                    return Ok(match error_policy {
-                        ErrorPolicy::Mandatory => GateOutcome::Reject {
-                            module_id: selected.id,
-                            reason_code: "module_unavailable".into(),
-                        },
-                        ErrorPolicy::Optional => GateOutcome::Skipped {
-                            module_id: selected.id,
-                            reason_code: "module_unavailable".into(),
-                        },
-                    })
-                }
+            let config: crate::gates::SizeConfig =
+                serde_json::from_value(selected.manifest.config)?;
+            if text_bytes > config.max_text_bytes {
+                return Ok(GateOutcome::Reject {
+                    module_id: selected.id,
+                    reason_code: "publication_size_exceeded".into(),
+                });
             }
         }
         Ok(GateOutcome::Pass)
-    }
-
-    async fn exchange(
-        socket: &Path,
-        input: &PublicationGateInput,
-        module_id: &str,
-        expected_uid: u32,
-    ) -> Result<GateOutcome> {
-        let mut stream = UnixStream::connect(socket)
-            .await
-            .context("gate unavailable")?;
-        if stream.peer_cred()?.uid() != expected_uid {
-            bail!("gate peer identity mismatch");
-        }
-        let identity = serde_json::to_vec(&(
-            &input.run_id,
-            &input.generation,
-            &input.policy_revision,
-            &input.input_digest,
-            input.turn,
-            input.call_index,
-            module_id,
-        ))?;
-        let request_id = hex::encode(Sha256::digest(identity));
-        let request = Request {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: request_id.clone(),
-            module_id,
-            checkpoint: "publication",
-            run_id: &input.run_id,
-            generation: &input.generation,
-            policy_revision: &input.policy_revision,
-            input_digest: &input.input_digest,
-            turn: input.turn,
-            call_index: input.call_index,
-            facts: Facts {
-                text_bytes: input.text_bytes,
-            },
-        };
-        let mut encoded = serde_json::to_vec(&request)?;
-        if encoded.len() >= MAX_FRAME {
-            bail!("gate request exceeds limit");
-        }
-        encoded.push(b'\n');
-        stream.write_all(&encoded).await?;
-        let mut frame = Vec::new();
-        BufReader::new(stream.take((MAX_FRAME + 1) as u64))
-            .read_until(b'\n', &mut frame)
-            .await?;
-        if frame.len() > MAX_FRAME || frame.last() != Some(&b'\n') {
-            bail!("invalid gate frame");
-        }
-        let response: Response = serde_json::from_slice(&frame)?;
-        if response.protocol_version != PROTOCOL_VERSION
-            || response.request_id != request_id
-            || response.module_id != module_id
-        {
-            bail!("gate response identity mismatch");
-        }
-        match (response.decision, response.reason_code) {
-            (Decision::Pass, None) => Ok(GateOutcome::Pass),
-            (Decision::Reject, Some(reason)) if reason == "publication_size_exceeded" => {
-                Ok(GateOutcome::Reject {
-                    module_id: module_id.into(),
-                    reason_code: reason,
-                })
-            }
-            _ => bail!("invalid gate decision"),
-        }
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
         use serde_json::json;
-        use std::os::unix::fs::MetadataExt;
-        use tokio::{
-            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-            net::UnixListener,
-        };
 
-        fn input() -> PublicationGateInput {
-            PublicationGateInput {
-                run_id: "run".into(),
-                generation: "gen".into(),
-                policy_revision: "policy".into(),
-                input_digest: "digest".into(),
-                turn: 1,
-                call_index: 0,
-                text_bytes: 12,
+        #[test]
+        fn size_gate_rejects_only_above_the_configured_limit() {
+            let limit = crate::gates::manifest(MODULE_ID).unwrap().config["max_text_bytes"]
+                .as_u64()
+                .unwrap() as usize;
+            for spelling in [MODULE_ID.to_owned(), format!("optional:{MODULE_ID}")] {
+                let policy = crate::workflow::Policy::resolve(Some(
+                    &json!({"modules":{"publication":[spelling]}}),
+                ))
+                .unwrap();
+                assert_eq!(
+                    evaluate_publication(&policy, limit).unwrap(),
+                    GateOutcome::Pass
+                );
+                assert_eq!(
+                    evaluate_publication(&policy, limit + 1).unwrap(),
+                    GateOutcome::Reject {
+                        module_id: MODULE_ID.into(),
+                        reason_code: "publication_size_exceeded".into()
+                    }
+                );
             }
         }
 
-        async fn mock(
-            response: impl FnOnce(&serde_json::Value) -> serde_json::Value + Send + 'static,
-        ) -> (tempfile::TempDir, std::path::PathBuf) {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("gate.sock");
-            let listener = UnixListener::bind(&path).unwrap();
-            tokio::spawn(async move {
-                let (socket, _) = listener.accept().await.unwrap();
-                let mut line = String::new();
-                let mut reader = BufReader::new(socket);
-                reader.read_line(&mut line).await.unwrap();
-                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
-                let body = response(&request);
-                reader
-                    .get_mut()
-                    .write_all(format!("{body}\n").as_bytes())
-                    .await
-                    .unwrap();
-            });
-            (dir, path)
-        }
-
-        #[tokio::test]
-        async fn accepted_response_binds_request_identity() {
-            let (_dir, path) = mock(|r| {
-                json!({"protocol_version":1,
-            "request_id":r["request_id"],"module_id":MODULE_ID,"decision":"pass",
-            "reason_code":null})
-            })
-            .await;
-            let peer_uid = std::fs::metadata(&path).unwrap().uid();
+        #[test]
+        fn without_the_size_gate_every_size_passes() {
+            let policy = crate::workflow::Policy::resolve(Some(
+                &json!({"modules":{"publication":[crate::gates::CLOSING_STATUS]}}),
+            ))
+            .unwrap();
             assert_eq!(
-                exchange(&path, &input(), MODULE_ID, peer_uid)
-                    .await
-                    .unwrap(),
+                evaluate_publication(&policy, usize::MAX).unwrap(),
                 GateOutcome::Pass
             );
-        }
-
-        #[tokio::test]
-        async fn explicit_reject_is_never_skipped() {
-            let (_dir, path) = mock(|r| {
-                json!({"protocol_version":1,
-            "request_id":r["request_id"],"module_id":MODULE_ID,"decision":"reject",
-            "reason_code":"publication_size_exceeded"})
-            })
-            .await;
-            let peer_uid = std::fs::metadata(&path).unwrap().uid();
-            assert_eq!(
-                exchange(&path, &input(), MODULE_ID, peer_uid)
-                    .await
-                    .unwrap(),
-                GateOutcome::Reject {
-                    module_id: MODULE_ID.into(),
-                    reason_code: "publication_size_exceeded".into()
-                }
-            );
-        }
-
-        #[tokio::test]
-        async fn unavailable_gate_obeys_configured_error_policy() {
-            let dir = tempfile::tempdir().unwrap();
-            let missing = dir.path().join("missing.sock");
-            let mandatory = crate::workflow::Policy::resolve(Some(
-                &json!({"modules":{"publication":[MODULE_ID]}}),
-            ))
-            .unwrap();
-            let optional = crate::workflow::Policy::resolve(Some(
-                &json!({"modules":{"publication":["optional:publication_size_guard_v1"]}}),
-            ))
-            .unwrap();
-            assert_eq!(
-                evaluate_publication(&missing, &mandatory, &input())
-                    .await
-                    .unwrap(),
-                GateOutcome::Reject {
-                    module_id: MODULE_ID.into(),
-                    reason_code: "module_unavailable".into()
-                }
-            );
-            assert_eq!(
-                evaluate_publication(&missing, &optional, &input())
-                    .await
-                    .unwrap(),
-                GateOutcome::Skipped {
-                    module_id: MODULE_ID.into(),
-                    reason_code: "module_unavailable".into()
-                }
-            );
-        }
-
-        #[tokio::test]
-        async fn wrong_identity_or_peer_is_rejected() {
-            let (_dir, path) = mock(|_| {
-                json!({"protocol_version":1,
-            "request_id":"wrong","module_id":MODULE_ID,"decision":"pass",
-            "reason_code":null})
-            })
-            .await;
-            let peer_uid = std::fs::metadata(&path).unwrap().uid();
-            assert!(
-                exchange(&path, &input(), crate::gates::PUBLICATION_SIZE, peer_uid)
-                    .await
-                    .is_err()
-            );
-            let (_dir, path) = mock(|r| {
-                json!({"protocol_version":1,
-            "request_id":r["request_id"],"module_id":MODULE_ID,"decision":"pass",
-            "reason_code":null})
-            })
-            .await;
-            assert!(exchange(&path, &input(), MODULE_ID, u32::MAX)
-                .await
-                .is_err());
         }
     }
 }

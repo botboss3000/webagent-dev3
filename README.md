@@ -37,9 +37,7 @@ On the development server:
 ```sh
 sh /home/ar/webagent-dev3/code/deploy.sh build
 sh /home/ar/webagent-dev3/code/deploy.sh build-loop
-sh /home/ar/webagent-dev3/code/gate-deploy.sh build
 sh /home/ar/webagent-dev3/code/deploy.sh start
-sh /home/ar/webagent-dev3/code/gate-deploy.sh start
 sh /home/ar/webagent-dev3/code/deploy.sh start-loop
 curl -fsS http://100.112.23.15:8081/health/ready
 ```
@@ -606,23 +604,18 @@ Ability catalogs, ability tiers and the Abilities page are unchanged.
 
 ## Phase 4 loop and publication gate
 
-The v3 API, loop, and metadata gate are separate sibling containers. The API
+The v3 API and loop are separate sibling containers. The API
 container runs HTTP, authentication, admission, the tool worker, and the promotion
 broker. `webagent-dev-v3-loop` runs the Rust scheduler and recovers durable runs;
-it has no public port. `webagent-dev-v3-gate` runs an unprivileged Python gate
-with no network, credentials, state, or workspace mount. Only the Rust loop can
-authorize tools or publish a terminal assistant reply.
+it has no public port. Only the Rust loop can authorize tools or publish a
+terminal assistant reply.
 
 The API and loop share `v3/runtime` for local control and worker sockets, and
-`v3/data` for durable state. The loop and gate share only
-`v3/gate-runtime`, mounted at `/runtime/gate`. The gate socket is
-`/runtime/gate/gate.sock` (mode 0660); the Rust client verifies gate UID 1102
-and the gate verifies loop UID 1100. Requests and responses use a versioned,
-16 KiB bounded protocol with a one-second client deadline. The gate receives
-the final reply's byte count and digest, never its text. Its first installed
-module, `publication_size_guard_v1`, rejects replies above 8192 bytes.
-Rust still enforces the native publication limit and is the only writer of
-the final chat row.
+`v3/data` for durable state. The optional publication-size gate,
+`publication_size_guard_v1`, runs in the loop: it compares the final reply's
+byte count with its descriptor (8192 bytes) and never sees the text. Until
+2026-11 it ran as a separate Python container (`webagent-dev-v3-gate`); the
+loop container still mounts the then-shared `/runtime/gate` folder, unused.
 
 Accepted messages are written with a schema-v1 loop command and an idempotency
 receipt in one user-store transaction. The loop validates and acknowledges
@@ -637,18 +630,15 @@ Build the images independently on the development server:
 ```sh
 sh /home/ar/webagent-dev3/code/deploy.sh build
 sh /home/ar/webagent-dev3/code/deploy.sh build-loop
-sh /home/ar/webagent-dev3/code/gate-deploy.sh build
 ```
 
 For a new installation, start the API first so its control and worker sockets
-exist, start the gate, then start the loop with `deploy.sh start-loop`.
-`deploy.sh start` and `gate-deploy.sh start` each require their named
-container to be absent. For an update, inspect the live image and container
+exist, then start the loop with `deploy.sh start-loop`.
+`deploy.sh start` requires its named container to be absent. For an update, inspect the live image and container
 settings, capture a compatible full backup of `v3/data` including its
 encryption key before a migration, and retain the stopped prior container as
-rollback material. Replace only the image's matching container: a gate update
-does not replace the API or loop, and a loop update does not replace the API or
-gate. Stop the loop before replacing its image; generation, lease-epoch, and
+rollback material. Replace only the image's matching container: a loop update does not replace
+the API. Stop the loop before replacing its image; generation, lease-epoch, and
 run-revision checks govern durable recovery when the new loop starts. Treat an interrupted external write as uncertain until reconciled.
 The API readiness endpoint returns 503 while the loop heartbeat is absent or
 stale, then 200 after the loop resumes. Check health and one persisted reply
@@ -661,7 +651,8 @@ the optional size plugin, use:
 `{"model_dispatch":["message_visibility_v1"],"publication":["closing_status","optional:publication_size_guard_v1"]}`.
 The fixed Rust checkpoints run in their normal order; each list orders modules
 within that checkpoint. Unknown, duplicate, or wrong-checkpoint modules fail
-validation. Only the isolated Python size plugin accepts the `optional:` prefix.
+validation. Only the size gate accepts the `optional:` prefix, kept from when it
+ran in a separate process; required and optional now behave the same.
 
 The integral module definitions and settings are single live JSON files at
 `crates/modules/engine/gates/message_visibility_v1.json` and
@@ -690,11 +681,10 @@ writes the session's `flag`, `flag_source`, `notification`, `flag_run_id`,
 `flag_set_at` and `flag_dismissed`: the closing status after a normal finish,
 otherwise `error` or `stopped`.
 
-The optional `publication_size_guard_v1` descriptor and handler live in
-`v3/plugins/gates/publication_size_guard_v1/` and are packaged with the isolated Python gate. A
-mandatory transport or protocol failure pauses publication; an optional
-failure records a private skip and native Rust checks still apply. An explicit
-rejection always blocks. No gate can grant tool permission or publish a
+The `publication_size_guard_v1` descriptor lives in
+`v3/plugins/gates/publication_size_guard_v1/gate.json`; Rust evaluates it
+(`crates/modules/engine/src/gates.rs`, `protocol`). A reply above
+`max_text_bytes` pauses publication for review. No gate can grant tool permission or publish a
 terminal reply; Rust alone commits that reply exactly once. Gate settings
 have no UI yet.
 

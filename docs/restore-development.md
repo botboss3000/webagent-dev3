@@ -106,7 +106,7 @@ lifecycle reconfiguration during an idle task-owned drain.
    reconfiguration during an idle task-owned drain. The recorded old ID is an
    identity reference, not a pullable registry name or authority to accept a
    different image. Retain normal resource admission and ownership enforcement.
-3. Use the documented first-install deploy.py build, build-loop and build-gate
+3. Use the documented first-install deploy.py build and build-loop
    commands with the explicit protected configuration, as root. The build helper
    supplies the virtual v3/ and ui/ archive namespaces; docker build . and the
    historical compose.yaml are not substitutes. Initial downloads require access
@@ -125,8 +125,8 @@ lifecycle reconfiguration during an idle task-owned drain.
    with setfacl -b under abilities). Keep Diagnostics configuration writable by
    app UID/GID 1100 (0660); do not restore logs.db or capture-session grants.
    Remove the disposable extraction container after reconciliation.
-5. Run deploy.py start-gate, start and start-loop as root, with the explicit
-   WEBAGENT_BUILD_CONFIG. Check all three containers, readiness, actual plugin
+5. Run deploy.py start and start-loop as root, with the explicit
+   WEBAGENT_BUILD_CONFIG. Check both containers, readiness, actual plugin
    readiness and a persisted authenticated app journey. Restore the named
    Cloudflare tunnel using separately supplied credentials and verify the public
    origin. Register boot supervision through the separately documented

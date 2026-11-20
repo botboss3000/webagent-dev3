@@ -4290,30 +4290,10 @@ impl<
                                     .await?;
                                 return Ok(());
                             }
-                            let gate_input = gate_protocol::PublicationGateInput {
-                                run_id: id.clone(),
-                                generation: generation.clone(),
-                                policy_revision: publication_policy.revision()?,
-                                input_digest: workflow::digest_input(
-                                    &workflow::Input::Publication {
-                                        text_digest: digest(&json!(text)),
-                                    },
-                                )?,
-                                turn: run["turns"].as_u64().unwrap_or(0),
-                                call_index: run["call_index"].as_u64().unwrap_or(0),
-                                text_bytes: text.len(),
-                            };
-                            let gate_socket =
-                                PathBuf::from(std::env::var("V3_GATE_SOCKET").unwrap_or_else(
-                                    |_| gate_protocol::socket_path().to_string_lossy().into_owned(),
-                                ));
                             match gate_protocol::evaluate_publication(
-                                &gate_socket,
                                 &publication_policy,
-                                &gate_input,
-                            )
-                            .await?
-                            {
+                                text.len(),
+                            )? {
                                 gate_protocol::GateOutcome::Pass => {}
                                 gate_protocol::GateOutcome::Reject {
                                     module_id,
@@ -4334,13 +4314,6 @@ impl<
                                         )
                                         .await?;
                                     return Ok(());
-                                }
-                                gate_protocol::GateOutcome::Skipped {
-                                    module_id,
-                                    reason_code,
-                                } => {
-                                    run["workflow"]["module_skips"]["publication"] =
-                                        json!({"module_id":module_id,"reason_code":reason_code});
                                 }
                             }
                             // Journal model output before any following user interaction.
