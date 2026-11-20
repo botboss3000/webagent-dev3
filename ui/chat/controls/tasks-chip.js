@@ -4,7 +4,7 @@
 // and removes steps (each edit reaches the agent with its next step) and reads the History
 // of revisions. Everyone in the chat sees the list; those who can send in it edit.
 import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
-import {createTaskPlan} from '../../components/tasks/task-plan.js';
+import {createExpandList} from '../../components/expand-list/expand-list.js';
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 
@@ -62,7 +62,7 @@ export function createTasksChip({session = () => '', request, note = () => {}, c
     return b;
   }
   const SUB = {open: 'pending', in_progress: 'in-progress', blocked: 'need-help', done: 'completed', cancelled: 'cancelled'};
-  /** A section as a task-plan task: its steps become subtasks, outcomes their details. */
+  /** A section as a expand-list row: its steps become subtasks, outcomes their details. */
   function planTask(section) {
     const steps = section.steps || [];
     const status = section.status === 'done' ? 'completed' : section.status === 'cancelled' ? 'cancelled'
@@ -72,7 +72,7 @@ export function createTasksChip({session = () => '', request, note = () => {}, c
       description: section.summary, notes: section.notes,
       subtasks: steps.map(step => ({id: step.id, title: step.label, status: SUB[step.status] || 'pending', description: step.outcome}))};
   }
-  const plan = createTaskPlan({
+  const plan = createExpandList({
     label: 'Session tasks',
     canEdit: task => task.section.status === 'open' && canEdit(),
     onToggle: (task, sub, done) => edit(task.id, [{id: sub.id, status: done ? 'done' : 'open'}]),
@@ -82,13 +82,12 @@ export function createTasksChip({session = () => '', request, note = () => {}, c
   /** A History change line's status, read from its wording ("s2.3 done", "s2 added: …"). */
   const changeStatus = line => /\bdone\b/.test(line) ? 'completed' : /in_progress/.test(line) ? 'in-progress'
     : /\bblocked\b/.test(line) ? 'need-help' : /cancelled|removed/.test(line) ? 'cancelled' : 'pending';
-  /** History: each revision a collapsible task-plan row (newest open), its changes as steps. */
+  /** History: each revision a collapsible expand-list row (newest open), its changes as steps. */
   async function historyView(box) {
     try {
       const entries = (await request(path())).history || [];
       if (!entries.length) { box.append(el('p', 'task-history-empty', 'No revisions yet.')); return; }
-      const log = createTaskPlan({label: 'Task list history', defaultOpen: task => task.id === 'r' + entries[0].revision});
-      log.element.classList.add('plan-log');
+      const log = createExpandList({label: 'Task list history', defaultOpen: task => task.id === 'r' + entries[0].revision});
       log.update(entries.map(entry => ({
         id: 'r' + entry.revision, title: 'Revision ' + entry.revision, status: 'pending', icon: 'History', pill: false,
         badges: [entry.by === 'user' ? 'You' : 'Agent', entry.updated_at ? new Date(entry.updated_at * 1000).toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : ''].filter(Boolean),

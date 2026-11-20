@@ -1,6 +1,6 @@
-@import url('/ui/components/tasks/task-plan.css');
+@import url('/ui/components/expand-list/expand-list.css');
 /* Tasks chip (tasks-chip.js): the header chip for the session task list, its panel of
-   sections and steps (the shared task-plan component), and the History of revisions. Chip and panel reuse the shared
+   sections and steps (the shared expand-list component), and the History of revisions. Chip and panel reuse the shared
    .sub-chip and .sub-chip-menu skins. */
 #chat-sub-header .sub-chip.chip-tasks .chip-status { color: var(--brand); }
 #chat-sub-header .sub-chip.chip-tasks .chip-status svg { width: 12px; height: 12px; }
@@ -24,5 +24,3 @@
 .task-tab:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
 .task-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-history-empty { color: var(--fg-2); }
-/* History rows log changes, so finished steps keep their plain text. */
-.plan-log .plan-sub .plan-sub-title { color: var(--fg-1); text-decoration: none; }

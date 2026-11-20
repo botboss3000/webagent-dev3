@@ -120,11 +120,12 @@
 }
 /* Chip "more" menu — body-mounted popup mirroring .session-row-actions
    (same surface, same design-system variables, both themes). */
+/* Every chip panel and menu: its corners match the 14px radius of the chips that open it. */
 .sub-chip-menu {
   position: fixed;
   background: var(--bg-elev);
   border: var(--border-width) solid var(--border);
-  border-radius: 6px;
+  border-radius: 14px;
   box-shadow: 0 6px 16px rgba(var(--shadow-rgb), 0.4);
   z-index: 2000;
   min-width: 150px;

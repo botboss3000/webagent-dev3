@@ -5,8 +5,10 @@
 #chat-sub-header .sub-chip.chip-artifacts .chip-status svg { width: 12px; height: 12px; }
 #chat-sub-header .sub-chip.chip-artifacts:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .artifacts-chip-meta { color: var(--fg-3); font-weight: 500; }
-.artifact-list { max-height: min(60vh, 420px); overflow-y: auto; }
-.artifact-list .family-menu-text small { color: var(--fg-2); }
+.artifact-list.family-spawn-menu { width: min(460px, calc(100vw - 16px)); max-width: none; max-height: min(70dvh, 560px); overflow-y: auto; overscroll-behavior: contain; padding-top: 6px; padding-bottom: 6px; padding-left: 6px; --wa-scroll-pad: 10px; }
+.artifact-list:has(.artifact-card-element) { width: min(560px, calc(100vw - 16px)); }
+/* A card opened inside its list row: no popup frame; the row already shows its title. */
+.artifact-card.artifact-card-inline { width: auto; max-height: none; overflow: visible; padding: 2px 0 6px; }
 .artifact-card {
   width: min(460px, calc(100vw - 16px));
   max-height: min(70dvh, 560px);
@@ -21,12 +23,9 @@
 .artifact-section + .artifact-section { margin-top: 8px; }
 .artifact-label { color: var(--fg-2); font-size: 12px; font-weight: 600; }
 .artifact-text { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.artifact-back { min-height: 32px; margin: 0 0 6px; padding: 4px 10px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); font: inherit; font-size: 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.artifact-back:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
-.artifact-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* A UI element card (artifact-element.js): the agent's element in a sandboxed frame, and the
    countdown strip shown before a prompt it asked to send. */
-.artifact-card.artifact-card-element { width: min(560px, calc(100vw - 16px)); }
+.artifact-card.artifact-card-element:not(.artifact-card-inline) { width: min(560px, calc(100vw - 16px)); }
 .artifact-element { margin-top: 8px; }
 .artifact-element-frame { display: block; width: 100%; border: var(--border-width) solid var(--border); border-radius: 8px; background: var(--bg-1, transparent); }
 .artifact-element-status { margin: 4px 0; color: var(--fg-2); font-size: 12px; }

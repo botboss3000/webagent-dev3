@@ -1,3 +1,4 @@
+@import url('/ui/components/expand-list/expand-list.css');
 /* Main Notes chip and card. The chip joins the session-tabs row beside Spawns and Broker;
    CSS order keeps that visual order even though those chips re-append themselves. The card
    reuses the shared .sub-chip-menu and .broker-card skins (including phone positioning) and
@@ -24,12 +25,11 @@
 .main-notes-notice { margin: 0 0 6px; }
 .main-notes-notice:empty { display: none; }
 .main-notes-toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 2px; }
-.main-notes-card button, .main-notes-card .ac-btn { border: var(--border-width) solid var(--border); border-radius: var(--r-sm, 6px); padding: 5px 9px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.main-notes-card button:disabled { opacity: .55; cursor: default; }
+.main-notes-card .ac-btn { border: var(--border-width) solid var(--border); border-radius: var(--r-sm, 6px); padding: 5px 9px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.main-notes-card .ac-btn:disabled { opacity: .55; cursor: default; }
 .main-notes-card a.ac-btn { display: inline-flex; align-items: center; text-decoration: none; }
-.main-notes-topic, .main-notes-proposal { margin-block: 8px; padding: 6px; border: var(--border-width) solid var(--border); border-radius: var(--r-sm, 6px); }
-.main-notes-topic > summary, .main-notes-proposal > summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
-.main-notes-entry { border-top: var(--border-width) solid var(--border); padding-block: 6px; margin-top: 6px; }
+.main-notes-entry { padding-block: 2px; }
+.main-notes-card .xl-content .ac-btn, .main-notes-entry .ac-btn { margin: 4px 6px 0 0; }
 .main-notes-editor { display: grid; gap: 8px; min-width: 0; }
 .main-notes-editor label { display: grid; gap: 4px; font-size: 12px; }
 .main-notes-editor input, .main-notes-editor select, .main-notes-editor textarea { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; border: var(--border-width) solid var(--border); border-radius: var(--r-sm, 6px); padding: 6px; background: var(--bg-2); color: inherit; font: inherit; }

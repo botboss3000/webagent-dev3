@@ -18,7 +18,7 @@ export function createActionsChip({session = () => '', request, canResolve = () 
   function close() { popup?.remove(); popup = null; chip.setAttribute('aria-expanded', 'false'); }
   document.addEventListener('pointerdown', e => { if (popup && !popup.contains(e.target) && !chip.contains(e.target)) close(); }, true);
   function open() {
-    const box = el('div', 'sub-chip-menu actions-panel'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Session actions');
+    const box = el('div', 'sub-chip-menu actions-panel wa-scroll-gutter'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Session actions');
     renderActions(box, actions, {changed: refresh,
       resolve: canResolve() ? (id, state) => request(path() + '/' + encodeURIComponent(id) + '/resolve', 'POST', {state}) : null});
     popup?.remove(); popup = box; document.body.append(box); chip.setAttribute('aria-expanded', 'true');

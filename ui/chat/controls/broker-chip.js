@@ -1,11 +1,11 @@
 // Broker chip: a header session-tab chip (beside Spawns) for the broker tasks this chat's
 // builds and checks ran. The engine records each job's stage snapshot while it follows
 // the job (crates/modules/engine/src/runtime/build_tasks.rs); the chip loads the task list
-// on session open and on build events. The list is a task-plan (ui/components/tasks): each
+// on session open and on build events. The list is an expand-list (ui/components/expand-list): each
 // task is a row whose card loads only when that row is opened, under it. While a card is
 // open its counters tick in the browser and a live one re-reads the task every 15 s.
 import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
-import {createTaskPlan} from '../../components/tasks/task-plan.js';
+import {createExpandList} from '../../components/expand-list/expand-list.js';
 
 const ACTIVE = ['queued','running','needs_decision'];
 const FAILED = ['failed','stale','cancelled','uncertain','interrupted','needs_decision'];
@@ -308,7 +308,7 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
       await Promise.all([...new Set(tasks.map(task => task.sid))].map(id => request(path(id, '/clear'), 'POST', {}))); await refresh(); }}]);
   }
 
-  /** A broker task as a task-plan row; its card is the row's lazy content. */
+  /** A broker task as an expand-list row; its card is the row's lazy content. */
   const STATES = {done: 'completed', error: 'failed', warning: 'need-help', running: 'in-progress'};
   function planRow(task) {
     return {id: task.task_id, title: task.name || task.task_id, lazy: true, task,
@@ -345,7 +345,7 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
   function openList() {
     const box = el('div', 'sub-chip-menu family-spawn-menu broker-list wa-scroll-gutter'); box.setAttribute('aria-label', 'Broker tasks');
     show(box); // show() closes any earlier popup, so the list's state starts after it
-    plan = createTaskPlan({
+    plan = createExpandList({
       label: 'Broker tasks',
       defaultOpen: () => tasks.length === 1,
       onHold: row => void taskMenu(row.task),

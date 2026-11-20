@@ -1,0 +1,79 @@
+/* Expand list (expand-list.js): rows that open to steps or custom content, with status icons and pills.
+   Colours come from the design-system tokens; motion is off under reduced motion. */
+.expand-list, .xl-subs { list-style: none; margin: 0; padding: 0; }
+.expand-list { display: flex; flex-direction: column; gap: 2px; animation: xl-in .3s cubic-bezier(.2,.65,.3,.9); }
+.expand-list button, .expand-list input { -webkit-tap-highlight-color: transparent; font: inherit; }
+.xl-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 4px 8px;
+  border: var(--border-width) solid transparent; border-radius: 8px; background: none; color: var(--fg-1);
+  text-align: left; cursor: pointer; transition: background-color .2s;
+}
+.xl-head:hover, .xl-sub-line:hover { background: color-mix(in oklab, var(--fg-1) 4%, transparent); }
+.xl-head:active, .xl-icon:active, .xl-remove:active, .xl-add-button:active, .xl-sub-title:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
+.expand-list :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.xl-title { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font-weight: 600; }
+.xl-meta { display: flex; flex: none; align-items: center; gap: 4px; font-size: 11px; }
+.xl-pill, .xl-tag { display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.xl-tag { background: color-mix(in oklab, var(--fg-1) 8%, transparent); color: var(--fg-2); }
+.xl-pill { background: color-mix(in oklab, var(--fg-1) 8%, transparent); color: var(--fg-2); }
+.xl-task.is-changed > .xl-head .xl-pill, .xl-sub.is-changed .xl-pill { animation: xl-pop .35s cubic-bezier(.34,1.56,.64,1); }
+.xl-task[data-status="completed"] > .xl-head .xl-pill, .xl-sub[data-status="completed"] .xl-pill { background: rgba(var(--success-rgb), .15); color: var(--success); }
+.xl-task[data-status="in-progress"] > .xl-head .xl-pill, .xl-sub[data-status="in-progress"] .xl-pill { background: rgba(var(--brand-rgb), .15); color: var(--brand); }
+.xl-task[data-status="need-help"] > .xl-head .xl-pill, .xl-sub[data-status="need-help"] .xl-pill { background: rgba(var(--warning-rgb), .15); color: var(--warning); }
+.xl-task[data-status="failed"] > .xl-head .xl-pill, .xl-sub[data-status="failed"] .xl-pill { background: rgba(var(--danger-rgb), .15); color: var(--danger); }
+.xl-chevron { display: inline-flex; flex: none; color: var(--fg-3); transition: transform .25s cubic-bezier(.2,.65,.3,.9); }
+.xl-chevron svg { width: 14px; height: 14px; }
+.xl-head[aria-expanded="true"] .xl-chevron { transform: rotate(90deg); }
+
+.xl-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: none; width: 22px; height: 22px; padding: 0;
+  border: var(--border-width) solid transparent; border-radius: 50%; background: none; color: var(--fg-3);
+  transition: transform .15s;
+}
+button.xl-icon { width: 32px; height: 32px; margin: -4px -5px; cursor: pointer; }
+button.xl-icon:hover { transform: scale(1.1); }
+button.xl-icon:active { transform: scale(.9); }
+.xl-icon svg { width: 18px; height: 18px; }
+.xl-sub .xl-icon svg { width: 15px; height: 15px; }
+.xl-icon[data-status="completed"] { color: var(--success); }
+.xl-icon[data-status="in-progress"] { color: var(--brand); }
+.xl-icon[data-status="need-help"] { color: var(--warning); }
+.xl-icon[data-status="failed"] { color: var(--danger); }
+.xl-icon.is-changed svg { animation: xl-swap .25s cubic-bezier(.2,.65,.3,.9); }
+
+/* Expand/collapse: a grid row from 0fr to 1fr animates to the content's own height. */
+.xl-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .25s cubic-bezier(.2,.65,.3,.9), opacity .2s; }
+.xl-collapse[data-open="true"] { grid-template-rows: 1fr; opacity: 1; }
+.xl-collapse > * { min-height: 0; overflow: hidden; }
+.xl-collapse[data-open="false"] > * { visibility: hidden; transition: visibility 0s .25s; }
+
+.xl-body { position: relative; padding: 0 4px 6px 0; }
+.xl-body::before { content: ""; position: absolute; top: 0; bottom: 8px; left: 18px; border-left: 2px dashed color-mix(in oklab, var(--fg-3) 45%, transparent); }
+.expand-list .xl-description, .expand-list .xl-notes { margin: 2px 0 4px 34px; color: var(--fg-2); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.expand-list .xl-notes { color: var(--fg-3); }
+.xl-subs { margin-left: 26px; }
+.xl-sub.is-new { animation: xl-slide .3s cubic-bezier(.2,.65,.3,.9) backwards; animation-delay: calc(var(--i, 0) * 40ms); }
+.xl-sub-line { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 4px 0 8px; border-radius: 6px; transition: background-color .2s; }
+.xl-sub-title { flex: 1; min-width: 0; padding: 4px 0; border: 0; background: none; color: var(--fg-1); font-size: 13px; text-align: left; overflow-wrap: anywhere; }
+button.xl-sub-title { cursor: pointer; border-radius: 4px; }
+.xl-remove { flex: none; min-width: 32px; min-height: 32px; border: var(--border-width) solid transparent; border-radius: 8px; background: none; color: var(--fg-3); font-size: 16px; cursor: pointer; }
+.xl-remove:hover { border-color: var(--border); color: var(--fg-1); }
+.xl-sub-detail { margin: 0 0 4px 17px; padding: 2px 0 2px 18px; border-left: var(--border-width) dashed color-mix(in oklab, var(--fg-1) 20%, transparent); color: var(--fg-2); font-size: 12px; }
+.expand-list .xl-sub-detail p { margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.xl-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0; }
+.xl-slot { margin-left: 26px; }
+.xl-content { margin: 2px 0 4px 34px; min-width: 0; overflow-wrap: anywhere; }
+.xl-content:empty { display: none; }
+.xl-slot:empty { display: none; }
+.xl-add { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px 34px; }
+.xl-add-input { flex: 1 1 160px; min-width: 0; min-height: 32px; padding: 4px 8px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); }
+.xl-add-button { min-height: 32px; padding: 4px 12px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); cursor: pointer; }
+
+@keyframes xl-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes xl-slide { from { opacity: 0; transform: translateX(-8px); } }
+@keyframes xl-pop { 50% { transform: scale(1.08); } }
+@keyframes xl-swap { from { opacity: 0; transform: scale(.8) rotate(-10deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .expand-list, .xl-sub.is-new, .expand-list .is-changed .xl-pill, .xl-icon.is-changed svg { animation: none; }
+  .xl-collapse, .xl-chevron, .xl-icon { transition: none; }
+}

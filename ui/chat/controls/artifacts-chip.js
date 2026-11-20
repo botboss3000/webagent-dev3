@@ -1,12 +1,15 @@
 // Artifacts chip: a header session-tab chip for what the agent produced in this chat (the
 // agreed plan first). Artifacts are kept with the session (its session_artifacts rows) and
-// arrive with the session snapshot; the chip lists them and opens one as a read-only card.
-// A UI element card (kind ui_element) also runs the agent's saved element in a sandboxed
-// frame (artifact-element.js). The user's own uploads are not artifacts.
+// arrive with the session snapshot; the chip lists them as expand-list rows, and opening a
+// row builds its read-only card under it. A UI element card (kind ui_element) also runs the
+// agent's saved element in a sandboxed frame (artifact-element.js), only once its row opens.
+// The user's own uploads are not artifacts.
 import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
+import {createExpandList} from '../../components/expand-list/expand-list.js';
 import {elementFrame} from './artifact-element.js';
 
 const KINDS = {plan: 'Plan', ui_element: 'Element'};
+const ICONS = {plan: 'ClipboardList', ui_element: 'AppWindow'};
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 
 /** The session's artifacts that can be shown, newest first. */
@@ -18,12 +21,14 @@ export function artifactRows(items) {
 
 /**
  * One artifact as a card: its title, then each section as a label over its text; a UI
- * element card then shows the element (`frame(row)` builds it).
+ * element card then shows the element (`frame(row)` builds it). `inline` renders it inside a
+ * list row, without the title the row already shows.
  */
-export function artifactCard(row, frame = null) {
-  const box = el('div', 'sub-chip-menu artifact-card'); box.setAttribute('role', 'dialog');
+export function artifactCard(row, frame = null, {inline = false} = {}) {
+  const box = el('div', inline ? 'artifact-card artifact-card-inline' : 'sub-chip-menu artifact-card');
+  if (!inline) box.setAttribute('role', 'dialog');
   box.setAttribute('aria-label', 'Artifact ' + (row.title || row.id));
-  box.append(el('strong', 'artifact-card-title', row.title || 'Artifact'));
+  if (!inline) box.append(el('strong', 'artifact-card-title', row.title || 'Artifact'));
   for (const section of (Array.isArray(row.sections) ? row.sections : []).slice(0, 20)) {
     if (typeof section?.value !== 'string' || !section.value) continue;
     const part = el('section', 'artifact-section');
@@ -55,28 +60,18 @@ export function createArtifactsChip({session = () => '', send = async () => {}} 
     const outside = e => { if (!popup || popup.contains(e.target) || chip.contains(e.target)) return; document.removeEventListener('pointerdown', outside, true); close(); };
     document.addEventListener('pointerdown', outside, true);
   }
-  function openCard(row) {
-    const card = artifactCard(row, element => elementFrame(element, session(), text => { close(); return send(text); }));
-    if (rows.length > 1) {
-      // Back returns to the list; the card itself stays read-only.
-      const back = el('button', 'artifact-back', 'All artifacts'); back.type = 'button';
-      back.onclick = e => { requestTouchVibration(e); openList(); };
-      card.prepend(back);
-    }
-    show(card);
-  }
   function openList() {
-    const box = el('div', 'sub-chip-menu family-spawn-menu artifact-list'); box.setAttribute('role', 'menu'); box.setAttribute('aria-label', 'Artifacts');
-    for (const row of rows) {
-      const item = el('button', 'family-menu-item'); item.type = 'button'; item.setAttribute('role', 'menuitem');
-      const text = el('span', 'family-menu-text');
-      const when = row.updated_at ? new Date(row.updated_at * 1000).toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : '';
-      text.append(el('span', '', row.title || row.id), el('small', '', [KINDS[row.kind] || row.kind, when].filter(Boolean).join(' · ')));
-      item.append(text);
-      item.onclick = e => { e.stopPropagation(); requestTouchVibration(e); openCard(row); };
-      box.append(item);
-    }
+    const box = el('div', 'sub-chip-menu family-spawn-menu artifact-list wa-scroll-gutter'); box.setAttribute('aria-label', 'Artifacts');
     show(box);
+    const list = createExpandList({label: 'Artifacts', defaultOpen: () => rows.length === 1,
+      onExpand: (item, open, slot) => {
+        if (!open) { delete slot.dataset.loaded; slot.replaceChildren(); return; }
+        slot.replaceChildren(artifactCard(item.row, element => elementFrame(element, session(), text => { close(); return send(text); }), {inline: true}));
+      }});
+    list.update(rows.map(row => ({id: row.id, title: row.title || row.id, row, lazy: true, status: 'pending', icon: ICONS[row.kind] || 'FileText',
+      pill: KINDS[row.kind] || row.kind || false,
+      badges: row.updated_at ? [new Date(row.updated_at * 1000).toLocaleString([], {dateStyle: 'short', timeStyle: 'short'})] : []})));
+    box.append(list.element);
   }
   function render() {
     tabs?.toggleAttribute('data-artifacts', rows.length > 0);
@@ -92,7 +87,7 @@ export function createArtifactsChip({session = () => '', send = async () => {}} 
   chip.addEventListener('click', e => {
     e.stopPropagation(); requestTouchVibration(e);
     if (popup) return close();
-    if (rows.length === 1) openCard(rows[0]); else openList();
+    openList();
   });
   return {
     /** Takes the session snapshot's artifact list. */
