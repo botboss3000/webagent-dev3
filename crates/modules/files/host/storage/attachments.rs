@@ -73,7 +73,7 @@ impl Store {
     /// Give a copied record its own file name; a missing source (legacy record) is skipped.
     pub(crate) fn link_blob(&self, from: &str, to: &str) -> Result<()> {
         let dir = self.blob_dir();
-        match std::fs::hard_link(dir.join(from), dir.join(to)) {
+        match webagent_platform::link_or_copy(&dir.join(from), &dir.join(to)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             result => Ok(result?),
         }

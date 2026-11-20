@@ -198,12 +198,18 @@ fn disk(path: &Path) -> Value {
     }
     // SAFETY: statvfs returned success and initialized the entire structure.
     let stat = unsafe { stat.assume_init() };
-    let block = stat.f_frsize;
-    let sizes = stat
-        .f_blocks
+    // Field widths differ between platforms (macOS counts blocks in 32 bits).
+    #[allow(clippy::useless_conversion)]
+    let (block, blocks, bfree, bavail) = (
+        u64::from(stat.f_frsize),
+        u64::from(stat.f_blocks),
+        u64::from(stat.f_bfree),
+        u64::from(stat.f_bavail),
+    );
+    let sizes = blocks
         .checked_mul(block)
-        .zip(stat.f_bfree.checked_mul(block))
-        .zip(stat.f_bavail.checked_mul(block));
+        .zip(bfree.checked_mul(block))
+        .zip(bavail.checked_mul(block));
     let Some(((total, free), available)) = sizes else {
         return unavailable("filesystem_counter_overflow");
     };

@@ -158,6 +158,35 @@ pub fn sync_dir(path: &std::path::Path) -> std::io::Result<()> {
     }
 }
 
+/// Give `original` a second name `link`, failing like `hard_link` (for example
+/// `AlreadyExists`). Where links are forbidden (the Android app sandbox) the file is
+/// copied instead; callers only use this for files that are not changed afterwards.
+pub fn link_or_copy(original: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::hard_link(original, link) {
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            // Copy beside the target first, so a crash never leaves a partial file there.
+            if link.exists() {
+                return Err(std::io::ErrorKind::AlreadyExists.into());
+            }
+            let mut partial = link.as_os_str().to_owned();
+            partial.push(".partial");
+            let partial = std::path::PathBuf::from(partial);
+            std::fs::copy(original, &partial)?;
+            if link.exists() {
+                let _ = std::fs::remove_file(&partial);
+                return Err(std::io::ErrorKind::AlreadyExists.into());
+            }
+            std::fs::rename(&partial, link)
+        }
+        result => result,
+    }
+}
+
 pub mod ffi {
     #[cfg(unix)]
     pub use std::os::unix::ffi::OsStrExt;
@@ -252,5 +281,22 @@ pub mod signal {
                 std::future::pending::<()>().await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn link_or_copy_names_the_file_once() {
+        let dir = std::env::temp_dir().join(format!("platform-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (original, link) = (dir.join("original"), dir.join("link"));
+        std::fs::write(&original, b"bytes").unwrap();
+        let _ = std::fs::remove_file(&link);
+        super::link_or_copy(&original, &link).unwrap();
+        assert_eq!(std::fs::read(&link).unwrap(), b"bytes");
+        let again = super::link_or_copy(&original, &link).unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

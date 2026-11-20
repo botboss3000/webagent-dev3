@@ -51,7 +51,7 @@ pub fn load_or_create_key(root: &Path) -> Result<Vec<u8>> {
             let published = (|| -> Result<bool> {
                 file.write_all(&key)?;
                 file.sync_all()?;
-                match std::fs::hard_link(&temp_path, &keypath) {
+                match webagent_platform::link_or_copy(&temp_path, &keypath) {
                     Ok(()) => {
                         webagent_platform::sync_dir(root)?;
                         Ok(true)
