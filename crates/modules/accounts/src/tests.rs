@@ -1557,12 +1557,14 @@ async fn diagnostics_controller_keeps_bound_caller_live_authority_and_ten_minute
         "authorization",
         format!("Bearer {fixture_token}").parse().unwrap(),
     );
+    let attempts = crate::LoginAttempts::default();
     let request = || crate::browser_login_api::LoginRequest {
         caller_id: "fixture-operator".into(),
     };
     let response = crate::browser_login_api::login(
         &repo,
         &host,
+        &attempts,
         Some(&bridge),
         &headers,
         request(),
@@ -1595,6 +1597,7 @@ async fn diagnostics_controller_keeps_bound_caller_live_authority_and_ten_minute
         crate::browser_login_api::login(
             &repo,
             &host,
+            &attempts,
             Some(&bridge),
             &headers,
             request(),
@@ -1610,6 +1613,7 @@ async fn diagnostics_controller_keeps_bound_caller_live_authority_and_ten_minute
         crate::browser_login_api::login(
             &repo,
             &host,
+            &attempts,
             Some(&bridge),
             &headers,
             request(),
@@ -1619,6 +1623,46 @@ async fn diagnostics_controller_keeps_bound_caller_live_authority_and_ten_minute
         .await,
         Err(Error::Public(StatusCode::UNAUTHORIZED, _))
     ));
+    // Five wrong bearer tokens in a minute refuse even the right one until the minute passes.
+    headers.remove("origin");
+    let mut wrong = headers.clone();
+    wrong.insert(
+        "authorization",
+        format!("Bearer {}", "e".repeat(32)).parse().unwrap(),
+    );
+    for _ in 0..5 {
+        assert!(matches!(
+            crate::browser_login_api::login(
+                &repo,
+                &host,
+                &attempts,
+                Some(&bridge),
+                &wrong,
+                request(),
+                true,
+                200
+            )
+            .await,
+            Err(Error::Public(StatusCode::UNAUTHORIZED, _))
+        ));
+    }
+    let limited = |at| {
+        crate::browser_login_api::login(
+            &repo,
+            &host,
+            &attempts,
+            Some(&bridge),
+            &headers,
+            request(),
+            true,
+            at,
+        )
+    };
+    assert!(matches!(
+        limited(201).await,
+        Err(Error::Public(StatusCode::TOO_MANY_REQUESTS, _))
+    ));
+    assert!(limited(261).await.is_ok());
 }
 #[tokio::test]
 async fn trusted_browser_issuance_keeps_inspected_generation_and_account_status() {

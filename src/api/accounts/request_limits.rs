@@ -179,6 +179,19 @@ pub(crate) async fn pairing_wait(app: &App) -> u64 {
         .await
 }
 
+/// Count one new account against the shared daily cap; false once today's cap is used.
+pub(crate) async fn new_account_admitted(app: &App) -> bool {
+    let (limits, _) = current(app);
+    app.login_attempts
+        .hit(
+            "new_accounts".into(),
+            limits.new_accounts_per_day,
+            86_400,
+            now(),
+        )
+        .await
+}
+
 /// Record one wrong pairing code against the shared cap.
 pub(crate) async fn pairing_failed(app: &App) {
     let (limits, _) = current(app);

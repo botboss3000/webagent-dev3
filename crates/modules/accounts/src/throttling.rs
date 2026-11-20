@@ -169,6 +169,8 @@ pub struct RequestLimits {
     pub per_user_per_minute: UserLimits,
     /// Wrong pairing codes from all clients together.
     pub pairing_failures_per_minute: u32,
+    /// Wrong diagnostics browser-login bearer tokens from all clients together.
+    pub browser_login_failures_per_minute: u32,
     /// Registered and guest accounts created, from all clients together.
     pub new_accounts_per_day: u32,
 }
@@ -178,6 +180,7 @@ impl Default for RequestLimits {
             per_address_per_minute: AddressLimits::default(),
             per_user_per_minute: UserLimits::default(),
             pairing_failures_per_minute: 20,
+            browser_login_failures_per_minute: 5,
             new_accounts_per_day: 50,
         }
     }
@@ -208,6 +211,10 @@ impl RequestLimits {
             (
                 "pairing_failures_per_minute",
                 limits.pairing_failures_per_minute,
+            ),
+            (
+                "browser_login_failures_per_minute",
+                limits.browser_login_failures_per_minute,
             ),
             ("new_accounts_per_day", limits.new_accounts_per_day),
         ] {
@@ -373,11 +380,13 @@ impl LoginAttempts {
     pub async fn retry_after(&self, key: &str, cap: u32, now: u64) -> u64 {
         let state = self.0.lock().await;
         state.counters.get(key).map_or(0, |(span, times)| {
-            if times.len() < cap as usize {
+            // Only events still inside the window count; expired ones wait for the next `hit`
+            // to prune them, so a caller that only asks is never refused forever.
+            let live = || times.iter().filter(|t| now.saturating_sub(**t) < *span);
+            if live().count() < cap as usize {
                 return 0;
             }
-            times
-                .iter()
+            live()
                 .min()
                 .map_or(0, |first| (first + span).saturating_sub(now).max(1))
         })

@@ -1,4 +1,4 @@
-// Broker card page: one broker task's progress, public (no sign-in), the same card the
+// Broker card page: one broker task's progress for a signed-in administrator, the same card the
 // chat's Broker chip opens (chat/controls/broker-chip.js renderCard). It reads
 // GET /api/v3/builds/tasks/{task_id} (names, states and timings only), counts in the browser and re-reads every 15 s
 // while the newest job is queued or running. A failed read keeps the last card, says so with a
@@ -39,6 +39,11 @@ function retryNote(text) {
 async function show() {
   try {
     const response = await fetch('/api/v3/builds/tasks/' + encodeURIComponent(id), {cache: 'no-store', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)});
+    if (response.status === 401 || response.status === 403) {
+      // Signing in is a person's step, so stop retrying and offer it.
+      message('Sign in as an administrator to see this broker task.', {href: '/app', text: 'Sign in'});
+      return;
+    }
     if (!response.ok) throw Error((await response.json().catch(() => ({}))).error || 'Task progress unavailable');
     const detail = await response.json();
     document.title = 'Broker · ' + (detail.task.name || id);

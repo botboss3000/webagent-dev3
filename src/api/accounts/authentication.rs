@@ -152,6 +152,7 @@ pub(crate) async fn diagnostics_browser_login(
     webagent_accounts::browser_login_api::login(
         &app.store.accounts_repository(),
         &app,
+        &app.login_attempts,
         app.browser_login_bridge.as_ref(),
         &headers,
         body,

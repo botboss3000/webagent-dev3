@@ -127,8 +127,8 @@ fn public_name(summary: &str) -> &str {
 
 /// One broker task for the public Broker card page: its recent jobs (newest first) from the
 /// dashboard feed, each with its stage snapshot, in the shape the chat's Broker card reads.
-/// It is served without sign-in, so it carries only names, states and timings: no session
-/// names, failure reasons, logs or paths. `queued_behind` names the tasks ahead in the queue.
+/// It needs an administrator sign-in and still carries only names, states and timings: no
+/// session names, failure reasons, logs or paths. `queued_behind` names the tasks ahead in the queue.
 pub async fn task(host: &dyn AdministrationHost, task_id: &str) -> Result<Value, ApiError> {
     if !valid_task_id(task_id) {
         return Err(bad("Invalid broker task identifier"));

@@ -1,7 +1,7 @@
 //! Opt-in diagnostics browser sign-in; the host evaluates current Access authority.
 use crate::{
     api::{Error, Host},
-    BrowserLoginBridge, RecordCodec, Repository,
+    BrowserLoginBridge, LoginAttempts, RecordCodec, Repository,
 };
 use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -15,9 +15,14 @@ use serde_json::json;
 pub struct LoginRequest {
     pub caller_id: String,
 }
+/// Wrong bridge tokens from every caller together share one per-minute cap.
+const FAILURES: &str = "browser-login:failures";
+
+#[allow(clippy::too_many_arguments)]
 pub async fn login<C: RecordCodec, H: Host>(
     repo: &Repository<'_, C>,
     host: &H,
+    attempts: &LoginAttempts,
     bridge: Option<&BrowserLoginBridge>,
     headers: &HeaderMap,
     body: LoginRequest,
@@ -31,6 +36,15 @@ pub async fn login<C: RecordCodec, H: Host>(
         )
     };
     let bridge = bridge.ok_or_else(denied)?;
+    let cap = crate::RequestLimits::from_policy(&host.registration_policy()?)?
+        .browser_login_failures_per_minute;
+    if attempts.retry_after(FAILURES, cap, now).await > 0 {
+        return Err(Error::Public(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Try again in one minute".into(),
+        ));
+    }
+    // The bearer is compared as a SHA-256 digest in constant time.
     if !bridge.authorized(
         headers
             .get("authorization")
@@ -38,6 +52,7 @@ pub async fn login<C: RecordCodec, H: Host>(
         &body.caller_id,
         headers.contains_key("origin"),
     ) {
+        attempts.hit(FAILURES.into(), cap, 60, now).await;
         return Err(denied());
     }
     let _guard = host.gate().lock().await;

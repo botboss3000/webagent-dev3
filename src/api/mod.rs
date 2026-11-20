@@ -50,9 +50,6 @@ mod build_dashboard {
     pub(super) fn admin_router() -> Router<App> {
         Router::new()
     }
-    pub(super) fn public_router() -> Router<App> {
-        Router::new()
-    }
     pub(crate) async fn list(State(_): State<App>) -> Api {
         Err(ApiError(
             StatusCode::NOT_FOUND,
@@ -534,7 +531,6 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/embed/{id}/guest",post(embed::guest))
         .route("/api/v3/embed/redeem",post(embed::redeem))
         .route("/api/v3/core/webhook-receive/{id}",post(tools::core_webhooks::receive).layer(DefaultBodyLimit::max(16384)))
-        .merge(build_dashboard::public_router())
         .route("/api/v3/auth/login",post(login))
         .route("/api/v3/harness-bridge/next",post(crate::harness_bridge::next))
         .route("/api/v3/harness-bridge/reply",post(crate::harness_bridge::reply))

@@ -441,6 +441,13 @@ pub(super) async fn guest(
     }
     let client = crate::account_authentication::throttle_client(&app, peer, &headers)?;
     rate(&app, &id, client, "guest").await?;
+    // Embedded guests share the daily new-account cap with sign-up and guest login.
+    if !crate::request_limits::new_account_admitted(&app).await {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "New accounts are paused for today; try again tomorrow".into(),
+        ));
+    }
     let account = app.store.create_guest_account().await?;
     let user = account["user_id"].as_str().ok_or_else(denied)?;
     // Owner opt-in admits only a fresh guest as Caller. This does not change
@@ -1125,6 +1132,22 @@ mod tests {
             .unwrap();
         assert_eq!(membership["relationship"], "caller");
         assert_ne!(membership["agent_administrator"], true);
+        // Once today's new-account cap is used, an embedded guest is refused too.
+        let mut used = 0;
+        while crate::request_limits::new_account_admitted(&app).await {
+            used += 1;
+            assert!(used < 1000, "the daily new-account cap never filled");
+        }
+        let refused = guest(
+            State(app.clone()),
+            Path("shared_default".into()),
+            None,
+            HeaderMap::new(),
+            Json(json!({"origin":"https://example.com"})),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.0, StatusCode::TOO_MANY_REQUESTS);
         app.store.set_registration_policy("restricted").unwrap();
         assert!(!credential_valid(&app, &doc).await);
         app.store.set_registration_policy("open").unwrap();

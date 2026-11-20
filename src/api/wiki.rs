@@ -353,6 +353,12 @@ mod tests {
         assert_eq!(created["url"], "/wiki/release-pipeline");
         let page = |app: App| public_article(State(app), Path("release-pipeline".to_owned()));
         assert_eq!(page(app.clone()).await.status(), StatusCode::NOT_FOUND);
+        // The public index lists published articles only: the draft stays off it.
+        let index = public_index(State(app.clone())).await;
+        let bytes = axum::body::to_bytes(index.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("release-pipeline"));
         let args = json!({"slug":"release-pipeline","status":"published","expected_revision":1});
         run(&app, "admin", true, "wiki_set_status", &args, "w2")
             .await

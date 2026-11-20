@@ -19,11 +19,9 @@ pub(super) fn admin_router() -> Router<App> {
             "/admin/production/{release_id}/decision",
             post(production_decide),
         )
-}
-
-/// The Broker card page reads one task without sign-in (names, states and timings only).
-pub(super) fn public_router() -> Router<App> {
-    Router::new().route("/api/v3/builds/tasks/{task_id}", get(task))
+        // The Broker card page and the Builds page read one task; task labels are guessable,
+        // so it needs an administrator sign-in like the rest of the Builds data.
+        .route("/builds/tasks/{task_id}", get(task))
 }
 
 pub(crate) async fn list(State(app): State<App>) -> Api {
@@ -169,19 +167,28 @@ mod tests {
         );
     }
 
-    /// The Broker card page's task read is public: no sign-in is needed, and a malformed
-    /// task ID is refused before any broker call.
+    /// The Broker card page's task read needs an administrator sign-in: an anonymous read is
+    /// refused before any broker call, and a signed-in administrator's malformed ID is refused.
     #[tokio::test]
-    async fn task_route_is_public_and_checks_the_task_id() {
+    async fn task_route_requires_administrator_and_checks_the_task_id() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        let status = |path: String| {
+        let token = uuid();
+        let auth_key = format!("auth:{}", digest(&json!(token)));
+        app.store
+            .put(
+                &auth_key,
+                &json!({"csrf":"expected","expires":now()+3600,"generation":"fixture-generation"}),
+            )
+            .await
+            .unwrap();
+        let status = |path: &str, cookie: bool| {
             let app = app.clone();
+            let mut builder = Request::builder().method("GET").uri(path);
+            if cookie {
+                builder = builder.header("cookie", format!("v3_session={token}"));
+            }
+            let request = builder.body(Body::empty()).unwrap();
             async move {
-                let request = Request::builder()
-                    .method("GET")
-                    .uri(path)
-                    .body(Body::empty())
-                    .unwrap();
                 crate::api::router(app)
                     .oneshot(request)
                     .await
@@ -189,12 +196,14 @@ mod tests {
                     .status()
             }
         };
+        let path = "/api/v3/builds/tasks/broker-card-task";
+        assert_eq!(status(path, false).await, StatusCode::UNAUTHORIZED);
         assert_eq!(
-            status("/api/v3/builds/tasks/bad".into()).await,
+            status("/api/v3/builds/tasks/bad", true).await,
             StatusCode::BAD_REQUEST
         );
         // The fixture has no broker: a valid ID reaches it instead of an auth refusal.
-        let reached = status("/api/v3/builds/tasks/broker-card-public".into()).await;
+        let reached = status(path, true).await;
         assert!(![StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN].contains(&reached));
     }
 
