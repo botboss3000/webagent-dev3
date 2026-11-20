@@ -10,6 +10,7 @@ credential guard over every file, builds and compiles the tests with the stable
 profile, then pushes one commit and tag to the production repository with a
 broker-only token. State lives under the broker's state root in production/.
 """
+import hashlib
 import json
 import os
 import re
@@ -19,15 +20,51 @@ import tarfile
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from pathlib import Path
 
 REPOSITORY = "https://github.com/botboss3000/webagent.git"
+API = "https://api.github.com/repos/botboss3000/webagent"
+UPLOADS = "https://uploads.github.com/repos/botboss3000/webagent"
 # Broker-only push credential; outside the checkout, never printed or logged.
 TOKEN = Path(os.environ.get("WEBAGENT_PRODUCTION_TOKEN", "/etc/webagent/production/github-token"))
-# Top-level entries of the production repository.
+# Android release signing key and its password file, broker-only like TOKEN. Without them the
+# release ships no APK (an unsigned one cannot be installed).
+KEYSTORE = TOKEN.with_name("android-keystore.jks")
+KEYSTORE_PASS = TOKEN.with_name("android-keystore-pass")
+# Top-level entries of the production repository (live-files.json is read by the app and the
+# installer packaging).
 ALLOW = ("src", "crates", "ui", "abilities", "config", "plugins", "Cargo.toml", "Cargo.lock",
-         "build.rs", "rustfmt.toml", "README.md")
+         "build.rs", "rustfmt.toml", "README.md", "live-files.json")
+# The installer image's build context in the exported tree, and the production-only GitHub
+# workflow (macOS installer on each release tag) it carries.
+INSTALLER = "crates/app-shell/installer"
+WORKFLOWS = {"release-macos.yml": INSTALLER + "/release-macos.yml"}
+INSTALLER_SECONDS = 3 * 3600
+SIDEKICK_WAIT = 30 * 60
+# The installers phase: every platform, then the outputs and a manifest into /output.
+INSTALLER_SCRIPT = r"""set -e
+for platform in linux windows android; do python3 crates/app-shell/package.py "$platform"; done
+python3 - <<'COLLECT'
+import glob, hashlib, json, shutil
+from pathlib import Path
+patterns = ["/cache/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb",
+            "/cache/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm",
+            "/cache/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage",
+            "/cache/target/x86_64-pc-windows-gnu/release/bundle/nsis/*-setup.exe",
+            "crates/app-shell/gen/android/app/build/outputs/apk/**/*-unsigned.apk"]
+files = []
+for pattern in patterns:
+    for path in glob.glob(pattern, recursive=True):
+        shutil.copy2(path, "/output/" + Path(path).name)
+        body = Path(path).read_bytes()
+        files.append({"name": Path(path).name, "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()})
+Path("/output/manifest.json").write_text(json.dumps(files))
+COLLECT
+"""
 # Development-only parts inside allowed folders.
 EXCLUDE = ("abilities/Administrator/host_admin", "ui/main-panel/builds", "ui/main-panel/host-admin")
 FIRST = "0.1.0"
@@ -77,7 +114,7 @@ def stamp(tree, version):
     package(tree / "Cargo.toml", "webagent-v3")
     lock(tree / "Cargo.lock", "webagent-v3")
     shell = tree / "crates/app-shell"
-    if shell.is_dir():
+    if (shell / "Cargo.toml").is_file():
         package(shell / "Cargo.toml", "webagent-app")
         if (shell / "Cargo.lock").is_file():
             lock(shell / "Cargo.lock", "webagent-app")
@@ -134,7 +171,8 @@ class Production:
     def summary(self, record):
         return {k: record.get(k) for k in ("id", "status", "version", "bump", "notes", "commit",
                                             "requested_by", "requested_at", "decided_by", "decided_at",
-                                            "stage", "stages", "error", "finished_at", "pushed_commit")}
+                                            "stage", "stages", "error", "finished_at", "pushed_commit",
+                                            "installers")}
 
     # --- entry ---------------------------------------------------------------------------
     def handle(self, name, trusted, args):
@@ -233,13 +271,19 @@ class Production:
             self.stage(record, "build", lambda: self.build(tree, folder))
             self.stage(record, "push", lambda: self.push(tree, record))
             self.stage(record, "dev_tag", lambda: self.tag(record))
-            # Installers (Linux, Windows, Android on the sidekick; macOS on GitHub) follow.
-            record["stages"]["installers"] = {"status": "not built yet"}
-            record.update(status="published", finished_at=time.time(), stage=None)
-            self.save(record)
         except Exception as error:  # Recorded for the Host Admin page and the agent.
             record.update(status="failed", finished_at=time.time(), error=str(error)[:500])
             self.save(record)
+            return
+        # The source release stands; installers are added to it, and a failure here says so
+        # without undoing the release (macOS comes from the repository's own workflow).
+        try:
+            self.stage(record, "installers", lambda: self.installers(tree, folder, record))
+            self.stage(record, "upload", lambda: self.upload(folder / "installers", record))
+        except Exception as error:
+            record["installers"] = {"error": str(error)[:500]}
+        record.update(status="published", finished_at=time.time(), stage=None)
+        self.save(record)
 
     def export(self, commit, tree, version):
         if tree.exists():
@@ -259,6 +303,11 @@ class Production:
                 raise ValueError("links or escaping paths in the export")
             source.extractall(tree, members=members, filter="data")
         archive.unlink()
+        for name, origin in WORKFLOWS.items():
+            if (tree / origin).is_file():
+                target = tree / ".github/workflows" / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(tree / origin, target)
         stamp(tree, version)
         return {"files": sum(1 for p in tree.rglob("*") if p.is_file())}
 
@@ -326,3 +375,167 @@ class Production:
         name = f"production-v{record['version']}"
         self.git("tag", name, record["commit"])
         return {"dev_tag": name}
+
+    # --- installers ----------------------------------------------------------------------
+    def installer_image(self, tree, folder):
+        """The installer image built from the exported tree's recipe, reused while it is unchanged."""
+        context = tree / INSTALLER
+        digest = hashlib.sha256()
+        for path in sorted(context.rglob("*")):
+            if path.is_file():
+                digest.update(str(path.relative_to(context)).encode() + b"\0" + path.read_bytes())
+        tag = "webagent-production-installer:" + digest.hexdigest()[:16]
+        found = self.runner(["docker", "image", "inspect", "--format", "{{.Id}}", tag],
+                            capture_output=True, text=True, timeout=60)
+        if found.returncode != 0:
+            built = self.runner(["nice", "-n", "15", "docker", "build", "-q", "-t", tag, str(context)],
+                                capture_output=True, text=True, timeout=3600)
+            (folder / "installer-image.log").write_text(built.stdout[-50_000:] + built.stderr[-50_000:])
+            if built.returncode != 0:
+                raise RuntimeError("installer image build failed; see installer-image.log")
+            found = self.runner(["docker", "image", "inspect", "--format", "{{.Id}}", tag],
+                                capture_output=True, text=True, timeout=60)
+        return found.stdout.strip()
+
+    def sidekick(self, settings, *words, stdin=b"", timeout=120, stdout=None):
+        argv = self.broker.runner.executor.sidekick_argv(settings, *words)
+        # Bytes go in whole; a stream (the saved installer image) is piped through.
+        feed = {"input": stdin} if isinstance(stdin, bytes) else {"stdin": stdin}
+        result = self.runner(argv, **feed, stdout=stdout or subprocess.PIPE, stderr=subprocess.PIPE,
+                             timeout=timeout)
+        if result.returncode != 0:
+            raise RuntimeError(f"sidekick {words[0]} failed: {result.stderr.decode(errors='replace')[-300:]}")
+        return result.stdout
+
+    def installers(self, tree, folder, record):
+        """Linux, Windows and Android installers built on the sidekick, the APK signed here."""
+        executor = self.broker.runner.executor
+        settings = executor.sidekick_settings()
+        if not settings or not all(isinstance(settings.get(k), str) and settings[k]
+                                   for k in ("host", "user", "key", "known_hosts")):
+            raise RuntimeError("no sidekick is configured for installer builds")
+        image = self.installer_image(tree, folder)
+        status = executor.sidekick_sync(settings, {})
+        if status.get("version", 0) < 5:
+            raise RuntimeError("the sidekick program is too old for installer builds")
+        job = record["id"]
+        deadline = time.time() + SIDEKICK_WAIT
+        while True:  # A dev test half may hold the sidekick; it frees it within minutes.
+            decision = json.loads(self.sidekick(settings, "begin", job))
+            if decision.get("decision") == "accepted":
+                break
+            if decision.get("decision") != "busy" or time.time() > deadline:
+                raise RuntimeError(f"sidekick did not take the installer build: {decision}")
+            time.sleep(30)
+        result = "failed"
+        try:
+            if image not in status.get("images", []):
+                saved = subprocess.Popen(["docker", "save", image], stdout=subprocess.PIPE)
+                try:
+                    self.sidekick(settings, "load-image", job, image, "installer", stdin=saved.stdout,
+                                  timeout=3600)
+                finally:
+                    saved.wait(600)
+            body, digest = executor.sidekick_tree(tree)
+            synced = json.loads(self.sidekick(settings, "sync-installer-source", job, stdin=body, timeout=600))
+            if synced.get("sha256") != digest:
+                raise RuntimeError("the sidekick's installer source does not match the export")
+            request = json.dumps({"argv": ["sh", "-c", INSTALLER_SCRIPT], "image": image, "cargo_key": None,
+                                  "incremental": "0"}).encode()
+            with open(folder / "installers.log", "wb") as log:
+                argv = executor.sidekick_argv(settings, "run", job, "installers", str(INSTALLER_SECONDS))
+                ran = self.runner(argv, input=request, stdout=log, stderr=subprocess.STDOUT,
+                                  timeout=INSTALLER_SECONDS + 300)
+            if ran.returncode != 0:
+                raise RuntimeError("installer builds failed on the sidekick; see installers.log")
+            manifest = json.loads(self.fetch(settings, job, ["installers/manifest.json"], folder)
+                                  .joinpath("manifest.json").read_text())
+            names = [item["name"] for item in manifest]
+            if not names or any("/" in n or n.startswith(".") for n in names):
+                raise RuntimeError("the sidekick listed no usable installers")
+            output = self.fetch(settings, job, ["installers/" + n for n in names], folder)
+            for item in manifest:
+                body = (output / item["name"]).read_bytes()
+                if hashlib.sha256(body).hexdigest() != item["sha256"]:
+                    raise RuntimeError(f"{item['name']} changed in transfer")
+            result = "passed"
+        finally:
+            self.sidekick(settings, "end", job, result)
+        notes = self.sign_apks(output, image, record["version"])
+        built = sorted(p.name for p in output.iterdir() if p.name != "manifest.json")
+        record["installers"] = {"files": built, **notes}
+        return {"files": len(built)}
+
+    def fetch(self, settings, job, names, folder):
+        """The named sidekick outputs, unpacked into folder/installers."""
+        output = folder / "installers"
+        output.mkdir(exist_ok=True)
+        archive = folder / "fetch.tar"
+        with open(archive, "wb") as stream:
+            self.sidekick(settings, "fetch", job, stdin=json.dumps(names).encode(), timeout=1800, stdout=stream)
+        with tarfile.open(archive) as source:
+            for member in source.getmembers():
+                if not member.isfile() or not member.name.startswith("installers/") or "/" in member.name[11:]:
+                    raise ValueError("unexpected file from the sidekick")
+                member.name = member.name[11:]
+                source.extract(member, output, filter="data")
+        archive.unlink()
+        return output
+
+    def sign_apks(self, output, image, version):
+        """Sign the APK with the broker-only release key in the installer image; without the key,
+        drop it (an unsigned APK cannot be installed) and say so."""
+        unsigned = sorted(output.glob("*-unsigned.apk"))
+        if not unsigned:
+            return {}
+        if not (KEYSTORE.is_file() and KEYSTORE_PASS.is_file()):
+            for path in unsigned:
+                path.unlink()
+            return {"apk": f"not built: put the Android release key in {KEYSTORE} and its password in {KEYSTORE_PASS}"}
+        source = unsigned[0]
+        name = f"WebAgent_{version}_android.apk"
+        script = ("set -e; tools=$(ls -d /opt/android/build-tools/* | sort | tail -1); "
+                  f"$tools/zipalign -f -p 4 /work/{source.name} /tmp/aligned.apk; "
+                  "$tools/apksigner sign --ks /keys/keystore.jks --ks-pass file:/keys/pass "
+                  f"--ks-key-alias webagent --out /work/{name} /tmp/aligned.apk")
+        signed = self.runner(["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
+                              "-v", f"{output}:/work", "-v", f"{KEYSTORE}:/keys/keystore.jks:ro",
+                              "-v", f"{KEYSTORE_PASS}:/keys/pass:ro", image, "sh", "-c", script],
+                             capture_output=True, text=True, timeout=600)
+        for path in unsigned:
+            path.unlink()
+        if signed.returncode != 0:
+            return {"apk": "signing failed: " + signed.stderr[-300:]}
+        return {}
+
+    def api(self, method, url, body=None, content_type="application/json", length=None):
+        token = TOKEN.read_text().strip()
+        request = urllib.request.Request(url, data=body, method=method, headers={
+            "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28", "Content-Type": content_type,
+            **({"Content-Length": str(length)} if length is not None else {})})
+        with urllib.request.urlopen(request, timeout=1800) as reply:
+            data = reply.read()
+        return json.loads(data) if data else None
+
+    def upload(self, output, record):
+        """Create the GitHub release for the tag (the macOS workflow may have made it first) and
+        upload the installers, replacing assets of the same name."""
+        tag = f"v{record['version']}"
+        try:
+            release = self.api("GET", f"{API}/releases/tags/{tag}")
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            release = self.api("POST", f"{API}/releases", json.dumps({
+                "tag_name": tag, "name": f"WebAgent {tag}", "body": record["notes"] or f"Release {tag}"}).encode())
+        existing = {asset["name"]: asset["id"] for asset in release.get("assets", [])}
+        names = sorted(p.name for p in output.iterdir() if p.name != "manifest.json")
+        for name in names:
+            if name in existing:
+                self.api("DELETE", f"{API}/releases/assets/{existing[name]}")
+            path = output / name
+            with open(path, "rb") as stream:
+                self.api("POST", f"{UPLOADS}/releases/{release['id']}/assets?name={urllib.parse.quote(name)}",
+                         stream, "application/octet-stream", path.stat().st_size)
+        return {"release": release.get("html_url"), "assets": len(names)}

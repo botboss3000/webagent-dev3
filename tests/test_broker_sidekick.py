@@ -115,6 +115,43 @@ class SourceMirrorTests(unittest.TestCase):
     def test_escaping_members_are_refused(self):
         for name in ("../escape","/abs"):
             with self.assertRaises(SystemExit):helper.sync_source(tar({name:b"x"}),self.mirror)
+class InstallerPhaseTests(unittest.TestCase):
+    """Production installer builds: their own source folder and caches, and the network the bundlers need."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();root=Path(self.temp.name)
+        self.saved={k:getattr(helper,k)for k in ("STATE","OUTPUT","SOURCE","INSTALLER_SOURCE","INSTALLER_CACHE","LOCK","STATUS","run","image_present","held")}
+        helper.STATE=root;helper.OUTPUT=root/"work/output";helper.SOURCE=root/"work/source";helper.INSTALLER_SOURCE=root/"work/installer-source"
+        helper.INSTALLER_CACHE=root/"installer-cache";helper.LOCK=root/"job.lock";helper.STATUS=root/"status.json"
+        helper.LOCK.write_text(json.dumps({"job_id":"1"*36,"at":time.time()}))
+        helper.held=lambda job:True;helper.image_present=lambda image:True
+    def tearDown(self):
+        for k,v in self.saved.items():setattr(helper,k,v)
+        self.temp.cleanup()
+    def test_installer_source_never_touches_the_test_half_source(self):
+        (helper.SOURCE/"v3").mkdir(parents=True);(helper.SOURCE/"v3/keep.rs").write_text("warm")
+        result=helper.sync_source(tar({"Cargo.toml":b"[package]"}),helper.INSTALLER_SOURCE)
+        self.assertTrue((helper.INSTALLER_SOURCE/"Cargo.toml").is_file());self.assertTrue((helper.SOURCE/"v3/keep.rs").is_file())
+        self.assertIn("sync-installer-source",helper.VERBS);self.assertIn("installers",helper.PHASES);self.assertEqual(result["changed"],1)
+    def test_installers_phase_has_network_and_its_own_mounts(self):
+        helper.INSTALLER_SOURCE.mkdir(parents=True);calls=[]
+        def run(argv,timeout=60,**kwargs):
+            calls.append(argv);return types.SimpleNamespace(returncode=0,stdout="0",stderr="")
+        helper.run=run
+        class Started:
+            def __init__(self,*a,**k):pass
+            def poll(self):return 0
+        saved=helper.subprocess.Popen;helper.subprocess.Popen=Started
+        try:
+            with self.assertRaises(SystemExit)as done:
+                helper.run_installers("1"*36,{"argv":["sh","-c","true"],"image":"sha256:"+"8"*64},60)
+        finally:helper.subprocess.Popen=saved
+        self.assertEqual(done.exception.code,0)
+        create=next(c for c in calls if c[:2]==["docker","create"])
+        self.assertNotIn("--network",create);self.assertNotIn("RUSTFLAGS="+helper.RUSTFLAGS,create)
+        mounts=[create[i+1]for i,a in enumerate(create)if a=="--mount"]
+        self.assertEqual(mounts,["type=bind,src=%s,dst=/src"%helper.INSTALLER_SOURCE,"type=bind,src=%s,dst=/output"%(helper.OUTPUT/"installers"),
+            "type=bind,src=%s,dst=/cache"%helper.INSTALLER_CACHE])
+        self.assertIn(["docker","image","tag","sha256:"+"8"*64,helper.INSTALLER_TAG+":"+"8"*12],calls)
 class FetchTests(unittest.TestCase):
     def setUp(self):self.temp=tempfile.TemporaryDirectory();self.output=Path(self.temp.name)
     def tearDown(self):self.temp.cleanup()

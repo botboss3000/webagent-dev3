@@ -59,7 +59,8 @@ FILES = {
     "abilities/Core/base/base.json": b"{}", "abilities/Administrator/host_admin/host_admin.json": b"{}",
     "abilities/Administrator/codebase_admin/codebase_admin.json": b"{}",
     "ui/main-panel/builds/builds.js": b"", "ui/main-panel/chat/chat.js": b"",
-    "build-service/host.py": b"", "tests/test_x.py": b"", "AGENTS.md": b"",
+    "build-service/host.py": b"", "tests/test_x.py": b"", "AGENTS.md": b"", "live-files.json": b"{}",
+    "crates/app-shell/installer/release-macos.yml": b"name: Release macOS\n",
 }
 
 
@@ -106,8 +107,10 @@ class ProductionTests(unittest.TestCase):
         tree = Path(self.temp.name) / "x/tree"
         self.production.export("abc123", tree, "0.1.0")
         names = sorted(str(p.relative_to(tree)) for p in tree.rglob("*") if p.is_file())
-        self.assertEqual(names, ["Cargo.lock", "Cargo.toml", "abilities/Administrator/codebase_admin/codebase_admin.json",
-                                 "abilities/Core/base/base.json", "src/main.rs", "ui/main-panel/chat/chat.js"])
+        self.assertEqual(names, [".github/workflows/release-macos.yml", "Cargo.lock", "Cargo.toml",
+                                 "abilities/Administrator/codebase_admin/codebase_admin.json",
+                                 "abilities/Core/base/base.json", "crates/app-shell/installer/release-macos.yml",
+                                 "live-files.json", "src/main.rs", "ui/main-panel/chat/chat.js"])
         self.assertIn('version = "0.1.0"', (tree / "Cargo.toml").read_text())
         self.assertIn('version = "0.1.0"', (tree / "Cargo.lock").read_text())
 
@@ -138,6 +141,63 @@ class ProductionTests(unittest.TestCase):
         production.stamp(tree, "1.2.3")
         self.assertIn('version = "1.2.3"', (tree / "crates/app-shell/Cargo.toml").read_text())
         self.assertEqual(json.loads((tree / "crates/app-shell/tauri.conf.json").read_text())["version"], "1.2.3")
+
+
+class InstallerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.saved = (production.KEYSTORE, production.KEYSTORE_PASS, production.TOKEN)
+        production.KEYSTORE, production.KEYSTORE_PASS = self.root / "missing.jks", self.root / "missing-pass"
+        production.TOKEN = self.root / "token"
+        self.production = production.Production(None, self.root / "state", "/checkout", "rust:pinned", None,
+                                                runner=FakeGit(FILES))
+
+    def tearDown(self):
+        production.KEYSTORE, production.KEYSTORE_PASS, production.TOKEN = self.saved
+        self.temp.cleanup()
+
+    def test_without_the_release_key_the_unsigned_apk_is_dropped_and_named(self):
+        output = self.root / "out"
+        output.mkdir()
+        (output / "app-universal-release-unsigned.apk").write_bytes(b"apk")
+        (output / "WebAgent_0.1.0_x64-setup.exe").write_bytes(b"exe")
+        notes = self.production.sign_apks(output, "sha256:x", "0.1.0")
+        self.assertIn("missing.jks", notes["apk"])
+        self.assertEqual([p.name for p in output.iterdir()], ["WebAgent_0.1.0_x64-setup.exe"])
+
+    def test_upload_creates_the_release_and_replaces_same_named_assets(self):
+        output = self.root / "out"
+        output.mkdir()
+        (output / "a.deb").write_bytes(b"deb")
+        (output / "manifest.json").write_text("[]")
+        calls = []
+
+        def api(method, url, body=None, content_type="application/json", length=None):
+            calls.append((method, url.rsplit("/repos/botboss3000/webagent", 1)[1]))
+            if method == "GET":
+                raise production.urllib.error.HTTPError(url, 404, "Not Found", None, None)
+            if url.endswith("/releases"):
+                return {"id": 7, "html_url": "https://example.test/r", "assets": [{"name": "a.deb", "id": 3}]}
+            return {}
+        self.production.api = api
+        result = self.production.upload(output, {"version": "0.1.0", "notes": ""})
+        self.assertEqual(result["assets"], 1)
+        self.assertEqual(calls, [("GET", "/releases/tags/v0.1.0"), ("POST", "/releases"),
+                                 ("DELETE", "/releases/assets/3"), ("POST", "/releases/7/assets?name=a.deb")])
+
+    def test_an_installer_failure_keeps_the_source_release_published(self):
+        made = self.production.handle("v3_production", LOCAL, {"action": "request"})
+        for name in ("export", "guard", "build", "push", "tag"):
+            setattr(self.production, name, lambda *a, **k: None)
+
+        def broken(*args):
+            raise RuntimeError("no sidekick is configured for installer builds")
+        self.production.installers = broken
+        self.production.run(made["id"])
+        record = self.production.load(made["id"])
+        self.assertEqual(record["status"], "published")
+        self.assertIn("no sidekick", record["installers"]["error"])
 
 
 if __name__ == "__main__":
