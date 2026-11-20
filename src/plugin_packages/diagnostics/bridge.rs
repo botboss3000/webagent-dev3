@@ -3,9 +3,10 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+#[cfg(unix)]
+use tokio::net::UnixStream;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::UnixStream,
     process::{Child, Command},
 };
 static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -43,10 +44,7 @@ pub async fn send(
         anyhow::bail!("Plugin frame oversized")
     }
     tokio::time::timeout(Duration::from_secs(12), async {
-        let mut stream = UnixStream::connect(root.join("diagnostics/plugin.sock")).await?;
-        if stream.peer_cred()?.uid() != 1100 && std::env::var("V3_PLUGIN_TEST_ROOT").is_err() {
-            anyhow::bail!("Plugin peer rejected")
-        }
+        let mut stream = connect(root).await?;
         stream.write_u32(bytes.len() as u32).await?;
         stream.write_all(&bytes).await?;
         if stream.read_u8().await? != 1 {
@@ -57,15 +55,28 @@ pub async fn send(
     .await??;
     Ok(())
 }
+/// The plugin's socket, checked to belong to the app user. The plugin process and its
+/// peer-checked socket are Unix-only; elsewhere `init` never starts it.
+#[cfg(unix)]
+async fn connect(root: &Path) -> anyhow::Result<UnixStream> {
+    let stream = UnixStream::connect(root.join("diagnostics/plugin.sock")).await?;
+    if stream.peer_cred()?.uid() != 1100 && std::env::var("V3_PLUGIN_TEST_ROOT").is_err() {
+        anyhow::bail!("Plugin peer rejected")
+    }
+    Ok(stream)
+}
+
+#[cfg(not(unix))]
+async fn connect(_root: &Path) -> anyhow::Result<tokio::io::DuplexStream> {
+    anyhow::bail!("Diagnostics plugin is not supported on this platform")
+}
+
 pub async fn configuration() -> anyhow::Result<(super::config::Config, String)> {
     let root = ROOT
         .get()
         .ok_or_else(|| anyhow::anyhow!("Plugin not initialized"))?;
     tokio::time::timeout(Duration::from_secs(2), async {
-        let mut stream = UnixStream::connect(root.join("diagnostics/plugin.sock")).await?;
-        if stream.peer_cred()?.uid() != 1100 && std::env::var("V3_PLUGIN_TEST_ROOT").is_err() {
-            anyhow::bail!("Plugin peer rejected")
-        }
+        let mut stream = connect(root).await?;
         let request = serde_json::to_vec(&json!({"version":1,"operation":"configuration"}))?;
         stream.write_u32(request.len() as u32).await?;
         stream.write_all(&request).await?;
@@ -88,7 +99,7 @@ pub async fn configuration() -> anyhow::Result<(super::config::Config, String)> 
     .await?
 }
 fn package(root: &Path) -> Option<String> {
-    use std::os::unix::fs::PermissionsExt;
+    use webagent_platform::fs::PermissionsExt;
     if root.is_symlink() {
         return None;
     }
@@ -111,7 +122,7 @@ fn package(root: &Path) -> Option<String> {
         return None;
     }
     {
-        use std::os::unix::fs::MetadataExt;
+        use webagent_platform::fs::MetadataExt;
         Some(crate::digest(&json!([
             bi.dev(),
             bi.ino(),
@@ -124,7 +135,7 @@ fn package(root: &Path) -> Option<String> {
 }
 pub async fn init(root: &Path, role: &str) {
     let _ = ROOT.set(root.to_path_buf());
-    if role != "api" {
+    if role != "api" || cfg!(not(unix)) {
         return;
     }
     let root = root.to_path_buf();
@@ -184,7 +195,7 @@ mod tests {
     use super::*;
     #[test]
     fn manifests_and_executable_permissions_are_strict() {
-        use std::os::unix::fs::PermissionsExt;
+        use webagent_platform::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let b = root.path().join("webagent-diagnostics");
         std::fs::write(
@@ -198,7 +209,7 @@ mod tests {
         std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o775)).unwrap();
         assert!(package(root.path()).is_none());
         std::fs::remove_file(&b).unwrap();
-        std::os::unix::fs::symlink("/bin/true", &b).unwrap();
+        webagent_platform::fs::symlink("/bin/true", &b).unwrap();
         assert!(package(root.path()).is_none());
     }
 }

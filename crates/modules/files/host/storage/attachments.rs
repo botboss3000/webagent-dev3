@@ -32,7 +32,7 @@ impl Store {
             let temporary = dir.join(format!(".{aid}.tmp"));
             // Owner-only: other local accounts never need these files.
             let mut file = {
-                use std::os::unix::fs::OpenOptionsExt;
+                use webagent_platform::fs::OpenOptionsExt;
                 std::fs::OpenOptions::new()
                     .write(true)
                     .create(true)

@@ -33,6 +33,7 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
         "voice" => webagent_media::settings::LIVE_VOICE,
         "browser_limits" => webagent_browser::limits::LIVE_LIMITS,
         "admin_alerts" => webagent_notifications::alerts::LIVE_CONFIG,
+        #[cfg(feature = "administrator")]
         "find_ranking" => webagent_administration::find_ranking::LIVE_RANKING,
         _ => return None,
     })
@@ -108,6 +109,7 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         "admin_alerts" => {
             webagent_notifications::alerts::Config::parse(&serde_json::to_vec(value)?)?;
         }
+        #[cfg(feature = "administrator")]
         "find_ranking" => {
             webagent_administration::find_ranking::Ranking::parse(&serde_json::to_vec(value)?)?;
         }

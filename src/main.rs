@@ -73,6 +73,7 @@ mod model_discovery;
 mod module_services;
 #[path = "../crates/modules/extensions/host/modules.rs"]
 mod modules;
+#[cfg_attr(not(target_os = "linux"), path = "optimization_unsupported.rs")]
 mod optimization;
 mod optimization_prompt;
 mod optimization_settings;

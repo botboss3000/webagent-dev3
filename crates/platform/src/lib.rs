@@ -1,0 +1,242 @@
+//! Unix file and path extension traits under the same names on every platform.
+//!
+//! On Unix these are the standard library's traits. Elsewhere (Windows) they are
+//! stand-ins for a single-user install: the current user owns every file (owner and
+//! group 0), modes follow the read-only flag, and device and inode numbers are 0, so
+//! code that compares them treats every file alike. Code that needs the real Unix
+//! security model (workspace sandbox, UID checks between processes) stays Unix-only.
+
+pub mod fs {
+    #[cfg(unix)]
+    pub use std::os::unix::fs::{
+        symlink, DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt,
+    };
+
+    #[cfg(not(unix))]
+    pub use self::other::*;
+
+    #[cfg(not(unix))]
+    mod other {
+        use std::time::UNIX_EPOCH;
+
+        fn since_epoch(time: std::io::Result<std::time::SystemTime>) -> (i64, i64) {
+            time.ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map_or((0, 0), |since| {
+                    (since.as_secs() as i64, i64::from(since.subsec_nanos()))
+                })
+        }
+
+        fn mode_of(directory: bool, readonly: bool) -> u32 {
+            let kind = if directory { 0o040_000 } else { 0o100_000 };
+            let access = match (directory, readonly) {
+                (true, _) => 0o700,
+                (false, true) => 0o400,
+                (false, false) => 0o600,
+            };
+            kind | access
+        }
+
+        pub trait MetadataExt {
+            fn dev(&self) -> u64;
+            fn ino(&self) -> u64;
+            fn mode(&self) -> u32;
+            fn nlink(&self) -> u64;
+            fn uid(&self) -> u32;
+            fn gid(&self) -> u32;
+            fn mtime(&self) -> i64;
+            fn mtime_nsec(&self) -> i64;
+            fn ctime(&self) -> i64;
+            fn ctime_nsec(&self) -> i64;
+        }
+
+        impl MetadataExt for std::fs::Metadata {
+            fn dev(&self) -> u64 {
+                0
+            }
+            fn ino(&self) -> u64 {
+                0
+            }
+            fn mode(&self) -> u32 {
+                mode_of(self.is_dir(), self.permissions().readonly())
+            }
+            fn nlink(&self) -> u64 {
+                1
+            }
+            fn uid(&self) -> u32 {
+                0
+            }
+            fn gid(&self) -> u32 {
+                0
+            }
+            fn mtime(&self) -> i64 {
+                since_epoch(self.modified()).0
+            }
+            fn mtime_nsec(&self) -> i64 {
+                since_epoch(self.modified()).1
+            }
+            fn ctime(&self) -> i64 {
+                self.mtime()
+            }
+            fn ctime_nsec(&self) -> i64 {
+                self.mtime_nsec()
+            }
+        }
+
+        pub trait PermissionsExt {
+            fn mode(&self) -> u32;
+            fn set_mode(&mut self, mode: u32);
+            fn from_mode(mode: u32) -> Self;
+        }
+
+        impl PermissionsExt for std::fs::Permissions {
+            fn mode(&self) -> u32 {
+                mode_of(false, self.readonly())
+            }
+            fn set_mode(&mut self, mode: u32) {
+                self.set_readonly(mode & 0o200 == 0);
+            }
+            fn from_mode(mode: u32) -> Self {
+                // `Permissions` has no constructor off Unix; a temporary file's carries
+                // the platform default, then the read-only flag follows `mode`.
+                let mut permissions = std::env::temp_dir()
+                    .metadata()
+                    .map(|info| info.permissions())
+                    .expect("temporary folder metadata");
+                permissions.set_readonly(mode & 0o200 == 0);
+                permissions
+            }
+        }
+
+        pub trait OpenOptionsExt {
+            fn mode(&mut self, mode: u32) -> &mut Self;
+            fn custom_flags(&mut self, flags: i32) -> &mut Self;
+        }
+
+        impl OpenOptionsExt for std::fs::OpenOptions {
+            fn mode(&mut self, _mode: u32) -> &mut Self {
+                self
+            }
+            fn custom_flags(&mut self, _flags: i32) -> &mut Self {
+                self
+            }
+        }
+
+        pub trait DirBuilderExt {
+            fn mode(&mut self, mode: u32) -> &mut Self;
+        }
+
+        impl DirBuilderExt for std::fs::DirBuilder {
+            fn mode(&mut self, _mode: u32) -> &mut Self {
+                self
+            }
+        }
+
+        pub trait FileTypeExt {
+            fn is_socket(&self) -> bool;
+        }
+
+        impl FileTypeExt for std::fs::FileType {
+            fn is_socket(&self) -> bool {
+                false
+            }
+        }
+    }
+}
+
+pub mod ffi {
+    #[cfg(unix)]
+    pub use std::os::unix::ffi::OsStrExt;
+
+    /// The platform's encoded bytes (WTF-8 on Windows), equal to the Unix bytes for
+    /// valid UTF-8 names.
+    #[cfg(not(unix))]
+    pub trait OsStrExt {
+        fn as_bytes(&self) -> &[u8];
+    }
+
+    #[cfg(not(unix))]
+    impl OsStrExt for std::ffi::OsStr {
+        fn as_bytes(&self) -> &[u8] {
+            self.as_encoded_bytes()
+        }
+    }
+}
+
+pub mod ipc {
+    //! Local connections to a sibling process: Unix sockets on Unix, named pipes on
+    //! Windows, where a socket path maps to the pipe [`pipe_name`] gives it.
+    use std::{io, path::Path};
+
+    #[cfg(unix)]
+    pub type LocalStream = tokio::net::UnixStream;
+    #[cfg(windows)]
+    pub type LocalStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+    #[cfg(unix)]
+    pub async fn connect(path: &Path) -> io::Result<LocalStream> {
+        tokio::net::UnixStream::connect(path).await
+    }
+
+    #[cfg(windows)]
+    pub async fn connect(path: &Path) -> io::Result<LocalStream> {
+        tokio::net::windows::named_pipe::ClientOptions::new().open(pipe_name(path))
+    }
+
+    /// The pipe standing for a socket path: `\\.\pipe\webagent-` and the path with every
+    /// character outside `[A-Za-z0-9._-]` turned into `-`, cut to the 256-character limit.
+    #[must_use]
+    pub fn pipe_name(path: &Path) -> String {
+        let flat: String = path
+            .to_string_lossy()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let mut name = format!(r"\\.\pipe\webagent-{flat}");
+        name.truncate(256);
+        name
+    }
+}
+
+pub mod signal {
+    //! The service manager's stop request: SIGTERM on Unix. Windows has no such signal
+    //! for a background app; its window or Ctrl-C (handled by callers) stops it.
+
+    #[cfg(unix)]
+    pub struct Terminate(tokio::signal::unix::Signal);
+    #[cfg(not(unix))]
+    pub struct Terminate;
+
+    /// Starts listening for the stop request.
+    pub fn terminate() -> std::io::Result<Terminate> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            Ok(Terminate(signal(SignalKind::terminate())?))
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Terminate)
+        }
+    }
+
+    impl Terminate {
+        /// Waits for the next stop request.
+        pub async fn recv(&mut self) {
+            #[cfg(unix)]
+            {
+                self.0.recv().await;
+            }
+            #[cfg(not(unix))]
+            {
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+}

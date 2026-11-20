@@ -8,11 +8,11 @@ use crate::{
 };
 use axum::Extension;
 use std::{
-    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Component, Path as FsPath},
     process::Stdio,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use webagent_platform::fs::{MetadataExt, PermissionsExt};
 const IDS: [&str; 2] = ["automation", "outbound_notifications"];
 // A bounded sealed namespace plus a bounded read page may appear in one response.
 const LIMIT: usize = 8 * 1024 * 1024;
@@ -42,7 +42,7 @@ fn package_lock_store(store: &Store, id: &str, exclusive: bool) -> Result<File> 
     }
     let dir = store.root.join("modules");
     std::fs::create_dir_all(&dir)?;
-    use std::os::unix::fs::OpenOptionsExt;
+    use webagent_platform::fs::OpenOptionsExt;
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -66,7 +66,7 @@ fn host_lock(app: &App, id: &str) -> Result<File> {
         id,
         digest(&json!(app.store.current_user_id()))
     ));
-    use std::os::unix::fs::OpenOptionsExt;
+    use webagent_platform::fs::OpenOptionsExt;
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -426,7 +426,7 @@ fn write_health(
     std::fs::create_dir_all(&dir)?;
     let file = health_path(&app.store.root, id);
     let temp = dir.join(format!(".health-{}.tmp", uuid()));
-    use std::os::unix::fs::OpenOptionsExt;
+    use webagent_platform::fs::OpenOptionsExt;
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -546,9 +546,12 @@ fn reducer_process(id: &str, executable: &FsPath) -> Result<tokio::process::Comm
         let sandbox = crate::engine_sandbox::prepare(executable)?;
         // SAFETY: preparation allocates and holds the path rules in the parent; the pre-exec
         // closure only applies that Landlock/seccomp/descriptor fence between fork and exec.
+        #[cfg(unix)]
         unsafe {
             command.pre_exec(move || sandbox.apply());
         }
+        #[cfg(not(unix))]
+        let _ = sandbox;
         command.current_dir("/");
     }
     command.env_clear().env("PATH", "/usr/bin:/bin");
@@ -2709,7 +2712,7 @@ mod automation_ability_host_tests {
         assert_eq!(automation_activation(root.path()).unwrap(), original);
         let path = automation_activation_path(root.path());
         std::fs::remove_file(&path).unwrap();
-        std::os::unix::fs::symlink("/etc/passwd", &path).unwrap();
+        webagent_platform::fs::symlink("/etc/passwd", &path).unwrap();
         assert!(automation_activation(root.path()).is_err());
     }
     /// Exercise the native bridge's real pre-exec boundary, not a plugin's voluntary self-check.

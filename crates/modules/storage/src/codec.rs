@@ -12,10 +12,10 @@ use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
     io::Write,
-    os::unix::fs::OpenOptionsExt,
     path::Path,
     sync::{Arc, RwLock},
 };
+use webagent_platform::fs::OpenOptionsExt;
 
 const AGENT_ENVELOPE: &[u8] = b"WAAGENT1";
 

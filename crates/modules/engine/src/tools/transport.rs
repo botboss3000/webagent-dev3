@@ -2,10 +2,7 @@
 use super::{failure, outcome};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
-};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
 pub async fn execute(
     name: &str,
@@ -101,14 +98,16 @@ async fn execute_rpc(
     if cancel.is_cancelled() {
         return Err(fail(Stage::Preparation, Code::Cancelled, Delivery::NotSent, None).into());
     }
-    let mut stream = UnixStream::connect(socket).await.map_err(|error| {
-        let code = match error.kind() {
-            std::io::ErrorKind::NotFound => Code::SocketUnavailable,
-            std::io::ErrorKind::ConnectionRefused => Code::ConnectionRefused,
-            _ => Code::IoFailure,
-        };
-        fail(Stage::Connect, code, Delivery::NotSent, Some(&error))
-    })?;
+    let mut stream = webagent_platform::ipc::connect(socket.as_ref())
+        .await
+        .map_err(|error| {
+            let code = match error.kind() {
+                std::io::ErrorKind::NotFound => Code::SocketUnavailable,
+                std::io::ErrorKind::ConnectionRefused => Code::ConnectionRefused,
+                _ => Code::IoFailure,
+            };
+            fail(Stage::Connect, code, Delivery::NotSent, Some(&error))
+        })?;
     let timeout = args["timeout_seconds"]
         .as_u64()
         .unwrap_or(120)

@@ -8,12 +8,12 @@ use sqlx::{
 };
 use std::{
     collections::HashMap,
-    os::unix::fs::PermissionsExt,
     path::Path,
     str::FromStr,
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 use tokio::sync::RwLock;
+use webagent_platform::fs::PermissionsExt;
 
 /// Open a durable WAL authority with bounded connections, profile permissions and the tables its owner needs.
 /// `events` adds the event log (user and application planes); `runs` adds the user-plane run schema.

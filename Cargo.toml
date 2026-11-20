@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/modules/agents", "crates/modules/administration", "crates/modules/administration/host", "crates/modules/extensions", "crates/modules/accounts", "crates/modules/accounts/host", "crates/modules/webapp", "crates/modules/abilities", "crates/modules/abilities/native", "crates/modules/abilities/host/storage", "crates/modules/access", "crates/modules/configuration", "crates/modules/system", "crates/modules/system/host", "crates/modules/context", "crates/modules/engine", "crates/modules/manager", "crates/modules/chat", "crates/modules/models", "crates/modules/usage", "crates/modules/files", "crates/modules/media", "crates/modules/inference", "crates/modules/notifications", "crates/modules/browser", "crates/modules/actions", "crates/modules/storage", "crates/modules/worker", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/host-core", "crates/module-interface", "crates/module-service", "crates/module-toy", "crates/usage-reports", "crates/usage-service", "crates/model-discovery", "crates/models-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service", "src/plugin_packages/diagnostics"]
-default-members = ["crates/modules/agents", "crates/modules/administration", "crates/modules/administration/host", "crates/modules/extensions", "crates/modules/accounts", "crates/modules/accounts/host", "crates/modules/webapp", "crates/modules/abilities", "crates/modules/abilities/native", "crates/modules/abilities/host/storage", "crates/modules/access", "crates/modules/configuration", "crates/modules/system", "crates/modules/system/host", "crates/modules/context", "crates/modules/engine", "crates/modules/manager", "crates/modules/chat", "crates/modules/models", "crates/modules/usage", "crates/modules/files", "crates/modules/media", "crates/modules/inference", "crates/modules/notifications", "crates/modules/browser", "crates/modules/actions", "crates/modules/storage", "crates/modules/worker", ".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/host-core", "crates/module-interface", "crates/module-service", "crates/module-toy", "crates/usage-reports", "crates/usage-service", "crates/model-discovery", "crates/models-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service", "src/plugin_packages/diagnostics"]
+members = ["crates/modules/agents", "crates/modules/administration", "crates/modules/administration/host", "crates/modules/extensions", "crates/modules/accounts", "crates/modules/accounts/host", "crates/modules/webapp", "crates/modules/abilities", "crates/modules/abilities/native", "crates/modules/abilities/host/storage", "crates/modules/access", "crates/modules/configuration", "crates/modules/system", "crates/modules/system/host", "crates/modules/context", "crates/modules/engine", "crates/modules/manager", "crates/modules/chat", "crates/modules/models", "crates/modules/usage", "crates/modules/files", "crates/modules/media", "crates/modules/inference", "crates/modules/notifications", "crates/modules/browser", "crates/modules/actions", "crates/modules/storage", "crates/modules/worker", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/host-core", "crates/platform", "crates/module-interface", "crates/module-service", "crates/module-toy", "crates/usage-reports", "crates/usage-service", "crates/model-discovery", "crates/models-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service", "src/plugin_packages/diagnostics"]
+default-members = ["crates/modules/agents", "crates/modules/administration", "crates/modules/administration/host", "crates/modules/extensions", "crates/modules/accounts", "crates/modules/accounts/host", "crates/modules/webapp", "crates/modules/abilities", "crates/modules/abilities/native", "crates/modules/abilities/host/storage", "crates/modules/access", "crates/modules/configuration", "crates/modules/system", "crates/modules/system/host", "crates/modules/context", "crates/modules/engine", "crates/modules/manager", "crates/modules/chat", "crates/modules/models", "crates/modules/usage", "crates/modules/files", "crates/modules/media", "crates/modules/inference", "crates/modules/notifications", "crates/modules/browser", "crates/modules/actions", "crates/modules/storage", "crates/modules/worker", ".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/host-core", "crates/platform", "crates/module-interface", "crates/module-service", "crates/module-toy", "crates/usage-reports", "crates/usage-service", "crates/model-discovery", "crates/models-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service", "src/plugin_packages/diagnostics"]
 # Ability plugins built alone by the broker; Core and Web ones are linked through
 # `stable-abilities`, the optional Administrator pack's never are.
 exclude = ["abilities/Core/agent_management", "abilities/Web/web_search", "abilities/Administrator/diagnostics"]
@@ -25,11 +25,11 @@ len_without_is_empty = "warn"
 wrong_self_convention = "warn"
 
 [features]
-default = ["linked-context", "local-worker", "administrator"]
+default = ["linked-context", "local-worker", "administrator", "server-bins"]
 linked-context = ["webagent-engine/linked-context", "dep:webagent-usage-reports", "dep:webagent-model-discovery", "dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor", "dep:webagent-context-assets", "dep:webagent-capability-context", "dep:webagent-provider-projection"]
 # The server release build uses live-context alone, so it keeps the local worker and the
 # Administrator tier.
-live-context = ["webagent-engine/live-context", "local-worker", "administrator"]
+live-context = ["webagent-engine/live-context", "local-worker", "administrator", "server-bins"]
 # The Administrator tier: the Administration module behind the optional Administrator
 # pack (build broker, source promotion, live-checkout grants). Without it the app is a
 # non-coding platform: no Administrator routes, and its tools report unavailable.
@@ -38,6 +38,10 @@ administrator = ["dep:webagent-administration", "dep:webagent-administration-hos
 # Linux workspace sandbox. Builds for platforms without it (phones, remote clients)
 # leave it out; their tool calls then report that no local worker is available.
 local-worker = ["dep:webagent-worker"]
+# The Linux server's helper executables (boot host, plugin packages). Desktop and phone
+# builds leave them out: they serve peer-checked Unix sockets or run as separate
+# package processes, which those builds do not use.
+server-bins = []
 # Stable releases link ability plugins into the binary; dev runs them as packages.
 stable-abilities = ["dep:webagent-agent-management", "dep:webagent-web-search"]
 
@@ -73,6 +77,7 @@ webagent-actions = { path = "crates/modules/actions" }
 webagent-storage = { path = "crates/modules/storage" }
 webagent-worker = { path = "crates/modules/worker", optional = true }
 webagent-host-core = { path = "crates/host-core" }
+webagent-platform = { path = "crates/platform" }
 webagent-assets-contracts={path="crates/assets-contracts"}
 webagent-capability-contracts={path="crates/capability-contracts"}
 webagent-provider-contracts={path="crates/provider-contracts"}
@@ -130,22 +135,27 @@ http-body-util = "0.1"
 [[bin]]
 name = "webagent-boot-host"
 path = "src/boot_host_main.rs"
+required-features = ["server-bins"]
 
 [[bin]]
 name = "webagent-mcp"
 path = "abilities/Core/mcp/service/main.rs"
+required-features = ["server-bins"]
 
 [[bin]]
 name = "webagent-diagnostics"
 path = "src/plugin_packages/diagnostics/main.rs"
+required-features = ["server-bins"]
 
 [[bin]]
 name = "webagent-optimization"
 path = "src/plugin_packages/optimization/main.rs"
+required-features = ["server-bins"]
 
 [[bin]]
 name = "webagent-outbound-notifications"
 path = "src/plugin_packages/outbound_notifications/main.rs"
+required-features = ["server-bins"]
 
 # The root crate is mostly HTTP/serde glue and dominates every Rust build
 # (about 83% of its compile is LLVM code generation). Level 2 cuts its release

@@ -1073,7 +1073,7 @@ async fn run_process() -> Result<()> {
             app.clone(),
             progress.clone(),
         )));
-        let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut signal = webagent_platform::signal::terminate()?;
         tokio::select! {
             _=signal.recv()=>{},
             _=tokio::signal::ctrl_c()=>{},
@@ -1152,6 +1152,7 @@ async fn run_process() -> Result<()> {
     ));
     tokio::spawn(crate::phase3_api::sweep_browser_folders(app.clone()));
     tokio::spawn(api::storage_cleanup::service(app.clone()));
+    #[cfg(unix)]
     tokio::spawn(api::host_admin::watch(app.clone()));
     let shutdown = app.clone();
     axum::serve(
@@ -1159,8 +1160,7 @@ async fn run_process() -> Result<()> {
         router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(async move {
-        let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("signal handler");
+        let mut signal = webagent_platform::signal::terminate().expect("signal handler");
         tokio::select! {_=signal.recv()=>{},_=tokio::signal::ctrl_c()=>{}}
         shutdown.ready.store(false, Ordering::Release);
         shutdown.stop.cancel();

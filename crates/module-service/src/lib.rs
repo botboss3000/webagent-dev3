@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
+#[cfg(unix)]
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -409,6 +410,7 @@ const EVENT_LOOP_SYSCALLS: [libc::c_long; 6] = [
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 const EVENT_LOOP_SYSCALLS: [i64; 0] = [];
 
+#[cfg(unix)]
 fn nonblocking(fd: &OwnedFd) -> Result<()> {
     use std::os::fd::AsRawFd;
     // SAFETY: fcntl on a descriptor this process owns; only the status flags change.
@@ -423,7 +425,9 @@ fn nonblocking(fd: &OwnedFd) -> Result<()> {
 }
 
 /// Service process entry: isolate, then answer the host on stdin/stdout with
-/// `services` until the host closes the pipes.
+/// `services` until the host closes the pipes. Separate module processes are a Linux
+/// server mode; other platforms link the modules into the app.
+#[cfg(unix)]
 pub fn run(limits: Limits, services: Services) -> Result<()> {
     webagent_engine_service::isolate(&EVENT_LOOP_SYSCALLS)?;
     // SAFETY: descriptors 0 and 1 are the host's pipes; this process never touches

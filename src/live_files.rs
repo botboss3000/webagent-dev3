@@ -4,7 +4,6 @@
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -34,7 +33,7 @@ fn write(socket: &Path, relative: &str, body: &[u8], expected: &[u8]) -> Result<
             "expected_sha256": hex::encode(sha2::Sha256::digest(expected)),
         },
     });
-    let mut stream = UnixStream::connect(socket)?;
+    let mut stream = connect(socket)?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     let mut line = serde_json::to_vec(&request)?;
@@ -51,6 +50,17 @@ fn write(socket: &Path, relative: &str, body: &[u8], expected: &[u8]) -> Result<
         );
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn connect(socket: &Path) -> Result<std::os::unix::net::UnixStream> {
+    Ok(std::os::unix::net::UnixStream::connect(socket)?)
+}
+
+/// Saves go through the build service, which listens on a Unix socket.
+#[cfg(not(unix))]
+fn connect(_socket: &Path) -> Result<std::net::TcpStream> {
+    bail!("Live file saves need the build service, which is Linux-only")
 }
 
 /// Current bytes of a live file, unvalidated, for digest-fenced saves.

@@ -1,11 +1,8 @@
 //! Resource counters describe this process's Linux proc/mount namespace, not cgroup quotas.
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, Read};
-use std::mem::MaybeUninit;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -183,7 +180,14 @@ pub fn parse_uptime(text: &str) -> Option<Value> {
     Some(json!({"available":true,"seconds":seconds}))
 }
 
+#[cfg(not(unix))]
+fn disk(_path: &Path) -> Value {
+    unavailable("unsupported_platform")
+}
+
+#[cfg(unix)]
 fn disk(path: &Path) -> Value {
+    use std::{ffi::CString, mem::MaybeUninit, os::unix::ffi::OsStrExt};
     let Ok(name) = CString::new(path.as_os_str().as_bytes()) else {
         return unavailable("invalid_mount");
     };

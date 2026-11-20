@@ -2,16 +2,17 @@
 use anyhow::{bail, Context};
 use serde_json::{json, Value};
 use std::{
-    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     time::Duration,
 };
+use tokio::process::{Child, Command};
+#[cfg(unix)]
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
-    process::{Child, Command},
 };
 use tokio_util::sync::CancellationToken;
+use webagent_platform::fs::{MetadataExt, PermissionsExt};
 
 /// Unix seconds.
 fn now() -> u64 {
@@ -156,6 +157,7 @@ fn response(bytes: &[u8]) -> anyhow::Result<Value> {
     }
 }
 
+#[cfg(unix)]
 async fn exchange(mut stream: UnixStream, bytes: &[u8]) -> anyhow::Result<Value> {
     stream.write_u32(bytes.len() as u32).await?;
     stream.write_all(bytes).await?;
@@ -184,23 +186,7 @@ pub async fn call(mut request: Value, cancel: CancellationToken) -> anyhow::Resu
     if bytes.len() > FRAME_LIMIT {
         bail!("MCP request oversized")
     }
-    let execution = async {
-        let stream = UnixStream::connect(root.join("mcp/plugin.sock"))
-            .await
-            .context("MCP plugin connection failed")?;
-        let expected_uid = if std::env::var_os("V3_PLUGIN_TEST_ROOT").is_some() {
-            // Test overrides still enforce an identity, never bypass peer checks.
-            std::fs::metadata("/proc/self")
-                .context("MCP peer identity unavailable")?
-                .uid()
-        } else {
-            1100
-        };
-        if stream.peer_cred()?.uid() != expected_uid {
-            bail!("MCP plugin peer rejected")
-        }
-        exchange(stream, &bytes).await
-    };
+    let execution = execute(root, &bytes);
     // Dropping execution closes the socket. A cancelled consequential external
     // call remains uncertain; core recovery must never infer that it did not run.
     let output = tokio::select! {
@@ -215,9 +201,37 @@ pub async fn call(mut request: Value, cancel: CancellationToken) -> anyhow::Resu
     Ok(output)
 }
 
+/// The MCP package runs as its own process behind a peer-checked Unix socket, so it is
+/// a Unix-only feature; elsewhere `init` never starts it and calls report it missing.
+#[cfg(not(unix))]
+async fn execute(_root: &Path, _bytes: &[u8]) -> anyhow::Result<Value> {
+    bail!("MCP plugin is not supported on this platform")
+}
+
+#[cfg(unix)]
+async fn execute(root: &Path, bytes: &[u8]) -> anyhow::Result<Value> {
+    {
+        let stream = UnixStream::connect(root.join("mcp/plugin.sock"))
+            .await
+            .context("MCP plugin connection failed")?;
+        let expected_uid = if std::env::var_os("V3_PLUGIN_TEST_ROOT").is_some() {
+            // Test overrides still enforce an identity, never bypass peer checks.
+            std::fs::metadata("/proc/self")
+                .context("MCP peer identity unavailable")?
+                .uid()
+        } else {
+            1100
+        };
+        if stream.peer_cred()?.uid() != expected_uid {
+            bail!("MCP plugin peer rejected")
+        }
+        exchange(stream, bytes).await
+    }
+}
+
 pub async fn init(root: &Path, role: &str) {
     let _ = ROOT.set(root.to_path_buf());
-    if role != "api" {
+    if role != "api" || cfg!(not(unix)) {
         return;
     }
     let root = root.to_path_buf();
@@ -323,10 +337,10 @@ mod tests {
             std::fs::set_permissions(&path, original).unwrap();
         }
         let outer = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(root.path(), outer.path().join("linked")).unwrap();
+        webagent_platform::fs::symlink(root.path(), outer.path().join("linked")).unwrap();
         assert!(package(&outer.path().join("linked")).is_none());
         std::fs::remove_file(root.path().join("plugin.json")).unwrap();
-        std::os::unix::fs::symlink("/dev/null", root.path().join("plugin.json")).unwrap();
+        webagent_platform::fs::symlink("/dev/null", root.path().join("plugin.json")).unwrap();
         assert!(package(root.path()).is_none());
     }
     #[test]

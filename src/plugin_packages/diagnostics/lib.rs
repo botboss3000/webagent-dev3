@@ -3,6 +3,7 @@ pub mod background;
 pub mod bridge;
 pub mod config;
 mod recorder;
+#[cfg(unix)]
 pub mod server;
 pub mod ui_trace;
 use anyhow::Result;

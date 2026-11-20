@@ -13,7 +13,6 @@ use std::{
     any::{Any, TypeId},
     collections::{BTreeMap, HashMap},
     io::Read,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -141,13 +140,34 @@ fn settled(stamp: &Stamp) -> bool {
     stamp.modified.0 < now - 1
 }
 
+#[cfg(unix)]
 fn version(info: &std::fs::Metadata) -> Stamp {
+    use std::os::unix::fs::MetadataExt;
     Stamp {
         device: info.dev(),
         inode: info.ino(),
         len: info.len(),
         modified: (info.mtime(), info.mtime_nsec()),
         changed: (info.ctime(), info.ctime_nsec()),
+    }
+}
+
+/// Without inode and change time, the size and modification time stand for the version.
+#[cfg(not(unix))]
+fn version(info: &std::fs::Metadata) -> Stamp {
+    let modified = info
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or((0, 0), |since| {
+            (since.as_secs() as i64, i64::from(since.subsec_nanos()))
+        });
+    Stamp {
+        device: 0,
+        inode: 0,
+        len: info.len(),
+        modified,
+        changed: modified,
     }
 }
 

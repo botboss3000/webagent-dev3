@@ -154,7 +154,7 @@ pub fn current(root: &Path, user: &str, open: impl Fn(&[u8]) -> Result<Vec<u8>>)
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
+    use webagent_platform::fs::OpenOptionsExt;
     let temporary = path.with_extension("tmp");
     let mut file = std::fs::OpenOptions::new()
         .write(true)

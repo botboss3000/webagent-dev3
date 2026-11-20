@@ -3,9 +3,9 @@
 //! expire fifteen seconds after the probe. Idle decisions never replace a reducer's or an
 //! admission's own decision.
 use serde_json::Value;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use webagent_platform::fs::MetadataExt;
 
 /// Seconds a probe result stays valid.
 const FRESH: u64 = 15;

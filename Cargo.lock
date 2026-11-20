@@ -2308,6 +2308,7 @@ dependencies = [
  "webagent-configuration",
  "webagent-context-contracts",
  "webagent-extensions",
+ "webagent-platform",
 ]
 
 [[package]]
@@ -2339,6 +2340,7 @@ dependencies = [
  "uuid",
  "webagent-accounts",
  "webagent-configuration",
+ "webagent-platform",
 ]
 
 [[package]]
@@ -2689,6 +2691,7 @@ dependencies = [
  "webagent-configuration",
  "webagent-context",
  "webagent-models",
+ "webagent-platform",
 ]
 
 [[package]]
@@ -2725,6 +2728,7 @@ dependencies = [
  "webagent-context-assets",
  "webagent-context-contracts",
  "webagent-models",
+ "webagent-platform",
  "webagent-provider-contracts",
  "webagent-provider-projection",
 ]
@@ -2750,6 +2754,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "webagent-configuration",
+ "webagent-platform",
 ]
 
 [[package]]
@@ -2952,6 +2957,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-platform"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "webagent-provider-contracts"
 version = "0.1.0"
 dependencies = [
@@ -2995,6 +3007,7 @@ dependencies = [
  "tokio",
  "uuid",
  "webagent-configuration",
+ "webagent-platform",
  "zstd",
 ]
 
@@ -3126,6 +3139,7 @@ dependencies = [
  "webagent-module-service",
  "webagent-native-tools",
  "webagent-notifications",
+ "webagent-platform",
  "webagent-provider-contracts",
  "webagent-provider-projection",
  "webagent-storage",

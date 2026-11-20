@@ -119,16 +119,18 @@ async fn run(
 
 /// One call in the plugin's own process from the published release, in the engine sandbox.
 async fn spawn(plugin: &RequestsPlugin, host: &Host<'_>, context: &Value) -> Result<Value> {
-    use std::os::unix::process::CommandExt as _;
     let executable =
         plugin.executable(&webagent_configuration::paths::app().join("assets/artifacts"))?;
     let sandbox = crate::engine_sandbox::prepare(&executable)?;
     let mut command = std::process::Command::new(&executable);
     // SAFETY: `prepare` built every rule in the parent; the closure only applies that
     // Landlock/seccomp/descriptor fence and allocates nothing between fork and exec.
+    #[cfg(unix)]
     unsafe {
-        command.pre_exec(move || sandbox.apply());
+        std::os::unix::process::CommandExt::pre_exec(&mut command, move || sandbox.apply());
     }
+    #[cfg(not(unix))]
+    let _ = sandbox;
     let mut child = tokio::process::Command::from(command)
         .current_dir("/")
         .env_clear()

@@ -22,7 +22,7 @@ pub async fn call(request: &Value) -> Result<Value> {
         .join("board")
         .join("board.sock");
     let exchange = async {
-        let mut stream = tokio::net::UnixStream::connect(path).await?;
+        let mut stream = webagent_platform::ipc::connect(&path).await?;
         stream
             .write_all((request.to_string() + "\n").as_bytes())
             .await?;

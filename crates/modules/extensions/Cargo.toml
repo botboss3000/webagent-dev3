@@ -7,6 +7,7 @@ edition = "2021"
 # their validation, and the JSON-lines driver for a plugin process. Host IO stays in
 # the root and the `host/` crate.
 [dependencies]
+webagent-platform = { path = "../../platform" }
 anyhow = "1"
 serde_json = "1"
 tokio = { version = "1", features = ["fs", "io-util", "net", "process", "time", "macros", "rt"] }

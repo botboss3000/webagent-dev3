@@ -76,6 +76,8 @@ mod engine_components;
 mod file_manager;
 #[path = "../../crates/modules/chat/host/api/followup_queue.rs"]
 pub(crate) mod followup_queue;
+// The root host helper is a Linux service reached over a Unix socket.
+#[cfg(unix)]
 #[path = "../../crates/modules/administration/host/api/host_admin.rs"]
 pub(crate) mod host_admin;
 #[path = "../../crates/modules/inference/host/service.rs"]
@@ -163,6 +165,20 @@ async fn context_config_put(State(app): State<App>, Json(body): Json<Value>) -> 
     Ok(Json(json!({"config":value,"digest":crate::digest(&value)})))
 }
 
+/// Host Admin decides the root host helper's requests, a Linux service on a Unix socket.
+fn host_admin_routes() -> Router<App> {
+    let routes = Router::new();
+    #[cfg(unix)]
+    let routes = routes
+        .route("/admin/host/requests", get(host_admin::requests))
+        .route(
+            "/admin/host/requests/{id}/decision",
+            post(host_admin::decide),
+        )
+        .route("/admin/host/allow", post(host_admin::allow));
+    routes
+}
+
 pub(super) fn router(app: App) -> Router {
     let event_aliases = Router::new()
         .route("/admin/events", get(notifications::read))
@@ -194,12 +210,6 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/events/stream", get(notifications::stream))
         .route("/admin/alerts", get(notifications::alerts))
         .route("/admin/alerts/read", post(notifications::read_alerts))
-        .route("/admin/host/requests", get(host_admin::requests))
-        .route(
-            "/admin/host/requests/{id}/decision",
-            post(host_admin::decide),
-        )
-        .route("/admin/host/allow", post(host_admin::allow))
         .route("/admin/modules", get(crate::modules::admin_list))
         .route("/admin/modules/{id}", post(crate::modules::lifecycle))
         .route("/status", get(overview))
@@ -267,6 +277,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/ability-drift/rebuild", post(ability_drift::rebuild))
         .merge(build_dashboard::admin_router())
         .merge(app_defaults::admin_router())
+        .merge(host_admin_routes())
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()

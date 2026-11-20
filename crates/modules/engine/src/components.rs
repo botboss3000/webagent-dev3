@@ -370,7 +370,7 @@ pub fn load(root: &std::path::Path, revision: &str) -> Result<Catalog> {
         let executable = item.path().join(&descriptor.executable);
         let artifact_dir = std::fs::symlink_metadata(item.path().join("artifact"))?;
         let meta = std::fs::symlink_metadata(&executable)?;
-        use std::os::unix::fs::PermissionsExt;
+        use webagent_platform::fs::PermissionsExt;
         if !artifact_dir.is_dir()
             || artifact_dir.file_type().is_symlink()
             || !meta.is_file()
@@ -1678,9 +1678,12 @@ impl Service {
                     .clone();
                 let sandbox = crate::sandbox::prepare(&executable)?;
                 let mut command = tokio::process::Command::new(&executable);
+                #[cfg(unix)]
                 unsafe {
                     command.pre_exec(move || sandbox.apply());
                 }
+                #[cfg(not(unix))]
+                let _ = sandbox;
                 let mut child = command
                     .env_clear()
                     .current_dir("/")

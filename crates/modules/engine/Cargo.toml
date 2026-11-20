@@ -10,6 +10,7 @@ live-context = ["webagent-context/live-context"]
 test-support = ["webagent-context/test-support", "webagent-models/test-support"]
 
 [dependencies]
+webagent-platform = { path = "../../platform" }
 webagent-abilities = {path="../abilities"}
 anyhow = "1"
 regex = "1"

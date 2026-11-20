@@ -380,7 +380,7 @@ static SKILL_TEXT: std::sync::LazyLock<
 > = std::sync::LazyLock::new(Default::default);
 
 pub(crate) fn optional_skill(path: &Path) -> Result<Option<String>> {
-    use std::os::unix::fs::MetadataExt;
+    use webagent_platform::fs::MetadataExt;
     let meta = match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -2635,7 +2635,7 @@ pub mod registered_tests {
         #[cfg(unix)]
 
         pub fn symlink_replacement_cannot_restore_cached_bundled_guidance<H: crate::TestHost>() {
-            use std::os::unix::fs::symlink;
+            use webagent_platform::fs::symlink;
             let (root, catalog) = fixture::<H>();
             let folder = root.path().join("Administrator/codebase_admin");
             let path = folder.join("skills/codebase_admin.skill.md");
@@ -3192,7 +3192,7 @@ pub mod registered_tests {
         #[cfg(unix)]
 
         pub fn symlink_assets_fail_closed<H: crate::TestHost>() {
-            use std::os::unix::fs::symlink;
+            use webagent_platform::fs::symlink;
             let (root, _) = fixture::<H>();
             let skill = root
                 .path()
@@ -3205,7 +3205,7 @@ pub mod registered_tests {
         pub fn current_catalog_withdrawal_preserves_strict_snapshot_validation<
             H: crate::TestHost,
         >() {
-            use std::os::unix::fs::symlink;
+            use webagent_platform::fs::symlink;
             let (root, _) = fixture::<H>();
             let path = root
                 .path()

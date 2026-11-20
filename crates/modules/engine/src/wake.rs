@@ -1,13 +1,15 @@
 //! Wake hints contain no authority or content. Durable scans remain the fallback.
-use anyhow::{anyhow,Result};
-use std::{path::{Path,PathBuf},time::Duration};
-use tokio_util::sync::CancellationToken;
+use anyhow::{anyhow, Result};
 use std::sync::OnceLock;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{UnixListener, UnixStream},
+    io::AsyncWriteExt,
     sync::{watch, Notify},
 };
+use tokio_util::sync::CancellationToken;
 fn signal() -> &'static Notify {
     static SIGNAL: OnceLock<Notify> = OnceLock::new();
     SIGNAL.get_or_init(Notify::new)
@@ -30,14 +32,30 @@ pub async fn notify(control_dir: &Path) {
     emit();
     let path = socket(control_dir);
     let _ = tokio::time::timeout(Duration::from_millis(100), async move {
-        if let Ok(mut stream) = UnixStream::connect(path).await {
+        if let Ok(mut stream) = webagent_platform::ipc::connect(&path).await {
             let _ = stream.write_all(b"W").await;
         }
     })
     .await;
 }
-pub async fn listener(control_dir: &Path, stop: CancellationToken) -> Result<tokio::task::JoinHandle<()>> {
+/// Off Unix the API and loop share one process, so `emit` alone reaches the loop.
+#[cfg(not(unix))]
+pub async fn listener(
+    _control_dir: &Path,
+    stop: CancellationToken,
+) -> Result<tokio::task::JoinHandle<()>> {
+    Ok(tokio::spawn(async move { stop.cancelled().await }))
+}
+#[cfg(unix)]
+pub async fn listener(
+    control_dir: &Path,
+    stop: CancellationToken,
+) -> Result<tokio::task::JoinHandle<()>> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use tokio::{
+        io::AsyncReadExt,
+        net::{UnixListener, UnixStream},
+    };
     let path = socket(control_dir);
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if !std::os::unix::fs::FileTypeExt::is_socket(&meta.file_type()) {
@@ -65,7 +83,7 @@ pub async fn listener(control_dir: &Path, stop: CancellationToken) -> Result<tok
         let _ = std::fs::remove_file(path);
     }))
 }
-pub async fn wait(poll_interval_ms:u64,stop:&CancellationToken) {
+pub async fn wait(poll_interval_ms: u64, stop: &CancellationToken) {
     tokio::select! {_=signal().notified()=>{},_=tokio::time::sleep(Duration::from_millis(poll_interval_ms.min(5000)))=>{},_=stop.cancelled()=>{}}
 }
 

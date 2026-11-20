@@ -145,7 +145,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             .parent()
             .ok_or_else(|| anyhow!("Invalid policy path"))?;
         std::fs::create_dir_all(directory)?;
-        use std::os::unix::fs::OpenOptionsExt;
+        use webagent_platform::fs::OpenOptionsExt;
         let temporary = directory.join(format!(".access-policy-{}.tmp", Uuid::new_v4()));
         let result = (|| -> Result<()> {
             let mut file = std::fs::OpenOptions::new()

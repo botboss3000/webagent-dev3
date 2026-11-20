@@ -1,0 +1,11 @@
+[package]
+name = "webagent-platform"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["net", "signal"] }

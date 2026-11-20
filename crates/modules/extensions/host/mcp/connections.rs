@@ -237,7 +237,7 @@ async fn resource_lease(
     write: bool,
     cancel: &CancellationToken,
 ) -> crate::Result<std::fs::File> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use webagent_platform::fs::{OpenOptionsExt, PermissionsExt};
     let directory = app.store.root.join("mcp/leases");
     std::fs::create_dir_all(&directory)?;
     anyhow::ensure!(

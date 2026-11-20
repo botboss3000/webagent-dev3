@@ -332,7 +332,7 @@ impl RequestsPlugin {
 
     /// The plugin's content-addressed executable under `artifacts`, if it was built.
     pub fn executable(&self, artifacts: &FsPath) -> Result<PathBuf> {
-        use std::os::unix::fs::PermissionsExt;
+        use webagent_platform::fs::PermissionsExt;
         let executable = artifacts.join(&self.key).join(&self.entry);
         let meta = std::fs::symlink_metadata(&executable)?;
         let mode = meta.permissions().mode();
@@ -357,7 +357,7 @@ fn automation_service_at(root: &FsPath, artifacts: &FsPath) -> Result<Automation
     automation_cache::get(root, artifacts)
 }
 fn load_automation_service_at(root: &FsPath, artifacts: &FsPath) -> Result<AutomationService> {
-    use std::os::unix::fs::PermissionsExt;
+    use webagent_platform::fs::PermissionsExt;
     let manifest: Value = serde_json::from_slice(&read(&root.join("plugin.json"), 64 * 1024)?)?;
     let declaration: Value =
         serde_json::from_slice(&read(&root.join("automation.json"), 64 * 1024)?)?;
@@ -457,7 +457,7 @@ impl Package {
         };
         let code = read(&executable, 32 * 1024 * 1024)?;
         if manifest["runtime"] == "executable" {
-            use std::os::unix::fs::PermissionsExt;
+            use webagent_platform::fs::PermissionsExt;
             if std::fs::metadata(&executable)?.permissions().mode() & 0o111 == 0 {
                 anyhow::bail!("Plugin is not executable");
             }
@@ -861,7 +861,7 @@ pub mod registered_tests {
 
     pub mod native_automation_contract_tests {
         use super::*;
-        use std::os::unix::fs::PermissionsExt;
+        use webagent_platform::fs::PermissionsExt;
         /// Build private interface inputs; this fixture asserts contracts, never a Cargo compilation proof.
         pub fn fixture<H: crate::TestHost>() -> (tempfile::TempDir, Value, Vec<String>) {
             fixture_data()
@@ -948,7 +948,7 @@ pub mod registered_tests {
             let (root, manifest, tools) = fixture::<H>();
             let path = root.path().join("service/engine.rs");
             std::fs::remove_file(&path).unwrap();
-            std::os::unix::fs::symlink("/etc/passwd", &path).unwrap();
+            webagent_platform::fs::symlink("/etc/passwd", &path).unwrap();
             assert!(automation_contract(root.path(), "automation", &tools, &manifest).is_err());
         }
         /// Asset updates change runtime identity without recompilation; missing/new-input artifacts never fall back.
@@ -1039,7 +1039,7 @@ mod requests_contract_tests {
 
     #[test]
     fn the_executable_must_be_its_built_artifact() {
-        use std::os::unix::fs::PermissionsExt;
+        use webagent_platform::fs::PermissionsExt;
         let (root, manifest, folders) = fixture();
         let plugin = RequestsPlugin::load(root.path(), "demo", &folders).unwrap();
         let artifacts = tempfile::tempdir().unwrap();
