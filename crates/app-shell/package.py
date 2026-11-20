@@ -83,6 +83,32 @@ def prepare_android():
         manifest.write_text(text)
 
 
+def sign_apks(env):
+    """Release APKs come out unsigned. Sign them with WEBAGENT_APK_KEYSTORE (password in
+    WEBAGENT_APK_KEYSTORE_PASS, alias WEBAGENT_APK_KEY_ALIAS) or else the local Android
+    debug keystore, which is enough for sideloading but not for a store listing."""
+    sdk = Path(env["ANDROID_HOME"])
+    tools = sorted((sdk / "build-tools").iterdir())[-1]
+    keystore = env.get("WEBAGENT_APK_KEYSTORE")
+    if keystore:
+        key = ["--ks", keystore, "--ks-pass", "env:WEBAGENT_APK_KEYSTORE_PASS",
+               "--ks-key-alias", env.get("WEBAGENT_APK_KEY_ALIAS", "webagent")]
+    else:
+        debug = next((p for p in [Path.home() / ".android/debug.keystore",
+                                   Path.home() / ".config/.android/debug.keystore"] if p.exists()), None)
+        if not debug:
+            print("no keystore: APKs left unsigned")
+            return
+        # The debug keystore's published, non-secret password.
+        key = ["--ks", str(debug), "--ks-pass", "pass:android", "--ks-key-alias", "androiddebugkey"]
+    for unsigned in glob.glob(str(SHELL / "gen/android/app/build/outputs/apk/**/*-unsigned.apk"), recursive=True):
+        aligned = unsigned.replace("-unsigned.apk", "-aligned.apk")
+        signed = unsigned.replace("-unsigned.apk", ".apk")
+        run([str(tools / "zipalign"), "-f", "-p", "4", unsigned, aligned])
+        run([str(tools / "apksigner"), "sign", *key, "--out", signed, aligned])
+        os.remove(aligned)
+
+
 def build_server(triple, debug, env):
     profile = [] if debug else ["--release"]
     run(["cargo", "build", *profile, "--locked", "--target", triple, "-p", "webagent-v3",
@@ -150,12 +176,15 @@ def main():
         prepare_android()
         run(["cargo", "tauri", "android", "build", *profile, "--apk",
              "--target", *[ANDROID_ABI[t][1] for t in TARGETS["android"]]], cwd=SHELL, env=env)
+        if not args.debug:
+            sign_apks(env)
         print("outputs:", *glob.glob(str(SHELL / "gen/android/app/build/outputs/apk/**/*.apk"), recursive=True))
     else:
         triple = TARGETS[args.platform][0]
         bundles = ["--bundles", "nsis"] if args.platform == "windows" else []
         run(["cargo", "tauri", "build", *profile, "--target", triple, *bundles], cwd=SHELL, env=env)
-        print("outputs:", *glob.glob(str(SHELL / "target" / triple / "*/bundle/**/*.*"), recursive=True))
+        shell_target = Path(env.get("CARGO_TARGET_DIR", SHELL / "target"))
+        print("outputs:", *glob.glob(str(shell_target / triple / "*/bundle/*/*.*"), recursive=True))
 
 
 if __name__ == "__main__":
