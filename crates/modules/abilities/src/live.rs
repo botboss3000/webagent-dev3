@@ -161,6 +161,14 @@ fn build(base: &Path, changed: &[Change], root: &Path) -> std::io::Result<()> {
                     if let Some(folder) = target.parent() {
                         std::fs::create_dir_all(folder)?;
                     }
+                    // Release files are read-only and their copies keep that mode: replace
+                    // the copy rather than writing into it.
+                    match std::fs::remove_file(&target) {
+                        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                            return Err(error)
+                        }
+                        _ => {}
+                    }
                     std::fs::write(target, body)?;
                 }
                 None => std::fs::remove_file(target)?,
@@ -330,6 +338,12 @@ mod tests {
             std::fs::write(root.join("Core/demo/tool.json"), "{\"v\":1}").unwrap();
             std::fs::write(root.join("Core/demo/handler.rs"), "code").unwrap();
         }
+        // Published releases are read-only, as deployed.
+        let mut read_only = std::fs::metadata(base.join("abilities/Core/demo/tool.json"))
+            .unwrap()
+            .permissions();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(base.join("abilities/Core/demo/tool.json"), read_only).unwrap();
         let ok = |_: &Path| true;
         let now = Duration::ZERO;
         assert_eq!(overlay_every(now, &base, &checkout, &cache, ok), base);
