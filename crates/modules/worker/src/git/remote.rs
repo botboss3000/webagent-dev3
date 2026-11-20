@@ -396,6 +396,10 @@ const SCAN_PATHS_PER_COMMAND: usize = 64;
 /// A changed-path listing for one commit: a whole-folder move touches thousands of files.
 const SCAN_PATH_LIST_LIMIT: usize = 4 * 1024 * 1024;
 
+/// Outgoing commits one push may scan: a resource bound, not a detection setting. A
+/// development checkout can be hundreds of commits ahead of its remote.
+const SCAN_COMMIT_LIMIT: usize = 2048;
+
 fn located(commit: &str) -> Value {
     json!({"status":"located","commit":commit,"match_class":"credential_pattern"})
 }
@@ -411,13 +415,19 @@ async fn scan_outgoing_history(
     let listed = command(
         root,
         repo,
-        &["rev-list", "--max-count=257", scan_head, "--not", &remotes],
+        &[
+            "rev-list",
+            &format!("--max-count={}", SCAN_COMMIT_LIMIT + 1),
+            scan_head,
+            "--not",
+            &remotes,
+        ],
         Run::default(),
     )
     .await?;
     let listed = String::from_utf8_lossy(&listed).into_owned();
     let commits: Vec<&str> = listed.lines().collect();
-    if commits.len() > 256 {
+    if commits.len() > SCAN_COMMIT_LIMIT {
         return Err(Failure::Rejected(
             "git_credential_guard",
             "Outgoing history exceeds credential scan commit bound".into(),
