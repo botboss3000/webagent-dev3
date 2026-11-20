@@ -4,10 +4,9 @@
 // and removes steps (each edit reaches the agent with its next step) and reads the History
 // of revisions. Everyone in the chat sees the list; those who can send in it edit.
 import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
+import {createTaskPlan} from '../../components/tasks/task-plan.js';
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
-const unfinished = status => status === 'open' || status === 'in_progress';
-const STATUS = {open: 'Open', in_progress: 'In progress', blocked: 'Blocked', done: 'Done', cancelled: 'Cancelled'};
 
 /** Done and total steps over every section, cancelled steps left out. */
 export function taskCounts(list) {
@@ -62,49 +61,24 @@ export function createTasksChip({session = () => '', request, note = () => {}, c
     b.onclick = e => { e.stopPropagation(); requestTouchVibration(e); run(e); };
     return b;
   }
-  function stepRow(section, step, editable) {
-    const row = el('li', 'task-step'); row.dataset.status = step.status;
-    if (editable && (unfinished(step.status) || step.status === 'done')) {
-      const box = el('input', 'task-check'); box.type = 'checkbox'; box.checked = step.status === 'done';
-      box.setAttribute('aria-label', (box.checked ? 'Reopen ' : 'Mark done ') + step.label);
-      box.onclick = e => { e.stopPropagation(); requestTouchVibration(e); };
-      box.onchange = () => edit(section.id, [{id: step.id, status: box.checked ? 'done' : 'open'}]);
-      row.append(box);
-    } else row.append(el('span', 'task-mark', step.status === 'done' ? '✓' : step.status === 'cancelled' ? '–' : step.status === 'blocked' ? '!' : '·'));
-    const text = el('span', 'task-step-text');
-    text.append(el('span', 'task-step-label', step.label));
-    const detail = [step.status === 'done' || step.status === 'open' ? '' : STATUS[step.status], step.outcome].filter(Boolean).join(' · ');
-    if (detail) text.append(el('small', 'task-step-detail', detail));
-    row.append(text);
-    if (editable && step.status !== 'cancelled') row.append(button('task-remove', '×', 'Remove step ' + step.label, () => edit(section.id, [{id: step.id, status: 'cancelled'}])));
-    return row;
+  const SUB = {open: 'pending', in_progress: 'in-progress', blocked: 'need-help', done: 'completed', cancelled: 'cancelled'};
+  /** A section as a task-plan task: its steps become subtasks, outcomes their details. */
+  function planTask(section) {
+    const steps = section.steps || [];
+    const status = section.status === 'done' ? 'completed' : section.status === 'cancelled' ? 'cancelled'
+      : steps.some(s => s.status === 'blocked') ? 'need-help'
+      : steps.some(s => s.status === 'in_progress' || s.status === 'done') ? 'in-progress' : 'pending';
+    return {id: section.id, title: section.title, status, section, badges: [section.origin === 'user' ? 'Your request' : 'Agent'],
+      description: section.summary, notes: section.notes,
+      subtasks: steps.map(step => ({id: step.id, title: step.label, status: SUB[step.status] || 'pending', description: step.outcome}))};
   }
-  function sectionBlock(section) {
-    const editable = section.status === 'open' && canEdit();
-    const part = el('section', 'task-section'); part.dataset.status = section.status;
-    const head = el('div', 'task-section-head');
-    head.append(el('strong', 'task-section-title', section.title), el('small', 'task-section-meta', [section.origin === 'user' ? 'Your request' : 'Agent', STATUS[section.status] || section.status].join(' · ')));
-    part.append(head);
-    if (section.summary) part.append(el('p', 'task-section-summary', section.summary));
-    if (editable && section.notes) part.append(el('p', 'task-section-notes', section.notes));
-    const steps = el('ul', 'task-steps');
-    for (const step of section.steps || []) steps.append(stepRow(section, step, editable));
-    part.append(steps);
-    if (editable) {
-      const form = el('form', 'task-add');
-      const input = el('input', 'task-add-input'); input.type = 'text'; input.placeholder = 'Add a step'; input.maxLength = 240; input.setAttribute('aria-label', 'Add a step to ' + section.title);
-      const add = el('button', 'task-add-button', 'Add'); add.type = 'submit';
-      form.onsubmit = e => {
-        e.preventDefault(); requestTouchVibration(e);
-        const label = input.value.trim();
-        if (label.length < 3) { note('A step needs at least 3 characters'); return; }
-        void edit(section.id, [{label}]);
-      };
-      form.append(input, add);
-      part.append(form);
-    }
-    return part;
-  }
+  const plan = createTaskPlan({
+    label: 'Session tasks',
+    canEdit: task => task.section.status === 'open' && canEdit(),
+    onToggle: (task, sub, done) => edit(task.id, [{id: sub.id, status: done ? 'done' : 'open'}]),
+    onRemove: (task, sub) => edit(task.id, [{id: sub.id, status: 'cancelled'}]),
+    onAdd: (task, label) => { if (label.length < 3) note('A step needs at least 3 characters'); else void edit(task.id, [{label}]); }
+  });
   async function historyView(box) {
     const list = el('ol', 'task-history');
     box.append(list);
@@ -133,7 +107,7 @@ export function createTasksChip({session = () => '', request, note = () => {}, c
     if (view === 'history') void historyView(box);
     else {
       const sections = [...(state?.list?.sections || [])].sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1));
-      for (const section of sections) box.append(sectionBlock(section));
+      plan.update(sections.map(planTask)); box.append(plan.element);
     }
     show(box);
   }
