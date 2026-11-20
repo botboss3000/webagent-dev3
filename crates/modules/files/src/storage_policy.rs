@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// Live policy file, relative to the checkout; storage settings are its `storage` section.
-pub const LIVE_POLICY: &str = "crates/modules/access/policy.json";
+pub const LIVE_POLICY: &str = "config/access/policy.json";
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MIB: u64 = 1024 * 1024;
 

@@ -110,7 +110,7 @@ pub async fn agent_thresholds(
 }
 
 /// Live compaction policy, relative to the checkout.
-pub const LIVE_COMPACTION: &str = "crates/modules/context/context-compaction.json";
+pub const LIVE_COMPACTION: &str = "config/context/context-compaction.json";
 
 /// Runtime configuration adapter: storage and filesystem authority stay in the core.
 #[derive(Debug, Clone, serde::Serialize)]

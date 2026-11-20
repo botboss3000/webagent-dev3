@@ -1,5 +1,5 @@
 {
-  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "_instructions": "Setting descriptors for the configuration composer (see config/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
   "settings": [
     {
       "id": "user.display_name",

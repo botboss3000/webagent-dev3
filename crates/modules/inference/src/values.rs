@@ -11,7 +11,7 @@ use crate::matcher::Setting;
 /// Settings' own wording that their type alone does not give: enum synonyms ("close" →
 /// restricted), phrases that need another detail first, and direction words ("by accident" →
 /// smaller). Phrases are tried in file order; the first one found in the request wins.
-pub const VALUE_WORDS: &str = include_str!("../value-words.json");
+pub const VALUE_WORDS: &str = include_str!("../../../../config/inference/value-words.json");
 
 /// One request's reading for a setting.
 #[derive(Debug, Clone, PartialEq)]

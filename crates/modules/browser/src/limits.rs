@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use serde_json::Value;
 
 /// Live limits file, relative to the checkout.
-pub const LIVE_LIMITS: &str = "crates/modules/browser/browser-limits.json";
+pub const LIVE_LIMITS: &str = "config/browser/browser-limits.json";
 const MAX_BYTES: u64 = 16 * 1024;
 
 /// How many private browsers run at once and how long an idle one stays open.
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn shipped_file_parses() {
-        let bytes = include_bytes!("../browser-limits.json");
+        let bytes = include_bytes!("../../../../config/browser/browser-limits.json");
         let limits = Limits::parse(bytes).unwrap();
         assert_eq!(limits, Limits::default());
     }

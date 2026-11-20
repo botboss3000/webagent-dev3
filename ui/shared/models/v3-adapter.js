@@ -33,7 +33,7 @@ export const usageQuery=({model,entry_id,include_unassigned},extra={})=>new URLS
 export function createModelAdapter(request, agentId, onAssignment) {
   let data, catalog, account, destroyed=false;
   // Provider names, models and effort scales come from the server's provider files
-  // (crates/modules/models/providers/*.json), read once per page mount.
+  // (config/models/providers/*.json), read once per page mount.
   let providerPresets=null;
   async function presets(){
     if(!providerPresets){

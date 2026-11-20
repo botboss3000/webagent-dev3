@@ -1,7 +1,7 @@
 import {createSubpage} from '../../../../shared/subpage-list/subpage-list.js';
 import {createConfigList,createLongTextRow,createSelectRow,createTextRow} from '../../../../shared/config-rows/config-rows.js';
 
-/** Agent-specific coordination settings and text overrides. Config: crates/modules/configuration/prompts/main_chat.json supplies the defaults shown in grey; the host resolves effective texts. */
+/** Agent-specific coordination settings and text overrides. Config: config/configuration/prompts/main_chat.json supplies the defaults shown in grey; the host resolves effective texts. */
 export async function renderMainChat(host, request, {agentId,canManage=false}={}) {
   if(!agentId)throw Error('Agent identity is required');
   const path='/models/agents/'+encodeURIComponent(agentId)+'/main-chat';

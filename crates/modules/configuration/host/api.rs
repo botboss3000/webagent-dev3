@@ -26,10 +26,10 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
     Some(match id {
         "chat" => "ui/chat/chat.json",
         "app_ui" => webagent_webapp::configuration::LIVE_SETTINGS,
-        "context_compaction" => "crates/modules/context/context-compaction.json",
+        "context_compaction" => "config/context/context-compaction.json",
         "tool_output_retention" => crate::tool_output::LIVE_POLICY,
-        "message_visibility" => "crates/modules/engine/gates/message_visibility_v1.json",
-        "closing_status" => "crates/modules/engine/gates/closing_status.json",
+        "message_visibility" => "config/engine/gates/message_visibility_v1.json",
+        "closing_status" => "config/engine/gates/closing_status.json",
         "voice" => webagent_media::settings::LIVE_VOICE,
         "browser_limits" => webagent_browser::limits::LIVE_LIMITS,
         "admin_alerts" => webagent_notifications::alerts::LIVE_CONFIG,
@@ -218,7 +218,7 @@ pub(crate) async fn put_config(
     Json(body): Json<Value>,
 ) -> Api {
     if id == "prompts" {
-        return Err(bad("Prompts are live Markdown files under crates/modules/configuration/prompts; edit them in place"));
+        return Err(bad("Prompts are live Markdown files under config/configuration/prompts; edit them in place"));
     }
     let expected = required(&body, "expected_digest", 64)?;
     let value = &body["config"];

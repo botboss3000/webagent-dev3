@@ -1,5 +1,5 @@
-//! Provider and model catalogs: one `providers/<provider>.json` file per provider,
-//! beside this crate. They are live files (listed in `live-files.json`), never
+//! Provider and model catalogs: one `config/models/providers/<provider>.json` file per
+//! provider. They are live files (listed in `live-files.json`), never
 //! compiled in: every lookup reads the checkout, so the next request or model call
 //! sees an edit.
 use crate::provider::ProviderId;
@@ -147,7 +147,7 @@ fn scale(levels: &[String], default: Option<&str>) -> Result<()> {
 }
 
 /// The provider files' folder, relative to the checkout.
-pub const FOLDER: &str = "crates/modules/models/providers";
+pub const FOLDER: &str = "config/models/providers";
 
 /// Every provider file shares this one schema; the parser checks a file against its own provider.
 fn parse(bytes: &[u8]) -> Result<Provider> {
@@ -366,7 +366,8 @@ mod tests {
     #[test]
     fn candidate_folder_validates_every_file_with_the_one_schema() {
         let folder = tempfile::tempdir().unwrap();
-        let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("providers");
+        let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../config/models/providers");
         for name in ["deepseek.json", "openrouter.json"] {
             std::fs::copy(shipped.join(name), folder.path().join(name)).unwrap();
         }

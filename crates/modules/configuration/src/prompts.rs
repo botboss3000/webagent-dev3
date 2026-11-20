@@ -1,4 +1,4 @@
-//! Prompts are live Markdown files under `crates/modules/configuration/prompts/`
+//! Prompts are live Markdown files under `config/configuration/prompts/`
 //! (listed in `live-files.json`), assembled into the JSON shape owners consume:
 //! `name.md` is a text value, `name.json` an object of settings and a folder a
 //! nested object. Adding a prompt means adding a file; there is no saved copy.
@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 use std::path::PathBuf;
 /// Checkout folder of the prompt files.
-pub const PROMPTS: &str = "crates/modules/configuration/prompts";
+pub const PROMPTS: &str = "config/configuration/prompts";
 const FILE_LIMIT: u64 = 64 * 1024;
 pub fn published_root_at(ui: &std::path::Path) -> Result<PathBuf> {
     if !ui.ends_with("current/v3/ui") {

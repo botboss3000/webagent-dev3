@@ -110,7 +110,7 @@ impl Roots {
         let runtime = webagent_configuration::paths::runtime();
         Self {
             workspaces: webagent_configuration::paths::workspaces(),
-            context_config: live_checkout.join("crates/modules/context/context-compaction.json"),
+            context_config: live_checkout.join("config/context/context-compaction.json"),
             live_checkout,
             control: runtime.join("control"),
             port_claims: runtime.join("worker/port-claims"),

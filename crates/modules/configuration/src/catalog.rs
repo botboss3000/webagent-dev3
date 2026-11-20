@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 /// The catalog index, relative to the checkout.
-pub const INDEX: &str = "crates/modules/configuration/settings-catalog.json";
+pub const INDEX: &str = "config/configuration/settings-catalog.json";
 const LIVE_FILES: &str = "live-files.json";
 const LAYERS: [&str; 3] = ["app", "agent", "user"];
 const STORES: [&str; 2] = ["agent_metadata", "user_profile"];

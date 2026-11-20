@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock};
 
 /// Live alert configuration, relative to the checkout.
-pub const LIVE_CONFIG: &str = "crates/modules/notifications/admin-alerts.json";
+pub const LIVE_CONFIG: &str = "config/notifications/admin-alerts.json";
 const MAX_BYTES: u64 = 16 * 1024;
 /// Event kinds the host reports.
 /// `host_approval` is one host action waiting on the Host Admin page (raised per request).
@@ -133,7 +133,10 @@ impl Config {
     }
 
     fn shipped() -> Self {
-        Self::parse(include_bytes!("../admin-alerts.json")).expect("shipped alert file is valid")
+        Self::parse(include_bytes!(
+            "../../../../config/notifications/admin-alerts.json"
+        ))
+        .expect("shipped alert file is valid")
     }
 
     /// The configuration as the Notifications page shows it.
@@ -370,16 +373,22 @@ mod tests {
 
     #[test]
     fn unavailable_channel_and_unknown_keys_are_refused() {
-        let mut value: Value =
-            serde_json::from_slice(include_bytes!("../admin-alerts.json")).unwrap();
+        let mut value: Value = serde_json::from_slice(include_bytes!(
+            "../../../../config/notifications/admin-alerts.json"
+        ))
+        .unwrap();
         value["channels"]["ntfy"]["enabled"] = json!(true);
         assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
-        let mut value: Value =
-            serde_json::from_slice(include_bytes!("../admin-alerts.json")).unwrap();
+        let mut value: Value = serde_json::from_slice(include_bytes!(
+            "../../../../config/notifications/admin-alerts.json"
+        ))
+        .unwrap();
         value["events"]["unknown"] = json!({});
         assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
-        let mut value: Value =
-            serde_json::from_slice(include_bytes!("../admin-alerts.json")).unwrap();
+        let mut value: Value = serde_json::from_slice(include_bytes!(
+            "../../../../config/notifications/admin-alerts.json"
+        ))
+        .unwrap();
         value["events"]["login_failed"]["threshold"] = json!(0);
         assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
     }

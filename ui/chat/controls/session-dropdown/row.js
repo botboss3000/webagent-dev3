@@ -1,6 +1,6 @@
 // Two-line session row block shared by the chat session dropdown, its trigger and the
 // Agents → Sessions title column. Flag labels and colour roles come from the session
-// list's `flags` catalog (crates/modules/engine/gates/closing_status.json).
+// list's `flags` catalog (config/engine/gates/closing_status.json).
 import {chipCounts} from '../../elements/activity-group/index.js';
 
 let catalog = new Map();

@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The task list's texts (`prompts/task_list.json`, read live).
-const TEXTS_FILE: &str = "crates/modules/configuration/prompts/task_list.json";
+const TEXTS_FILE: &str = "config/configuration/prompts/task_list.json";
 /// The same file as built, used only when the live one is missing or invalid.
-const PACKAGED_TEXTS: &str = include_str!("../../configuration/prompts/task_list.json");
+const PACKAGED_TEXTS: &str =
+    include_str!("../../../../config/configuration/prompts/task_list.json");
 
 /// Sections one session's list keeps.
 pub const MAX_SECTIONS: usize = 64;

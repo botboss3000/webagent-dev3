@@ -1,4 +1,4 @@
-//! Non-secret runtime authority: the live file `crates/modules/engine/loop-runtime.json`
+//! Non-secret runtime authority: the live file `config/engine/loop-runtime.json`
 //! (listed in `live-files.json`), read through the live loader on every use.
 use crate::workflow;
 use anyhow::{bail, Result};
@@ -22,7 +22,7 @@ impl SchemaCatalog for UnboundSchemas {
     }
 }
 /// Live runtime file, relative to the checkout.
-pub const LIVE: &str = "crates/modules/engine/loop-runtime.json";
+pub const LIVE: &str = "config/engine/loop-runtime.json";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scheduler {

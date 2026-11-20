@@ -117,7 +117,7 @@ export function start(mount) {
 
     const rules = el('section');
     rules.append(el('h2', '', 'What raises an alert'),
-      el('p', 'alerts-help', 'Set in crates/modules/notifications/admin-alerts.json (or ask the configuration assistant). Alerts are kept ' + page.config.retention_days + ' days.'));
+      el('p', 'alerts-help', 'Set in config/notifications/admin-alerts.json (or ask the configuration assistant). Alerts are kept ' + page.config.retention_days + ' days.'));
     const ruleRows = el('div', 'alerts-rows');
     for (const [kind, rule] of Object.entries(page.config.events)) {
       const row = el('div', 'alerts-row');

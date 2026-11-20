@@ -2,9 +2,10 @@
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 /// The built-in modes' live file, in the prompts folder.
-const DEFAULTS_FILE: &str = "crates/modules/configuration/prompts/execution_modes.json";
+const DEFAULTS_FILE: &str = "config/configuration/prompts/execution_modes.json";
 /// The same file as built, used only when the live one is missing or invalid.
-const PACKAGED_DEFAULTS: &str = include_str!("../../configuration/prompts/execution_modes.json");
+const PACKAGED_DEFAULTS: &str =
+    include_str!("../../../../config/configuration/prompts/execution_modes.json");
 const BUILTIN: [&str; 3] = ["ask", "plan", "auto"];
 /// The built-in Ask, Plan and Auto modes from the live prompts file.
 pub fn defaults() -> Value {

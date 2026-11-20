@@ -1,7 +1,7 @@
 # Recreate the development installation from Git
 
 This profile is a reviewed snapshot, not a continuously synchronized copy of
-runtime state. `config/deployment/development.json` records non-secret live app
+runtime state. `docs/restore/development.json` records non-secret live app
 settings, broker installation policy and installed MCP, Diagnostics and
 Optimization package configuration. Their executable source remains in
 `src/plugin_packages/`; binaries are rebuilt from the matching checkout.
@@ -44,7 +44,7 @@ source. Its symlink checks complement the offline/no-other-writers requirement.
 import json, os, stat
 from pathlib import Path
 root = Path.cwd()
-profile = json.loads((root / "config/deployment/development.json").read_text())
+profile = json.loads((root / "docs/restore/development.json").read_text())
 assert profile["schema_version"] == 1
 broker = profile["broker"]
 assert os.geteuid() == 0

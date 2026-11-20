@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 /// The live app policy (`live-files.json`), relative to the checkout: access, tiers and, in
 /// its `storage` section, storage limits.
-pub const LIVE_POLICY: &str = "crates/modules/access/policy.json";
+pub const LIVE_POLICY: &str = "config/access/policy.json";
 const POLICY_LIMIT: u64 = 4 * 1024 * 1024;
 /// Fresh-install tiers; which abilities their owners' agents get is in the ability manifests.
 fn fresh_install_tiers() -> [Tier; 2] {

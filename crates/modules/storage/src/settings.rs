@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use webagent_configuration::live;
 
 /// The live storage settings file, relative to the checkout.
-pub const LIVE_SETTINGS: &str = "crates/modules/storage/storage-settings.json";
+pub const LIVE_SETTINGS: &str = "config/storage/storage-settings.json";
 const SETTINGS_LIMIT: u64 = 64 * 1024;
 
 /// The live file where the process saves through the broker; otherwise (tests) the state root.

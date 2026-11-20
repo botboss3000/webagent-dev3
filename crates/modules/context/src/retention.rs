@@ -25,7 +25,7 @@ const MAX_LIFETIME_CALLS: u64 = 1_000;
 const MAX_OUTPUT_CHARS: usize = 262_144;
 const MAX_POLICY_BYTES: usize = 64 * 1024;
 /// Live policy file, relative to the checkout.
-pub const LIVE_POLICY: &str = "crates/modules/context/tool-output-retention.json";
+pub const LIVE_POLICY: &str = "config/context/tool-output-retention.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -925,11 +925,7 @@ impl Default for DedupPolicy {
     }
 }
 
-pub const DEDUP_DEFAULT_TOOLS: &[&str] = &[
-    "file_read",
-    "file_list",
-    "file_search",
-];
+pub const DEDUP_DEFAULT_TOOLS: &[&str] = &["file_read", "file_list", "file_search"];
 
 pub fn dedup_included(settings: &Value, name: &str) -> bool {
     settings["tool_result_deduplication"]

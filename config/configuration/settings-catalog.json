@@ -1,0 +1,72 @@
+{
+  "_instructions": "Setting descriptor catalog for the configuration composer. Each owner keeps a *.settings.json beside its configuration; the composer merges them at runtime. Every leaf of an owner's config must be described or excluded with a reason, and every live file must be an owner or excluded here (webagent_configuration::catalog tests).",
+  "owners": [
+    {
+      "config": "ui/chat/chat.json",
+      "descriptors": "config/chat/chat.settings.json"
+    },
+    {
+      "config": "config/webapp/app-settings.json",
+      "descriptors": "config/webapp/app-settings.settings.json"
+    },
+    {
+      "config": "config/access/policy.json",
+      "descriptors": "config/access/policy.settings.json"
+    },
+    {
+      "config": "config/context/context-compaction.json",
+      "descriptors": "config/configuration/settings/context-compaction.settings.json"
+    },
+    {
+      "config": "config/context/tool-output-retention.json",
+      "descriptors": "config/configuration/settings/tool-output-retention.settings.json"
+    },
+    {
+      "config": "config/engine/loop-runtime.json",
+      "descriptors": "config/configuration/settings/loop-runtime.settings.json"
+    },
+    {
+      "config": "config/media/voice.json",
+      "descriptors": "config/media/voice.settings.json"
+    },
+    {
+      "config": "config/models/models-runtime.json",
+      "descriptors": "config/models/models-runtime.settings.json"
+    },
+    {
+      "store": "agent_metadata",
+      "descriptors": "config/agents/agent.settings.json"
+    },
+    {
+      "store": "user_profile",
+      "descriptors": "config/accounts/user-profile.settings.json"
+    },
+    {
+      "config": "config/browser/browser-limits.json",
+      "descriptors": "config/browser/browser-limits.settings.json"
+    },
+    {
+      "config": "config/notifications/admin-alerts.json",
+      "descriptors": "config/notifications/admin-alerts.settings.json"
+    },
+    {
+      "config": "abilities/Administrator/codebase_admin/tools/file_search/find-ranking.json",
+      "descriptors": "config/configuration/settings/find-ranking.settings.json"
+    }
+  ],
+  "excluded_files": {
+    "config/accounts/authentication.json": "Trusted proxy addresses decide whose forwarded IP is believed; a security setting changed only by a reviewed source edit.",
+    "config/storage/storage-settings.json": "Admin database encryption switch; a security setting changed only on the administrator encryption page or by a reviewed source edit.",
+    "config/configuration/prompts/*.json": "Prompts are never offered by the composer (Q1).",
+    "config/configuration/prompts/*.md": "Prompts are never offered by the composer (Q1).",
+    "config/configuration/prompts/main_chat_skills/*.md": "Prompts are never offered by the composer (Q1).",
+    "config/configuration/prompts/session_naming/*.md": "Prompts are never offered by the composer (Q1).",
+    "config/configuration/prompts/tool_output_retention/*.md": "Prompts are never offered by the composer (Q1).",
+    "config/configuration/prompts/tool_result_deduplication/*.md": "Prompts are never offered by the composer (Q1).",
+    "config/engine/engine-components.json": "Engine component wiring; not offered in v1.",
+    "config/engine/gates/*.json": "Gate manifests; changed only with the gates themselves.",
+    "config/engine/gates/*.md": "Gate prompts (the closing turn's message); prompts are never offered by the composer (Q1).",
+    "config/models/providers/*.json": "Provider definitions and connections; credentials are never offered (Q1).",
+    "src/plugin_packages/diagnostics/diagnostics.json": "Diagnostics package configuration; not offered in v1."
+  }
+}

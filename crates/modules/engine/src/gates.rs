@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 pub const MESSAGE_VISIBILITY: &str = "message_visibility_v1";
 pub const CLOSING_STATUS: &str = "closing_status";
 /// Checkout folder of the integral gate configuration files.
-pub const GATE_FOLDER: &str = "crates/modules/engine/gates";
+pub const GATE_FOLDER: &str = "config/engine/gates";
 pub const PUBLICATION_SIZE: &str = "publication_size_guard_v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -38,7 +38,7 @@ pub struct Selection {
 fn source(id: &str) -> Result<String> {
     match id {
         MESSAGE_VISIBILITY | CLOSING_STATUS => {
-            // Live files beside this crate (`live-files.json`); an integral gate has no
+            // Live files in config/engine/gates (`live-files.json`); an integral gate has no
             // packaged default, so a missing file fails closed.
             webagent_configuration::live::parsed(
                 &format!("{GATE_FOLDER}/{id}.json"),

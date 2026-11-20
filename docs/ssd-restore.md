@@ -1,7 +1,7 @@
 # SSD swap: broker host support snapshot
 
-The non-secret snapshot is config/deployment/ssd-host-support-20261017.json.
-Use it with config/deployment/development.json and docs/restore-development.md.
+The non-secret snapshot is docs/restore/ssd-host-support-20261017.json.
+Use it with docs/restore/development.json and docs/restore-development.md.
 It preserves host files outside this checkout, optional physical-console source,
 its Python dependency versions, protected installation metadata, and a mapping
 from every installed broker input to its tracked source hash.
@@ -22,7 +22,7 @@ or the live installation, and does not start any service.
 ```python
 import hashlib, json, os
 from pathlib import Path
-snapshot = json.loads(Path("config/deployment/ssd-host-support-20261017.json").read_text())
+snapshot = json.loads(Path("docs/restore/ssd-host-support-20261017.json").read_text())
 stage = Path("/tmp/webagent-ssd-host-support")
 stage.mkdir(mode=0o700)
 for entry in snapshot["files"]:

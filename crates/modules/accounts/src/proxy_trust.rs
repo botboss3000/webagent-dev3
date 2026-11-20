@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use webagent_configuration::live;
 
 /// The live authentication file, relative to the checkout.
-pub const LIVE_AUTHENTICATION: &str = "crates/modules/accounts/authentication.json";
+pub const LIVE_AUTHENTICATION: &str = "config/accounts/authentication.json";
 /// SHA-256 (hex) of the `x-webagent-client-proof` header, in the state root.
 pub const PROOF_HASH: &str = "proxy-proof.sha256";
 const LIMIT: u64 = 16 * 1024;
@@ -79,7 +79,10 @@ mod tests {
 
     #[test]
     fn shipped_file_parses_and_holds_no_proof() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/authentication.json");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../config/accounts/authentication.json"
+        );
         let value = parse(&std::fs::read(path).unwrap()).unwrap();
         assert!(value.get("proxy_header_sha256").is_none());
         let settings = json!({"authentication": value});

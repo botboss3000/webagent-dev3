@@ -179,7 +179,7 @@ Each settled run writes the session's `flag`, `flag_source` (`agent` or
 (see the closing gate below). Lists add the newest run's `run_status`, and for a
 live run its `run_started_at` and latest activity-group `activity_counts`; the
 list and statistics responses also return the `flags` catalog (label, colour
-role, tooltip) from `crates/modules/engine/gates/closing_status.json`. Stale
+role, tooltip) from `config/engine/gates/closing_status.json`. Stale
 checkpoint writes preserve activity even when metadata revisions are equal.
 
 Session lifecycle: browser `POST /api/v3/sessions/{id}/archive` archives and
@@ -645,7 +645,7 @@ stale, then 200 after the loop resumes. Check health and one persisted reply
 after each replacement. The socket directory is transient and is not
 application data or backup authority.
 
-Gate activation and order live in the live file `crates/modules/engine/loop-runtime.json` under
+Gate activation and order live in the live file `config/engine/loop-runtime.json` under
 `workflow.modules`. The default is empty. For the first two native modules and
 the optional size plugin, use:
 `{"model_dispatch":["message_visibility_v1"],"publication":["closing_status","optional:publication_size_guard_v1"]}`.
@@ -655,8 +655,8 @@ validation. Only the size gate accepts the `optional:` prefix, kept from when it
 ran in a separate process; required and optional now behave the same.
 
 The integral module definitions and settings are single live JSON files at
-`crates/modules/engine/gates/message_visibility_v1.json` and
-`crates/modules/engine/gates/closing_status.json`, read through the shared
+`config/engine/gates/message_visibility_v1.json` and
+`config/engine/gates/closing_status.json`, read through the shared
 live-file reader; no runtime data enters the build. The visibility module adds the v2
 message-visibility guidance and private `publish_main_message` control before
 a model call. A validated call commits a nonterminal working chat row while
@@ -691,7 +691,7 @@ have no UI yet.
 ## Context compaction
 
 `src/context/compaction.rs` owns rolling checkpoint policy and validation.
-The live file `crates/modules/context/context-compaction.json` (listed in
+The live file `config/context/context-compaction.json` (listed in
 `live-files.json`) is the single operational authority; both API and loop read it
 from the checkout. An invalid edit keeps the last good version.
 Model/provider/fallback fields are not accepted.
@@ -784,7 +784,7 @@ catalog, policy, visibility, loaded abilities and mode. Tool execution still che
 permissions. Activated discoverable skills are rebuilt from the catalog across compaction;
 Off and suppressed states remain authoritative. Catalog refresh still requires restart.
 
-Optional `context.model_profiles` in `crates/modules/engine/loop-runtime.json` maps
+Optional `context.model_profiles` in `config/engine/loop-runtime.json` maps
 `provider/model` to `context_tokens`, `output_reserve_tokens`, and `bytes_per_token`
 (1–8). The logical-envelope ceiling is the smaller of the existing byte ceiling and
 `(context_tokens - output_reserve_tokens) * bytes_per_token`. Unknown models retain
@@ -830,7 +830,7 @@ peak-RAM reduction is claimed from these allocation removals alone.
 
 ## App policy configuration
 
-V3 owns the live file `crates/modules/access/policy.json` (listed in
+V3 owns the live file `config/access/policy.json` (listed in
 `live-files.json`): registration mode, account levels (tiers, order, names),
 page policy and, in its `storage` section, per-tier storage limits and file
 compression, for example `{"registration": "restricted", ..., "storage": {...}}`.
@@ -941,7 +941,7 @@ need no rebuild.
 Both processes read the instance file `v3/data/config/app-settings.json` (container
 `/state/config/app-settings.json`). It holds only per-server settings (this toggle
 and trusted authentication proxies) and is never seeded; the UI settings live in
-the live file `crates/modules/webapp/app-settings.json`.
+the live file `config/webapp/app-settings.json`.
 `admin_database_encryption.enabled=false` saves new or rewritten fixed-account
 `admin` user database records as readable JSON with a tamper-detection tag.
 Other users, application and agent databases, and search cursors stay encrypted.

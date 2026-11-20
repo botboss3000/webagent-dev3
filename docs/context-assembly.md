@@ -48,7 +48,7 @@ after credential retrieval and before the network call. Repeated changes are
 bounded and pause for review rather than dispatching stale context.
 
 src/live_assets.rs::resolved_prompts_at assembles the live Markdown prompt files under
-crates/modules/configuration/prompts (`name.md` text, `name.json` settings, folders
+config/configuration/prompts (`name.md` text, `name.json` settings, folders
 nest) for features such as session naming. There is no base prompt file: an agent's
 instructions are its prompt slots (Provider::instructions_for_snapshot only strips old
 compiled seeds), and general rules live in the core Base skill. Agent prompt slots are
@@ -217,7 +217,7 @@ session's latest stored run update instead. Each reorder logs `context reordered
 with its reason (`idle` or `tools`).
 
 **Cache timeout (built).** `cache_timeout_minutes` per model or provider in
-`crates/modules/models/providers/<provider>.json` (60 minutes when absent), and
+`config/models/providers/<provider>.json` (60 minutes when absent), and
 Identity → Context compaction → Cache timeout per agent (0 uses the model's).
 The provider files are read live, so a change needs no rebuild. The OpenCode bridge
 file sets 15 minutes for its models (commit 50191a3); Claude bridge models use the
@@ -314,7 +314,7 @@ providers and for bridge harnesses.
 | Tools | `abilities/Memory/task_progress/tools/` | `task_list_read` (overview, one section, an old revision, or the changes between two) and `task_list_write` (one section and its steps, `expected_revision` required); both core and allowed for every role |
 | Plan seeding | `set_execution_mode` | Leaving Plan with an approved plan adds a user-requested section from its checklist (plan flag set, no step started) and reports it as `task_list` in the result; the plan artifact's checklist follows that section's progress, from agent writes and panel edits |
 | Panel | `ui/chat/controls/tasks-chip.js`, `GET/POST /api/v3/sessions/{sid}/tasks` | The Tasks chip (done/total) and panel with History; everyone who can view the chat reads it, anyone who can send edits it (observers read-only); every write adds a session event so open chats refresh |
-| Texts | `crates/modules/configuration/prompts/task_list.json` | Snapshot heading and rule, empty text, step line, end reminder, unfiled reminder and its `unfiled_after_calls` threshold, user change heading; read live, no compile |
+| Texts | `config/configuration/prompts/task_list.json` | Snapshot heading and rule, empty text, step line, end reminder, unfiled reminder and its `unfiled_after_calls` threshold, user change heading; read live, no compile |
 
 ### What reaches the model
 
@@ -522,7 +522,7 @@ and stale-write rejection remain host checks. Agent tool_result_deduplication
 policy and tool_result_deduplication_tools overrides have separate persisted
 namespaces. The ability API projects the tool map as tool_result_deduplication.
 
-Config: crates/modules/configuration/prompts/tool_result_deduplication/placeholder.md
+Config: config/configuration/prompts/tool_result_deduplication/placeholder.md
 ships the required value. dedup_template reads the live file at each
 model-call boundary; it does not consult
 embedded defaults or alternate text. Supported variables are {current_call_id},

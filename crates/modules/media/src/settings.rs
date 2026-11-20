@@ -1,4 +1,4 @@
-//! Voice settings: the live file `crates/modules/media/voice.json` (listed in `live-files.json`).
+//! Voice settings: the live file `config/media/voice.json` (listed in `live-files.json`).
 //! Values are read when they are used, so an edit applies to the next dictation or reply;
 //! `threads` and `pause_detection` apply when a model next loads. An invalid edit keeps serving
 //! the last good version, and the built-in defaults (the same values as the file) apply only
@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The live settings file, relative to the checkout.
-pub const LIVE_VOICE: &str = "crates/modules/media/voice.json";
+pub const LIVE_VOICE: &str = "config/media/voice.json";
 
 /// Both voice directions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -212,7 +212,11 @@ mod tests {
 
     #[test]
     fn the_live_file_holds_the_defaults() {
-        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/voice.json")).unwrap();
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../config/media/voice.json"
+        ))
+        .unwrap();
         let mut file = VoiceSettings::parse(&bytes).unwrap();
         file.instructions.clear();
         assert_eq!(file, VoiceSettings::default());

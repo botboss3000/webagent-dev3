@@ -754,7 +754,7 @@ async fn prefix_scan_treats_underscore_and_percent_literally() {
 fn shipped_storage_settings_keep_encryption_on() {
     let bytes = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/storage-settings.json"
+        "/../../../config/storage/storage-settings.json"
     ))
     .unwrap();
     assert!(settings::admin_encryption_enabled(&settings::parse(&bytes).unwrap()).unwrap());

@@ -18,17 +18,19 @@ neither described nor excluded with a reason.
 
 ## Standing rules
 
-Keep one live config file next to the code that reads it, with no seeded copies.
+Keep every live config file under `config/<module>/` (the owning module's name), with no
+seeded copies; the code reads it by its `config/...` path.
 Move hard-coded tunables into JSON config rather than adding constants. Ship the
 setting descriptor in the same patch as the value.
 
 ## Where things live
 
-- One live file per owner, next to its code, listed in `live-files.json`. No seeded copies.
+- One live file per owner in `config/<module>/` (for example `config/engine/loop-runtime.json`),
+  listed in `live-files.json`. No seeded copies. UI settings go in `config/ui/`.
 - Its descriptors sit in a `<name>.settings.json` beside it (for example
-  `crates/modules/chat/chat.settings.json`). Owners whose module is busy may keep them in
-  `crates/modules/configuration/settings/`.
-- `crates/modules/configuration/settings-catalog.json` lists every owner:
+  `config/chat/chat.settings.json`). Owners whose module is busy may keep them in
+  `config/configuration/settings/`.
+- `config/configuration/settings-catalog.json` lists every owner:
   `{"config": "<live file>", "descriptors": "<settings file>"}`, or `{"store":
   "agent_metadata"|"user_profile", "descriptors": ...}`. Files that are not settings (prompts,
   generated data) go in its `excluded_files` with a reason.
@@ -77,7 +79,7 @@ setting descriptor in the same patch as the value.
 - Descriptors hold no default or current values; those are always read live.
 
 If a setting has wording its type does not give ("close registration" = `restricted`, "by
-accident" = smaller), add it to `crates/modules/inference/value-words.json` under the id.
+accident" = smaller), add it to `config/inference/value-words.json` under the id.
 
 ## Checklist for a configuration change
 

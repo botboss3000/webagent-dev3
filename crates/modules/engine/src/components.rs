@@ -530,7 +530,7 @@ pub struct Controls {
     pub disabled: Vec<String>,
 }
 /// Engine on/off switches: a live checkout file (`live-files.json`), saved through the broker.
-pub const LIVE: &str = "crates/modules/engine/engine-components.json";
+pub const LIVE: &str = "config/engine/engine-components.json";
 const CONTROLS_LIMIT: u64 = 32768;
 /// The live file where the process saves through the broker; otherwise (tests) the state root.
 fn controls_path(root: &std::path::Path) -> PathBuf {

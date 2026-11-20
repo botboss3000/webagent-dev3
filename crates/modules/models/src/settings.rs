@@ -1,10 +1,10 @@
-//! Live models-module tunables: `crates/modules/models/models-runtime.json` (listed in
+//! Live models-module tunables: `config/models/models-runtime.json` (listed in
 //! `live-files.json`), read on use. An invalid edit keeps the last good version; a file that has
 //! never been readable gives the defaults below, which match the shipped file.
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
-pub const LIVE: &str = "crates/modules/models/models-runtime.json";
+pub const LIVE: &str = "config/models/models-runtime.json";
 const MAX_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn shipped_file_matches_defaults_and_validates() {
-        let shipped = include_bytes!("../models-runtime.json");
+        let shipped = include_bytes!("../../../../config/models/models-runtime.json");
         assert_eq!(Settings::parse(shipped).unwrap(), Settings::default());
     }
 

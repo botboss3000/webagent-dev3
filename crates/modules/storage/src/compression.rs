@@ -1,7 +1,7 @@
 //! Optional zstd compression of record and file plaintext before encryption.
 //!
 //! Settings come from `storage.compression` in the live
-//! `crates/modules/access/policy.json`, reread at most every ten seconds. Readers need no
+//! `config/access/policy.json`, reread at most every ten seconds. Readers need no
 //! setting: a zstd frame starts with a magic number no JSON text can start with, so compressed and
 //! uncompressed records coexist and turning compression off never breaks reads.
 use anyhow::{anyhow, bail, Result};
@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-const POLICY: &str = "crates/modules/access/policy.json";
+const POLICY: &str = "config/access/policy.json";
 const MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 /// Decompressed size bound; larger than any record or attachment the app admits.
 const MAX_PLAIN: usize = 512 * 1024 * 1024;

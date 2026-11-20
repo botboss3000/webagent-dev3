@@ -73,7 +73,7 @@ pub fn validate_app_settings(settings: &Value) -> Result<()> {
 }
 /// The live UI settings file (`live-files.json`), relative to the checkout. Database
 /// encryption and trusted proxies belong to the Storage and Accounts live files.
-pub const LIVE_SETTINGS: &str = "crates/modules/webapp/app-settings.json";
+pub const LIVE_SETTINGS: &str = "config/webapp/app-settings.json";
 
 /// UI settings from `settings`: the live file when relative, that exact file when absolute
 /// (fixtures). A missing file means defaults.

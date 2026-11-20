@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 /// The Main Chat and Main Notes texts and default names (`prompts/main_chat.json`, read live).
-const TEXTS_FILE: &str = "crates/modules/configuration/prompts/main_chat.json";
+const TEXTS_FILE: &str = "config/configuration/prompts/main_chat.json";
 /// The same file as built, used only when the live one is missing or invalid.
-const PACKAGED_TEXTS: &str = include_str!("../../configuration/prompts/main_chat.json");
+const PACKAGED_TEXTS: &str =
+    include_str!("../../../../config/configuration/prompts/main_chat.json");
 
 pub fn texts() -> Value {
     webagent_configuration::live::parsed(TEXTS_FILE, 256 * 1024, |bytes| {
