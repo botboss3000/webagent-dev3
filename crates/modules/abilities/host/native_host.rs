@@ -113,6 +113,26 @@ impl NativeHost for Host<'_> {
             artifact,
         ))
     }
+    fn main_notes_state<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
+        Box::pin(crate::main_chat::tool_state(self.0, sid))
+    }
+    fn main_notes_contribute<'a>(
+        &'a self,
+        sid: &'a str,
+        expected: u64,
+        request: &'a str,
+        fingerprint: &'a str,
+        contribution: webagent_chat::main_chat::Contribution,
+    ) -> Pending<'a, Result<Value>> {
+        Box::pin(crate::main_chat::tool_contribute(
+            self.0,
+            sid,
+            expected,
+            request,
+            fingerprint,
+            contribution,
+        ))
+    }
     fn session_artifact<'a>(
         &'a self,
         sid: &'a str,

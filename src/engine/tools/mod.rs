@@ -314,7 +314,6 @@ pub(crate) fn host_argument_types(
         core_scripts::ARGUMENT_TYPES,
         core_skills::ARGUMENT_TYPES,
         crate::api::sessions::ARGUMENT_TYPES,
-        crate::main_chat::ARGUMENT_TYPES,
         crate::session_messaging::ARGUMENT_TYPES,
         crate::source_control::ARGUMENT_TYPES,
         webagent_engine::runtime::background::ARGUMENT_TYPES,

@@ -304,8 +304,15 @@ impl
                     cancel,
                 ))
                 .await
-            } else if crate::main_chat::owns(&name) {
-                crate::main_chat::tool(&app, &sid, &run_id, &name, &args).await
+            } else if tools::native::main_notes::owns(&name) {
+                Box::pin(tools::native::main_notes::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                ))
+                .await
             } else if crate::modules::owns_tool(&name) {
                 crate::modules::tool_call(&app, &sid, &run_id, &name, &args, &pending_id, cancel)
                     .await

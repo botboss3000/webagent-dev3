@@ -36,6 +36,8 @@ pub mod human_escalation;
 pub mod image_vision;
 #[path = "../../../../../abilities/Memory/managed_knowledge_files/tools/shared/knowledge_files.rs"]
 pub mod knowledge_files;
+#[path = "../../../../../abilities/Core/base/tools/shared/main_notes.rs"]
+pub mod main_notes;
 #[path = "../../../../../abilities/Core/base/tools/set_execution_mode/set_execution_mode.rs"]
 pub mod mode;
 #[path = "../../../../../abilities/Core/model_switcher/tools/shared/model_switcher.rs"]
@@ -145,6 +147,19 @@ pub trait NativeHost: Sync {
         kind: &'a str,
         id: &'a str,
         body: &'a Value,
+    ) -> Pending<'a, Result<Value>>;
+    /// The Main Notes state for session `sid`, when the caller owns the session and has
+    /// live access to its agent.
+    fn main_notes_state<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>>;
+    /// Apply Main Notes contribution `contribution` for session `sid` at revision `expected`
+    /// under `request` (a retry with the same `fingerprint` replays), under the same checks.
+    fn main_notes_contribute<'a>(
+        &'a self,
+        sid: &'a str,
+        expected: u64,
+        request: &'a str,
+        fingerprint: &'a str,
+        contribution: webagent_chat::main_chat::Contribution,
     ) -> Pending<'a, Result<Value>>;
     /// Session `sid`'s artifact `id` (its title and sections), or `None`.
     fn session_artifact<'a>(
@@ -518,6 +533,7 @@ pub fn argument_types(
         self_edit::ARGUMENT_TYPES,
         session::ARGUMENT_TYPES,
         task::ARGUMENT_TYPES,
+        main_notes::ARGUMENT_TYPES,
         task_list::ARGUMENT_TYPES,
         user_files::ARGUMENT_TYPES,
         utilities::ARGUMENT_TYPES,

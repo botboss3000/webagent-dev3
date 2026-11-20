@@ -6,37 +6,8 @@ use axum::Extension;
 pub(crate) use webagent_chat::main_chat::{
     action_intent, empty, review_id, scheduled_entry_current, Contribution, Settings,
 };
-use webagent_chat::main_chat::{
-    identifier, public, render_notes, render_updates, request_fields, target,
-};
+use webagent_chat::main_chat::{public, render_notes, render_updates, request_fields, target};
 
-/// `main_notes_read`'s arguments: one page of topics, or of one topic's entries.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ReadArgs {
-    #[serde(default)]
-    offset: Option<u64>,
-    #[serde(default)]
-    limit: Option<u64>,
-    #[serde(default)]
-    topic_id: Option<String>,
-}
-
-/// `main_notes_write`'s arguments: one contribution against the expected revision.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct WriteArgs {
-    request_id: String,
-    expected_revision: u64,
-    contribution: Contribution,
-}
-
-/// Argument types of the Main Notes tools, checked against their tool.json by the root test.
-#[cfg(test)]
-pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] = &[
-    webagent_abilities::argument_type!("main_notes_read", ReadArgs),
-    webagent_abilities::argument_type!("main_notes_write", WriteArgs),
-];
 // The Main Notes state machine is Chat-owned; the host supplies the clock.
 fn apply(state: &mut Value, c: &Contribution, origin: &str, approved: bool) -> Result<Value> {
     webagent_chat::main_chat::apply(state, c, origin, approved, now())
@@ -435,15 +406,10 @@ pub(crate) async fn decide_api(
     wake::notify(&app).await;
     Ok(Json(result))
 }
-pub(crate) use webagent_chat::main_chat::owns;
-pub(crate) async fn tool(
-    app: &App,
-    sid: &str,
-    _rid: &str,
-    name: &str,
-    args: &Value,
-) -> Result<Value> {
-    // Reuse the private cross-session owner boundary; shared membership grants no notes authority.
+/// The notes store for the Main Notes tools in session `sid`: only the session's owner,
+/// with live access to its agent, reads or writes the notes; shared chat membership grants
+/// no notes authority.
+async fn tool_store(app: &App, sid: &str) -> Result<Store> {
     let actor = crate::shared_chat::actor(app);
     if actor != app.store.current_user_id() {
         return Err(anyhow!(
@@ -452,68 +418,33 @@ pub(crate) async fn tool(
     }
     let agent = session_agent_id(app, sid).await?;
     let store = app.store.for_user(actor).await?.for_agent(&agent).await?;
-    let access = store.live_access(actor, &agent).await?;
-    if !access.admitted() {
+    if !store.live_access(actor, &agent).await?.admitted() {
         return Err(anyhow!("Main Notes access revoked"));
     }
-    if name == "main_notes_read" {
-        let page: ReadArgs = webagent_abilities::tool_arguments::read(name, args)?;
-        let state = store.main_chat_state().await?;
-        let offset = page.offset.unwrap_or(0) as usize;
-        let limit = page.limit.unwrap_or(20) as usize;
-        if !(1..=20).contains(&limit) || offset > 65536 {
-            return Err(anyhow!("Invalid Main Notes page"));
-        }
-        let (items, total) = if let Some(topic) = page.topic_id.as_deref() {
-            let rows: Vec<Value> = state["topics"][topic]["entries"]
-                .as_object()
-                .into_iter()
-                .flatten()
-                .map(|(_, v)| v.clone())
-                .collect();
-            (
-                rows.iter()
-                    .skip(offset)
-                    .take(limit)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                rows.len(),
-            )
-        } else {
-            let rows:Vec<Value>=state["topics"].as_object().into_iter().flatten().map(|(id,v)|json!({"id":id,"title":v["title"],"scope":v["scope"],"approved_scope":v["approved_scope"],"groups":v["groups"],"revision":v["revision"],"entry_count":v["entries"].as_object().map_or(0,|e|e.len())})).collect();
-            (
-                rows.iter()
-                    .skip(offset)
-                    .take(limit)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                rows.len(),
-            )
-        };
-        return Ok(
-            json!({"status":"success","source_kind":"untrusted_main_notes","output":{"revision":state["revision"],"notes_version":state["notes_version"],"settings":state["settings"],"session_id":state["session_id"],"items":items,"total":total,"next_offset":offset+items.len(),"has_more":offset+items.len()<total}}),
-        );
-    }
-    let write: WriteArgs = webagent_abilities::tool_arguments::read(name, args)?;
-    if !identifier(&write.request_id) {
-        return Err(anyhow!("Stable request ID required"));
-    }
-    let (expected, request, c) = (
-        write.expected_revision,
-        write.request_id,
-        write.contribution,
-    );
-    let result = store
-        .main_chat_change(
-            expected,
-            &request,
-            &digest(&json!([sid, args])),
-            vec![],
-            |state| contribute(state, &c, sid, &request, false),
-        )
+    Ok(store)
+}
+/// The notes state `main_notes_read` pages through, for session `sid`.
+pub(crate) async fn tool_state(app: &App, sid: &str) -> Result<Value> {
+    tool_store(app, sid).await?.main_chat_state().await
+}
+/// Apply `main_notes_write`'s contribution `c` for session `sid` at revision `expected`
+/// under `request` (a retry with the same `fingerprint` replays), then wake the Main Chat.
+pub(crate) async fn tool_contribute(
+    app: &App,
+    sid: &str,
+    expected: u64,
+    request: &str,
+    fingerprint: &str,
+    c: Contribution,
+) -> Result<Value> {
+    let result = tool_store(app, sid)
+        .await?
+        .main_chat_change(expected, request, fingerprint, vec![], |state| {
+            contribute(state, &c, sid, request, false)
+        })
         .await?;
     wake::notify(app).await;
-    Ok(json!({"status":"success","output":result}))
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -968,8 +899,6 @@ mod api_tests {
         let prompt = guidance(&other, "agent-two", &main).await.unwrap().unwrap();
         assert_eq!(prompt, webagent_chat::main_chat::guidance(&state, "review"));
         assert!(!prompt.contains("{chat}") && !prompt.contains("{notes}"));
-        assert!(tool(&other, &main, "none", "main_notes_read", &json!({}))
-            .await
-            .is_ok());
+        assert!(tool_state(&other, &main).await.is_ok());
     }
 }
