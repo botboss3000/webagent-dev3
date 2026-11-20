@@ -267,6 +267,7 @@ async fn direct_message(Extension(app): Extension<App>, Json(body): Json<Value>)
         .into_response()
 }
 path_arg!(snapshot => snapshot, String);
+path_arg!(first_message => first_message, String);
 path_arg!(background_task_metadata => background_task_metadata_api, (String,String));
 path_json!(session_undo => undo_session_api, String, crate::store::conversation_history::HistoryRequest);
 path_json!(session_fork => fork_session_api, String, crate::store::conversation_history::HistoryRequest);
@@ -972,6 +973,7 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/model", axum::routing::put(chat_model))
         .route("/sessions/{id}/mode", get(mode_get).put(mode_set))
         .route("/sessions/{id}/visit", post(visit))
+        .route("/sessions/{id}/first-message", get(first_message))
         .route("/sessions/{id}/messaging-routes", get(messaging_routes))
         .route(
             "/sessions/{id}/messaging-routes/{target}",

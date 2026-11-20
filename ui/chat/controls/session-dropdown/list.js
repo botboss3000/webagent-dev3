@@ -1,6 +1,7 @@
 // V2 dropdown presentation/lifecycle, with independent Rust data authority.
 // Session dropdown presentation and interactions.
 import {bindNotes, createBlock, fillBlock, flagToggle, isLive, setFlagCatalog, tickTimes} from './row.js';
+import {createExpandList} from '../../../components/expand-list/expand-list.js';
 /** Renders active/archived sessions, private search results, and revision-fenced management actions. Controller callbacks own navigation; client writes retain retry receipts, and teardown fences pending work. */
 export function createSessionList(root, {guard, refresh, select, client, archived = () => {}}) {
   const protectedSession=item=>item?.main_chat===true||item?.can_delete===false;
@@ -59,19 +60,30 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     chip.setAttribute('aria-haspopup','menu'); chip.setAttribute('aria-expanded','false');
     wrap.prepend(chip); window.lucide?.createIcons();
   }
-  /** Opens the family menu under its chip; choosing a row opens that session. */
+  /** Opens the family panel under its chip: Main and each sub-agent are expand-list rows.
+   * Opening a row loads that session's first message (a sub-agent's starting prompt) once,
+   * shown in two lines; pressing it opens the session. */
   function familyMenu(chip, main, members) {
     if (chip.getAttribute('aria-expanded') === 'true') { root._sessionDropdownController.setPopup(null); return; }
-    const popup = document.createElement('div'); popup.className = 'family-spawn-menu sub-chip-menu';
-    popup.setAttribute('role','menu'); popup.setAttribute('aria-label','Sub-agent sessions');
-    for (const [item,labelText,i] of [[main,'Main',-1],...members.map((m,i) => [m,`Spawn ${i+1}`,i])]) {
-      const row = button(item.title || labelText,i < 0 ? 'layout-dashboard' : 'git-branch',() => { root._sessionDropdownController.setPopup(null); if (item.id !== selected) return select(item.id); },'family-menu-item' + (i < 0 ? ' family-menu-root' : '') + (item.id === selected ? ' selected' : ''));
-      row.setAttribute('role','menuitem');
-      row.firstChild.replaceWith(Object.assign(document.createElement('span'),{className:'chip-status',innerHTML:icon(i < 0 ? 'layout-dashboard' : 'git-branch')}));
-      const text = document.createElement('span'); text.className = 'family-menu-text';
-      text.append(Object.assign(document.createElement('span'),{textContent:labelText}),Object.assign(document.createElement('small'),{textContent:i < 0 ? (item.title || 'Main chat') : (item.title || 'New Session')}));
-      row.append(text); popup.append(row);
-    }
+    const popup = document.createElement('div'); popup.className = 'family-spawn-menu sub-chip-menu spawn-panel wa-scroll-gutter';
+    popup.setAttribute('aria-label','Sub-agent sessions');
+    const people = [[main,'Main session',-1],...members.map((m,i) => [m,`Sub-agent ${i+1}`,i])];
+    const go = id => { root._sessionDropdownController.setPopup(null); if (id !== selected) select(id); };
+    const list = createExpandList({label: 'Sub-agent sessions', defaultOpen: () => false,
+      onExpand: async (row, open, slot) => {
+        if (!open) return;
+        slot.replaceChildren(Object.assign(document.createElement('p'),{className:'spawn-prompt-status',textContent:'Loading…'}));
+        let text = '';
+        try { text = (await client.firstMessage(row.id))?.text || ''; }
+        catch (error) { slot.replaceChildren(Object.assign(document.createElement('p'),{className:'spawn-prompt-status',textContent:error.message})); delete slot.dataset.loaded; return; }
+        const link = document.createElement('button'); link.type = 'button'; link.className = 'spawn-prompt';
+        link.textContent = text || 'No message yet'; link.title = 'Open ' + row.title;
+        link.onclick = e => { e.stopPropagation(); go(row.id); };
+        slot.replaceChildren(link);
+      }});
+    list.update(people.map(([item,labelText,i]) => ({id: item.id, title: labelText, lazy: true, status: 'pending', pill: item.id === selected ? 'Open' : false,
+      icon: i < 0 ? 'LayoutDashboard' : 'GitBranch', badges: [item.title || (i < 0 ? 'Main chat' : 'New Session')]})));
+    popup.append(list.element);
     root._sessionDropdownController.setPopup(popup); document.body.append(popup); chip.setAttribute('aria-expanded','true');
     const r = chip.getBoundingClientRect();
     popup.style.position = 'fixed'; popup.style.top = (r.bottom + 4) + 'px';
@@ -80,7 +92,7 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     const close = e => { if (popup.isConnected && (popup.contains(e.target) || chip.contains(e.target))) return; document.removeEventListener('pointerdown',close,true); chip.setAttribute('aria-expanded','false'); if (popup.isConnected) root._sessionDropdownController.setPopup(null); };
     document.addEventListener('pointerdown',close,{capture:true,signal:abort.signal});
     new MutationObserver((_,observer) => { if (!popup.isConnected) { observer.disconnect(); chip.setAttribute('aria-expanded','false'); document.removeEventListener('pointerdown',close,true); } }).observe(document.body,{childList:true});
-    window.lucide?.createIcons(); popup.querySelector('button')?.focus({preventScroll:true});
+    popup.querySelector('button')?.focus({preventScroll:true});
   }
   /** Refreshes trigger label/status from the currently selected session. */
   function label() {

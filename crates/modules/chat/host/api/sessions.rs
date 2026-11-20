@@ -451,6 +451,35 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
         "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"artifacts":artifacts,"task_list":task_list,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"],"repeat_similarity":webagent_engine::gates::repeat_similarity()}),
     ))
 }
+/// Characters of a first message returned for the Spawns panel preview.
+const FIRST_MESSAGE_PREVIEW: usize = 600;
+
+/// A session's first user message, trimmed for a preview: for a spawned sub-agent, the
+/// prompt it was started with. Only the session's own user reads it; shared-chat observers
+/// get no preview, since their transcript goes through the shared projection.
+pub(crate) async fn first_message(State(app): State<App>, Path(id): Path<String>) -> Api {
+    app.store
+        .get(&key("session", &id))
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Session not found".into()))?;
+    if crate::shared_projection::observer(&app) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Not available in a shared chat".into(),
+        ));
+    }
+    let first = app.store.first_user_message(&id).await?;
+    let text = first.as_ref().map(|(content, _)| {
+        let text = content
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| content.to_string());
+        text.chars().take(FIRST_MESSAGE_PREVIEW).collect::<String>()
+    });
+    Ok(Json(
+        json!({"text": text, "created_at": first.map(|(_, at)| at)}),
+    ))
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionModeBody {

@@ -99,6 +99,24 @@ impl Store {
         Ok(exists == 1)
     }
 
+    /// A session's first public user message and when it was sent. For a spawned sub-agent
+    /// this is the prompt the parent started it with.
+    pub(crate) async fn first_user_message(&self, sid: &str) -> Result<Option<(Value, i64)>> {
+        let row = sqlx::query(
+            "SELECT content,created_at FROM chat WHERE session_id=? AND role='user' ORDER BY seq LIMIT 1",
+        )
+        .bind(sid)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok((
+                self.unseal(&row.get::<Vec<u8>, _>("content"))?,
+                row.get::<i64, _>("created_at"),
+            ))
+        })
+        .transpose()
+    }
+
     /// Newest active anonymous conversation for one agent that no message has used yet.
     /// New reuses this draft instead of leaving another blank session behind.
     pub async fn reusable_draft_session(&self, agent_id: &str) -> Result<Option<Value>> {
@@ -2150,6 +2168,27 @@ mod tests {
             100
         );
         assert!(store.get("session:a").await.unwrap().is_none());
+    }
+
+    /// The first user message is read alone, skipping earlier assistant rows and later turns.
+    #[tokio::test]
+    async fn first_user_message_returns_the_starting_prompt_only() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        assert!(store.first_user_message("s").await.unwrap().is_none());
+        for (id, role, text, at) in [
+            ("a", "assistant", "Welcome", 10),
+            ("u1", "user", "You are tasked with checking", 20),
+            ("u2", "user", "Later turn", 30),
+        ] {
+            sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,'s','r',?,?,?)")
+                .bind(id).bind(role).bind(store.seal(&json!(text)).unwrap()).bind(at)
+                .execute(&store.pool).await.unwrap();
+        }
+        assert_eq!(
+            store.first_user_message("s").await.unwrap(),
+            Some((json!("You are tasked with checking"), 20))
+        );
     }
 
     /// Verify legacy metadata backfill is durable/idempotent and newly admitted sessions get canonical metadata immediately.

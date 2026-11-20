@@ -128,6 +128,8 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     delivery:(id,mid,body)=>request('/sessions/'+encodeURIComponent(id)+'/messages/'+encodeURIComponent(mid)+'/delivery','PATCH',body),
     /** Resumes a held delivery queue with its expected revision and request ID. */
     resumeQueue:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/queue/resume','POST',body),
+    /** A session's first user message, trimmed: a sub-agent's starting prompt (Spawns panel). */
+    firstMessage:id=>request('/sessions/'+encodeURIComponent(id)+'/first-message'),
     /** Rewinds a session transcript to the requested public message boundary. */
     undo:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/undo','POST',body),
     /** Forks a session from the supplied message boundary. */

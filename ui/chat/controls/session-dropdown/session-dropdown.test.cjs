@@ -27,7 +27,7 @@ async function fixture(t,{mobile=false}={}) {
   const root=document.querySelector('#session-dropdown');
   window.items=Array.from({length:18},(_,i)=>({id:'s'+i,title:'Session '+i,agent_id:'shared_default',last_active_at:123,metadata_revision:1,status:'active'}));
   window.controller=mountSessionDropdown(root,{refresh:async()=>{refreshes++;list.update(items,window.fixtureSelected||'s0');},select:id=>selectedCalls.push(id),guard:fn=>fn,resetSearch:()=>list.reset()});
-  window.list=createSessionList(root,{guard:fn=>fn,refresh:async()=>{refreshes++;},select:id=>selectedCalls.push(id),client:{sessions:async status=>({sessions:status==='active'?items:[{...items[0],id:'archived',status:'archived'}]}),patch:async(id,body)=>{writes.push({id,body});return {session:{...items[0],title:body.title}};}}});
+  window.list=createSessionList(root,{guard:fn=>fn,refresh:async()=>{refreshes++;},select:id=>selectedCalls.push(id),client:{firstMessage:async id=>({text:id==='s0'?'Hi, can you help me with the release':'You are tasked with '+id}),sessions:async status=>({sessions:status==='active'?items:[{...items[0],id:'archived',status:'archived'}]}),patch:async(id,body)=>{writes.push({id,body});return {session:{...items[0],title:body.title}};}}});
   list.configure(config);list.update(items,'s0');
  });
  return page;
@@ -150,8 +150,12 @@ test('sub-agent sessions nest under their parent and the header chip lists the f
  assert.equal(await p.locator('.session-child-row').count(),0);assert(await p.locator('#session-dropdown-menu').isVisible());assert.equal(await p.evaluate(()=>selectedCalls.length),0);
  await p.keyboard.press('Escape');
  await p.locator('#chat-sub-header .chip-spawn-menu').click();
- assert.deepEqual(await p.locator('.family-spawn-menu .family-menu-item').evaluateAll(rows=>rows.map(r=>r.querySelector('.family-menu-text span').textContent)),['Main','Spawn 1','Spawn 2']);
- await p.locator('.family-spawn-menu .family-menu-root').click();
+ assert.deepEqual(await p.locator('.spawn-panel .xl-title').allTextContents(),['Main session','Sub-agent 1','Sub-agent 2']);
+ assert.equal(await p.locator('.spawn-prompt').count(),0,'prompts load only when a row opens');
+ await p.locator('.spawn-panel [data-id="s1"]>.xl-head').click();
+ await p.locator('.spawn-prompt').waitFor();assert.equal(await p.locator('.spawn-prompt').textContent(),'You are tasked with s1');assert.equal(await p.evaluate(()=>selectedCalls.length),0,'opening a row does not navigate');
+ await p.locator('.spawn-panel [data-id="s0"]>.xl-head').click();
+ await p.locator('.spawn-panel [data-id="s0"] .spawn-prompt').click();
  assert.deepEqual(await p.evaluate(()=>selectedCalls),['s0']);assert.equal(await p.locator('.family-spawn-menu').count(),0);
  await p.evaluate(()=>{for(const item of items)delete item.parent_session_id;list.update(items,'s0');});
  assert.equal(await p.locator('#chat-sub-header').evaluate(e=>e.hasAttribute('data-empty')),true);

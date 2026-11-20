@@ -144,6 +144,20 @@ body.light-mode .sub-chip-menu {
   max-height: min(60vh, 420px);
   overflow-y: auto;
 }
+/* Spawns panel (session-dropdown/list.js familyMenu): Main and each sub-agent as expand-list
+   rows; an opened row shows that session's first message in two lines, pressing it opens
+   the session. */
+.spawn-panel.family-spawn-menu { width: min(420px, calc(100vw - 16px)); max-width: none; padding-top: 6px; padding-bottom: 6px; padding-left: 6px; --wa-scroll-pad: 10px; }
+.spawn-prompt {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  width: 100%; min-height: 32px; margin: 0 0 4px; padding: 4px 8px; border: var(--border-width) solid transparent;
+  border-radius: 8px; background: none; color: var(--fg-1); font: inherit; font-size: 13px; text-align: left;
+  overflow-wrap: anywhere; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.spawn-prompt:hover { border-color: var(--border); text-decoration: underline; }
+.spawn-prompt:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
+.spawn-prompt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.spawn-prompt-status { margin: 4px 8px; color: var(--fg-2); font-size: 12px; }
 /* The grouped-elements trigger mirrors the Spawns trigger: accent icon, and its
    status icon never spins — a group of chat elements has no running state. */
 .family-menu-item {
