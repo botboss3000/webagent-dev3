@@ -13,7 +13,7 @@ function stage(value) {
  */
 async function loadVibrationConfig() {
   try {
-    const response = await fetch(new URL('../../vibrate.json', import.meta.url), {cache: 'no-store'});
+    const response = await fetch('/config/ui/vibrate.json', {cache: 'no-store'});
     if (!response.ok) return;
     const value = await response.json();
     if (typeof value.enabled !== 'boolean') return;
@@ -29,5 +29,5 @@ export function getVibrationConfig() {
   return config ? {...config} : null;
 }
 
-/** Shared synchronous touch pulse; Config: ui/vibrate.json -> enabled, duration_ms. */
+/** Shared synchronous touch pulse; Config: config/ui/vibrate.json -> enabled, duration_ms. */
 export const requestTouchVibration = createTouchVibration(() => config);

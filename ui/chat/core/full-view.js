@@ -3,7 +3,7 @@
 // Shared full-view dialog for rendered chat elements. Callers pass the element
 // that holds the readable content; its DOM is cloned so the dialog is a stable
 // snapshot even while the live transcript changes underneath it.
-// Shows a cloned chat element in an accessible modal dialog Trigger config: ui/chat/chat.json -> chat_common.message_gutters.user.controls.full_view and…
+// Shows a cloned chat element in an accessible modal dialog Trigger config: config/ui/chat/chat.json -> chat_common.message_gutters.user.controls.full_view and…
 
 import { _refreshLucideIcons } from './presentation.js';
 import { pushBackHandler } from '../../shared/history-back/history-back.js';

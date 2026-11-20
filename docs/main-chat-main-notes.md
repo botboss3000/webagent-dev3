@@ -172,7 +172,7 @@ Main Chat remains ordinary. No engine or authorization behavior changed.
 | sessions/js/sessions-page.js::_renderTitleCell | Chooses the wavy Main Chat class or existing pinned halo; retains escaped labels, avatar slots and family disclosure controls. |
 | chat/main-chat-avatar/main-chat-avatar.css | Imported by both dropdown and Sessions styles. The static SVG mask on .session-row-agent-main::after draws a wavy ring at inset -3px, using --warning with yellow fallback. No animation; pointer-events:none keeps actions unobstructed and the avatar slot unchanged. |
 
-Config: `ui/chat/controls/session-dropdown/session-dropdown.json` ->
+Config: `config/ui/chat/controls/session-dropdown/session-dropdown.json` ->
 `common.trigger.agent_icon` and `common.menu.agent_icons`, with desktop/mobile/widget
 overlays on reload, control avatar/ring visibility. Sessions column sorting is an
 existing browser-local preference. Priority and wave geometry have no new JSON

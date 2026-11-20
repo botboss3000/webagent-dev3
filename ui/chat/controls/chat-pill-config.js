@@ -1,12 +1,12 @@
 // V2 schema adapter with V3-specific incremental layout and focus-preserving reconciliation.
-// Normalizes chat pill settings and renders configured composer controls Config: ui/chat/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.
+// Normalizes chat pill settings and renders configured composer controls Config: config/ui/chat/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.
 'use strict';
 
 // Canonical chat-pill schema and renderer.
 //
 // ⚠️ JSON DRIVES SIZING — all button sizes (element_size/container_size),
 // textarea properties (font_size, min_height, max_height, padding), and
-// zone padding are authored in ui/chat/chat.json. This file applies
+// zone padding are authored in config/ui/chat/chat.json. This file applies
 // them as inline styles. Change the JSON, not the CSS or JS defaults.
 //
 // The public schema is always two rows with left/center/right zones. Older
@@ -584,7 +584,7 @@ export function applyChatPillLayout(els, rawPill = {}) {
       els.input.style.setProperty('--chat-pill-font-size', textareaCfg.font_size);
     }
     // padding is applied as inline-style so it overrides the CSS default
-    // (8px 8px 2px 0). Authored in ui/chat/chat.json.
+    // (8px 8px 2px 0). Authored in config/ui/chat/chat.json.
     if (textareaCfg.padding) els.input.style.padding = textareaCfg.padding;
   }
   applyStatsConfig(els.stats, pill.controls.stats);

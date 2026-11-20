@@ -33,7 +33,7 @@ export function schedulerPanel() {
   let snapshot = {}, stopped = false, busy = false, offset = 0, updateRevision = 0;
   const requests = new Map();
 
-  // Page-owned feedback uses ui/vibrate.json -> enabled, duration_ms.
+  // Page-owned feedback uses config/ui/vibrate.json -> enabled, duration_ms.
 
   /** Authenticate each closed scheduler action and retain its exact retry ID on uncertain failure. */
   async function send(args) {

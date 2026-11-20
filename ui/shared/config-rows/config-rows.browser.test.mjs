@@ -8,7 +8,7 @@ const server=http.createServer(async(req,res)=>{
  try{
   const u=new URL(req.url,'http://localhost').pathname;
   if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/shared/css/design-system.css"><link rel="stylesheet" href="/ui/shared/option-list/option-list.css"><link rel="stylesheet" href="/ui/shared/models/model-table.css"><link rel="stylesheet" href="/ui/shared/models/model-analytics.css"><link rel="stylesheet" href="/ui/shared/models/save-indicator.css"><link rel="stylesheet" href="/ui/main-panel/agents/pages/abilities/ability-table.css"><link rel="stylesheet" href="/ui/chat/core/confirm-panel.css"><link rel="stylesheet" href="/ui/shared/models/field-tip.css"><link rel="stylesheet" href="/ui/shared/skeleton/skeleton.css"><link rel="stylesheet" href="/ui/shared/controls/controls.css"><link rel="stylesheet" href="/ui/shared/config-rows/config-rows.css"><link rel="stylesheet" href="/ui/shared/subpage-list/subpage-list.css"><main id="host" style="padding:12px;max-width:650px"></main>');return;}
-  if(u==='/ui/vibrate.json'){res.setHeader('content-type','application/json');res.end('{"enabled":true,"impact":{"enabled":true,"duration_ms":10},"release":{"enabled":true,"duration_ms":17}}');return;}
+  if(u==='/config/ui/vibrate.json'){res.setHeader('content-type','application/json');res.end('{"enabled":true,"impact":{"enabled":true,"duration_ms":10},"release":{"enabled":true,"duration_ms":17}}');return;}
   const file=path.resolve(root,'.'+u);
   if(!file.startsWith(path.join(root,'ui')+'/'))throw Error('outside');
   res.setHeader('content-type',file.endsWith('.css')?'text/css':'text/javascript');res.end(await fs.readFile(file));

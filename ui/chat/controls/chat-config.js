@@ -1,10 +1,10 @@
-// Applies the V3 chat surface profile from ui/chat/chat.json (live, read from the checkout), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.
+// Applies the V3 chat surface profile from config/ui/chat/chat.json (live, read from the checkout), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.
 import {loadSessionDropdownConfig, sessionDropdownConfig, setSessionDropdownOverlay} from './session-dropdown/config.js';
 import { watchChatConfig } from './chat-config-live.js';
 import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout, disposeChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';
-// V3 reads the ui/chat/chat.json schema. Unknown controls are
+// V3 reads the config/ui/chat/chat.json schema. Unknown controls are
 // skipped until their v3 features exist; the controls below are live in v3.
 let chatRoot = null;
 // The optional chatRoot keeps widget queries scoped; document lookup supports the panel.

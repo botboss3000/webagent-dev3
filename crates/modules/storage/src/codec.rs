@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use sqlx::{Row, SqlitePool};
 use std::{
     collections::HashMap,
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     io::Write,
     path::Path,
     sync::{Arc, RwLock},

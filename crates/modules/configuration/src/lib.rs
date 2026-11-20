@@ -3,11 +3,7 @@ use anyhow::{anyhow, bail, Result};
 use fs2::FileExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{
-    fs::{File, OpenOptions},
-    io::Write,
-    path::Path,
-};
+use std::{fs::OpenOptions, io::Write, path::Path};
 
 /// Read an object from a regular, non-symlink file no larger than four MiB.
 pub fn read(path: &Path) -> Result<Value> {
@@ -167,7 +163,7 @@ mod tests {
         symlink(&path, &link).unwrap();
         assert!(read(&link).is_err());
         assert!(read(root.path()).is_err());
-        File::create(&path)
+        std::fs::File::create(&path)
             .unwrap()
             .set_len(4 * 1024 * 1024 + 1)
             .unwrap();

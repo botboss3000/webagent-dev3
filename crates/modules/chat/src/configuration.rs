@@ -39,7 +39,7 @@ pub fn parse_chat_preferences(document: &Value) -> Result<ChatModePreferences> {
 }
 
 /// Chat's live file (`live-files.json`), relative to the checkout.
-pub const LIVE_CHAT: &str = "ui/chat/chat.json";
+pub const LIVE_CHAT: &str = "config/ui/chat/chat.json";
 
 /// The installation chat.json, parsed again only when it changes; per-agent overlays merge
 /// over this base. A missing file means defaults; a broken live edit keeps the last good

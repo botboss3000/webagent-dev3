@@ -1,6 +1,6 @@
 'use strict';
 // V2 chat-ui/session-load landing: live rects, exact tail shortfall, local settle.
-// Keeps new user turns visible while respecting reader scroll intent Config: ui/chat/chat.json -> chat_common.user_turn_anchor.
+// Keeps new user turns visible while respecting reader scroll intent Config: config/ui/chat/chat.json -> chat_common.user_turn_anchor.
 /** Coordinates user-turn landing, tail following, and directional settle snaps for a transcript. Call destroy when its panel is unmounted. */
 export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   const abort=new AbortController();

@@ -1,4 +1,4 @@
-// Locates provider-reported usage and measured context presentation UI config: ui/chat/chat.json -> chat_common.{active_footer,idle_footer}.chat_pill.controls.stats.visible.
+// Locates provider-reported usage and measured context presentation UI config: config/ui/chat/chat.json -> chat_common.{active_footer,idle_footer}.chat_pill.controls.stats.visible.
 // V2 stats-strip and context-panel presentation; Rust supplies every measured value.
 /** Purpose: Format finite counts compactly for the stats strip; unknown values remain an em dash. */
 export function formatCount(value) {

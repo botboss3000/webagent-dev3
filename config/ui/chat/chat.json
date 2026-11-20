@@ -276,7 +276,7 @@
         },
         "session_dropdown": {
           "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
-          "description": "Session selector layout. Internal settings are owned by ui/chat/controls/session-dropdown/session-dropdown.json.",
+          "description": "Session selector layout. Internal settings are owned by config/ui/chat/controls/session-dropdown/session-dropdown.json.",
           "enabled": true
         }
       },

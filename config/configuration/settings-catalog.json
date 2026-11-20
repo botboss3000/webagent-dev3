@@ -2,7 +2,7 @@
   "_instructions": "Setting descriptor catalog for the configuration composer. Each owner keeps a *.settings.json beside its configuration; the composer merges them at runtime. Every leaf of an owner's config must be described or excluded with a reason, and every live file must be an owner or excluded here (webagent_configuration::catalog tests).",
   "owners": [
     {
-      "config": "ui/chat/chat.json",
+      "config": "config/ui/chat/chat.json",
       "descriptors": "config/chat/chat.settings.json"
     },
     {
@@ -67,6 +67,20 @@
     "config/engine/gates/*.json": "Gate manifests; changed only with the gates themselves.",
     "config/engine/gates/*.md": "Gate prompts (the closing turn's message); prompts are never offered by the composer (Q1).",
     "config/models/providers/*.json": "Provider definitions and connections; credentials are never offered (Q1).",
-    "src/plugin_packages/diagnostics/diagnostics.json": "Diagnostics package configuration; not offered in v1."
+    "src/plugin_packages/diagnostics/diagnostics.json": "Diagnostics package configuration; not offered in v1.",
+    "config/access/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/accounts/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/agents/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/browser/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/chat/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/media/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/models/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/notifications/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/webapp/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/configuration/settings/*.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/configuration/settings-catalog.json": "The settings index itself; changed with the descriptors it lists.",
+    "config/inference/value-words.json": "Vocabulary data for value detection, not a setting.",
+    "config/ui/*.json": "Touch feedback settings for app pages; not offered by the composer yet.",
+    "config/ui/chat/controls/session-dropdown/*.json": "UI page descriptor or display data; not offered by the composer yet."
   }
 }

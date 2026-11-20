@@ -209,7 +209,37 @@ pub fn routes<S: Clone + Send + Sync + 'static>(ui: &Path) -> Router<S> {
             }),
         )
         .route_service("/setup.html", ServeFile::new(ui.join("setup.html")))
+        .route("/config/ui/{*path}", get(config_ui))
         .nest_service("/ui", ui_files(ui))
+}
+
+/// UI settings files live in `config/ui/` (read live, checkout first), served at
+/// `/config/ui/<path>`; the `/ui/` tree serves only the released UI files.
+pub fn ui_config(path: &str) -> Option<Vec<u8>> {
+    let relative = path.trim_start_matches('/');
+    if !relative.ends_with(".json") {
+        return None;
+    }
+    webagent_configuration::live::read(
+        &format!("config/ui/{relative}"),
+        4 * 1024 * 1024,
+        |_| Ok(()),
+    )
+    .ok()
+}
+
+async fn config_ui(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    match ui_config(&path) {
+        Some(bytes) => (
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Drops `Accept-Encoding` so a missing file whose name minus its extension is a folder is a 404.

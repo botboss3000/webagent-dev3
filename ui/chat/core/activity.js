@@ -1,4 +1,4 @@
-// Locates private tool and run activity projection and polling Config: ui/chat/chat.json -> chat_common.show_activity_groups.
+// Locates private tool and run activity projection and polling Config: config/ui/chat/chat.json -> chat_common.show_activity_groups.
 // Private journal projection: no public reducer or persistent browser cache.
 /**
  * Merges one session's activity page by sequence while rejecting identity, cursor, and revision conflicts.

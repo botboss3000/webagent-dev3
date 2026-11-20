@@ -91,7 +91,7 @@ export function bindGutterVisibility(bubble,gutter,config,role) {
  * Disabled V3-unported actions stay inert. At most one More menu is open and
  * at most one speech playback runs; these states are independent.
  */
-// Builds the configured message action gutter and its More menu Config: ui/chat/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation.
+// Builds the configured message action gutter and its More menu Config: config/ui/chat/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation.
 export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,showContext=()=>{},historyAction=null,refreshMessage=async()=>{}}) {
   const role=item.role==='user'?'user':'agent',profile=currentChatProfile()||{};
   const config=profile.message_gutters||{},spec=config[role]||{};

@@ -1,4 +1,4 @@
-// Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
+// Display policy from config/ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
 const ACTIVE = new Set(['queued', 'running', 'waiting_gate', 'waiting_external']);
 const WAITING = new Set(['waiting_approval', 'recovery']);
 const MODES = new Set(['on', 'dim', 'off']);
@@ -124,8 +124,8 @@ export function createScreenAwake({config, doc = document, nav = navigator, win 
   function destroy() { disposed = true; ++epoch; refresh(); for (const remove of listeners) remove(); }
   return {select, runs, attention, configure, destroy};
 }
-// Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
-// Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
+// Display policy from config/ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
+// Display policy from config/ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
 /** Calls from panel select/runs/live message callbacks; only changed notice text restores brightness. */
 export function mountScreenAwake(root, {getProfile = () => null} = {}) {
   // chat.json is the only source: there is no per-device override or settings panel.

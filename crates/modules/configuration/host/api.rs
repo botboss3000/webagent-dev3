@@ -24,7 +24,7 @@ const IDS: [&str; 14] = [
 /// Live files (checkout-relative, listed in `live-files.json`) for configuration edited in place.
 pub(crate) fn live(id: &str) -> Option<&'static str> {
     Some(match id {
-        "chat" => "ui/chat/chat.json",
+        "chat" => "config/ui/chat/chat.json",
         "app_ui" => webagent_webapp::configuration::LIVE_SETTINGS,
         "context_compaction" => "config/context/context-compaction.json",
         "tool_output_retention" => crate::tool_output::LIVE_POLICY,

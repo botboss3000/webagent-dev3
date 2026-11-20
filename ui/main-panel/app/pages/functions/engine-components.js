@@ -15,7 +15,7 @@ export function mountEngineComponents(host) {
  const list=document.createElement('div'),status=document.createElement('p');status.setAttribute('role','status');section.append(list,status);
  const refresh=document.createElement('button');refresh.type='button';refresh.className='app-engine-button';refresh.textContent='Refresh components';refresh.style.webkitTapHighlightColor='transparent';section.append(refresh);host.append(section);
  let snapshot=null,busy=false;
- // App's page owner supplies touch feedback: ui/vibrate.json -> enabled, duration_ms.
+ // App's page owner supplies touch feedback: config/ui/vibrate.json -> enabled, duration_ms.
  /** Authenticate administrator reads and revision-fenced writes through the owning API. */
  async function request(method='GET',component,body) {
   const response=await fetch('/api/v3/auth/me',{credentials:'same-origin',cache:'no-store'});

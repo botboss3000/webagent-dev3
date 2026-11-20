@@ -1,5 +1,5 @@
 'use strict';
-// Renders persisted V3 user and assistant messages into transcript bubbles Config: ui/chat/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation.
+// Renders persisted V3 user and assistant messages into transcript bubbles Config: config/ui/chat/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation.
 // Reference chat-bubble DOM and configured gutters, with V3 committed-row transport.
 import {applyBubblePaint} from './bubble-paint.js';
 import {currentChatProfile} from '../controls/chat-config.js';

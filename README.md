@@ -98,7 +98,7 @@ with retry receipts. It is not an atomic batch. Unsupported management actions
 are disabled, not sent to v2. This remains a partial port: hidden sessions,
 custom pinned ordering, rich status/family grouping, and the remaining header
 controls are not yet equivalent to v2.
-V3 serves the live file `ui/chat/chat.json` (listed in `live-files.json`, read
+V3 serves the live file `config/ui/chat/chat.json` (listed in `live-files.json`, read
 from the checkout on every request) through an authenticated
 `GET /api/v3/auth/ui-config` route. Edits take effect without a release. Its
 `chat_common` values merge with `chat_desktop` or `chat_mobile`; arrays replace
@@ -915,7 +915,7 @@ a build stale even if compilation passed.
 
 ### Attachment limits in chat.json
 
-Configure the live file ui/chat/chat.json under
+Configure the live file config/ui/chat/chat.json under
 chat_limits.attachments:
 
     { "max_file_size_mb": null, "max_per_message": null }

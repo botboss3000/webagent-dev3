@@ -1,4 +1,4 @@
-// Locates private activity journal rows rendered inside chat Config: ui/chat/chat.json -> chat_common.show_activity_groups.
+// Locates private activity journal rows rendered inside chat Config: config/ui/chat/chat.json -> chat_common.show_activity_groups.
 'use strict';
 
 // Presentation only: journal IDs are never treated as legacy interaction IDs.

@@ -1,4 +1,4 @@
-// Loads component settings from ui/chat/controls/session-dropdown/session-dropdown.json -> common and desktop/mobile/widget overlays; live adoption through the chat.json poll.
+// Loads component settings from config/ui/chat/controls/session-dropdown/session-dropdown.json -> common and desktop/mobile/widget overlays; live adoption through the chat.json poll.
 let documentConfig = {}, agentOverlay = {};
 /** Merge component objects without letting absent surface settings erase common values. */
 function merge(base, overlay) {
@@ -12,7 +12,7 @@ function merge(base, overlay) {
 /** Load the independently published component JSON and report whether it changed; failed reloads retain the last valid settings. */
 export async function loadSessionDropdownConfig(signal) {
   try {
-    const response = await fetch('/ui/chat/controls/session-dropdown/session-dropdown.json', {credentials:'same-origin',cache:'no-store',signal});
+    const response = await fetch('/config/ui/chat/controls/session-dropdown/session-dropdown.json', {credentials:'same-origin',cache:'no-store',signal});
     if (!response.ok) throw Error('Session dropdown configuration unavailable');
     const value = await response.json();
     if (!value?.common || typeof value.common !== 'object' || Array.isArray(value.common)) throw Error('Invalid session dropdown configuration');
