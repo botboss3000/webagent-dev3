@@ -158,7 +158,9 @@ path = "src/plugin_packages/outbound_notifications/main.rs"
 required-features = ["server-bins"]
 
 # Keep the symbol table (not debug info) so `perf` can name hot functions in the
-# live binaries. It is not loaded at runtime; it only adds file size.
+# live binaries. It is not loaded at runtime; it only adds file size. The root's
+# package overrides below repeat it: with Mold, a package override otherwise falls
+# back to Cargo's default debuginfo strip, which removes the whole symbol table.
 [profile.release]
 strip = "none"
 
@@ -167,6 +169,7 @@ strip = "none"
 # compile by about a sixth; module and dependency crates keep level 3.
 [profile.release.package.webagent-v3]
 opt-level = 2
+strip = "none"
 
 # Test builds: optimize third-party crates only. The suite spends much of its
 # time in library code (serde_json, sha2); this nearly halves the main test run,
@@ -183,3 +186,4 @@ lto = "thin"
 
 [profile.stable.package.webagent-v3]
 opt-level = 3
+strip = "none"
