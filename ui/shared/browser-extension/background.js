@@ -168,7 +168,10 @@ async function openTab(url) {
       ? {left: beside.left + Math.round(beside.width / 2), top: beside.top,
         width: Math.round(beside.width / 2), height: beside.height}
       : {};
-    const window = await chrome.windows.create({url, focused: true, ...placement});
+    // Chrome refuses bounds that are mostly off-screen (a second monitor, a narrow screen);
+    // the window still opens at Chrome's own position then.
+    const window = await chrome.windows.create({url, focused: true, ...placement})
+      .catch(() => chrome.windows.create({url, focused: true}));
     tab = window.tabs[0];
   }
   await session.set('tabs', [...tabs.map(t => t.id), tab.id]);
@@ -304,7 +307,8 @@ async function read(tabId, offset = 0) {
       } else if ((role === 'StaticText' || role === 'image') && name) {
         lines.push(role === 'image' ? `[image] ${name}` : name);
       }
-      if (INTERACTIVE.has(role) || role === 'heading') return;
+      // A heading without a computed name keeps its text in its children.
+      if (INTERACTIVE.has(role) || (role === 'heading' && name)) return;
     }
     for (const child of node.childIds || []) walk(byId.get(child), depth + 1);
   };
@@ -341,7 +345,8 @@ async function act(args, sites) {
     await chrome.tabs.remove(tab.id);
     return {closed: tab.id};
   }
-  if (!siteAllowed(tab.url, sites)) {
+  // navigate's target was checked above, so it may also lead off a disallowed page.
+  if (action !== 'navigate' && !siteAllowed(tab.url, sites)) {
     throw failure(`The agent tab is on ${new URL(tab.url).hostname}, which is not on this agent's site list`);
   }
   await attach(tab.id);
