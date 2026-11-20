@@ -1,5 +1,6 @@
 import {requestTouchVibration} from '../../../../shared/vibrate/vibrate.js';
 import {_fmtTime} from '../sessions/js/adapter.js';
+import {mountActions} from '../../../../shared/actions/actions-list.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 /** Explicit assignments are distinct from automatic Member access and blocks. One V2-style table lists everyone. */
 export async function renderMembers(host,request,{agentId}) {
@@ -97,5 +98,10 @@ export async function renderMembers(host,request,{agentId}) {
     show(data.members||[],data.next_offset!=null);
     if(data.next_offset!=null){const more=node('button','Load more members','ac-btn');more.type='button';let offset=data.next_offset;more.onclick=async()=>{more.disabled=true;try{const next=await request(path+'?offset='+offset);if(host._membersGeneration!==generation)return;offset=next.next_offset;show(next.members||[],offset!=null);more.hidden=offset==null;}catch(error){statusText(error.message);}finally{more.disabled=false;}};host.append(more);}
     statusText('Members configuration ready.');
+    // Operator audit: every member's recorded actions with this agent, read-only (owners and admins settle them).
+    const audit=node('div','','members-section'),auditHeader=node('div','','members-section-header'),auditCount=node('span','','members-section-count');
+    auditHeader.append(node('span','Actions','members-section-title'),auditCount);audit.append(auditHeader,node('p','Recorded actions of everyone using this agent: publishing, pushing and other tool calls that must not happen twice. The chat\'s owner or an administrator marks an uncertain one done or failed.','members-notice'));
+    const auditBox=node('div');audit.append(auditBox);host.append(audit);
+    void mountActions(auditBox,request,'/agents/'+encodeURIComponent(agentId)+'/actions',{showSession:true,showUser:true}).then(list=>{if(host._membersGeneration===generation)auditCount.textContent=String(list.length);});
   }catch(error){skeleton.remove();status.textContent='Members unavailable: '+error.message;}
 }

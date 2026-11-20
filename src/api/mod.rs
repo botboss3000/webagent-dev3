@@ -251,6 +251,11 @@ pub(super) fn router(app: App) -> Router {
             get(model_usage::admin_analytics).delete(model_usage::admin_clear),
         )
         .route("/admin/usage/models/totals", get(model_usage::admin_totals))
+        .route("/admin/actions", get(admin_actions))
+        .route(
+            "/admin/actions/{user}/{id}/resolve",
+            post(admin_action_resolve),
+        )
         .route("/admin/usage/models/undo", post(model_usage::admin_undo))
         .route(
             "/admin/access/registration",
@@ -609,4 +614,32 @@ pub(crate) fn core_tools_router() -> Router<App> {
                 .delete(crate::chat_config::reset),
         )
         .merge(user_api::router())
+}
+
+/// Every user's recorded actions (`?agent=` narrows to one agent), for App → Actions.
+async fn admin_actions(State(app): State<App>, Query(args): Query<HashMap<String, String>>) -> Api {
+    let actions =
+        crate::actions::audit_list(&app.store, args.get("agent").map(String::as_str)).await?;
+    Ok(Json(serde_json::json!({"actions": actions})))
+}
+/// An administrator marks any user's uncertain action done or failed.
+async fn admin_action_resolve(
+    State(app): State<App>,
+    Path((user, id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Api {
+    match crate::actions::audit_resolve(
+        &app.store,
+        &user,
+        &id,
+        body["state"].as_str().unwrap_or(""),
+    )
+    .await?
+    {
+        Some(action) => Ok(Json(serde_json::json!({"action": action}))),
+        None => Err(ApiError(
+            StatusCode::CONFLICT,
+            "Action is not uncertain".into(),
+        )),
+    }
 }

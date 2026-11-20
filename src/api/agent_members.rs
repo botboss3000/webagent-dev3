@@ -634,8 +634,20 @@ async fn dismiss_access_request(
     Ok(Json(json!({"requested":false})))
 }
 
+/// Every user's recorded actions on this agent, read-only, for its Agent Operators.
+async fn actions(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+) -> Api {
+    operator(&app, &identity, &id).await?;
+    let actions = crate::actions::audit_list(&app.store, Some(&id)).await?;
+    Ok(Json(json!({"actions": actions})))
+}
+
 pub fn router() -> Router<App> {
     Router::new()
+        .route("/agents/{id}/actions", get(actions))
         .route("/agents/{id}/members", get(read).put(update))
         .route("/agents/{id}/capability-ladder", put(ladder))
         .route("/agents/{id}/access-summary", get(summary))

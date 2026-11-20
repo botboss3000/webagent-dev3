@@ -27,13 +27,19 @@ try{
    const request=async(url,method='GET',body)=>{
     if(url==='/agents/one/members')return {capability_levels:{order:['member'],levels:{member:{name:'Member'}}},owner_id:'owner',members:[{user_id:'owner',username:'owner',capability_level_id:'member',relationship:'owner'},{user_id:'gone',username:'gone',capability_level_id:'member',relationship:'caller',access_origin:'none'}]};
     if(url==='/agents/one/shared-sessions'){if(fixture.denied)throw Error('No access');return {sessions:fixture.sessions};}
+    if(url==='/agents/one/actions')return {actions:[{id:'a1',tool:'source_publish',state:'uncertain',attempt:1,critical:true,requester:'gone',session_id:'help',created_at:1793440000}]};
     if(url==='/sessions/help/join'&&method==='POST'){fixture.joins.push(body);throw Error('fixture join stop');}
     throw Error('Unscoped route '+url);
    };
    window.remount=()=>renderMembers(document.querySelector('#host'),request,{agentId:'one'});await remount();
   });
   const sections=page.locator('.members-section');
-  assert.deepEqual(await sections.locator('.members-section-title').allTextContents(),['Help requests','All members']);
+  assert.deepEqual(await sections.locator('.members-section-title').allTextContents(),['Help requests','All members','Actions']);
+  // Operators audit every member's actions read-only: no settle buttons.
+  const audit=sections.filter({hasText:'Recorded actions of everyone'});
+  const row=audit.locator('.xl-task').first();await row.waitFor();
+  assert.match(await row.textContent(),/User gone/);
+  assert.equal(await audit.locator('.actions-btn').count(),0);
   const help=sections.first();
   // Only pending requests become rows, one per notification.
   assert.equal(await help.locator('tbody tr').count(),1);

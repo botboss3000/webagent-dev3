@@ -22,7 +22,7 @@ const STATUS = {prepared: 'pending', running: 'in-progress', completed: 'complet
  * state)` settles an uncertain action (omit it for a read-only list); `changed()` runs after a
  * resolution so the caller reloads.
  */
-export function renderActions(box, actions, {resolve, changed = () => {}, showSession = false, empty = 'No recorded actions yet.'} = {}) {
+export function renderActions(box, actions, {resolve, changed = () => {}, showSession = false, showUser = false, empty = 'No recorded actions yet.'} = {}) {
   box.replaceChildren();
   if (!actions.length) { box.append(el('p', 'actions-empty', empty)); return; }
   const list = createExpandList({label: 'Recorded actions', defaultOpen: row => row.status === 'need-help'});
@@ -30,7 +30,7 @@ export function renderActions(box, actions, {resolve, changed = () => {}, showSe
     id: action.id || String(action.created_at), title: action.tool || 'tool', status: STATUS[action.state] || 'pending',
     icon: action.critical ? 'ShieldAlert' : null, pill: STATE[action.state] || action.state || false,
     badges: [action.critical ? 'Critical' : '', when(action.updated_at || action.created_at)].filter(Boolean),
-    description: [action.attempt ? 'Attempt ' + action.attempt : '', showSession && action.session_id ? 'Chat ' + String(action.session_id).slice(0, 8) : '', action.resolved_by ? 'Marked by ' + action.resolved_by : ''].filter(Boolean).join(' · '),
+    description: [showUser && action.requester ? 'User ' + action.requester : '', action.attempt ? 'Attempt ' + action.attempt : '', showSession && action.session_id ? 'Chat ' + String(action.session_id).slice(0, 8) : '', action.resolved_by ? 'Marked by ' + action.resolved_by : ''].filter(Boolean).join(' · '),
     content: host => {
       if (action.arguments && typeof action.arguments === 'object') host.append(el('small', 'actions-label', 'Arguments'), el('pre', 'actions-args-body', JSON.stringify(action.arguments, null, 2).slice(0, 4000)));
       if (action.state !== 'uncertain') return;
@@ -44,7 +44,7 @@ export function renderActions(box, actions, {resolve, changed = () => {}, showSe
           const text = state === 'completed' ? 'Mark this action done? The agent will treat it as finished and not repeat it.' : 'Mark this action failed? The agent may then try it again.';
           if (!window.confirm(text)) return;
           for (const b of buttons.querySelectorAll('button')) b.disabled = true;
-          try { await resolve(action.id, state); changed(); }
+          try { await resolve(action.id, state, action); changed(); }
           catch (error) { host.append(el('p', 'actions-error', error.message)); for (const b of buttons.querySelectorAll('button')) b.disabled = false; }
         };
         buttons.append(button);
@@ -63,14 +63,14 @@ function ensureStyles() {
 }
 
 /** Loads `path` (an `{actions}` response) into `box` and keeps it reloadable. */
-export async function mountActions(box, request, path, {resolvePath, showSession = false} = {}) {
+export async function mountActions(box, request, path, {resolvePath, showSession = false, showUser = false, empty} = {}) {
   ensureStyles();
   const status = el('p', 'actions-empty', 'Loading…'); status.setAttribute('role', 'status'); box.replaceChildren(status);
   const load = async () => {
     try {
       const data = await request(path);
-      renderActions(box, data.actions || [], {showSession, changed: load,
-        resolve: resolvePath ? (id, state) => request(resolvePath(id), 'POST', {state}) : null});
+      renderActions(box, data.actions || [], {showSession, showUser, empty, changed: load,
+        resolve: resolvePath ? (id, state, action) => request(resolvePath(id, action), 'POST', {state}) : null});
       return data.actions || [];
     } catch (error) { status.textContent = 'Actions unavailable: ' + error.message; box.replaceChildren(status); return []; }
   };

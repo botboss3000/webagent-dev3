@@ -216,6 +216,15 @@ mod tests {
             panel_list(&app.store, Some(sid), None).await.unwrap()[0]["state"],
             "uncertain"
         );
+        // The audit views read every user's ledger; an administrator settles it as the owner's.
+        let agent = saved["agent_id"].as_str().unwrap();
+        let audit = audit_list(&app.store, Some(agent)).await.unwrap();
+        let row = audit.iter().find(|a| a["id"] == "unknown-action").unwrap();
+        assert_eq!(row["requester"], saved["requester"]);
+        assert!(audit_list(&app.store, Some("no_such_agent"))
+            .await
+            .unwrap()
+            .is_empty());
         assert_eq!(
             app.store
                 .action_claim("unknown-action", true)
@@ -239,6 +248,13 @@ mod tests {
             "completed"
         );
         assert_eq!(app.store.test_provider_effect_count().await.unwrap(), 2);
+        // An administrator settles the still-uncertain action as its owner's.
+        let owner = saved["requester"].as_str().unwrap();
+        let settled = audit_resolve(&app.store, owner, "unknown-action", "confirmed_failed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(settled["state"], "confirmed_failed");
     }
     #[tokio::test]
     async fn configuration_off_cannot_bypass_existing_uncertain_intent() {
@@ -615,6 +631,7 @@ fn panel_row(action: &Value) -> Value {
         "updated_at",
         "critical",
         "resolved_by",
+        "requester",
     ] {
         row[key] = action[key].clone();
     }
@@ -636,6 +653,43 @@ pub(crate) async fn panel_list(
         .filter(|a| agent.is_none_or(|agent| a["agent_id"] == agent))
         .map(panel_row)
         .collect())
+}
+
+/// Every user's newest actions, those on agent `agent` when given, newest first: the
+/// administrator and Agent Operator audit views. Callers authorize first.
+pub(crate) async fn audit_list(base: &Store, agent: Option<&str>) -> Result<Vec<Value>> {
+    let mut rows = Vec::new();
+    for user in webagent_engine::runtime::ports::ScopedStorage::all_user_ids(base).await? {
+        rows.extend(panel_list(&base.for_user(&user).await?, None, agent).await?);
+    }
+    rows.sort_by_key(|row| {
+        std::cmp::Reverse(
+            row["updated_at"]
+                .as_u64()
+                .or(row["created_at"].as_u64())
+                .unwrap_or(0),
+        )
+    });
+    rows.truncate(500);
+    Ok(rows)
+}
+
+/// An administrator settles another user's uncertain action `id`, recorded as theirs.
+pub(crate) async fn audit_resolve(
+    base: &Store,
+    user: &str,
+    id: &str,
+    state: &str,
+) -> Result<Option<Value>> {
+    if !valid_id(id) {
+        bail!("Invalid action ID");
+    }
+    let by = base.current_user_id().to_owned();
+    let store = base.for_user(user).await?;
+    Ok(store
+        .action_resolve(id, state, &by)
+        .await?
+        .map(|a| panel_row(&a)))
 }
 
 /// Mark the caller's uncertain action `id` done (`completed`) or failed (`confirmed_failed`)
