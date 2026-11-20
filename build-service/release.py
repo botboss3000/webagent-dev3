@@ -72,7 +72,8 @@ def possible_credentials(data):
 
 
 def live_patterns(files):
-    """Validated `v3/` patterns from a snapshot's live-files.json; `*` only in the last segment."""
+    """Validated `v3/` patterns from a snapshot's live-files.json. The last segment may hold
+    `*` anywhere; a folder segment may be `*` alone (any one folder), never the first."""
     item = files.get(LIVE_MANIFEST)
     if item is None:
         return ()
@@ -86,7 +87,8 @@ def live_patterns(files):
     for name in names:
         parts = name.split("/") if isinstance(name, str) else []
         if (not parts or len(name) > 200 or any(part in ("", ".", "..") for part in parts)
-                or "*" in "/".join(parts[:-1]) or not name.endswith((".json", ".md"))
+                or any("*" in part and part != "*" for part in parts[:-1]) or parts[0] == "*"
+                or not name.endswith((".json", ".md"))
                 or name.startswith(LIVE_DENIED) or name == "live-files.json"
                 or any(not (c.isalnum() or c in "._-*/") for c in name)):
             raise ValueError("invalid live-files.json entry")
@@ -94,9 +96,23 @@ def live_patterns(files):
 
 
 def is_live(name, patterns):
-    folder, _, leaf = name.rpartition("/")
-    return any(folder == pattern.rpartition("/")[0] and fnmatch.fnmatchcase(leaf, pattern.rpartition("/")[2])
-               for pattern in patterns)
+    parts = name.split("/")
+    return any(len(parts) == len(shape) and fnmatch.fnmatchcase(parts[-1], shape[-1])
+               and all(want in ("*", part) for want, part in zip(shape[:-1], parts[:-1]))
+               for shape in (pattern.split("/") for pattern in patterns))
+
+
+def _live_folders(root, folder):
+    """Checkout folders matching a pattern's folder part (`*` segments), never through a link."""
+    found = [root]
+    for part in folder.split("/") if folder else ():
+        if part == "*":
+            found = [child for parent in found for child in sorted(parent.iterdir())
+                     if child.is_dir() and not child.is_symlink()]
+        else:
+            found = [parent / part for parent in found
+                     if (parent / part).is_dir() and not (parent / part).is_symlink()]
+    return found
 
 
 def _live_target(root, relative):
@@ -116,13 +132,7 @@ def expose_live(root, patterns):
     root = Path(root)
     for pattern in patterns:
         folder, _, leaf = pattern.removeprefix("v3/").rpartition("/")
-        try:
-            directory = _live_target(root, folder) if folder else root
-        except ValueError:
-            continue
-        if not directory.is_dir():
-            continue
-        for path in directory.iterdir():
+        for path in (path for directory in _live_folders(root, folder) for path in directory.iterdir()):
             if path.is_symlink() or not path.is_file() or not fnmatch.fnmatchcase(path.name, leaf):
                 continue
             mode = path.stat().st_mode & 0o777
@@ -137,7 +147,8 @@ def expose_live(root, patterns):
 
 
 def write_live(root, relative, body, expected):
-    """Atomically replace a live file when its current bytes still match `expected` (None: absent)."""
+    """Atomically replace a live file, or delete it when `body` is None, while its current
+    bytes still match `expected` (None: absent). Returns the new digest (None once deleted)."""
     path = _live_target(root, relative)
     try:
         current = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -145,6 +156,9 @@ def write_live(root, relative, body, expected):
         current = None
     if current != expected:
         raise ValueError("live file changed; reload before saving")
+    if body is None:
+        path.unlink(missing_ok=True)
+        return None
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("." + path.name + ".live-" + uuid.uuid4().hex)
     try:

@@ -32,13 +32,19 @@ class LiveFileTests(unittest.TestCase):
                          ("v3/crates/modules/models/providers/*.json","v3/ui/chat/chat.json"))
         self.assertEqual(release.live_patterns({}),())
         for bad in ("src/main.rs","build-service/scheduler-defaults.json","tests/a.json","data/config/chat.json",
-                    "crates/*/x.json","ui/../src/a.json","live-files.json",".git/config.json","ui/a b.json"):
+                    "crates/a*/x.json","*/x.json","ui/../src/a.json","live-files.json",".git/config.json","ui/a b.json"):
             with self.assertRaises(ValueError,msg=bad):parse(bad)
         with self.assertRaises(ValueError):parse(*[f"ui/{n}.json"for n in range(257)])
         patterns=parse("crates/modules/models/providers/*.json")
         self.assertTrue(release.is_live("v3/crates/modules/models/providers/deepseek.json",patterns))
         self.assertFalse(release.is_live("v3/crates/modules/models/providers/old/deepseek.json",patterns))
         self.assertFalse(release.is_live("v3/crates/modules/models/src/lib.rs",patterns))
+        # A whole folder segment may be `*`: one folder, any name, never deeper or shallower.
+        tools=parse("abilities/*/*/tools/*/*.json")
+        self.assertTrue(release.is_live("v3/abilities/Core/base/tools/calculate/calculate.tool.json",tools))
+        self.assertFalse(release.is_live("v3/abilities/Core/base/tools/calculate.tool.json",tools))
+        self.assertFalse(release.is_live("v3/abilities/Core/base/x/tools/calculate/calculate.tool.json",tools))
+        self.assertFalse(release.is_live("v3/abilities/Core/base/skills/calculate/calculate.tool.json",tools))
     def test_tasks_change_live_files_against_their_base_and_can_list_new_ones(self):
         release=self.release
         manifest=self.manifest("ui/chat.json")
@@ -147,6 +153,14 @@ class LiveFileAccessTests(unittest.TestCase):
             (root/"link").symlink_to(folder_path)
             with self.assertRaisesRegex(ValueError,"link"):self.release.write_live(root,"link/a.json",b"{}",digest)
             self.assertEqual(sorted(p.name for p in folder_path.iterdir()),["a.json","b.rs","new.json"])
+            with self.assertRaisesRegex(ValueError,"changed"):self.release.write_live(root,"crates/x/new.json",None,digest)
+            self.assertIsNone(self.release.write_live(root,"crates/x/new.json",None,current))
+            self.assertFalse((folder_path/"new.json").exists())
+            # `*` folder segments expose every matching folder's files.
+            deep=root/"abilities/Core/base/tools/calc";deep.mkdir(parents=True);(deep/"calc.tool.json").write_text("{}")
+            (deep/"calc.tool.json").chmod(0o600);deep.chmod(0o700)
+            self.release.expose_live(root,("v3/abilities/*/*/tools/*/*.json",))
+            self.assertEqual(((deep/"calc.tool.json").stat().st_mode&0o777,deep.stat().st_mode&0o777),(0o644,0o705))
     def test_broker_writes_only_listed_valid_files(self):
         broker=types.SimpleNamespace(live_patterns=lambda:("v3/ui/chat.json",),runner=types.SimpleNamespace(git_lock=__import__("threading").Lock()))
         write=lambda args:fixtures.host.Broker.live_file_write(broker,args)
@@ -157,6 +171,10 @@ class LiveFileAccessTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"invalid"):write({"path":"ui/chat.json","content":"{","expected_sha256":hashlib.sha256(b"{}").hexdigest()})
             result=write({"path":"ui/chat.json","content":'{"a":1}',"expected_sha256":hashlib.sha256(b"{}").hexdigest()})
             self.assertEqual(result["sha256"],hashlib.sha256(b'{"a":1}').hexdigest())
+            with self.assertRaisesRegex(ValueError,"or delete"):write({"path":"ui/chat.json","content":"{}","delete":True,"expected_sha256":result["sha256"]})
+            with self.assertRaisesRegex(ValueError,"or delete"):write({"path":"ui/chat.json","delete":False,"expected_sha256":result["sha256"]})
+            self.assertEqual(write({"path":"ui/chat.json","delete":True,"expected_sha256":result["sha256"]}),{"sha256":None})
+            self.assertFalse((Path(folder)/"ui/chat.json").exists())
 class ConfigurationTests(unittest.TestCase):
  def account(self,name):return types.SimpleNamespace(pw_name=name,pw_uid=2301 if name=="builder" else 2402,pw_gid=2301,pw_dir="/srv/build-home")
  def test_arbitrary_account_paths_and_two_instances(self):

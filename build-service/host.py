@@ -3471,18 +3471,21 @@ class Broker:
         return self.runner.commit_live(patterns, released=released)
 
     def live_file_write(self, args):
-        """Replace one listed live file for the app, only if it still has the caller's digest."""
-        if set(args) - {"path", "content", "expected_sha256"} or not isinstance(args.get("path"), str) \
-                or not isinstance(args.get("content"), str) or len(args["content"].encode()) > 4 * 1024 * 1024:
-            raise ValueError("bounded live file path and content required")
+        """Replace or delete (`delete: true`) one listed live file for the app, only if it still
+        has the caller's digest."""
+        delete = args.get("delete") is True
+        if set(args) - {"path", "content", "expected_sha256", "delete"} or not isinstance(args.get("path"), str) \
+                or args.get("delete") not in (None, True) or ("content" in args) == delete \
+                or not (delete or isinstance(args["content"], str) and len(args["content"].encode()) <= 4 * 1024 * 1024):
+            raise ValueError("bounded live file path and content (or delete) required")
         expected = args.get("expected_sha256")
         if expected is not None and not (isinstance(expected, str) and re.fullmatch(r"[0-9a-f]{64}", expected)):
             raise ValueError("invalid expected digest")
         name = "v3/" + args["path"]
         if not release.is_live(name, self.live_patterns()):
             raise ValueError("not a live file")
-        body = args["content"].encode()
-        if name.endswith(".json"):
+        body = None if delete else args["content"].encode()
+        if body is not None and name.endswith(".json"):
             try:
                 json.loads(body)
             except ValueError:
