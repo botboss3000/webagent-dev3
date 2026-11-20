@@ -702,6 +702,11 @@ def main():
     sidekick=commands.add_parser("sidekick",help="broker sidekick: status, or switch it on/off live (no restart)")
     sidekick.add_argument("action",choices=("status","on","off"))
     sidekick.add_argument("--reason",default="")
+    prod=commands.add_parser("production",help="production releases: request one (approved on the Host Admin page), list, status")
+    prod.add_argument("action",choices=("request","list","status"))
+    prod.add_argument("release_id",nargs="?")
+    prod.add_argument("--bump",choices=("patch","minor","major"),default="patch")
+    prod.add_argument("--notes",default="")
     maintenance=commands.add_parser("maintenance")
     maintenance.add_argument("action",choices=("status","drain","resume"))
     maintenance.add_argument("--task-id")
@@ -764,6 +769,13 @@ def main():
     if args.command=="apply":
         patch=sys.stdin.read(4*1024*1024)if args.patch=="-"else Path(args.patch).read_text()
         print(json.dumps(call("v3_source_apply",{"task_id":args.task_id,"request_id":args.request_id,"expected_inputs_sha256":args.expected,"patch":patch}),sort_keys=True));return 0
+    if args.command=="production":
+        body={"action":args.action}
+        if args.action=="request":body.update(bump=args.bump,**({"notes":args.notes}if args.notes else{}))
+        if args.action=="status":
+            if not args.release_id:raise SystemExit("status needs a release id")
+            body["release_id"]=args.release_id
+        print(json.dumps(call("v3_production",body),indent=1,sort_keys=True));return 0
     if args.command=="sidekick":
         print(json.dumps(call("build_service_sidekick",{"action":args.action,**({"reason":args.reason}if args.reason else{})}),sort_keys=True));return 0
     if args.command=="maintenance":

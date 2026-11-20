@@ -47,6 +47,13 @@ class ReconciliationTests(unittest.TestCase):
     with self.assertRaises((ValueError,RuntimeError)):self.broker._reconcile_plugin_publication(self.job,self.trusted,"testspace")
     self.runner.promote_checkout.assert_not_called()
     self.temporary.cleanup()
+ def test_changed_ability_files_reach_the_checkout_before_the_adoption_check(self):
+  # Live abilities overlay the checkout on the release, so adoption waits for these files.
+  ability="v3/abilities/Web/example/tools/example/example.skill.md"
+  self.job["changed_paths"]=[ability,"v3/ui/example.js"]
+  self.runner.verify_plugin_adoption.side_effect=RuntimeError("not adopted")
+  with self.assertRaises(RuntimeError):self.broker._reconcile_plugin_publication(self.job,self.trusted,"testspace")
+  self.runner.promote_checkout.assert_called_once_with(self.blob,self.blob,[ability],None)
 class AdoptionProbeTests(unittest.TestCase):
  def test_ready_response_and_both_receipts_are_required_with_bounded_timeout(self):
   from unittest.mock import patch

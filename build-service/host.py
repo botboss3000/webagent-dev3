@@ -263,6 +263,12 @@ _performance_spec = importlib.util.spec_from_file_location("v3_build_performance
 performance = importlib.util.module_from_spec(_performance_spec)
 _performance_spec.loader.exec_module(performance)
 
+_production_file = (_module_root / "production.py"
+                    if str(__file__).startswith("/proc/self/fd/") else Path(__file__).with_name("production.py"))
+_production_spec = importlib.util.spec_from_file_location("v3_build_production", _production_file)
+production = importlib.util.module_from_spec(_production_spec)
+_production_spec.loader.exec_module(production)
+
 MAX_TASK_CONTEXT = 512 * 1024 * 1024
 
 
@@ -3035,6 +3041,7 @@ class Broker:
         if not isinstance(self.work, dict) or len(self.work) > 1000:
             raise ValueError("invalid coordination registry")
         self.performance = performance.Performance(self)
+        self.production = production.Production(self, self.state, CONFIG["checkout_root"], executor_module.RUST, release)
         self.scheduler=scheduler_module.Scheduler(self,CONFIG)
         self.resources=resource_module.Resources(self.state,self.runner,CONFIG.get("scheduler",{}))
         self.runner.resources=self.resources
@@ -4229,6 +4236,14 @@ class Broker:
         except Exception:
             return False
 
+    def _promote_live_abilities(self, job, blob, base=None):
+        # The app overlays the checkout's ability files on the published release and reports
+        # loading the release only while they match it, so changed ability files reach the
+        # checkout before the adoption check. Checked promotion; the full one follows.
+        abilities=[p for p in job.get("changed_paths",()) if p.startswith(ABILITY_ROOTS)]
+        if abilities:
+            self.runner.promote_checkout(self._current_release_blob(),blob,abilities,base)
+
     def _reconcile_plugin_publication(self, job, trusted, workspace):
         # Operator continuation after an uncertain adoption check. Never activate
         # assets or execute/build a package again; verify the already selected release.
@@ -4253,6 +4268,7 @@ class Broker:
             if identity is not None and self.runner.inspect(name)["Id"]!=identity:
                 raise ValueError("Retained consumer identity changed")
         self.runner.verify_ui(job.get("changed_paths",()))
+        self._promote_live_abilities(job,candidate)
         job["consumer_adoption"]=self.runner.verify_plugin_adoption(job["job_id"])
         job["engine_execution_modes"]=self.runner.engine_execution_modes(job["job_id"])
         # This explicit operator request authorizes only the remaining checked
@@ -5736,6 +5752,8 @@ class Broker:
             raise ValueError("arguments must be an object")
         name = request.get("name")
         if not isinstance(name,str):raise ValueError("Broker tool name required")
+        if name in {"v3_production","v3_production_decide"} or (name=="build_work" and args.get("action") in production.AGENT_ACTIONS):
+            return self.production.handle(name,trusted,args)
         # The normalized recursive call carries legacy task_id and cannot create/select again.
         with self.lock:
             normalized,context=self.broker_arguments(request,args)
@@ -6925,6 +6943,7 @@ class Broker:
             if not self.runner.healthy(name, job["images"][role]):
                 raise RuntimeError("V3 " + role + " unhealthy after UI switch")
         if job["operation"]=="plugin_deploy":
+            self._promote_live_abilities(job,blob,self._task_base(job))
             if hasattr(self.runner,"verify_plugin_adoption"):
                 job["consumer_adoption"]=self.runner.verify_plugin_adoption(job["job_id"])
                 job["engine_execution_modes"]=self.runner.engine_execution_modes(job["job_id"])
@@ -7442,7 +7461,7 @@ async def serve(broker, listener, bridge_listener=None):
                 operator = request.pop("operator", scheduler_module.LOCAL_OPERATOR)
                 if operator not in scheduler_module.LOCAL_OPERATORS:
                     raise ValueError("unknown operator identity")
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_mark_not_installed", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "v3_build_progress", "build_service_sidekick"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_mark_not_installed", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "v3_build_progress", "build_service_sidekick", "v3_production"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": operator, "session_id": LOCAL_WORKSPACE,
