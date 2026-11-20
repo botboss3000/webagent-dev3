@@ -735,48 +735,60 @@ impl App {
 /// and the broker refuses an action or argument it does not know with a precise error.
 const BROKER_SERVED_TOOLS: [&str; 2] = ["build_work", "performance_work"];
 
-/// Every candidate tool schema keeps to the rules the shared argument check enforces. With
-/// `--validate-baseline=<live root>` (an asset-only release ships no Rust code) it also may
-/// not change what a tool's code receives, unless the tool's plugin package ships new code
-/// or the broker serves it ([`BROKER_SERVED_TOOLS`]).
-fn validate_tool_schemas(path: &std::path::Path) -> Result<()> {
+/// Why the abilities folder `abilities` cannot replace the live ones: the catalog does not
+/// load, an Administrator tool folder is invalid, a tool folder is skipped, or a tool schema
+/// breaks the rules the shared argument check enforces. With `baseline` (the published
+/// release root, whose code serves the tools) it also may not change what a tool's code
+/// receives, unless the tool's plugin package ships new code or the broker serves it
+/// ([`BROKER_SERVED_TOOLS`]). Used by the release check and by live App Default Saves.
+pub(crate) fn ability_problems(
+    abilities: &std::path::Path,
+    baseline: Option<&std::path::Path>,
+) -> Vec<String> {
     use webagent_abilities::tool_definitions;
     use webagent_engine::tools::arguments;
-    let candidate = tool_definitions::definitions();
-    let mut problems: Vec<String> = candidate
-        .iter()
-        .flat_map(|(name, definition)| arguments::schema_problems(name, &definition.parameters))
-        .collect();
-    if let Some(baseline) = std::env::args()
-        .skip(1)
-        .find_map(|arg| arg.strip_prefix("--validate-baseline=").map(PathBuf::from))
-    {
-        let (live, _) = tool_definitions::load_all(&baseline.join("abilities"));
-        let shipping = tool_definitions::package_tools_with_code_changes(
-            &baseline.join("abilities"),
-            &path.join("abilities"),
-        );
-        for (name, definition) in live.iter().filter(|(name, _)| {
-            !shipping.contains(*name) && !BROKER_SERVED_TOOLS.contains(&name.as_str())
-        }) {
-            match candidate.get(name) {
-                Some(next) => problems.extend(arguments::contract_changes(
-                    name,
-                    &definition.parameters,
-                    &next.parameters,
-                )),
-                None => problems.push(format!(
-                    "{name}: definition removed or renamed, but the code serving it is unchanged"
-                )),
-            }
+    let mut problems = Vec::new();
+    if let Err(error) = abilities::Catalog::load_snapshot(abilities) {
+        problems.push(format!("The abilities do not load: {error:#}"));
+    }
+    #[cfg(feature = "administrator")]
+    match webagent_administration::schemas::load(abilities) {
+        Ok(administrator) => problems.extend(administrator.problems),
+        Err(error) => problems.push(format!("Invalid Administrator tool folders: {error:#}")),
+    }
+    let (candidate, skipped) = tool_definitions::load_all(abilities);
+    problems.extend(
+        candidate.iter().flat_map(|(name, definition)| {
+            arguments::schema_problems(name, &definition.parameters)
+        }),
+    );
+    let Some(baseline) = baseline else {
+        return problems;
+    };
+    let (live, live_skipped) = tool_definitions::load_all(&baseline.join("abilities"));
+    // A tool folder the release already skipped is not this candidate's problem.
+    problems.extend(
+        skipped
+            .into_iter()
+            .filter(|problem| !live_skipped.contains(problem)),
+    );
+    let shipping =
+        tool_definitions::package_tools_with_code_changes(&baseline.join("abilities"), abilities);
+    for (name, definition) in live.iter().filter(|(name, _)| {
+        !shipping.contains(*name) && !BROKER_SERVED_TOOLS.contains(&name.as_str())
+    }) {
+        match candidate.get(name) {
+            Some(next) => problems.extend(arguments::contract_changes(
+                name,
+                &definition.parameters,
+                &next.parameters,
+            )),
+            None => problems.push(format!(
+                "{name}: definition removed or renamed, but the code serving it is unchanged"
+            )),
         }
     }
-    anyhow::ensure!(
-        problems.is_empty(),
-        "Tool schemas need code changes: {}",
-        problems.join("; ")
-    );
-    Ok(())
+    problems
 }
 
 async fn run_process() -> Result<()> {
@@ -854,16 +866,17 @@ async fn run_process() -> Result<()> {
         // Tool schemas come from the candidate's own tool folders.
         webagent_abilities::tool_definitions::use_root(path.join("abilities"));
         let catalog = abilities::Catalog::load_snapshot(&path.join("abilities"))?;
-        #[cfg(feature = "administrator")]
-        {
-            let administrator = webagent_administration::schemas::load(&path.join("abilities"))?;
-            anyhow::ensure!(
-                administrator.problems.is_empty(),
-                "Invalid Administrator tool folders: {}",
-                administrator.problems.join("; ")
-            );
-        }
-        validate_tool_schemas(&path)?;
+        // With `--validate-baseline=<live root>` (an asset-only release ships no Rust code)
+        // tool schemas also keep what their code receives.
+        let baseline = std::env::args()
+            .skip(1)
+            .find_map(|arg| arg.strip_prefix("--validate-baseline=").map(PathBuf::from));
+        let problems = ability_problems(&path.join("abilities"), baseline.as_deref());
+        anyhow::ensure!(
+            problems.is_empty(),
+            "Abilities cannot be released: {}",
+            problems.join("; ")
+        );
         let engine = crate::engine_components::load(&path, "candidate")?;
         let prompts: Value =
             serde_json::from_slice(&crate::live_assets::prompt_defaults_at(Some(&path))?)?;

@@ -237,8 +237,8 @@ const KEYWORDS: [&str; 18] = [
 ];
 
 /// Release-time problems with one tool's `parameters` schema: a keyword [`check`] would
-/// skip, an invalid pattern, an unknown format, or an `additionalProperties` that is
-/// neither a boolean nor a schema.
+/// skip, an invalid pattern, a lower limit above its upper one (no call could pass), an
+/// unknown format, or an `additionalProperties` that is neither a boolean nor a schema.
 pub fn schema_problems(name: &str, schema: &Value) -> Vec<String> {
     let mut problems = Vec::new();
     schema_walk(schema, "", &mut |path, schema| {
@@ -260,6 +260,18 @@ pub fn schema_problems(name: &str, schema: &Value) -> Vec<String> {
                 .is_none_or(|pattern| Regex::new(pattern).is_err())
             {
                 problems.push(format!("{name}: {} has an invalid pattern", label(path)));
+            }
+        }
+        for (low, high) in [
+            ("minLength", "maxLength"),
+            ("minimum", "maximum"),
+            ("minItems", "maxItems"),
+        ] {
+            let bound = |key: &str| object.get(key).and_then(Value::as_f64);
+            if let (Some(low_value), Some(high_value)) = (bound(low), bound(high)) {
+                if low_value > high_value {
+                    problems.push(format!("{name}: {} has {low} above {high}", label(path)));
+                }
             }
         }
         if object.get("format").is_some_and(|format| format != "uuid") {
@@ -507,10 +519,12 @@ mod tests {
             "x":{"type":"string","pattern":"("},
             "y":{"type":"string","format":"email"},
             "z":{"type":"object","additionalProperties":1,"oneOf":[]},
-            "w":{"type":"object","additionalProperties":{"type":"string","maxLength":2}}}});
+            "w":{"type":"object","additionalProperties":{"type":"string","maxLength":2}},
+            "v":{"type":"string","minLength":3,"maxLength":2}}});
         assert_eq!(
             schema_problems("t", &bad),
             vec![
+                "t: argument 'v' has minLength above maxLength",
                 "t: argument 'x' has an invalid pattern",
                 "t: argument 'y' has an unsupported format",
                 "t: argument 'z' uses unsupported keyword 'oneOf'",

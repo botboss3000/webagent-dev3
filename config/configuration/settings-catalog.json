@@ -81,6 +81,12 @@
     "config/configuration/settings-catalog.json": "The settings index itself; changed with the descriptors it lists.",
     "config/inference/value-words.json": "Vocabulary data for value detection, not a setting.",
     "config/ui/*.json": "Touch feedback settings for app pages; not offered by the composer yet.",
-    "config/ui/chat/controls/session-dropdown/*.json": "UI page descriptor or display data; not offered by the composer yet."
+    "config/ui/chat/controls/session-dropdown/*.json": "UI page descriptor or display data; not offered by the composer yet.",
+    "abilities/*/_group.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
+    "abilities/*/*/*.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
+    "abilities/*/*/skills/*.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
+    "abilities/*/*/skills/*.md": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
+    "abilities/*/*/tools/*/*.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
+    "abilities/*/*/tools/*/*.md": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings."
   }
 }

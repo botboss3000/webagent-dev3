@@ -6,7 +6,12 @@
 //! manifest without `owner_tier` grants no tier and is reported.
 use crate::tool_definitions::ROLES;
 use serde_json::Value;
-use std::{collections::BTreeMap, fs, path::Path, sync::OnceLock};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 use webagent_access::{Permission, ADMINISTRATOR_TIER};
 
 /// The group whose abilities only an administrator owner and caller may use.
@@ -171,15 +176,26 @@ pub fn roles(value: &Value) -> Result<Option<Vec<String>>, String> {
         .map(Some)
 }
 
-static LOADED: OnceLock<Registry> = OnceLock::new();
+/// The registry of the abilities root it was read from. Each root is read once and kept, as
+/// callers hold `'static` references; publishes and live edits are rare.
+static LOADED: Mutex<Option<(Option<PathBuf>, &'static Registry)>> = Mutex::new(None);
 
-/// Process-wide registry, read once on first use.
+/// Process-wide registry from the current abilities root (`tool_definitions::root`), read
+/// again when that root changes, so a publish or live ability edit applies without a restart.
 pub fn registry() -> &'static Registry {
-    LOADED.get_or_init(|| {
-        crate::tool_definitions::root()
-            .map(|root| load_all(&root))
-            .unwrap_or_default()
-    })
+    let root = crate::tool_definitions::root();
+    let mut held = LOADED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((read_from, loaded)) = held.as_ref() {
+        if *read_from == root {
+            return loaded;
+        }
+    }
+    let loaded: &'static Registry =
+        Box::leak(Box::new(root.as_deref().map(load_all).unwrap_or_default()));
+    *held = Some((root, loaded));
+    loaded
 }
 
 /// An ability's declared default for a level's rungs, shown on the Abilities page.

@@ -443,6 +443,35 @@ impl AdministrationHost for Host<'_> {
     fn abilities_version(&self) -> String {
         self.0.abilities.live_version()
     }
+    fn live_ability_problems(
+        &self,
+        edits: Vec<(String, Option<String>)>,
+    ) -> Pending<'_, Result<Vec<String>>> {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || crate::abilities::live_edit_problems(&edits))
+                .await?
+        })
+    }
+    fn write_live_ability<'a>(
+        &'a self,
+        path: &'a str,
+        body: Option<String>,
+        expected: Option<Vec<u8>>,
+    ) -> Pending<'a, Result<()>> {
+        let path = path.to_owned();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let expected = expected.unwrap_or_default();
+                match body {
+                    Some(body) => {
+                        webagent_configuration::live::write(&path, body.as_bytes(), &expected)
+                    }
+                    None => webagent_configuration::live::remove(&path, &expected),
+                }
+            })
+            .await?
+        })
+    }
     fn stopping(&self) -> CancellationToken {
         self.0.stop.child_token()
     }

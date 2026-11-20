@@ -54,12 +54,15 @@ static PARSED: Mutex<BTreeMap<ParsedKey, Parsed>> = Mutex::new(BTreeMap::new());
 type Listing = (Stamp, Vec<(String, bool)>);
 static LISTED: Mutex<BTreeMap<PathBuf, Listing>> = Mutex::new(BTreeMap::new());
 
-/// Replaces a live file if it still holds `expected`; installed once by the app process.
-type Writer = dyn Fn(&str, &[u8], &[u8]) -> Result<()> + Send + Sync;
+/// Replaces a live file (deletes it for `None`) if it still holds `expected`; installed
+/// once by the app process.
+type Writer = dyn Fn(&str, Option<&[u8]>, &[u8]) -> Result<()> + Send + Sync;
 static WRITER: OnceLock<Box<Writer>> = OnceLock::new();
 
 /// Install this process's live-file writer (the app saves through the broker).
-pub fn install_writer(writer: impl Fn(&str, &[u8], &[u8]) -> Result<()> + Send + Sync + 'static) {
+pub fn install_writer(
+    writer: impl Fn(&str, Option<&[u8]>, &[u8]) -> Result<()> + Send + Sync + 'static,
+) {
     // A second install is ignored: the first process-wide writer stays authoritative.
     let _ = WRITER.set(Box::new(writer));
 }
@@ -71,6 +74,15 @@ pub fn writable() -> bool {
 
 /// Replace `relative` with `body` only while it still holds `expected` (the bytes read).
 pub fn write(relative: &str, body: &[u8], expected: &[u8]) -> Result<()> {
+    replace(relative, Some(body), expected)
+}
+
+/// Delete `relative` only while it still holds `expected` (the bytes read).
+pub fn remove(relative: &str, expected: &[u8]) -> Result<()> {
+    replace(relative, None, expected)
+}
+
+fn replace(relative: &str, body: Option<&[u8]>, expected: &[u8]) -> Result<()> {
     checked(relative)?;
     let writer = WRITER
         .get()

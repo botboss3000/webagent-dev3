@@ -19,25 +19,80 @@ fn desktop_base() -> Option<PathBuf> {
     (base.join("abilities") == abilities).then_some(base)
 }
 
+/// Where live ability edits apply: the published release (or a desktop install's shipped
+/// abilities) as the base, and the checkout's `abilities/`. `Err(base)` when there is no
+/// checkout to lay over it; `Ok(None)`/`Err(None)` mean no base either.
+fn live_parts() -> Result<std::result::Result<(PathBuf, PathBuf), Option<PathBuf>>> {
+    let checkout = webagent_configuration::paths::checkout().join("abilities");
+    Ok(
+        match webagent_configuration::prompts::default_source(None)? {
+            Some(base) if !checkout.is_dir() => Err(Some(base)),
+            Some(base) => Ok((base, checkout)),
+            None => match desktop_base() {
+                Some(base) if checkout.is_dir() => Ok((base, checkout)),
+                _ => Err(None),
+            },
+        },
+    )
+}
+
+fn live_cache() -> PathBuf {
+    webagent_configuration::paths::runtime().join("ability-live")
+}
+
+/// Why live ability edits at `abilities` may not be used over `base`: the release check
+/// (`crate::ability_problems`, in `src/app.rs`) against the release whose code serves the tools.
+fn live_problems(abilities: &std::path::Path, base: &std::path::Path) -> Vec<String> {
+    crate::ability_problems(abilities, Some(base))
+}
+
+/// Problems App Default edits (checkout-relative `abilities/...` paths; `None` deletes) would
+/// cause once written to the live checkout; empty when they may be saved. Checked on what
+/// the live abilities would become, with the same rules a release and the overlay apply.
+pub(crate) fn live_edit_problems(edits: &[(String, Option<String>)]) -> Result<Vec<String>> {
+    let Ok((base, checkout)) = live_parts()? else {
+        anyhow::bail!("This app has no live ability files to save into");
+    };
+    let edits = edits
+        .iter()
+        .map(|(path, body)| {
+            let relative = path
+                .strip_prefix("abilities/")
+                .ok_or_else(|| anyhow::anyhow!("{path} is not an ability file"))?;
+            Ok((
+                PathBuf::from(relative),
+                body.as_ref().map(|text| text.as_bytes().to_vec()),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let root = live_cache().join(format!(".check-{}", uuid::Uuid::new_v4()));
+    let built = webagent_abilities::live::candidate(&base, &checkout, &edits, &root);
+    let problems = built.map(|()| live_problems(&root.join("abilities"), &base));
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(problems?)
+}
+
 impl webagent_abilities::Host for NativeHost {
     /// The published release, with the checkout's ability JSON and Markdown laid over it
-    /// when they differ (ability files are live; see `webagent_abilities::live`).
+    /// when they differ (ability files are live; see `webagent_abilities::live`), as long
+    /// as they pass the release check; otherwise the last good version stays.
     /// An installed desktop app has no publication: its shipped `app/abilities` is the base.
     fn selected_source() -> Result<Option<PathBuf>> {
-        let checkout = webagent_configuration::paths::checkout().join("abilities");
-        let base = match webagent_configuration::prompts::default_source(None)? {
-            Some(base) if !checkout.is_dir() => return Ok(Some(base)),
-            Some(base) => base,
-            None => match desktop_base() {
-                Some(base) if checkout.is_dir() => base,
-                _ => return Ok(None),
-            },
+        let (base, checkout) = match live_parts()? {
+            Ok(parts) => parts,
+            Err(base) => return Ok(base),
         };
         Ok(Some(webagent_abilities::live::overlay(
             &base,
             &checkout,
-            &webagent_configuration::paths::runtime().join("ability-live"),
-            |root| Catalog::load_snapshot(root).is_ok(),
+            &live_cache(),
+            |root| {
+                let problems = live_problems(root, &base);
+                for problem in problems.iter().take(5) {
+                    eprintln!("Live ability edit refused: {problem}");
+                }
+                problems.is_empty()
+            },
         )))
     }
     fn native_schemas_for_catalog(root: &std::path::Path, publication: bool) -> Result<Vec<Value>> {

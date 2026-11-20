@@ -35,6 +35,9 @@ pub(crate) fn install_direct() {
         if current != expected {
             bail!("Live file save refused: the file changed; reload before saving");
         }
+        let Some(body) = body else {
+            return Ok(std::fs::remove_file(&path)?);
+        };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -45,20 +48,25 @@ pub(crate) fn install_direct() {
     });
 }
 
-/// One bounded `live_file_write` request: a short blocking call made under the caller's lock.
-fn write(socket: &Path, relative: &str, body: &[u8], expected: &[u8]) -> Result<()> {
+/// One bounded `live_file_write` request (a delete for `None`): a short blocking call made
+/// under the caller's lock. Empty `expected` bytes mean the file is absent (a new file).
+fn write(socket: &Path, relative: &str, body: Option<&[u8]>, expected: &[u8]) -> Result<()> {
     use sha2::Digest;
+    let mut arguments = json!({
+        "path": relative,
+        "expected_sha256": (!expected.is_empty()).then(|| hex::encode(sha2::Sha256::digest(expected))),
+    });
+    match body {
+        Some(body) => arguments["content"] = json!(std::str::from_utf8(body)?),
+        None => arguments["delete"] = json!(true),
+    }
     let request = json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "name": "live_file_write",
         "workspace": WORKSPACE,
         "timeout_seconds": 30,
         "trusted": {"user_id": "live-config", "session_id": WORKSPACE},
-        "arguments": {
-            "path": relative,
-            "content": std::str::from_utf8(body)?,
-            "expected_sha256": hex::encode(sha2::Sha256::digest(expected)),
-        },
+        "arguments": arguments,
     });
     let mut stream = connect(socket)?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;

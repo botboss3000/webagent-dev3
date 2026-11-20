@@ -1,7 +1,13 @@
 {
-  "_instructions": "Files edited in place in this checkout (settings live under config/<module>/, UI settings under config/ui/), by hand or by the app, and read live. The broker excludes them from release drift and commits their edits automatically. A task may also change them: alone they take the fast plugin_deploy lane, with code the normal release. Paths are relative to this folder; '*' is allowed only in the last segment; only .json and .md files.",
+  "_instructions": "Files edited in place in this checkout (settings live under config/<module>/, UI settings under config/ui/), by hand or by the app, and read live (ability JSON and Markdown included: see webagent_abilities::live). The broker excludes them from release drift and commits their edits automatically. A task may also change them: alone they take the fast plugin_deploy lane, with code the normal release. Paths are relative to this folder; '*' is allowed in the last segment, or as a whole folder segment other than the first; only .json and .md files.",
   "version": 1,
   "files": [
+    "abilities/*/*/*.json",
+    "abilities/*/*/skills/*.json",
+    "abilities/*/*/skills/*.md",
+    "abilities/*/*/tools/*/*.json",
+    "abilities/*/*/tools/*/*.md",
+    "abilities/*/_group.json",
     "abilities/Administrator/codebase_admin/tools/file_search/find-ranking.json",
     "config/access/*.settings.json",
     "config/access/policy.json",

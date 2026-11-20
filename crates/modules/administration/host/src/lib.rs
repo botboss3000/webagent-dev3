@@ -153,6 +153,25 @@ pub trait AdministrationHost: Sync {
     fn optimization_generation(&self) -> Option<String>;
     /// The live ability bundle version.
     fn abilities_version(&self) -> String;
+    /// Why App Default edits (`abilities/...` paths, `None` deletes) may not be written to
+    /// the live ability files: the release check run on what the live abilities would become.
+    /// Empty when they may. A host without live ability files refuses.
+    fn live_ability_problems(
+        &self,
+        _edits: Vec<(String, Option<String>)>,
+    ) -> Pending<'_, Result<Vec<String>>> {
+        Box::pin(async { anyhow::bail!("This app cannot save ability files live") })
+    }
+    /// Write one live ability file (`None` deletes it) while it still holds `expected`
+    /// (`None`: absent); the broker commits the edit.
+    fn write_live_ability<'a>(
+        &'a self,
+        _path: &'a str,
+        _body: Option<String>,
+        _expected: Option<Vec<u8>>,
+    ) -> Pending<'a, Result<()>> {
+        Box::pin(async { anyhow::bail!("This app cannot save ability files live") })
+    }
     /// A token cancelled when the application stops.
     fn stopping(&self) -> CancellationToken;
 }

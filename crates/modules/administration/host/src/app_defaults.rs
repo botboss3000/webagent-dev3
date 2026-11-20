@@ -1,15 +1,16 @@
 //! App Default routes' work: read an editable ability file from the checkout, keep one
-//! administrator's drafts, and Save them through one broker task. The router admits only
-//! administrators before these run. A successful release is committed and closed by the
-//! broker itself; a failed one keeps the drafts and the task for repair.
+//! administrator's drafts, and Save them. JSON and Markdown drafts are checked and written
+//! to the live ability files at once; drafts with an icon go through one broker task. The
+//! router admits only administrators before these run. A successful release is committed
+//! and closed by the broker itself; a failed one keeps the drafts and the task for repair.
 use crate::{trusted, AdministrationHost};
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use webagent_administration::app_defaults::{
-    checkout_file, draft_problem, drafts_file, sha256, summary, task_label, Draft, DraftSet,
-    Release, MAX_DRAFT_FILES, SESSION, SESSION_NAME,
+    checkout_file, draft_problem, drafts_file, saves_live, sha256, summary, task_label, Draft,
+    DraftSet, Release, MAX_DRAFT_FILES, SESSION, SESSION_NAME,
 };
 use webagent_host_core::{bad, digest, now, ApiError};
 
@@ -253,7 +254,8 @@ pub async fn discard(
     Ok(json!({"revision":set.revision}))
 }
 
-/// Save every draft as one broker task and start its release. Locked while a Save runs.
+/// Save every draft: live when all are JSON or Markdown, else as one broker task whose
+/// release starts here. Locked while a release runs.
 pub async fn save(
     host: &dyn AdministrationHost,
     note: &str,
@@ -279,8 +281,16 @@ pub async fn save(
             return Err(bad(&problem));
         }
     }
+    let live = set.files.keys().all(|path| saves_live(path));
+    if live {
+        // Refuse before ending anything: a refused live Save changes nothing.
+        check_live(host, &set).await?;
+    }
     if let Some(failed) = set.release.clone().filter(|r| r.status == "failed") {
         end_failed(host, &failed.task_id).await?;
+    }
+    if live {
+        return save_live(host, &mut set).await;
     }
     let paths: Vec<String> = set.files.keys().cloned().collect();
     let started = now();
@@ -313,6 +323,76 @@ pub async fn save(
         return Err(error);
     }
     Ok(json!({"revision":set.revision,"release":set.release}))
+}
+
+/// Each draft as a live edit: its new text, or `None` to delete.
+fn live_edits(set: &DraftSet) -> Vec<(String, Option<String>)> {
+    set.files
+        .iter()
+        .map(|(path, draft)| {
+            (
+                path.clone(),
+                draft.content.clone().filter(|_| !draft.delete),
+            )
+        })
+        .collect()
+}
+
+/// Refuse a live Save the release check would refuse, naming each problem.
+async fn check_live(host: &dyn AdministrationHost, set: &DraftSet) -> Result<(), ApiError> {
+    let problems = host
+        .live_ability_problems(live_edits(set))
+        .await
+        .map_err(|error| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("The drafts could not be checked: {error:#}"),
+            )
+        })?;
+    if problems.is_empty() {
+        return Ok(());
+    }
+    let mut shown: Vec<String> = problems.iter().take(8).cloned().collect();
+    if problems.len() > shown.len() {
+        shown.push(format!("{} more", problems.len() - shown.len()));
+    }
+    let message: String = format!("Not saved, nothing changed: {}", shown.join("; "))
+        .chars()
+        .take(1500)
+        .collect();
+    Err(bad(&message))
+}
+
+/// Write each checked draft to the live ability files; agents see them from their next model
+/// call and the broker commits them. A file another writer changed since the check stops the
+/// Save there; the drafts already written are cleared, the rest stay.
+async fn save_live(host: &dyn AdministrationHost, set: &mut DraftSet) -> Result<Value, ApiError> {
+    let mut saved = Vec::new();
+    let mut failure = None;
+    for (path, body) in live_edits(set) {
+        let current = checkout_file(&path).and_then(|file| std::fs::read(file).ok());
+        if (body.is_none() && current.is_none())
+            || body.as_deref().map(str::as_bytes) == current.as_deref()
+        {
+            saved.push(path);
+            continue;
+        }
+        if let Err(error) = host.write_live_ability(&path, body, current).await {
+            failure = Some(conflict(format!(
+                "{path} was not saved ({error:#}); the drafts before it were saved"
+            )));
+            break;
+        }
+        saved.push(path);
+    }
+    set.files.retain(|path, _| !saved.contains(path));
+    set.release = None;
+    set.revision += 1;
+    store(set)?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok(json!({"revision":set.revision,"release":null,"live":saved}))
 }
 
 /// End a failed Save's task so its reservations free before the next Save's task begins. The

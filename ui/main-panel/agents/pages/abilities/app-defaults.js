@@ -102,7 +102,7 @@ export function buildAppDefaultsBar(app, { onStatus }) {
   discard.title = 'Discard all drafts';
   discard.innerHTML = '<i data-lucide="trash-2"></i>';
   const note = text('', 'Optional note for this Save');
-  note.placeholder = 'Optional note for the release';
+  note.placeholder = 'Optional note, for a Save that releases an icon';
   note.maxLength = 120;
   const previewButton = node('button', 'ac-btn ac-btn-sm', 'Preview changes');
   previewButton.type = 'button';
@@ -183,10 +183,12 @@ export function buildAppDefaultsBar(app, { onStatus }) {
     try {
       const saved = await app.request('/admin/app-defaults/save', 'POST', { note: note.value, expected_revision: app.state.drafts.revision });
       note.value = '';
-      onStatus('Save started a release. Track it on the Broker card.');
+      onStatus(saved.live
+        ? 'Saved live: ' + (saved.live.length === 1 ? '1 file' : saved.live.length + ' files') + '. Agents use it from their next model call; Reload abilities to see it here.'
+        : 'Save started a release (an icon changed). Track it on the Broker card.');
       app.state.drafts.revision = saved.revision;
     } catch (error) {
-      onStatus('Save did not start: ' + error.message);
+      onStatus('Save failed: ' + error.message);
     }
     await app.refresh().catch(() => {});
   };
@@ -486,7 +488,7 @@ function buildParametersForm(value, changed, name) {
     }
     wrap.append(row);
   }
-  wrap.append(node('p', 'ac-hint', 'Adding, removing or renaming an argument, or changing a type, needs a matching code change: a quick release refuses it.'));
+  wrap.append(node('p', 'ac-hint', 'Adding, removing or renaming an argument, changing a type, making a required argument optional or adding an allowed value needs a matching code change: Save refuses it.'));
   return wrap;
 }
 

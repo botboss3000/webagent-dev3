@@ -502,12 +502,22 @@ pub fn use_root(abilities: PathBuf) {
 }
 
 /// The abilities folder definitions are read from, matching the catalog's: a root chosen
-/// with `use_root`, else the selected publication (so an ability publish takes effect
-/// without a restart), else the app's `V3_ABILITIES_ROOT`, else the first live root that
-/// has one (the checkout, the published release, then this source tree for tests).
+/// with `use_root`, else the live snapshot the catalog chose (so checkout edits of tool.json
+/// reach the argument check, effects and guards), else the selected publication (so an
+/// ability publish takes effect without a restart), else the app's `V3_ABILITIES_ROOT`, else
+/// the first live root that has one (the checkout, the published release, then this source
+/// tree for tests).
 pub fn root() -> Option<PathBuf> {
     if let Some(root) = ROOT.get() {
         return Some(root.clone());
+    }
+    // This crate's own tests point the live snapshot at temporary folders.
+    #[cfg(not(test))]
+    if let Some(live) = crate::live::selected()
+        .map(|root| root.join("abilities"))
+        .filter(|path| path.is_dir())
+    {
+        return Some(live);
     }
     let published = webagent_configuration::prompts::default_source(None)
         .ok()

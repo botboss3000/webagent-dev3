@@ -29,10 +29,14 @@ setting descriptor in the same patch as the value.
   listed in `live-files.json`. No seeded copies. UI settings go in `config/ui/` (served
   at `/config/ui/<path>`); page folders keep their own `page.json` and page data.
 - Ability JSON and Markdown (`tool.json`, `plugin.json`, `_group.json`, skills) stay in
-  `abilities/` and are live too: the app lays the checkout's versions over the published
-  release within a second (`webagent_abilities::live`), including permission fields. An
-  edit that does not load is ignored and the last good version stays. Compiled plugin
-  code still changes only through a release.
+  `abilities/` and are live too (listed in `live-files.json`, so the broker commits their
+  edits): the app lays the checkout's versions over the published release within a second
+  (`webagent_abilities::live`), including permission fields, argument schemas and deleted
+  skill files; every reader of tool definitions follows. An edit that fails the release
+  check (`ability_problems` in `src/app.rs`: the catalog loads, schemas keep the argument
+  check's rules and what the tool's code receives) is ignored and the last good version
+  stays. The App Default Save runs the same check before writing, so it refuses instead.
+  Icons (`.svg`) and compiled plugin code still change only through a release.
 - Its descriptors sit in a `<name>.settings.json` beside it (for example
   `config/chat/chat.settings.json`). Owners whose module is busy may keep them in
   `config/configuration/settings/`.

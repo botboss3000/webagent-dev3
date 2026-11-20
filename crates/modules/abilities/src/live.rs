@@ -1,7 +1,8 @@
 //! Live ability edits. Ability JSON and Markdown in the checkout apply without a release:
 //! they are laid over the published abilities as a snapshot folder the catalog loads like a
-//! publication, so code and compiled plugins still come only from the release. Rechecked at
-//! most once a second; an edit that does not load keeps the last good snapshot.
+//! publication, so code and compiled plugins still come only from the release. A file the
+//! checkout deleted is left out. Rechecked at most once a second; an edit that does not load
+//! keeps the last good snapshot.
 use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
@@ -20,6 +21,7 @@ struct State {
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
+static BUILDING: Mutex<()> = Mutex::new(());
 
 fn editable(path: &Path) -> bool {
     matches!(
@@ -111,9 +113,34 @@ fn share_rest(base: &Path, root: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Builds the snapshot `root/abilities` = `base/abilities` with `changed` taken from
-/// `checkout`, beside the base's other entries, unless it already exists.
-fn build(base: &Path, checkout: &Path, changed: &[PathBuf], root: &Path) -> std::io::Result<()> {
+/// One snapshot change: the checkout's version of a file, or its removal (`None`).
+type Change = (PathBuf, Option<Vec<u8>>);
+
+/// The editable files whose checkout version differs from `base`, with their new bytes;
+/// a base file the checkout no longer has is a removal.
+fn changes(base: &Path, checkout: &Path, listed: &[PathBuf]) -> Vec<Change> {
+    let base_abilities = base.join("abilities");
+    let mut found: Vec<Change> = listed
+        .iter()
+        .filter_map(|relative| {
+            let now = std::fs::read(checkout.join(relative)).ok()?;
+            (std::fs::read(base_abilities.join(relative)).ok().as_ref() != Some(&now))
+                .then(|| (relative.clone(), Some(now)))
+        })
+        .collect();
+    let kept: std::collections::BTreeSet<&PathBuf> = listed.iter().collect();
+    found.extend(
+        files(&base_abilities)
+            .into_iter()
+            .filter(|relative| !kept.contains(relative))
+            .map(|relative| (relative, None)),
+    );
+    found
+}
+
+/// Builds the snapshot `root/abilities` = `base/abilities` with `changed` applied, beside the
+/// base's other entries, unless it already exists.
+fn build(base: &Path, changed: &[Change], root: &Path) -> std::io::Result<()> {
     if root.join("abilities").is_dir() {
         return Ok(());
     }
@@ -127,12 +154,17 @@ fn build(base: &Path, checkout: &Path, changed: &[PathBuf], root: &Path) -> std:
     let result = (|| {
         copy_tree(&base.join("abilities"), &partial.join("abilities"))?;
         share_rest(base, &partial)?;
-        for relative in changed {
+        for (relative, body) in changed {
             let target = partial.join("abilities").join(relative);
-            if let Some(folder) = target.parent() {
-                std::fs::create_dir_all(folder)?;
+            match body {
+                Some(body) => {
+                    if let Some(folder) = target.parent() {
+                        std::fs::create_dir_all(folder)?;
+                    }
+                    std::fs::write(target, body)?;
+                }
+                None => std::fs::remove_file(target)?,
             }
-            std::fs::copy(checkout.join(relative), target)?;
         }
         match std::fs::rename(&partial, root) {
             // Another process built the same snapshot first.
@@ -183,41 +215,37 @@ fn overlay_every(
     cache: &Path,
     valid: impl Fn(&Path) -> bool,
 ) -> PathBuf {
-    let mut state = STATE.lock().unwrap_or_else(|poisoned| {
-        STATE.clear_poison();
-        let mut state = poisoned.into_inner();
-        *state = None;
-        state
-    });
-    if let Some(current) = state.as_ref() {
+    if let Some(current) = state().as_ref() {
         if current.checked.elapsed() < recheck {
             return current.root.clone();
         }
     }
+    // One builder at a time. `STATE` is only held briefly: checking a snapshot reads tool
+    // definitions, which ask `selected` for it.
+    let _building = BUILDING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let listed = files(checkout);
     let key = fingerprint(base, checkout, &listed);
-    if let Some(current) = state.as_mut() {
-        if current.key == key {
-            current.checked = Instant::now();
-            return current.root.clone();
+    let previous = {
+        let mut state = state();
+        if let Some(current) = state.as_mut() {
+            if current.key == key {
+                current.checked = Instant::now();
+                return current.root.clone();
+            }
         }
-    }
-    let previous = state
-        .as_ref()
-        .map_or_else(|| base.to_path_buf(), |s| s.root.clone());
-    let changed: Vec<PathBuf> = listed
-        .into_iter()
-        .filter(|relative| {
-            std::fs::read(checkout.join(relative)).ok()
-                != std::fs::read(base.join("abilities").join(relative)).ok()
-        })
-        .collect();
+        state
+            .as_ref()
+            .map_or_else(|| base.to_path_buf(), |s| s.root.clone())
+    };
+    let changed = changes(base, checkout, &listed);
     let chosen = if changed.is_empty() {
         base.to_path_buf()
     } else {
         // The name carries the snapshot layout, so an older layout is never reused.
-        let root = cache.join(format!("v2-{}", hex::encode(&key[..12])));
-        match build(base, checkout, &changed, &root) {
+        let root = cache.join(format!("v3-{}", hex::encode(&key[..12])));
+        match build(base, &changed, &root) {
             Ok(()) if valid(&root.join("abilities")) => {
                 prune(cache, &root);
                 root
@@ -233,12 +261,54 @@ fn overlay_every(
             }
         }
     };
-    *state = Some(State {
+    *state() = Some(State {
         checked: Instant::now(),
         key,
         root: chosen.clone(),
     });
     chosen
+}
+
+/// The chosen snapshot; a poisoned lock forgets it, so the next use chooses again.
+fn state() -> std::sync::MutexGuard<'static, Option<State>> {
+    STATE.lock().unwrap_or_else(|poisoned| {
+        STATE.clear_poison();
+        let mut state = poisoned.into_inner();
+        *state = None;
+        state
+    })
+}
+
+/// The publication root the catalog last chose (`overlay`), if it has chosen one in this
+/// process; tool definitions follow it so live edits reach every reader.
+pub fn selected() -> Option<PathBuf> {
+    state().as_ref().map(|state| state.root.clone())
+}
+
+/// Builds at `root` what the live snapshot would be once `edits` (checkout-relative ability
+/// paths, `None` deletes) are written to the checkout, so they can be checked first. The
+/// caller removes `root`.
+pub fn candidate(
+    base: &Path,
+    checkout: &Path,
+    edits: &[(PathBuf, Option<Vec<u8>>)],
+    root: &Path,
+) -> std::io::Result<()> {
+    let mut changed: std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> =
+        changes(base, checkout, &files(checkout))
+            .into_iter()
+            .collect();
+    for (relative, body) in edits {
+        match body {
+            None if !base.join("abilities").join(relative).is_file() => {
+                changed.remove(relative);
+            }
+            _ => {
+                changed.insert(relative.clone(), body.clone());
+            }
+        }
+    }
+    build(base, &changed.into_iter().collect::<Vec<_>>(), root)
 }
 
 #[cfg(test)]
@@ -285,5 +355,48 @@ mod tests {
         );
         std::fs::write(checkout.join("Core/demo/tool.json"), "{\"v\":1}").unwrap();
         assert_eq!(overlay_every(now, &base, &checkout, &cache, ok), base);
+        for root in [base.join("abilities"), checkout.clone()] {
+            std::fs::write(root.join("Core/demo/old.skill.md"), "old").unwrap();
+        }
+        assert_eq!(overlay_every(now, &base, &checkout, &cache, ok), base);
+        std::fs::remove_file(checkout.join("Core/demo/old.skill.md")).unwrap();
+        let live = overlay_every(now, &base, &checkout, &cache, ok);
+        assert!(
+            !live.join("abilities/Core/demo/old.skill.md").exists(),
+            "a file the checkout deleted leaves the snapshot"
+        );
+        assert!(live.join("abilities/Core/demo/tool.json").is_file());
+    }
+
+    #[test]
+    fn a_candidate_applies_drafts_over_the_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let (base, checkout) = (dir.path().join("release"), dir.path().join("checkout"));
+        for root in [base.join("abilities"), checkout.clone()] {
+            std::fs::create_dir_all(root.join("Core/demo")).unwrap();
+            std::fs::write(root.join("Core/demo/tool.json"), "{\"v\":1}").unwrap();
+            std::fs::write(root.join("Core/demo/a.skill.md"), "a").unwrap();
+        }
+        std::fs::write(checkout.join("Core/demo/b.skill.md"), "b").unwrap();
+        let root = dir.path().join("candidate");
+        let edits = [
+            (
+                PathBuf::from("Core/demo/tool.json"),
+                Some(b"{\"v\":2}".to_vec()),
+            ),
+            (PathBuf::from("Core/demo/a.skill.md"), None),
+            (PathBuf::from("Core/demo/c.skill.md"), Some(b"c".to_vec())),
+        ];
+        candidate(&base, &checkout, &edits, &root).unwrap();
+        let read =
+            |name: &str| std::fs::read_to_string(root.join("abilities/Core/demo").join(name)).ok();
+        assert_eq!(read("tool.json").as_deref(), Some("{\"v\":2}"));
+        assert_eq!(read("a.skill.md"), None);
+        assert_eq!(
+            read("b.skill.md").as_deref(),
+            Some("b"),
+            "the checkout's own edits stay"
+        );
+        assert_eq!(read("c.skill.md").as_deref(), Some("c"));
     }
 }
