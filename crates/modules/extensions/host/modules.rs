@@ -142,7 +142,7 @@ fn save_automation_activation(
     )?)?;
     file.as_file().sync_all()?;
     file.persist(&path).map_err(anyhow::Error::from)?;
-    File::open(parent)?.sync_all()?;
+    webagent_platform::sync_dir(parent)?;
     forget_available();
     Ok(())
 }

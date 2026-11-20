@@ -180,7 +180,7 @@ impl Config {
             file.write_all(&serde_json::to_vec_pretty(self)?)?;
             file.sync_all()?;
             std::fs::rename(&temp, path)?;
-            std::fs::File::open(parent)?.sync_all()?;
+            webagent_platform::sync_dir(parent)?;
             Ok(())
         })();
         if result.is_err() {

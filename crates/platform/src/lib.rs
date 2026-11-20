@@ -144,6 +144,20 @@ pub mod fs {
     }
 }
 
+/// Make a folder's entries (a new or renamed file) durable. Unix syncs the folder;
+/// Windows cannot open a folder as a file and NTFS journals its entries, so it does nothing.
+pub fn sync_dir(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(path)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 pub mod ffi {
     #[cfg(unix)]
     pub use std::os::unix::ffi::OsStrExt;

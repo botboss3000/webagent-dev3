@@ -18,6 +18,33 @@ pub(crate) fn install(socket: PathBuf) {
     });
 }
 
+/// A desktop install has no broker: replace the file in this install's own copy of the
+/// live files (`V3_CHECKOUT_ROOT`) atomically, only while it still holds `expected`.
+pub(crate) fn install_direct() {
+    webagent_configuration::live::install_writer(|relative, body, expected| {
+        static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _saving = SAVING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let path = webagent_configuration::paths::checkout().join(relative);
+        let current = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        if current != expected {
+            bail!("Live file save refused: the file changed; reload before saving");
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let saving = path.with_extension("saving");
+        std::fs::write(&saving, body)?;
+        std::fs::rename(&saving, &path)?;
+        Ok(())
+    });
+}
+
 /// One bounded `live_file_write` request: a short blocking call made under the caller's lock.
 fn write(socket: &Path, relative: &str, body: &[u8], expected: &[u8]) -> Result<()> {
     use sha2::Digest;

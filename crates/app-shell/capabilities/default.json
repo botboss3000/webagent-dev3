@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The loading page needs no app commands; the app itself is a plain web page from the local server.",
+  "windows": ["main"],
+  "permissions": []
+}

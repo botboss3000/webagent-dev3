@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "WebAgent",
+  "version": "0.1.0",
+  "identifier": "live.webagent.app",
+  "build": {
+    "frontendDist": "./dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "WebAgent",
+        "width": 1200,
+        "height": 820,
+        "minWidth": 360,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/webagent-server"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "WebAgent",
+    "longDescription": "WebAgent agent platform as a desktop app."
+  }
+}

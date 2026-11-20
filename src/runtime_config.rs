@@ -80,10 +80,11 @@ mod parallel_tool_tests {
             .parallel_modes
             .insert("file_write".into(), "concurrent".into());
         c.validate().unwrap();
+        // Tools that are not installed are allowed and have no effect.
         c.tools
             .parallel_modes
             .insert("unknown".into(), "concurrent".into());
-        assert!(c.validate().is_err());
+        c.validate().unwrap();
         c.tools.parallel_modes.remove("unknown");
         c.tools
             .parallel_modes

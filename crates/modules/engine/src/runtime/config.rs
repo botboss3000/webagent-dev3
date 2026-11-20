@@ -258,15 +258,15 @@ impl<C: SchemaCatalog> Config<C> {
         {
             bail!("Invalid parallel tool configuration");
         }
-        if !self.tools.parallel_modes.is_empty() {
-            let schemas = C::schemas()?;
-            for (name, mode) in &self.tools.parallel_modes {
-                if !schemas.iter().any(|schema| schema["name"] == name.as_str())
-                    || !matches!(mode.as_str(), "concurrent" | "reject")
-                {
-                    bail!("Invalid parallel tool mode");
-                }
-            }
+        // A mode for a tool that is not installed (for example a removed ability pack)
+        // has no effect, so only the mode values are checked.
+        if self
+            .tools
+            .parallel_modes
+            .values()
+            .any(|mode| !matches!(mode.as_str(), "concurrent" | "reject"))
+        {
+            bail!("Invalid parallel tool mode");
         }
         if self.schema_version != 2
             || self.scheduler.max_active_runs > 16
@@ -320,7 +320,7 @@ impl<C: SchemaCatalog> Config<C> {
             f.write_all(&serde_json::to_vec_pretty(self)?)?;
             f.sync_all()?;
             std::fs::rename(&temp, path)?;
-            std::fs::File::open(parent)?.sync_all()?;
+            webagent_platform::sync_dir(parent)?;
             Ok(())
         })();
         if result.is_err() {

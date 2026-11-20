@@ -935,12 +935,25 @@ async fn run_process() -> Result<()> {
             Err(anyhow!("V3 loop heartbeat is stale"))
         };
     }
-    if !matches!(role.as_str(), "api" | "loop") {
+    // `desktop` runs the API and the loop in one process (installed apps, no containers).
+    if !matches!(role.as_str(), "api" | "loop" | "desktop") {
         return Err(anyhow!("Invalid v3 process role"));
     }
+    let desktop = role == "desktop";
     std::fs::create_dir_all(&root)?;
     // One loop per installation: the lock is runtime coordination, never kept in state.
-    let lock = if role == "loop" {
+    // The container launcher (`--launch`) creates the control files; a desktop process
+    // has no launcher, so it creates any that are missing (dispatch starts switched on).
+    if desktop {
+        std::fs::create_dir_all(control_root())?;
+        for (name, content) in [("dispatch.lock", ""), ("shutoff", "0")] {
+            let path = control_root().join(name);
+            if !path.exists() {
+                std::fs::write(path, content)?;
+            }
+        }
+    }
+    let lock = if role == "loop" || desktop {
         std::fs::create_dir_all(control_root())?;
         let lock = OpenOptions::new()
             .create(true)
@@ -954,6 +967,10 @@ async fn run_process() -> Result<()> {
         None
     };
     // Live configuration files are saved through the broker, before any owner reads them.
+    // A desktop install has no broker: the app saves its own copy of the live files.
+    if desktop {
+        crate::live_files::install_direct();
+    }
     crate::live_files::install(PathBuf::from(
         std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| {
             webagent_configuration::paths::runtime()
@@ -963,9 +980,11 @@ async fn run_process() -> Result<()> {
         }),
     ));
     let store = Store::open(&root).await?;
-    diagnostics::init(&root, &store, &role).await;
-    optimization::init(&root, &role).await;
-    mcp::bridge::init(&root, &role).await;
+    // Plugin packages follow the API's role in a desktop process.
+    let service_role = if desktop { "api" } else { role.as_str() };
+    diagnostics::init(&root, &store, service_role).await;
+    optimization::init(&root, service_role).await;
+    mcp::bridge::init(&root, service_role).await;
     store.migrate_agent_storage(&root).await?;
     let (runtime, runtime_path) = loop_runtime::Config::live()?;
     // The live policy file, reread at call boundaries; fail start-up only if it is invalid.
@@ -1049,93 +1068,125 @@ async fn run_process() -> Result<()> {
         // Checkout-relative: read live (`live-files.json`) on every use.
         chat_ui_config_path: PathBuf::from(webagent_chat::configuration::LIVE_CHAT),
     };
-    if role == "loop" {
-        let progress = agent_loop::watchdog::Progress::new();
-        let _watchdog = agent_loop::watchdog::Watchdog::start(progress.clone())?;
-        restore_worker_control(&app).await?;
-        recover(&app, true).await?;
-        app.ready.store(true, Ordering::Release);
-        // Load the local inference model and embed the skill catalog before the first message;
-        // best effort, so a failure only slows the first list_skills.
-        let warm = app.clone();
+    // Each half stops on SIGTERM or Ctrl-C; a desktop process also when the app window
+    // closes its standard input (`V3_STOP_ON_STDIN_EOF=1`).
+    let stop = CancellationToken::new();
+    if std::env::var_os("V3_STOP_ON_STDIN_EOF").is_some_and(|value| value == "1") {
+        let stop = stop.clone();
         tokio::spawn(async move {
-            let started = std::time::Instant::now();
-            match crate::tools::core_skills::warm_inference(&warm).await {
-                Some(items) => tracing::info!(
-                    items,
-                    seconds = started.elapsed().as_secs_f32(),
-                    "Local inference warmed"
-                ),
-                None => tracing::warn!("Local inference warm-up failed"),
-            }
+            use tokio::io::AsyncReadExt;
+            let mut sink = Vec::new();
+            let _ = tokio::io::stdin().read_to_end(&mut sink).await;
+            stop.cancel();
         });
-        let mut scheduler = tokio::spawn(futures_util::FutureExt::boxed(scheduler_with_progress(
-            app.clone(),
-            progress.clone(),
-        )));
-        let mut signal = webagent_platform::signal::terminate()?;
-        tokio::select! {
-            _=signal.recv()=>{},
-            _=tokio::signal::ctrl_c()=>{},
-            result=&mut scheduler=>{
-                // A dispatcher panic/early return must terminate the supervised
-                // process rather than leave healthy lease renewers running alone.
-                return Err(anyhow!("Loop dispatcher exited unexpectedly: {}", if result.is_err() {"task failure"} else {"early return"}));
-            }
-        }
-        // Drain: clearing `ready` stops dispatch and pauses each run before its next
-        // step, so a planned restart cuts off only calls that outlast the timeout.
-        app.ready.store(false, Ordering::Release);
-        // Mark this restart as planned for startup recovery, unless the broker already
-        // recorded its deploy job there.
-        let cause = app.control_dir.join("restart-cause.json");
-        if !cause.exists() {
-            let _ = std::fs::write(&cause, br#"{"planned":true}"#);
-        }
-        let drain = Duration::from_secs(app.runtime.read().await.scheduler.drain_timeout_seconds);
-        let started = tokio::time::Instant::now();
-        let active = app.active.lock().await.len();
-        crate::diagnostics::lifecycle(
-            "Loop drain started",
-            json!({"active_runs":active,"drain_timeout_seconds":drain.as_secs()}),
-        );
-        while !app.active.lock().await.is_empty() && started.elapsed() < drain {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-        let remaining = app.active.lock().await.len();
-        crate::diagnostics::lifecycle(
-            "Loop drain ended",
-            json!({"reason":if remaining == 0 {"all_paused"} else {"timeout"},
-                "seconds":started.elapsed().as_secs(),"cut_off_runs":remaining}),
-        );
-        app.stop.cancel();
-        for token in app.active.lock().await.values() {
-            token.cancel();
-        }
-        // A stuck gate must not make SIGTERM wait forever.
-        if tokio::time::timeout(Duration::from_secs(12), &mut scheduler)
-            .await
-            .is_err()
-        {
-            scheduler.abort();
-        }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
-        while !app.active.lock().await.is_empty() && tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        let _ = marker(&app, true);
-        app.stop.cancel();
-        for token in app.active.lock().await.values() {
-            token.cancel();
-        }
-        let _ = app.store.clear_loop_heartbeat().await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        app.store.pool.close().await;
-        app.store.agent_pool.close().await;
-        app.store.app_pool.close().await;
-        drop(lock);
-        return Ok(());
     }
+    match role.as_str() {
+        "loop" => serve_loop(app, lock, stop).await,
+        "api" => serve_api(app, true, stop).await,
+        _ => {
+            // The loop drains its runs after the API stops taking requests, then closes
+            // the shared database pools.
+            let worker = tokio::spawn(serve_loop(app.clone(), lock, stop.clone()));
+            let api = serve_api(app, false, stop.clone()).await;
+            stop.cancel();
+            worker.await??;
+            api
+        }
+    }
+}
+
+/// The agent loop: recovers and dispatches runs until stopped, then drains them.
+async fn serve_loop(app: App, lock: Option<std::fs::File>, stop: CancellationToken) -> Result<()> {
+    let progress = agent_loop::watchdog::Progress::new();
+    let _watchdog = agent_loop::watchdog::Watchdog::start(progress.clone())?;
+    restore_worker_control(&app).await?;
+    recover(&app, true).await?;
+    app.ready.store(true, Ordering::Release);
+    // Load the local inference model and embed the skill catalog before the first message;
+    // best effort, so a failure only slows the first list_skills.
+    let warm = app.clone();
+    tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        match crate::tools::core_skills::warm_inference(&warm).await {
+            Some(items) => tracing::info!(
+                items,
+                seconds = started.elapsed().as_secs_f32(),
+                "Local inference warmed"
+            ),
+            None => tracing::warn!("Local inference warm-up failed"),
+        }
+    });
+    let mut scheduler = tokio::spawn(futures_util::FutureExt::boxed(scheduler_with_progress(
+        app.clone(),
+        progress.clone(),
+    )));
+    let mut signal = webagent_platform::signal::terminate()?;
+    tokio::select! {
+        _=signal.recv()=>{},
+        _=tokio::signal::ctrl_c()=>{},
+        _=stop.cancelled()=>{},
+        result=&mut scheduler=>{
+            // A dispatcher panic/early return must terminate the supervised
+            // process rather than leave healthy lease renewers running alone.
+            return Err(anyhow!("Loop dispatcher exited unexpectedly: {}", if result.is_err() {"task failure"} else {"early return"}));
+        }
+    }
+    // Drain: clearing `ready` stops dispatch and pauses each run before its next
+    // step, so a planned restart cuts off only calls that outlast the timeout.
+    app.ready.store(false, Ordering::Release);
+    // Mark this restart as planned for startup recovery, unless the broker already
+    // recorded its deploy job there.
+    let cause = app.control_dir.join("restart-cause.json");
+    if !cause.exists() {
+        let _ = std::fs::write(&cause, br#"{"planned":true}"#);
+    }
+    let drain = Duration::from_secs(app.runtime.read().await.scheduler.drain_timeout_seconds);
+    let started = tokio::time::Instant::now();
+    let active = app.active.lock().await.len();
+    crate::diagnostics::lifecycle(
+        "Loop drain started",
+        json!({"active_runs":active,"drain_timeout_seconds":drain.as_secs()}),
+    );
+    while !app.active.lock().await.is_empty() && started.elapsed() < drain {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let remaining = app.active.lock().await.len();
+    crate::diagnostics::lifecycle(
+        "Loop drain ended",
+        json!({"reason":if remaining == 0 {"all_paused"} else {"timeout"},
+            "seconds":started.elapsed().as_secs(),"cut_off_runs":remaining}),
+    );
+    app.stop.cancel();
+    for token in app.active.lock().await.values() {
+        token.cancel();
+    }
+    // A stuck gate must not make SIGTERM wait forever.
+    if tokio::time::timeout(Duration::from_secs(12), &mut scheduler)
+        .await
+        .is_err()
+    {
+        scheduler.abort();
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+    while !app.active.lock().await.is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let _ = marker(&app, true);
+    app.stop.cancel();
+    for token in app.active.lock().await.values() {
+        token.cancel();
+    }
+    let _ = app.store.clear_loop_heartbeat().await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    app.store.pool.close().await;
+    app.store.agent_pool.close().await;
+    app.store.app_pool.close().await;
+    drop(lock);
+    Ok(())
+}
+
+/// The HTTP API; `close_pools` is false when a loop in this process still needs them.
+async fn serve_api(app: App, close_pools: bool, stop: CancellationToken) -> Result<()> {
     restore_worker_control(&app).await?;
     app.ready.store(true, Ordering::Release);
     let listener = tokio::net::TcpListener::bind(
@@ -1161,7 +1212,7 @@ async fn run_process() -> Result<()> {
     )
     .with_graceful_shutdown(async move {
         let mut signal = webagent_platform::signal::terminate().expect("signal handler");
-        tokio::select! {_=signal.recv()=>{},_=tokio::signal::ctrl_c()=>{}}
+        tokio::select! {_=signal.recv()=>{},_=tokio::signal::ctrl_c()=>{},_=stop.cancelled()=>{}}
         shutdown.ready.store(false, Ordering::Release);
         shutdown.stop.cancel();
     })
@@ -1170,9 +1221,11 @@ async fn run_process() -> Result<()> {
     #[cfg(feature = "administrator")]
     let _ = administrator_watch.await;
     let _ = notification_relay.await;
-    app.store.pool.close().await;
-    app.store.agent_pool.close().await;
-    app.store.app_pool.close().await;
+    if close_pools {
+        app.store.pool.close().await;
+        app.store.agent_pool.close().await;
+        app.store.app_pool.close().await;
+    }
     Ok(())
 }
 

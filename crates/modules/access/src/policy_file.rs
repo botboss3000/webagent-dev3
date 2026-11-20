@@ -157,7 +157,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             file.write_all(b"\n")?;
             file.sync_all()?;
             std::fs::rename(&temporary, &path)?;
-            std::fs::File::open(directory)?.sync_all()?;
+            webagent_platform::sync_dir(directory)?;
             Ok(())
         })();
         if result.is_err() {

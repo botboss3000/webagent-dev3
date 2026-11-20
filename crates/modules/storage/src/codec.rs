@@ -53,7 +53,7 @@ pub fn load_or_create_key(root: &Path) -> Result<Vec<u8>> {
                 file.sync_all()?;
                 match std::fs::hard_link(&temp_path, &keypath) {
                     Ok(()) => {
-                        File::open(root)?.sync_all()?;
+                        webagent_platform::sync_dir(root)?;
                         Ok(true)
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),

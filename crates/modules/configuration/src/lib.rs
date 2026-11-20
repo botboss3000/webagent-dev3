@@ -95,7 +95,7 @@ pub fn update_if_current(
         return Ok(None);
     }
     output.persist(path).map_err(anyhow::Error::from)?;
-    File::open(parent)?.sync_all()?;
+    webagent_platform::sync_dir(parent)?;
     Ok(Some(value))
 }
 

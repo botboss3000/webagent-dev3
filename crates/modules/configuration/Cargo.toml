@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+webagent-platform = { path = "../../platform" }
 anyhow = "1"
 fs2 = "0.4"
 hex = "0.4"

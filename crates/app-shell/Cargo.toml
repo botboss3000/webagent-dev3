@@ -1,0 +1,30 @@
+# The installed app: a Tauri window around the WebAgent server, which it starts as a
+# companion process. Kept out of the server workspace (its own lockfile) so server
+# releases never build Tauri; built by package.py for each platform.
+[package]
+name = "webagent-app"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+name = "webagent_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+url = "2"
+serde_json = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = "thin"
