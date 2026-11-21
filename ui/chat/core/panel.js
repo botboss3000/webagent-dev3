@@ -19,6 +19,7 @@ import {mountSessionControls} from '../controls/session-controls.js';
 import {mountChatActionPanel,createChatAction} from './chat-action-panel.js';
 import {buildReplyForm,answeredPanelRuns} from './reply-panel.js';
 import {mountUsageStats} from '../controls/usage-stats.js';
+import {watchIdlePause,idlePaused} from './idle-pause.js';
 import {mountBrowserLink} from './browser-link.js';
 import {createMessageRow as createMessage,updateAdmission} from './message-view.js';
 import {mountTranscriptWindow} from './transcript-window.js';
@@ -242,7 +243,7 @@ window.addEventListener('v3-identity-changed',()=>chatActions.showCredential(cre
 let reviewRefreshBusy=false;
 // Rechecks admission rows once per second while a session is open; serializes snapshots and stops in destroy.
 const reviewTimer=setInterval(async()=>{
-  if(!session||reviewRefreshBusy||document.visibilityState==='hidden')return;
+  if(!session||reviewRefreshBusy||document.visibilityState==='hidden'||idlePaused())return;
   const rows=[...$('chat-messages-inner').querySelectorAll('[data-admission-status]')];
   if(!followups.pending&&!rows.some(row=>['pending_review','reviewing'].includes(row.dataset.admissionStatus)))return;
   const sid=session,generation=sessionGeneration;reviewRefreshBusy=true;
@@ -255,6 +256,14 @@ const reviewTimer=setInterval(async()=>{
   }catch(error){if(sid===session&&generation===sessionGeneration)issues?issues.fail('manager_status',error,sid):note('Manager status unavailable: '+error.message);}
   finally{reviewRefreshBusy=false;}
 },1000);
+// An unused tab stops costing the server: its event stream and activity polling close, and
+// the next input or showing the tab reopens the conversation, catching up on anything missed.
+const pausedBar=document.createElement('button');pausedBar.type='button';pausedBar.className='chat-idle-paused';pausedBar.hidden=true;pausedBar.textContent='Paused while idle. Tap to resume';
+$('composer').before(pausedBar);
+let pausedSession='';
+const idlePause=watchIdlePause({getConfig:currentChatProfile,
+  onPause(){pausedSession=session;client.disconnect();activity.disconnect();pausedBar.hidden=false;},
+  onResume(){pausedBar.hidden=true;const id=pausedSession;pausedSession='';if(id&&id===session)void open(id,'replace');}});
 /** Removes transcript rows already drawn for a panel's answer message. */
 function hidePanelAnswers(){for(const node of [...$('chat-messages-inner').children])if(node.classList.contains('user')&&panelAnswerRuns.has(node.dataset.turnId))node.remove();}
 /** Inserts or updates a public message row and repaints activity. */
@@ -567,7 +576,7 @@ $('chat-stop-btn').onclick=guard(()=>$('chat-stop-btn').dataset.run?cancel($('ch
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
   function destroy(){
     mainNotes?.destroy();disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
-    disconnect();followups.destroy();chatActions.destroy();anchor.destroy();transcriptWindow.destroy();uiTrace.then(dispose=>dispose());disposeFooterGestures();disposeHeaderGestures();disposeZoom();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();voiceReply.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();panelAbort.abort();chatClearanceObserver.disconnect();
+    disconnect();followups.destroy();chatActions.destroy();anchor.destroy();transcriptWindow.destroy();uiTrace.then(dispose=>dispose());disposeFooterGestures();disposeHeaderGestures();disposeZoom();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);idlePause.destroy();pausedBar.remove();stats.destroy();media.destroy();voiceReply.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();panelAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     document.removeEventListener('v3:chat-config-applied',onChatConfigApplied);$('chat-input').onkeydown=null;$('chat-input').oninput=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }

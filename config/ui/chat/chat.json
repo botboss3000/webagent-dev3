@@ -543,6 +543,12 @@
       "description": "Simplified footer shown when the textarea is empty and unfocused. Single row (left/center/right), same width as active footer, no stats, chips, or below.",
       "margin_bottom": "24px"
     },
+    "idle_pause": {
+      "_instructions": "An unused open chat stops polling and closes its live connection so it costs the server nothing: hidden_ms after the tab goes to the background, idle_ms without input while visible (0 turns either off; bounded to 30 s–1 h and 1 min–4 h). The next input or showing the tab resumes and catches up.",
+      "enabled": true,
+      "hidden_ms": 120000,
+      "idle_ms": 900000
+    },
     "live_reload": {
       "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again.",
       "enabled": true,

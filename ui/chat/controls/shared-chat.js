@@ -1,5 +1,6 @@
 // Locates per-session invitations, participation, and help controls.
 import {setSharedChatControls} from './chat-config.js';
+import {idlePaused} from '../core/idle-pause.js';
 /** Mounts invitation, participation, and help controls from server state; button placement never grants permission. Mutations are guarded and use client request IDs, generation checks discard stale refreshes, and a visible-session timer refreshes every three seconds. panel.js drives open/refresh/disconnect/destroy. */
 export function mountSharedChat({root,client,guard,note,issues,ensureSession,onState=()=>{}}){
   let session='',generation=0,state=null,busy=false,loading=null,destroyed=false;
@@ -41,7 +42,7 @@ export function mountSharedChat({root,client,guard,note,issues,ensureSession,onS
   nodes.agent_active.onclick=guard(async()=>{await ready();if(nodes.agent_active.disabled)return;await mutate(()=>client.participation(session,{client_request_id:crypto.randomUUID(),expected_revision:state.participation.revision,active:!state.participation.active}));});
   nodes.request_help.onclick=guard(async()=>{await ready();if(nodes.request_help.disabled)return;await mutate(()=>state.help?.status==='pending'?client.cancelHelp(session,{client_request_id:crypto.randomUUID()}):client.help(session,{client_request_id:crypto.randomUUID()}));});
   setSharedChatControls(nodes);paint();
-  const timer=setInterval(()=>{if(session&&document.visibilityState!=='hidden')load().catch(()=>{});},3000);
+  const timer=setInterval(()=>{if(session&&document.visibilityState!=='hidden'&&!idlePaused())load().catch(()=>{});},3000);
   // Purpose: Invalidate in-flight state and clear session-specific invitation UI.
   function disconnect(){++generation;session='';state=null;panel.hidden=true;result.value='';result.hidden=true;copy.hidden=true;onState(null);paint();}
   // Methods: open selects a session, refresh reloads its server state, disconnect clears session UI, and destroy also stops polling and removes owned nodes.

@@ -36,6 +36,9 @@ dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px))
 .chat-action-plan li+li{margin-top:2px}
 .chat-action-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;margin-top:12px}
 .chat-action-action{margin:0;min-height:32px;padding:0 14px;border:var(--border-width) solid var(--border);border-radius:999px;background:transparent;color:var(--fg-1);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}
+/* Shown while an unused tab is paused (core/idle-pause.js); any tap resumes, the button only says so. */
+.chat-idle-paused{display:block;align-self:center;margin:6px auto;min-height:32px;max-width:calc(100% - 32px);padding:0 14px;border:var(--border-width) solid var(--border);border-radius:999px;background:var(--bg-elev);color:var(--fg-2);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.chat-idle-paused[hidden]{display:none}
 /* Page background as text: --brand is white in dark mode and black in light. */
 .chat-action-approve{background:var(--accent,var(--brand));border-color:var(--accent,var(--brand));color:var(--bg-0)}
 .chat-action-deny{color:var(--danger)}

@@ -6,6 +6,7 @@
 // open its counters tick in the browser and a live one re-reads the task every 15 s.
 import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 import {createExpandList} from '../../components/expand-list/expand-list.js';
+import {idlePaused} from '../core/idle-pause.js';
 
 const ACTIVE = ['queued','running','needs_decision'];
 const FAILED = ['failed','stale','cancelled','uncertain','interrupted','needs_decision'];
@@ -340,6 +341,7 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
     if (!put(detail)) return;
     cards.get(id).refresh = setInterval(async () => {
       if (!slot.isConnected) return stopCard(id);
+      if (idlePaused()) return;
       try {
         const next = await request(url);
         if (cards.has(id) && slot.isConnected && !put(next)) { clearInterval(cards.get(id).refresh); void refresh(); }

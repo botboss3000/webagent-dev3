@@ -125,6 +125,69 @@
       "bounds": "proposed"
     },
     {
+      "id": "chat.idle_pause.enabled",
+      "description": "Pause an open chat that nobody is using, so it stops polling the server until someone returns.",
+      "type": "boolean",
+      "pointer": "/chat_common/idle_pause/enabled",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "stop idle tabs from polling",
+        "keep chats live even when unused"
+      ],
+      "areas": [
+        "chat",
+        "refresh",
+        "performance"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.idle_pause.hidden_ms",
+      "description": "How long, in milliseconds, a chat tab in the background stays live before it pauses; 0 never pauses background tabs.",
+      "type": "integer",
+      "pointer": "/chat_common/idle_pause/hidden_ms",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "pause background chat tabs after 5 minutes",
+        "keep hidden tabs live longer"
+      ],
+      "areas": [
+        "chat",
+        "refresh",
+        "performance"
+      ],
+      "unit": "ms",
+      "min": 0,
+      "max": 3600000,
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.idle_pause.idle_ms",
+      "description": "How long, in milliseconds, a visible chat with no taps or typing stays live before it pauses; 0 never pauses visible tabs.",
+      "type": "integer",
+      "pointer": "/chat_common/idle_pause/idle_ms",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "pause an unused chat after 30 minutes",
+        "never pause a chat I can see"
+      ],
+      "areas": [
+        "chat",
+        "refresh",
+        "performance"
+      ],
+      "unit": "ms",
+      "min": 0,
+      "max": 14400000,
+      "bounds": "proposed"
+    },
+    {
       "id": "chat.live_reload.interval_ms",
       "description": "How often, in milliseconds, an open chat checks for new messages.",
       "type": "integer",

@@ -1,4 +1,5 @@
 // Refreshes authenticated mounted chats from the live UI configuration endpoint without reload or compilation.
+import {idlePaused} from '../core/idle-pause.js';
 /** Watches visible native chats serially; teardown aborts fetches and prevents stale adoption. */
 export function watchChatConfig({getConfig,onConfig,isMounted,fetchConfig,initial,refreshComponents=async()=>false,onComponents=()=>{}}) {
   let stopped = false, timer = null, controller = null;
@@ -17,7 +18,7 @@ export function watchChatConfig({getConfig,onConfig,isMounted,fetchConfig,initia
     timer = null;
     if (stopped) return;
     if (!isMounted()) { stop(); return; }
-    if (document.hidden || interval() === null) { schedule(); return; }
+    if (document.hidden || idlePaused() || interval() === null) { schedule(); return; }
     controller = new AbortController();
     const active = controller, timeout = setTimeout(() => active.abort(),10000);
     try {
