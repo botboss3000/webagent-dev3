@@ -115,6 +115,29 @@ class TaskFileTests(unittest.TestCase):
             self.edit(read,old_text="a")
 
 
+    def test_edits_apply_several_blocks_at_once_or_none(self):
+        read=self.read()
+        result=self.call("file_edit", {"task_id":read["task_id"],"path":read["path"],
+            "edits":[{"old_text":"gamma","new_text":"third"},{"old_text":"alpha","new_text":"first"}],
+            "request_id":"multi-edit-01","expected_inputs_sha256":read["workspace_inputs_sha256"]})
+        self.assertEqual(result["status"],"success")
+        self.assertEqual(self.read()["lines"],["first","beta","third"])
+        read=self.read()
+        for number,(edits,error) in enumerate((
+                ([{"old_text":"first","new_text":"x"},{"old_text":"missing","new_text":"y"}],"edits\\[2\\].old_text must match exactly once"),
+                ([{"old_text":"first\nbeta","new_text":"x"},{"old_text":"beta","new_text":"y"}],"overlap"),
+                ([],"1 to 20"),
+                ([{"old_text":"first","new_text":"x","path":"other"}],"only old_text and new_text"))):
+            with self.assertRaisesRegex(ValueError,error):
+                self.call("file_edit", {"task_id":read["task_id"],"path":read["path"],"edits":edits,
+                    "request_id":"multi-bad-"+str(number),
+                    "expected_inputs_sha256":read["workspace_inputs_sha256"]})
+        with self.assertRaisesRegex(ValueError,"not both"):
+            self.call("file_edit", {"task_id":read["task_id"],"path":read["path"],"old_text":"first",
+                "new_text":"x","edits":[{"old_text":"beta","new_text":"y"}],
+                "request_id":"multi-bad-both","expected_inputs_sha256":read["workspace_inputs_sha256"]})
+        self.assertEqual(self.read()["lines"],["first","beta","third"])
+
     def test_empty_file_and_noop_write(self):
         result=self.call("file_write", {"task_id":"empty-task-01","path":"docs/empty.md","content":"","request_id":"empty-request-01"})
         self.assertEqual(result["status"],"success")

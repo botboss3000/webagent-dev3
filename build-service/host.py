@@ -787,6 +787,45 @@ def prepare_new_source_files(files):
     return "".join(parts)
 
 
+MAX_TEXT_EDITS = 20
+
+
+def apply_text_edits(before, args):
+    """Apply file_edit's replacements to `before`: one old_text/new_text pair, or `edits`
+    (1 to MAX_TEXT_EDITS {old_text,new_text} pairs), never both. Every old_text is matched
+    against the original text, exactly once, and matched spans may not overlap; any
+    failure rejects the whole call, so the file gets all of the edits or none."""
+    edits = args.get("edits")
+    if edits is not None:
+        if args.get("old_text") is not None or args.get("new_text") is not None:
+            raise ValueError("file_edit takes edits or old_text/new_text, not both")
+        if not isinstance(edits, list) or not 1 <= len(edits) <= MAX_TEXT_EDITS:
+            raise ValueError("edits must list 1 to %d {old_text,new_text} pairs" % MAX_TEXT_EDITS)
+    else:
+        edits = [{"old_text": args.get("old_text"), "new_text": args.get("new_text")}]
+    spans = []
+    for number, edit in enumerate(edits, 1):
+        label = "old_text" if len(edits) == 1 else "edits[%d].old_text" % number
+        if not isinstance(edit, dict) or set(edit) - {"old_text", "new_text"}:
+            raise ValueError("each edit takes only old_text and new_text")
+        old, new = edit.get("old_text"), edit.get("new_text")
+        if not isinstance(old, str) or not old or not isinstance(new, str):
+            raise ValueError("file_edit requires an existing file and nonempty old_text plus new_text")
+        if before.count(old) != 1:
+            raise ValueError(label + " must match exactly once")
+        at = before.index(old)
+        spans.append((at, at + len(old), new, label))
+    spans.sort()
+    for (_, end, _, first), (start, _, _, second) in zip(spans, spans[1:]):
+        if start < end:
+            raise ValueError(first + " and " + second + " overlap; merge them into one edit")
+    after, cursor = [], 0
+    for start, end, new, _ in spans:
+        after += [before[cursor:start], new]
+        cursor = end
+    return "".join(after + [before[cursor:]])
+
+
 def source_patch_text_counts(patch):
     """Count all text changes, including lines Git would ignore after a short hunk."""
     added = removed = 0
@@ -4619,7 +4658,7 @@ class Broker:
             "file_list": {"task_id", "path", "offset", "limit"},
             "file_read": {"task_id", "path", "offset", "limit"},
             "file_search": {"task_id", "path", "query", "regex", "file_glob", "comments_only", "limit"},
-            "file_edit": {"task_id", "path", "old_text", "new_text", "expected_sha256", "expected_inputs_sha256", "request_id"},
+            "file_edit": {"task_id", "path", "old_text", "new_text", "edits", "expected_sha256", "expected_inputs_sha256", "request_id"},
             "file_write": {"task_id", "path", "content", "delete", "mode", "expected_inputs_sha256", "request_id"},
         }
         if set(args) - allowed[name]:
@@ -4701,13 +4740,11 @@ class Broker:
         if delete and (args["delete"] is not True or args.get("content") is not None or not exists):
             raise ValueError("file_write delete requires delete: true, no content and an existing task file")
         if name == "file_edit":
-            old, new = args.get("old_text"), args.get("new_text")
-            if not exists or not isinstance(old, str) or not old or not isinstance(new, str):
+            if not exists:
                 raise ValueError("file_edit requires an existing file and nonempty old_text plus new_text")
-            if before.count(old) != 1: raise ValueError("old_text must match exactly once")
             if args.get("expected_sha256") is not None and args["expected_sha256"] != hashlib.sha256(original).hexdigest():
                 raise ValueError("file changed since inspection")
-            after = before.replace(old, new, 1)
+            after = apply_text_edits(before, args)
         elif delete:
             after = ""
         else:
