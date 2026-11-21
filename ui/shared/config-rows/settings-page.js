@@ -27,6 +27,8 @@ const GENERIC = new Set(['enabled', 'mode', 'max', 'min', 'seconds', 'minutes', 
   'visible', 'label', 'top', 'bottom', 'intensity', 'margin_bottom', 'pill_width', 'pill_radius', 'line_height',
   'bg_light', 'bg_dark', 'background_opacity', 'new_session', 'existing_session']);
 const UNIT_SUFFIX = /_(px|mb|kb|ms|tokens|seconds|minutes)$/;
+// Id words read better spelled out.
+const SPELLED = {bg_light: 'background (light mode)', bg_dark: 'background (dark mode)'};
 export const SURFACES = [['common', 'Common'], ['desktop', 'Desktop'], ['mobile', 'Mobile'], ['widget', 'Widget']];
 // Where a chat value comes from (the composer's `source`).
 const SOURCES = {agent: 'This agent’s value', app: 'App value', common: 'Same as Common'};
@@ -38,7 +40,7 @@ const capital = text => text.charAt(0).toUpperCase() + text.slice(1);
 export function settingTitle(setting, withParams = true) {
   const parts = setting.id.split('.');
   let last = parts.at(-1).replace(UNIT_SUFFIX, '');
-  if (GENERIC.has(last) && parts.length > 2) last = parts.at(-2) + ' ' + last;
+  if (GENERIC.has(last) && parts.length > 2) last = parts.at(-2) + ' ' + (SPELLED[last] || last);
   const params = withParams ? Object.values(setting.params || {}).map(words).join(', ') : '';
   return capital(words(last)) + (params ? ' (' + params + ')' : '');
 }

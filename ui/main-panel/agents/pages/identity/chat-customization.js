@@ -24,11 +24,19 @@ const node = (tag, className = '', text = '') => {
 const words = text => text.replace(/[_-]+/g, ' ').trim();
 const capital = text => text.charAt(0).toUpperCase() + text.slice(1);
 // Area headings: a chat setting id's second part ("chat.<area>.…").
-const AREAS = {chat_header: 'Header', composer: 'Message box', messages: 'Texts', message_bubbles: 'Message bubbles',
-  message_gutters: 'Message buttons', gutter_presentation: 'Message buttons', message_headings: 'Message headings',
-  message_spacing: 'Spacing', fade: 'Fades', pill_fade: 'Fades', idle_footer: 'Footer', active_footer: 'Footer',
-  glimmer: 'Glow', screen_display: 'Screen', main_notes: 'Header'};
-const area = id => { const key = id.split('.')[1] || ''; return AREAS[key] || capital(words(key)); };
+const AREAS = {chat_header: 'Header', main_notes: 'Header', composer: 'Message box', idle_footer: 'Message box',
+  active_footer: 'Message box', messages: 'Texts', message_bubbles: 'Message bubbles',
+  user_message_truncation: 'Message bubbles', glimmer: 'Message bubbles', message_headings: 'Message bubbles',
+  message_gutters: 'Message buttons', gutter_presentation: 'Message buttons', message_spacing: 'Layout',
+  content_max_width: 'Layout', component_panel: 'Layout', fade: 'Layout', pill_fade: 'Layout', window: 'Layout',
+  launcher: 'Layout', show_tool_calls: 'Activity', show_activity_groups: 'Activity', show_activity_preview: 'Activity',
+  mirror_activity_in_transcript: 'Activity', classify_main_messages: 'Activity', fold_main_messages: 'Activity',
+  transcript_window: 'Scrolling', user_turn_anchor: 'Scrolling', execution_mode: 'Behaviour', live_reload: 'Behaviour',
+  limits: 'Attachments', screen_display: 'Screen'};
+// Settings written for one surface only ("chat.mobile.…", "chat.widget.…") belong under it.
+const FIXED = /^chat\.(mobile|widget)\./;
+const surfaceOf = setting => setting.params?.surface || setting.id.match(FIXED)?.[1] || 'common';
+const area = id => { const key = id.replace(FIXED, 'chat.').split('.')[1] || ''; return AREAS[key] || capital(words(key)); };
 const button = (label, onClick) => {
   const element = node('button', 'ac-btn ac-btn-sm', label);
   element.type = 'button';
@@ -58,8 +66,7 @@ export function renderChatCustomization(stage, request, {agentId, canManage}) {
   const draw = () => {
     rows.clear();
     lists.replaceChildren();
-    const chat = store.settings.filter(s => s.owner === CHAT && !s.unavailable
-      && (s.params?.surface || 'common') === surface);
+    const chat = store.settings.filter(s => s.owner === CHAT && !s.unavailable && surfaceOf(s) === surface);
     const areas = new Map();
     for (const setting of chat) {
       const name = area(setting.id);
