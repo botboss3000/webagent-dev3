@@ -18,7 +18,8 @@ struct Cached {
     drift: Arc<Drift>,
 }
 
-/// The current drift. A comparison that fails leaves the running release in charge.
+/// The current drift. A comparison that fails before any succeeded leaves the running
+/// release in charge.
 pub(crate) fn current() -> Arc<Drift> {
     static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
     // A poisoned cache is cleared and rebuilt, never read.
@@ -50,12 +51,25 @@ pub(crate) fn current() -> Arc<Drift> {
         cached.checked = Instant::now();
         return cached.drift.clone();
     }
-    let drift = drift::compare(&published, &checkout)
-        .map(Arc::new)
-        .unwrap_or_else(|error| {
-            tracing::warn!("Ability drift unavailable: {error:#}");
-            Arc::default()
+    // A comparison that fails, or that raced a write (the checkout changed while it ran),
+    // keeps the previous drift and is retried at the next recheck: a half-written file
+    // must not disable tools or swap skill text for a call.
+    let compared = drift::compare(&published, &checkout)
+        .inspect_err(|error| tracing::warn!("Ability drift unavailable: {error:#}"))
+        .ok()
+        .filter(|_| self::signature(&published, &checkout) == signature);
+    let Some(drift) = compared.map(Arc::new) else {
+        // Keep the old signature so the next recheck compares again.
+        let (signature, drift) = cache.as_ref().map_or(([0; 32], Arc::default()), |cached| {
+            (cached.signature, cached.drift.clone())
         });
+        *cache = Some(Cached {
+            checked: Instant::now(),
+            signature,
+            drift: drift.clone(),
+        });
+        return drift;
+    };
     *cache = Some(Cached {
         checked: Instant::now(),
         signature,

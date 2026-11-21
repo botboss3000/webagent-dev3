@@ -414,6 +414,15 @@ pub(crate) fn optional_skill(path: &Path) -> Result<Option<String>> {
     Ok(Some(text))
 }
 
+/// The last text `optional_skill` read from `path`, whatever the file holds now.
+fn last_skill_text(path: &Path) -> Option<String> {
+    SKILL_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(path)
+        .map(|(_, text)| text.clone())
+}
+
 impl<H: Host> Catalog<H> {
     /// Freeze a completely validated catalog for one immutable publication revision.
     pub fn load_snapshot(root: &Path) -> Result<Self> {
@@ -993,42 +1002,58 @@ impl<H: Host> Catalog<H> {
     }
 
     fn present(ability: &Ability) -> bool {
-        // MCP tools exist only while its separately installed package is present. Readiness
-        // is not checked here: schemas must not change when a plugin restarts, and a call
-        // made while it is not ready fails at execution.
-        if ability.id == "mcp" && !H::mcp_installed() {
-            return false;
-        }
         if ability.id == crate::base::ID {
             return true;
         }
-        if ability.id == "optimization" {
-            return H::optimization_installed();
-        }
-        // Presence alone cannot retain an old executable declaration after an
-        // operator disables or edits its manifest. Unreadable/changed bytes fail closed.
-        // Catalog checks ask once per tool for every ability, so one disk answer per
-        // ability folder and manifest digest is reused for a second.
-        type Recent = HashMap<(PathBuf, String), (std::time::Instant, bool)>;
-        static RECENT: std::sync::Mutex<Option<Recent>> = std::sync::Mutex::new(None);
-        let key = (ability.path.clone(), ability.manifest_bytes_digest.clone());
+        // MCP and Optimization count while their packages are installed: readiness is not
+        // checked here, since schemas and skills must not change when a plugin restarts,
+        // and a call made while it is not ready fails at execution. Presence alone cannot
+        // retain an old executable declaration after an operator disables or edits its
+        // manifest: unreadable or changed bytes fail closed.
+        let check = || match ability.id.as_str() {
+            "mcp" => H::mcp_installed() && Self::present_on_disk(ability),
+            "optimization" => H::optimization_installed(),
+            _ => Self::present_on_disk(ability),
+        };
         // Tests edit fixtures and expect the change at once, so they never reuse.
-        if cfg!(not(any(test, feature = "test-support"))) {
-            let recent = RECENT.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((at, answer)) = recent.as_ref().and_then(|map| map.get(&key)) {
-                if at.elapsed() < std::time::Duration::from_secs(1) {
-                    return *answer;
-                }
+        if cfg!(any(test, feature = "test-support")) {
+            return check();
+        }
+        // Catalog checks ask once per tool for every ability, so one answer per ability
+        // folder and manifest digest is reused for a second. A present ability turns
+        // absent only when two checks at least ABSENT_CONFIRM apart both miss it, so one
+        // failed read (a file replaced mid-read, a pruned snapshot) never drops its
+        // schemas and skills from a model call; a real removal still applies.
+        const ABSENT_CONFIRM: std::time::Duration = std::time::Duration::from_secs(2);
+        type Seen = (std::time::Instant, bool, Option<std::time::Instant>);
+        static RECENT: std::sync::Mutex<Option<HashMap<(PathBuf, String), Seen>>> =
+            std::sync::Mutex::new(None);
+        let key = (ability.path.clone(), ability.manifest_bytes_digest.clone());
+        let previous = RECENT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|map| map.get(&key).copied());
+        if let Some((at, answer, _)) = previous {
+            if at.elapsed() < std::time::Duration::from_secs(1) {
+                return answer;
             }
         }
-        let answer = Self::present_on_disk(ability);
+        let found = check();
+        let (answer, missing_since) = match previous {
+            Some((_, true, since)) if !found => {
+                let since = since.unwrap_or_else(std::time::Instant::now);
+                (since.elapsed() < ABSENT_CONFIRM, Some(since))
+            }
+            _ => (found, None),
+        };
         let mut recent = RECENT.lock().unwrap_or_else(|e| e.into_inner());
         let map = recent.get_or_insert_with(HashMap::new);
         // Bounded: one entry per catalog ability folder; old releases' paths are dropped.
         if map.len() > 1024 {
             map.clear();
         }
-        map.insert(key, (std::time::Instant::now(), answer));
+        map.insert(key, (std::time::Instant::now(), answer, missing_since));
         answer
     }
 
@@ -1137,7 +1162,18 @@ impl<H: Host> Catalog<H> {
         }) {
             return None;
         }
-        optional_skill(&path).ok().flatten().map(Cow::Owned)
+        // A read that fails mid-write (a truncated or half-written regular file) keeps the
+        // last text read from this path, so the skill never drops out of the instructions
+        // for a call. A file that is gone is removed, and anything that is no longer a
+        // regular file (a symlink swapped in) fails closed.
+        match optional_skill(&path) {
+            Ok(text) => text,
+            Err(_) if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file()) => {
+                last_skill_text(&path)
+            }
+            Err(_) => None,
+        }
+        .map(Cow::Owned)
     }
 
     /// Reject a body that changed between the source read and its use.

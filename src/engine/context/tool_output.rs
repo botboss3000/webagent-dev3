@@ -69,6 +69,52 @@ mod dedup_tests {
             .await
             .unwrap();
     }
+    /// A load_skill result carries the skill text the instructions leave out, so it stays
+    /// whole however long; an ordinary result of the same size is cut to the preview.
+    #[tokio::test]
+    async fn loaded_skill_results_are_never_cut_to_the_preview() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let rid = crate::runtime_tests::queued(&app, &sid).await;
+        let mut run = app.run(&rid).await.unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        dedup_prepare(&app, &mut run, 8192, &cancel).await.unwrap();
+        let text = "skill line\n".repeat(2000);
+        let mut bodies = Vec::new();
+        for (turn, name) in ["load_skill", "get_time"].into_iter().enumerate() {
+            run["turns"] = json!(turn + 1);
+            let id = format!("long-{name}");
+            let call = json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"});
+            run["input"].as_array_mut().unwrap().push(call.clone());
+            app.store
+                .save_run(&mut run, "model_output", &json!({"output":[call]}))
+                .await
+                .unwrap();
+            run["pending"] = json!({"call_id":id});
+            let body = json!({"status":"loaded","text":text});
+            record(&mut run, &body).unwrap();
+            run["input"].as_array_mut().unwrap().push(
+                json!({"type":"function_call_output","call_id":id,"output":body.to_string()}),
+            );
+            app.store
+                .save_run(&mut run, "tool_result", &json!({}))
+                .await
+                .unwrap();
+            bodies.push(body.to_string());
+        }
+        let projected = dedup_prepare(&app, &mut run, 8192, &cancel).await.unwrap();
+        let output = |id: &str| {
+            projected
+                .iter()
+                .find(|item| item["type"] == "function_call_output" && item["call_id"] == id)
+                .unwrap()["output"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(output("long-load_skill"), bodies[0]);
+        assert!(output("long-get_time").len() < bodies[1].len());
+    }
     /// Native control pending state has no name; retain exact identity and recover old paused runs safely.
     #[tokio::test]
     async fn native_control_provenance_uses_recorded_calls_and_recovers_null_names() {

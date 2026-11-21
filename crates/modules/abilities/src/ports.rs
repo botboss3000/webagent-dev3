@@ -16,6 +16,8 @@ pub trait Host: Clone + Send + Sync + 'static {
     fn optimization_declaration() -> Result<Option<(String, Value)>>;
     /// A valid package is installed, whatever its readiness marker says.
     fn optimization_installed() -> bool;
+    /// The installed package's digest and guidance, whatever its readiness: the live
+    /// version and the instructions follow them, so a plugin restart changes neither.
     fn optimization_generation() -> Option<String>;
     fn optimization_guidance() -> Option<String>;
     /// A valid package is installed, whatever its readiness marker says.

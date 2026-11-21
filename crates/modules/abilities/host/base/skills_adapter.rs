@@ -172,9 +172,22 @@ struct View {
     fingerprint: String,
 }
 /// Resolve private caller/agent scope and fingerprint current source, selectors and live authority.
+/// A caller who may not read loaded skills: a normal state, not a failure to retry.
+#[derive(Debug)]
+struct NoSkillAccess(&'static str);
+impl std::fmt::Display for NoSkillAccess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+impl std::error::Error for NoSkillAccess {}
+
 async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
     if crate::shared_chat::actor(app) != app.store.current_user_id() {
-        bail!("Shared chat membership does not authorize caller-owned private records");
+        return Err(NoSkillAccess(
+            "Shared chat membership does not authorize caller-owned private records",
+        )
+        .into());
     }
 
     // Resolve the session in the authenticated user's plane before its agent.
@@ -205,7 +218,7 @@ async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
         || live_tool_decision(&scoped, &access, name, &visibility, &state, &loaded).permission
             == crate::access::Permission::Deny
     {
-        bail!("Bundled skill tool unavailable under current access");
+        return Err(NoSkillAccess("Bundled skill tool unavailable under current access").into());
     }
     // Own-skill revision is part of the read fingerprint; a skill edit
     // invalidates outstanding list/load results before their text is returned.
@@ -570,9 +583,13 @@ pub(crate) async fn own_capability_guidance(
     run_id: &str,
 ) -> Result<Vec<webagent_capability_contracts::Guidance>> {
     use webagent_capability_contracts::{Guidance, GuidanceKind};
+    // A caller without skill access has no own skills; any other failed read is an
+    // error, never an empty list: the caller retries and then pauses the run, rather than
+    // sending one call without the agent's loaded own skills.
     let current = match view(app, sid, run_id, "load_skill").await {
         Ok(view) => view,
-        Err(_) => return Ok(Vec::new()),
+        Err(error) if error.is::<NoSkillAccess>() => return Ok(Vec::new()),
+        Err(error) => return Err(error),
     };
     let mut guidance = Vec::new();
     for selected in current.loaded_skills.as_array().into_iter().flatten() {

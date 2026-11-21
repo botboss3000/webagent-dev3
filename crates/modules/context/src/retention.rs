@@ -1224,6 +1224,15 @@ pub async fn dedup_prepare(
         .filter(|entry| entry.placeholder.is_some())
         .map(|entry| entry.primary.as_str())
         .collect();
+    // A loaded skill's text reaches the model only as its load_skill result, and the
+    // instructions leave that skill out while the result is in the history, so the result
+    // is never shortened or replaced: a preview would drop the skill from both places.
+    let skill_calls: HashSet<String> = input
+        .iter()
+        .filter(|item| item["type"] == "function_call" && item["name"] == "load_skill")
+        .filter_map(call_id)
+        .map(str::to_owned)
+        .collect();
     let mut projected = input;
     for item in projected
         .iter_mut()
@@ -1232,6 +1241,9 @@ pub async fn dedup_prepare(
         let Some(id) = call_id(item).map(str::to_owned) else {
             continue;
         };
+        if skill_calls.contains(&id) {
+            continue;
+        }
         if let Some(text) = plan.replacements.get(&id) {
             item["output"] = json!(text);
             continue;

@@ -239,6 +239,18 @@ package's tools only while its health was current, and a 15-second health window
 the 60-second probe dropped Automation's 14 tools for most of each minute, so most model
 calls started with a `tools` reorder.
 
+**Skills stay through transient failures.** A visible or loaded skill's text stays in
+the context on every call; only the same direct changes that change the tool list, or an
+edit of the skill file, change it. A `load_skill` result is never shortened to the
+tool-result preview (`crates/modules/context/src/retention.rs`), since the instructions
+leave that skill out while its result is in the history. A skill file read that fails
+mid-write reuses the last text read from that path (`catalog.rs` `last_skill_text`). An
+ability turns absent only when two checks at least 2 seconds apart both miss it
+(`catalog.rs` `present`). A failed or racing comparison of the live checkout keeps the
+previous drift (`src/ability_drift.rs`). Optimization's guidance and the catalog's live
+version follow its installed package, not its readiness marker. A failed own-skill read
+retries and then pauses the run instead of sending a call without the agent's own skills.
+
 **Cache timeout (built).** `cache_timeout_minutes` per model or provider in
 `config/models/providers/<provider>.json` (60 minutes when absent), and
 Identity → Context compaction → Cache timeout per agent (0 uses the model's).

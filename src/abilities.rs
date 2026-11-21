@@ -128,10 +128,10 @@ impl webagent_abilities::Host for NativeHost {
         crate::optimization::installed()
     }
     fn optimization_generation() -> Option<String> {
-        crate::optimization::generation()
+        crate::optimization::installed_generation()
     }
     fn optimization_guidance() -> Option<String> {
-        crate::optimization::guidance()
+        crate::optimization::installed_guidance()
     }
     fn mcp_installed() -> bool {
         crate::mcp::bridge::installed()

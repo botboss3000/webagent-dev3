@@ -331,10 +331,17 @@ pub(crate) fn available() -> bool {
 pub(crate) fn installed() -> bool {
     ROOT.get().is_some() && package(&folder()).is_some()
 }
-pub(crate) fn guidance() -> Option<String> {
-    let before = generation()?;
-    let package = package(&folder())?;
-    (package.0 == before && generation()? == before).then(|| package.2.clone())
+/// The installed package's digest, whatever its readiness marker says. The catalog keys
+/// its live version on this, so a plugin restart never changes the model's context.
+pub(crate) fn installed_generation() -> Option<String> {
+    ROOT.get()?;
+    package(&folder()).map(|package| package.0.clone())
+}
+/// The installed package's guidance, whatever its readiness marker says: once shown it
+/// stays in the instructions until the package itself changes.
+pub(crate) fn installed_guidance() -> Option<String> {
+    ROOT.get()?;
+    package(&folder()).map(|package| package.2.clone())
 }
 async fn ping(root: &Path, generation: &str) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -492,7 +499,7 @@ mod tests {
             names.iter().any(|s| s["name"] == "performance_work"),
             expected
         );
-        assert_eq!(guidance().is_some(), expected);
+        assert_eq!(installed_guidance().is_some(), expected);
     }
 }
 
