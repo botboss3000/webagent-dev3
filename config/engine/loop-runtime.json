@@ -10,10 +10,10 @@
   "scheduler": {
     "background_rescan_interval_ms": 5000,
     "drain_timeout_seconds": 180,
-    "max_active_runs": 20,
-    "max_attachment_reads": 16,
+    "max_active_runs": 10,
+    "max_attachment_reads": 32,
     "max_background_workers": 4,
-    "max_media_requests": 4,
+    "max_media_requests": 8,
     "max_unresolved_runs": 200,
     "message_detach_grace_ms": 0,
     "poll_interval_ms": 300,
