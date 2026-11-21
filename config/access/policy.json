@@ -115,13 +115,14 @@
     },
     "free": {
       "allowed_models": [
-        "deepseek-flash"
+        "deepseek-flash",
+        "muse-spark-1.3"
       ],
       "id": "free",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 6
+      "revision": 7
     }
   }
 }
