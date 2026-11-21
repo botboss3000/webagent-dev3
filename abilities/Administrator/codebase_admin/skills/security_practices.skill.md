@@ -12,6 +12,8 @@ minimum_access: registered
 
 These rules come from the 2026 security audit of v3. Apply them to every change. A new route or handler that breaks one is a defect, even if its tests pass.
 
+The platform-wide requirements (who may do what, tool permissions, browsers, shared chats, build and host boundaries), each marked in force or target with an ID, are in `docs/security-spec.md`. Read it before changing any of those areas and cite the requirement IDs your change affects.
+
 ## Authorization: who may touch this resource
 
 - **The server decides identity.** Take the caller only from the auth middleware's identity (`_user_id`, `_role`) or a server-sealed token. Never from a body field, query, or header such as `Origin` or `X-Forwarded-For`.
