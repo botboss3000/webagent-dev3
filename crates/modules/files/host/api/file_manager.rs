@@ -13,6 +13,8 @@ const CHECKOUT: &str = "/live-checkout";
 const NEEDS_GRANT: &str =
     "Host Admin must authorize browsing outside the checkout. The request is waiting on the Host Admin page.";
 #[cfg(unix)]
+const NEEDS_SUDO: &str = "Sudo password needed: ";
+#[cfg(unix)]
 const NEEDS_TERMINAL_GRANT: &str =
     "Host Admin must authorize terminal access. The request is waiting on the Host Admin page.";
 /// Terminal actions; they all run in the root host file service (security spec FILES-3).
@@ -168,6 +170,7 @@ async fn host_files(admin: &str, action: &str, body: &Value) -> Api {
         "cols",
         "rows",
         "cwd",
+        "sudo_password",
     ] {
         if !body[key].is_null() {
             message[key] = body[key].clone();
@@ -192,6 +195,13 @@ async fn host_files(admin: &str, action: &str, body: &Value) -> Api {
     let reply = host_admin::call("files/files.sock", "Host file service", &message).await?;
     if reply["status"] == "success" {
         return Ok(Json(reply["output"].clone()));
+    }
+    // The account was denied: the page asks for its sudo password and sends the request again.
+    if reply["code"] == "sudo_required" {
+        return Err(bad(&format!(
+            "{NEEDS_SUDO}{}",
+            reply["output"].as_str().unwrap_or("")
+        )));
     }
     if reply["code"] == "authorization_required" {
         let terminal = action.starts_with("terminal_");

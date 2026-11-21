@@ -269,7 +269,7 @@ export function start(mount) {
     const grants = [...Object.entries(page.file_grants || {}).map(([admin, until]) => ['files', admin, until]),
       ...Object.entries(page.terminal_grants || {}).map(([admin, until]) => ['terminal', admin, until])];
     box.append(el('p', 'host-help', grants.length
-      ? 'File and terminal access both act as the operator account without sudo or docker: anything that account can read or change, except app data and sockets.'
+      ? 'File and terminal access both act as the operator account, like a login on this computer; anything needing root asks for its sudo password. App data and sockets stay closed to the File Manager.'
       : 'No administrator can browse outside the checkout or open a terminal. The File Manager asks here (or in its own prompt).'));
     const list = el('ul', 'host-list');
     for (const [kind, admin, until] of grants) {

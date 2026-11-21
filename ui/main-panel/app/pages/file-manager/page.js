@@ -89,6 +89,7 @@ const fileDigests = new Map();
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 const NEEDS_GRANT = 'Host Admin must authorize';
+const NEEDS_SUDO = 'Sudo password needed: ';
 let toastTimer = null;
 
 function toastBox() {
@@ -196,9 +197,44 @@ async function showGrantToast(message, action) {
   };
 }
 
+// The sudo prompt in the toast, like a terminal's: resolves to the typed password, or null when
+// dismissed. The password goes only into the retried request; the page never keeps it.
+function askSudoPassword(message) {
+  return new Promise((resolve) => {
+    const box = toastBox();
+    if (!box) { resolve(null); return; }
+    box.classList.add('files-toast-grant');
+    const text = document.createElement('div');
+    text.className = 'files-toast-text';
+    text.textContent = message;
+    const form = document.createElement('form');
+    form.className = 'files-toast-form';
+    const pass = document.createElement('input');
+    pass.type = 'password';
+    pass.autocomplete = 'off';
+    pass.placeholder = 'Sudo password';
+    pass.setAttribute('aria-label', 'Sudo password');
+    const run = document.createElement('button');
+    run.type = 'submit';
+    run.className = 'files-toast-approve';
+    run.textContent = 'Run as root';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'files-toast-dismiss';
+    cancel.textContent = 'Cancel';
+    const done = (value) => { box.hidden = true; box.classList.remove('files-toast-grant'); resolve(value); };
+    cancel.onclick = () => done(null);
+    form.onsubmit = (event) => { event.preventDefault(); if (pass.value) done(pass.value); };
+    form.append(pass, run, cancel);
+    box.append(text, form);
+    pass.focus();
+  });
+}
+
 // One File Manager API call. A missing Host Admin grant shows the approval toast (unless quiet)
-// and throws an error marked needsGrant.
-async function postFileManager(payload, quiet = false) {
+// and throws an error marked needsGrant. An action the account may not do asks for its sudo
+// password (up to three tries) and sends the request again with it.
+async function postFileManager(payload, quiet = false, tries = 0) {
   const response = await fetch(API_BASE, {
     method: 'POST', credentials: 'same-origin',
     headers: {'Content-Type': 'application/json', ...authHeaders()},
@@ -208,6 +244,11 @@ async function postFileManager(payload, quiet = false) {
   if (!response.ok) {
     const message = data.error || data.detail || 'File Manager request failed (' + response.status + ')';
     // Outside the checkout, and terminals: Host Admin must approve (with the host passphrase) first.
+    if (message.startsWith(NEEDS_SUDO) && !quiet && tries < 3) {
+      const password = await askSudoPassword(message.slice(NEEDS_SUDO.length));
+      if (password) return postFileManager({...payload, sudo_password: password}, quiet, tries + 1);
+      throw Error('Cancelled: needs sudo');
+    }
     if (message.startsWith(NEEDS_GRANT)) {
       if (!quiet) showGrantToast(message, /terminal/.test(message) ? 'terminal_grant' : 'files_grant');
       throw Object.assign(Error(message), {needsGrant: true});
