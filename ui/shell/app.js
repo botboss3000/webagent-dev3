@@ -10,6 +10,7 @@ const privateReveal=document.querySelector('[data-private-access-reveal]');
 privateReveal.onclick=()=>{privateHost.hidden=false;privateReveal.hidden=true;privateReveal.setAttribute('aria-expanded','true');document.getElementById('login-username').focus({preventScroll:true});};
 function privateVisible(visible){document.body.classList.toggle('app-restricted',visible);document.getElementById('app-restricted-overlay').setAttribute('aria-hidden',String(!visible));privateHost.hidden=true;privateReveal.hidden=false;privateReveal.setAttribute('aria-expanded','false');}
 import { initHeaderCarousel } from './header-carousel/header-carousel.js';
+import { idlePaused } from '../chat/core/idle-pause.js';
 initHeaderCarousel();
 import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../shared/page-tabs/page-tabs.js';
 import { consumeBack, pushBackHandler } from '../shared/history-back/history-back.js';
@@ -334,7 +335,7 @@ let noticeSource='',actionNotice='',backgroundNotices=[];
 // Shown for transport and gateway failures; the next server response clears it.
 const OFFLINE="Can't reach the server. Retrying automatically.";
 const paintNotices=()=>{$('notice').textContent=[actionNotice,...backgroundNotices].filter(Boolean).join(' · ');};
-const issues=createBackgroundIssues({request:(...args)=>api(...args),render:messages=>{backgroundNotices=messages;paintNotices();}});
+const issues=createBackgroundIssues({request:(...args)=>api(...args),render:messages=>{backgroundNotices=messages;paintNotices();},paused:idlePaused});
 const note=(text,source='')=>{
   const visibleText=(text==='Sign in required'||text==='Guest access is not enabled')?'':text;
   actionNotice=visibleText;paintNotices();
@@ -616,7 +617,8 @@ async function boot(){
     finished=true;
     window.__boot?.appReady();
     clearInterval(poll);
-    poll=setInterval(()=>refresh().then(()=>issues.resolve('status_poll')).catch(error=>issues.fail('status_poll',error)),3000);
+    // An idle-paused tab (chat/core/idle-pause.js) skips the status poll; it resumes on input.
+    poll=setInterval(()=>{if(idlePaused())return;refresh().then(()=>issues.resolve('status_poll')).catch(error=>issues.fail('status_poll',error));},3000);
   };
   // Phase C: the active page and the transcript open independently of each other.
   // On a phone a session deep link shows only the chat, so its tab loads when the user switches
