@@ -150,7 +150,7 @@ contracts, family grouping, both-theme/narrow-layout regression, and active
 container configuration provenance. Reference functions remain pending in
 `v3/v2_ref` because their containing UI port is incomplete.
 
-- App All Settings: /app?tab=app&appView=all-settings, and an agent's: /app?tab=agents&agent=shared_default&agentView=settings. Verify the category list (one per settings file), that each row's control fits its type (switch, dropdown, stepper with unit, px/% width, text), that a change saves with the spinner and check and survives a reload, and that "bigger chat text" in the search box opens the Chat category with the font size row highlighted. Check at phone and desktop width.
+- App All Settings: /app?tab=app&appView=all-settings (Config directory → All Settings), and an agent's Identity → Chat customization. Verify the category list (one per settings file, chat split by surface), that Advanced lists every editable config file, that each row's control fits its type (switch, dropdown, stepper with unit, px/% width, text), that a change saves with the spinner and check and survives a reload, and that "bigger chat text" in the search box opens the Chat category with the font size row highlighted. Check at phone and desktop width.
 - App Functions: /app?tab=app&appView=functions. Verify saved concurrency in
   the clickable summary, expanded settings, save/reload persistence and restart
   notice. Blank or zero means unlimited concurrency. Nonadmins cannot access it.

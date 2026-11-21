@@ -8,9 +8,8 @@
 // lists every remaining chat.json value, drawn from its JSON type, saved through the same
 // overlay (PATCH /agents/{id}/chat-config/chat).
 import { createSubpage } from '../../../../shared/subpage-list/subpage-list.js';
-import { createConfigList, createNumberRow, createSelectRow, createTextRow, createToggleRow }
-  from '../../../../shared/config-rows/config-rows.js';
-import { SURFACES, createComposerBox, createSettingRow, createSettingsStore, highlight, settingTitle }
+import { createConfigList, createSelectRow } from '../../../../shared/config-rows/config-rows.js';
+import { SURFACES, createComposerBox, createRawRows, createSettingRow, createSettingsStore, highlight, settingTitle }
   from '../../../../shared/config-rows/settings-page.js';
 import { requestTouchVibration } from '../../../../shared/vibrate/vibrate.js';
 
@@ -146,16 +145,6 @@ export function renderChatCustomization(stage, request, {agentId, canManage}) {
       queue = task.catch(() => {});
       return task;
     };
-    const leaves = (value, pointer, out) => {
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        for (const [key, child] of Object.entries(value)) {
-          if (key !== '_instructions' && key !== 'description') leaves(child, pointer + '/' + key, out);
-        }
-      } else if (!Array.isArray(value)) {
-        out.push([pointer, value]);
-      }
-      return out;
-    };
     advanced.append(node('p', 'ac-hint', 'Raw values from chat.json, by their key names. Changes apply to this agent only.'));
     for (const [part, value] of Object.entries(doc.effective || {})) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
@@ -165,17 +154,8 @@ export function renderChatCustomization(stage, request, {agentId, canManage}) {
       section.addEventListener('toggle', () => {
         if (!section.open || section.dataset.drawn) return;
         section.dataset.drawn = '1';
-        const list = createConfigList(section, {label: part});
-        for (const [pointer, current] of leaves(value, '/' + part, [])) {
-          const title = pointer.split('/').slice(2).map(words).join(' › ');
-          const hint = own(pointer) ? 'This agent’s value' : '';
-          const onSave = canManage ? next => patch(pointer, next) : undefined;
-          const disabled = !canManage;
-          if (typeof current === 'boolean') createToggleRow(list, {title, hint, value: current, disabled, onSave});
-          else if (typeof current === 'number') createNumberRow(list, {title, hint, value: current, disabled, onSave,
-            step: Number.isInteger(current) ? 1 : 0.01});
-          else createTextRow(list, {title, hint, value: current ?? '', disabled, placeholder: current == null ? 'none' : '', onSave});
-        }
+        createRawRows(createConfigList(section, {label: part}), value, '/' + part,
+          {onSave: canManage ? patch : undefined, own, disabled: !canManage});
       });
     }
   }

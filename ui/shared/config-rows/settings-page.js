@@ -10,7 +10,7 @@
 // Used by App → All Settings (mountSettingsPage) and an agent's Identity → Chat customization.
 
 import { createSubpage, createSubpageList } from '../subpage-list/subpage-list.js';
-import { createConfigList, createLengthRow, createNumberRow, createSelectRow, createTextRow,
+import { createConfigList, createLengthRow, createLongTextRow, createNumberRow, createSelectRow, createTextRow,
   createToggleRow } from './config-rows.js';
 import { createTextField } from '../controls/controls.js';
 import { requestTouchVibration } from '../vibrate/vibrate.js';
@@ -90,6 +90,93 @@ export function createSettingRow(list, setting, {onSave, agents = [], title = se
         options: agents.map(agent => [agent.id, agent.name || agent.id]), onSave});
     default:
       return null;
+  }
+}
+
+/** The `key: text.` sentence an object's `_instructions` gives for one of its keys. */
+function instruction(object, key) {
+  const text = typeof object?._instructions === 'string' ? object._instructions : '';
+  const at = text.search(new RegExp('(?:^|[.;]\\s+)' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':'));
+  if (at < 0) return '';
+  const rest = text.slice(at).replace(/^[.;]?\s*/, '').slice(key.length + 1).trim();
+  const next = rest.search(/\.\s+[a-z_][a-z0-9_]*(?:\s*\/\s*[a-z_][a-z0-9_]*)?:/);
+  return (next < 0 ? rest : rest.slice(0, next + 1)).trim();
+}
+
+/** Every scalar value under `value` as a row picked by its JSON type (true/false → switch,
+ *  number → stepper, text → text box, long text → editor). Arrays are left out and null values
+ *  are shown read-only. onSave(pointer, value) saves one; own(pointer) labels values this layer
+ *  sets itself. Hints come from each object's `_instructions`. */
+export function createRawRows(list, value, pointer, {onSave, own = () => false, disabled = false, root = pointer}) {
+  for (const [key, child] of Object.entries(value || {})) {
+    if (key === '_instructions' || key === 'description' || Array.isArray(child)) continue;
+    const path = pointer + '/' + key.replace(/~/g, '~0').replace(/\//g, '~1');
+    if (child && typeof child === 'object') {
+      createRawRows(list, child, path, {onSave, own, disabled, root});
+      continue;
+    }
+    const title = path.slice(root.length + 1).split('/').map(words).join(' \u203a ');
+    const hint = [instruction(value, key), own(path) ? 'Set here' : ''].filter(Boolean).join(' \u00b7 ');
+    const save = disabled || !onSave ? undefined : next => onSave(path, next);
+    const off = disabled || !onSave;
+    if (typeof child === 'boolean') createToggleRow(list, {title, hint, value: child, disabled: off, onSave: save});
+    else if (typeof child === 'number') createNumberRow(list, {title, hint, value: child, disabled: off, onSave: save,
+      step: Number.isInteger(child) ? 1 : 0.01});
+    else if (typeof child === 'string' && (child.length > 80 || child.includes('\n'))) {
+      createLongTextRow(list, {title, hint, value: child, disabled: off, onSave: save});
+    } else createTextRow(list, {title, hint, value: child ?? '', placeholder: child == null ? 'none' : '',
+      disabled: off || child == null, stacked: true, onSave: save});
+  }
+}
+
+/** A copy of `document` with `pointer` set to `value`. */
+export function withValue(document, pointer, value) {
+  const copy = structuredClone(document);
+  const keys = pointer.split('/').slice(1).map(key => key.replace(/~1/g, '/').replace(/~0/g, '~'));
+  let node = copy;
+  for (const key of keys.slice(0, -1)) node = node[key] ??= {};
+  node[keys.at(-1)] = value;
+  return copy;
+}
+
+// Raw config files editable on App → All Settings, by administrator configuration id. Prompts are
+// edited as files and the encryption switch on its own page, so neither is listed.
+const RAW_FILES = {app_ui: 'App layout', chat: 'Chat', context_compaction: 'Context compaction',
+  loop_runtime: 'Loop runtime', tool_output_retention: 'Tool output retention', access_policy: 'Access policy',
+  message_visibility: 'Message visibility gate', closing_status: 'Closing status gate', voice: 'Voice',
+  browser_limits: 'Browser limits', admin_alerts: 'Admin alerts', find_ranking: 'Find ranking',
+  models_runtime: 'Models runtime'};
+
+/** Every value of every editable config file, one lazily drawn section per file, saved through
+ *  the administrator configuration save (its validator and digest fence apply). */
+async function drawRawFiles(host, request, onSaved) {
+  const listing = await request('/admin/configuration');
+  host.append(node('p', 'ac-hint', 'Every value in the app\u2019s config files, by key name. Each save is checked by '
+    + 'that file\u2019s own validator. Prompts and the database encryption switch are edited elsewhere.'));
+  for (const {id} of listing.configurations || []) {
+    if (!RAW_FILES[id]) continue;
+    const section = node('details', 'stp-unavailable');
+    section.append(node('summary', 'ac-hint', RAW_FILES[id]));
+    host.append(section);
+    section.addEventListener('toggle', async () => {
+      if (!section.open || section.dataset.drawn) return;
+      section.dataset.drawn = '1';
+      const path = '/admin/configuration/' + encodeURIComponent(id);
+      let file;
+      try { file = await request(path); } catch (error) { section.append(node('p', 'ac-hint', error.message)); return; }
+      let queue = Promise.resolve();
+      createRawRows(createConfigList(section, {label: RAW_FILES[id]}), file.config, '', {
+        onSave: (pointer, value) => {
+          const task = queue.then(async () => {
+            const config = withValue(file.config, pointer, value);
+            const saved = await request(path, 'PUT', {expected_digest: file.digest, config});
+            file = {config, digest: saved.digest};
+            await onSaved?.();
+          });
+          queue = task.catch(() => {});
+          return task;
+        }});
+    });
   }
 }
 
@@ -239,7 +326,8 @@ export function highlight(row) {
   setTimeout(() => row.classList.remove('stp-match'), 2400);
 }
 
-/** Mount the All Settings page for `page` ('app', 'agent:<id>' or 'user') into host. */
+/** Mount the All Settings page for `page` ('app', 'agent:<id>' or 'user') into host; the app's
+ *  also lists every raw config value. */
 export async function mountSettingsPage(host, {page}) {
   const generation = (host._settingsGeneration || 0) + 1;
   host._settingsGeneration = generation;
@@ -305,6 +393,17 @@ export async function mountSettingsPage(host, {page}) {
     for (const setting of unavailable) items.append(node('li', '', settingTitle(setting) + ': ' + setting.unavailable));
     note.append(items);
     host.append(note);
+  }
+  if (page === 'app') {
+    const raw = node('details', 'stp-unavailable');
+    raw.append(node('summary', 'ac-hint', 'Advanced: every value in the config files'));
+    host.append(raw);
+    raw.addEventListener('toggle', () => {
+      if (raw.open && !raw.dataset.drawn) {
+        raw.dataset.drawn = '1';
+        void drawRawFiles(raw, request, () => store.load()).catch(error => raw.append(node('p', 'ac-hint', error.message)));
+      }
+    });
   }
   createComposerBox(composer, {request, page,
     onOpen: (id, surface) => {
