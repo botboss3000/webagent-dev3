@@ -143,8 +143,7 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
         let plan: model_selection::SelectionPlan = serde_json::from_value(value.clone())?;
         let state: model_selection::FailoverState =
             serde_json::from_value(run["failover_state"].clone())?;
-        if !matches!(plan.version, 1 | 2) || plan.agent_id != run["agent_id"].as_str().unwrap_or("")
-        {
+        if plan.version != 2 || plan.agent_id != run["agent_id"].as_str().unwrap_or("") {
             return Err(anyhow!("Invalid pinned model plan identity"));
         }
         let catalog = self.store.model_catalog().await?;
@@ -255,7 +254,23 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
                 return Err(anyhow!("BYO model outside tier"));
             }
         }
+        plan.backup_policy = Some(self.backup_policy(&plan.agent_id).await);
         Ok(())
+    }
+    /// The agent's effective backup policy: the app policy with its valid overlay, if any.
+    /// An unreadable overlay never blocks a run; the app policy applies.
+    pub async fn backup_policy(&self, agent: &str) -> crate::backup_policy::BackupPolicy {
+        use crate::backup_policy::{overlay_key, BackupPolicy};
+        let base = BackupPolicy::live();
+        match self
+            .store
+            .storage
+            .agent_document(agent, &overlay_key(agent))
+            .await
+        {
+            Ok(Some(record)) => BackupPolicy::effective(&base, &record["overlay"]),
+            _ => base,
+        }
     }
     pub async fn provider_start_for(
         &self,

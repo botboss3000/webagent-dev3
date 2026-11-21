@@ -61,7 +61,7 @@ export async function mountAppModels(host) {
         if(!providers[row.provider])throw Error('Unsupported platform provider');
         if(!row.entry_id&&providers[row.provider].validated===false)throw Error(providers[row.provider].name+' is not yet validated');
         if(typeof row.model!=='string'||row.model.length<1||row.model.length>200||!/^[!-~]+$/.test(row.model))throw Error('Invalid upstream model ID');
-        if(row.alias_group_id||row.reference_cost_input!=null||row.reference_cost_output!=null)throw Error(MISSING+': alias groups and pricing');
+        if(row.reference_cost_input!=null||row.reference_cost_output!=null)throw Error(MISSING+': pricing');
         row.entry_id||='model_'+crypto.randomUUID().replaceAll('-','');
       }
       staged=structuredClone(next);dirty=true;update();return{providers:next};
@@ -75,10 +75,10 @@ export async function mountAppModels(host) {
     listCredentials:async()=>{throw Error(MISSING+': named credential library');}
   };
   function markPending() {
-    for(const element of host.querySelectorAll('.ac-model-meta-defaultline,.ac-model-meta-aliases,.ac-saved-credentials .ac-ability-name')) {
+    for(const element of host.querySelectorAll('.ac-model-meta-defaultline,.ac-saved-credentials .ac-ability-name')) {
       if(element.querySelector('.v3-contract-pending'))continue;const label=document.createElement('span');label.className='v3-contract-pending';label.textContent=MISSING;element.append(label);
     }
-    for(const control of host.querySelectorAll('.ac-model-meta-defaultline input,.ac-model-alias-add'))control.disabled=true;
+    for(const control of host.querySelectorAll('.ac-model-meta-defaultline input'))control.disabled=true;
   }
   const extras=q('#ac-model-adv-extras');extras.classList.remove('ac-kv-hidden');
   for(const control of extras.querySelectorAll('input,select,button')) {

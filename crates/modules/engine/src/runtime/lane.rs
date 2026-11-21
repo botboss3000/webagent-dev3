@@ -185,7 +185,9 @@ impl<
                 }
                 // Poll the actual transport once while authority writers remain fenced.
                 let mut completion = Box::pin(async {
-                    let ready = prepared.bind_credentials(&tokens, &cancel)?;
+                    let ready = prepared
+                        .bind_credentials(&tokens, &cancel)?
+                        .with_response_start(super::failure::response_start(run));
                     self.provider.dispatch(ready, tx, cancel.clone()).await
                 });
                 let mut immediate = None;

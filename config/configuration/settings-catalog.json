@@ -6,6 +6,10 @@
       "descriptors": "config/chat/chat.settings.json"
     },
     {
+      "config": "config/chat/model-backup.json",
+      "descriptors": "config/chat/model-backup.settings.json"
+    },
+    {
       "config": "config/webapp/app-settings.json",
       "descriptors": "config/webapp/app-settings.settings.json"
     },

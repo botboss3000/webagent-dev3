@@ -26,6 +26,21 @@ pub trait RuntimeStorage: RecordCodec + Clone + Send + Sync + 'static {
         &'a self,
         user: &'a str,
     ) -> impl Future<Output = Result<SqlitePool>> + Send + 'a;
+    /// One decoded document from the named agent's own database, read as that agent.
+    fn agent_document<'a>(
+        &'a self,
+        agent: &'a str,
+        key: &'a str,
+    ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+        async move {
+            let pool = self.agent_pool(agent).await?;
+            let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+                .bind(key)
+                .fetch_optional(&pool)
+                .await?;
+            raw.map(|raw| self.unseal(&raw)).transpose()
+        }
+    }
 }
 pub struct Repository<'a, C: RuntimeStorage> {
     pub(crate) root: &'a Path,
@@ -122,88 +137,6 @@ impl<C: RuntimeStorage> Repository<'_, C> {
         )
         .agent_authority(user, agent)
         .await
-    }
-}
-
-impl<C: RuntimeStorage> Repository<'_, C> {
-    pub async fn migrate_legacy_default<F, Fut>(
-        &self,
-        load_legacy: F,
-        default_model: &str,
-    ) -> anyhow::Result<()>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<Value>>,
-    {
-        use crate::model_selection::*;
-        const MARKER: &str = "migration:model_roles_default_v1";
-        if self.get(MARKER).await?.is_some() {
-            return Ok(());
-        }
-        let mut catalog = self.model_catalog().await?;
-        if !catalog.agent_models.contains_key("shared_default")
-            && self.get("provider_tokens").await?.is_some()
-        {
-            let selection =
-                crate::provider::ProviderSelection::parse(&load_legacy().await?, default_model)?;
-            if selection.provider != crate::provider::ProviderId::OpenaiSubscription {
-                anyhow::bail!("Legacy default provider requires explicit model configuration");
-            }
-            let grants = std::collections::BTreeSet::from(["shared_default".to_owned()]);
-            let id = "legacy-default-subscription".to_owned();
-            if catalog.connections.contains_key(&id) || catalog.entries.contains_key(&id) {
-                anyhow::bail!("Legacy migration identity conflict");
-            }
-            catalog.connections.insert(
-                id.clone(),
-                Connection {
-                    id: id.clone(),
-                    owner_id: "admin".into(),
-                    transport: Transport::OpenaiSubscription,
-                    credential_ref: "provider_tokens".into(),
-                    allowed_agents: grants.clone(),
-                    revision: 1,
-                    revoked: false,
-                },
-            );
-            catalog.entries.insert(
-                id.clone(),
-                ModelEntry {
-                    id: id.clone(),
-                    owner_id: "admin".into(),
-                    connection_id: id.clone(),
-                    upstream_model: selection.model,
-                    display_name: "Existing default subscription".into(),
-                    capabilities: std::collections::BTreeSet::from(["text".into()]),
-                    allowed_agents: grants,
-                    revision: 1,
-                },
-            );
-            catalog.agent_models.insert(
-                "shared_default".into(),
-                AgentModels {
-                    retired_limits: Default::default(),
-                    efforts: std::collections::BTreeMap::new(),
-                    agent_id: "shared_default".into(),
-                    owner_id: "admin".into(),
-                    entry_ids: vec![id.clone()],
-                    roles: std::collections::BTreeMap::from([(
-                        ModelRole::Standard,
-                        RoleAssignment {
-                            entry_id: id,
-                            backup_entry_ids: vec![],
-                        },
-                    )]),
-                    revision: 1,
-                },
-            );
-            self.save_model_catalog(&catalog, catalog.revision).await?;
-        } else if !catalog.agent_models.is_empty() {
-            // Persist projected old primary assignments without changing their ordered backups.
-            self.save_model_catalog(&catalog, catalog.revision).await?;
-        }
-        self.put(MARKER, &json!({"complete":true})).await?;
-        Ok(())
     }
 }
 

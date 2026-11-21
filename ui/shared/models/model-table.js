@@ -6,6 +6,7 @@ import { copyText } from './clipboard.js';
 import { icon } from './icons.js';
 import { advanceDeleteBtn, resetDeleteBtn } from './delete-control.js';
 import { modelAddGuard } from './model-add-guard.js';
+import { requestTouchVibration } from '../vibrate/vibrate.js';
 import { createEffortSlider, modelEfforts } from './effort-slider.js';
 
 // COLOR SCHEME → ui/shared/css/design-system.css (single source of truth).
@@ -797,53 +798,6 @@ export function mountModelTable(host, opts = {}) {
   modelLabel.appendChild(searchWrap); modelLabel.appendChild(modelBar);
   modelRow.appendChild(modelLabel);
   table.appendChild(modelRow);
-
-  // MODEL-ALIASES: reuse the live configurator (including credentials and model
-  // validation), never clone its fields or handlers. Restore it before any row
-  // rebuild so a destroyed detail panel cannot take the form with it.
-  const configuratorRows = [provRow, urlRow, bridgeClientRow, keyRow, savedKeyRow, subscriptionRow, displayNameRow, modelRow];
-  let aliasTarget = null;
-  let aliasForm = null;
-  let aliasTrigger = null;
-  function closeAliasForm() {
-    if (!aliasForm) return;
-    configuratorRows.forEach(row => table.insertBefore(row, advRow));
-    aliasForm.remove();
-    aliasTrigger?.setAttribute('aria-expanded', 'false');
-    aliasForm = null; aliasTarget = null; aliasTrigger = null;
-    addBtn.textContent = 'Add';
-  }
-  function openAliasForm(p, destination, trigger) {
-    if (aliasTarget === p) { closeAliasForm(); trigger.focus(); return; }
-    closeAliasForm();
-    aliasTarget = p; aliasTrigger = trigger;
-    aliasForm = document.createElement('div');
-    aliasForm.className = 'ac-list ac-model-alias-form';
-    aliasForm.setAttribute('role', 'group');
-    aliasForm.setAttribute('aria-label', `New backup connection for ${rowDisplayName(p)}`);
-    const heading = document.createElement('div');
-    heading.className = 'ac-ability-row';
-    const text = document.createElement('span');
-    text.className = 'ac-ability-name';
-    text.textContent = `New alias for ${rowDisplayName(p)}`;
-    const cancel = document.createElement('button');
-    cancel.type = 'button'; cancel.className = 'ac-btn ac-btn-ghost ac-btn-sm';
-    cancel.textContent = 'Cancel';
-    cancel.addEventListener('click', () => { closeAliasForm(); trigger.focus(); });
-    heading.append(text, cancel); aliasForm.appendChild(heading);
-    configuratorRows.forEach(row => aliasForm.appendChild(row));
-    destination.appendChild(aliasForm);
-    table.classList.remove('ac-cfg-collapsed');
-    // A backup is a NEW connection; never reuse the primary's credential or
-    // pending subscription entry. Provider changes keep their existing flow.
-    pendingSubscriptionRow = null;
-    clearModel(); keyInput.value = '';
-    provSel.value = userCatalog ? 'webagent_catalog' : '_custom';
-    provSel.dispatchEvent(new Event('change'));
-    addBtn.textContent = 'Save alias';
-    trigger.setAttribute('aria-expanded', 'true');
-    provInput.focus();
-  }
 
   // Advanced / + action row
   const advRow = document.createElement('div');
@@ -2342,64 +2296,9 @@ export function mountModelTable(host, opts = {}) {
     body.innerHTML = automaticRouting + `<div class="ac-model-meta-list">${identityHtml + specHtml + usageHtml + capsHtml + aliasLineHtml + defaultLineHtml}</div>` + desc
       + (hasModelSpec ? '' : '<div class="ac-hint" style="margin:8px 0 0;">No token or cost data available for this model.</div>');
 
-    // MODEL-ALIASES: relationship IDs are independent of provider model names
-    // and display names. List members in roster order (the runtime backup order).
-    const backupLine = document.createElement('div');
-    backupLine.className = 'ac-model-meta-line ac-model-meta-aliases';
-    const aliasLabel = document.createElement('span');
-    aliasLabel.className = 'ac-model-meta-k'; aliasLabel.textContent = 'Aliases: ';
-    const aliasAdd = document.createElement('button');
-    aliasAdd.type = 'button'; aliasAdd.className = 'ac-btn ac-btn-ghost ac-btn-sm ac-model-alias-add';
-    aliasAdd.textContent = 'Add backup connection';
-    aliasAdd.setAttribute('aria-expanded', 'false');
-    aliasAdd.disabled = !p.entry_id;
-    const aliasRegion = document.createElement('div');
-    aliasRegion.className = 'ac-model-alias-region';
-    const groupId = String(p.alias_group_id || '');
-    const members = groupId ? S.providers.filter(other => other !== p && String(other.alias_group_id || '') === groupId) : [];
-    if (members.length) {
-      const list = document.createElement('div'); list.className = 'ac-list ac-model-alias-members';
-      list.setAttribute('aria-label', 'Alias group connections');
-      members.forEach(member => {
-        const row = document.createElement('div'); row.className = 'ac-ability-row';
-        const name = document.createElement('button');
-        name.type = 'button'; name.className = 'ac-btn ac-btn-ghost ac-btn-sm';
-        name.textContent = rowDisplayName(member);
-        name.title = 'Open this model connection';
-        name.addEventListener('click', () => {
-          closeAliasForm();
-          const target = table.querySelector(`.ac-saved-injected[data-mt-uid="${member._uid}"]`);
-          if (target && !target.classList.contains('expanded')) target.querySelector('.ac-saved-name-click')?.click();
-          target?.scrollIntoView({ block: 'nearest' });
-        });
-        const unlink = document.createElement('button');
-        unlink.type = 'button'; unlink.className = 'ac-btn ac-btn-ghost ac-btn-sm'; unlink.textContent = 'Unlink';
-        unlink.title = 'Keep the model connection, but remove it from this alias group';
-        unlink.addEventListener('click', async () => {
-          const before = S.providers.map(row => [row, row.alias_group_id]);
-          member.alias_group_id = '';
-          const remaining = S.providers.filter(row => row.alias_group_id === groupId);
-          if (remaining.length < 2) remaining.forEach(row => { row.alias_group_id = ''; });
-          unlink.disabled = true; _markSaving(unlink);
-          try { await saveRoster(); renderSaved(); onModelChange(); }
-          catch (error) {
-            before.forEach(([row, value]) => { row.alias_group_id = value; });
-            unlink.disabled = false; _flashSaveCheck(unlink, false, error?.message || 'Not saved');
-          }
-        });
-        row.append(name, unlink); list.appendChild(row);
-      });
-      aliasRegion.appendChild(list);
-    }
-    const aliasHint = document.createElement('div'); aliasHint.className = 'ac-hint';
-    aliasHint.textContent = members.length
-      ? 'Connections in this group are tried in roster order when the selected model fails before a response starts.'
-      : 'Add another model connection as a backup for this model.';
-    aliasRegion.appendChild(aliasHint);
-    backupLine.append(aliasLabel, aliasAdd);
-    body.querySelector('.ac-model-meta-list').appendChild(backupLine);
-    body.appendChild(aliasRegion);
-    aliasAdd.addEventListener('click', () => openAliasForm(p, aliasRegion, aliasAdd));
+    // MODEL-ALIASES: an agent model's ordered backups. A call that fails on this model moves
+    // down the list, under the agent's backup policy, to each alias able to do that call.
+    if (!catalogOnly && p.entry_id) renderAliases(p, body);
 
     // ── MODEL-PRICE-EDIT: the BYO price is click-to-edit ────────────────────
     // One click swaps the value for a PAIR of rate fields, because a price is a pair
@@ -3335,8 +3234,83 @@ export function mountModelTable(host, opts = {}) {
     if (onModelFocus) { try { onModelFocus(''); } catch (_) {} }
   }
 
+  // MODEL-ALIASES: a model can stand in for another only for a capability both have.
+  const capable = (row, key) => key === 'text_capable' ? row[key] !== false : !!row[key];
+  const sharesCapability = (a, b) => [...CAPABILITY_FLAGS.map(flag => flag[3]), 'transcription_capable']
+    .some(key => capable(a, key) && capable(b, key));
+  // Ordered aliases of saved model `p`: one line each with up/down/remove, then a
+  // dropdown of the agent's other models and a + that appends the chosen one.
+  function renderAliases(p, body) {
+    const saved = new Map(S.providers.filter(row => row.entry_id).map(row => [String(row.entry_id), row]));
+    const aliases = (p.aliases || []).filter(id => saved.has(id));
+    const button = (label, html, onClick) => {
+      const element = document.createElement('button');
+      element.type = 'button'; element.className = 'ac-btn ac-btn-ghost ac-btn-sm ac-model-alias-btn';
+      element.setAttribute('aria-label', label); element.title = label; element.innerHTML = html;
+      element.style.webkitTapHighlightColor = 'transparent';
+      element.addEventListener('click', event => { requestTouchVibration(event); onClick(element); });
+      return element;
+    };
+    // Save, rebuild the rows and reopen this one so the editor stays in view.
+    const save = async (next, control) => {
+      const before = p.aliases;
+      p.aliases = next; control.disabled = true; _markSaving(control);
+      try {
+        await saveRoster();
+        renderSaved();
+        table.querySelector(`.ac-saved-injected[data-mt-uid="${p._uid}"] .ac-saved-name-click`)?.click();
+      } catch (error) {
+        p.aliases = before; control.disabled = false;
+        _flashSaveCheck(control, false, error?.message || 'Not saved');
+      }
+    };
+    const section = document.createElement('div');
+    section.className = 'ac-model-meta-line ac-model-meta-aliases';
+    const label = document.createElement('span');
+    label.className = 'ac-model-meta-k'; label.textContent = 'Aliases:';
+    section.appendChild(label);
+    const list = document.createElement('div');
+    list.className = 'ac-model-alias-list';
+    list.setAttribute('aria-label', `Aliases of ${rowDisplayName(p)}`);
+    aliases.forEach((id, index) => {
+      const row = document.createElement('div');
+      row.className = 'ac-model-alias-row';
+      const name = document.createElement('span');
+      name.className = 'ac-model-alias-name';
+      name.textContent = `${index + 1}. ${rowDisplayName(saved.get(id))}`;
+      const move = (from, to) => { const next = [...aliases]; next.splice(to, 0, next.splice(from, 1)[0]); return next; };
+      const up = button('Move up', icon('chevron-up', { size: '15px' }), el => save(move(index, index - 1), el));
+      const down = button('Move down', icon('chevron-down', { size: '15px' }), el => save(move(index, index + 1), el));
+      const remove = button('Remove alias', icon('x', { size: '15px' }), el => save(aliases.filter(other => other !== id), el));
+      up.disabled = index === 0; down.disabled = index === aliases.length - 1;
+      row.append(name, up, down, remove);
+      list.appendChild(row);
+    });
+    const addRow = document.createElement('div');
+    addRow.className = 'ac-model-alias-add-row';
+    const select = document.createElement('select');
+    select.className = 'ac-input ac-model-alias-select';
+    select.setAttribute('aria-label', `Model to add as an alias of ${rowDisplayName(p)}`);
+    select.add(new Option('Choose a model…', ''));
+    for (const [id, row] of saved) {
+      if (row === p || aliases.includes(id)) continue;
+      const fits = sharesCapability(p, row);
+      const option = new Option(rowDisplayName(row) + (fits ? '' : ' (no shared capability)'), id);
+      option.disabled = !fits;
+      select.add(option);
+    }
+    const add = button('Add alias', icon('plus', { size: '15px' }), el => save([...aliases, select.value], el));
+    add.disabled = true;
+    select.addEventListener('change', () => { add.disabled = !select.value; });
+    addRow.append(select, add);
+    const hint = document.createElement('div');
+    hint.className = 'ac-hint';
+    hint.textContent = 'When a call on this model fails, it moves down this list to the next model able to do that call, under the agent\'s backup policy.';
+    section.append(list, addRow, hint);
+    body.querySelector('.ac-model-meta-list').appendChild(section);
+  }
+
   function renderSaved({ animate = false, enteringUids = [] } = {}) {
-    closeAliasForm();
     closeRolesPopover?.();   // its row is about to be rebuilt
     const before = animate ? _snapshotSavedLayout() : null;
     // MODEL-ROW-FOCUS: this rebuild collapses every row detail, so the chart's
@@ -3427,16 +3401,13 @@ export function mountModelTable(host, opts = {}) {
     // model. Catalog-only mounts have no roles, and subscription entries already
     // carry a server-reserved ID before they can be added.
     const becomesStandard = !catalogOnly && !subscription && capText && !S.providers.length;
-    // Platform entries already have server-owned IDs. Picking one already in
-    // this roster links that connection rather than submitting a duplicate ID.
-    // MODEL-ADD-GUARD keeps the alias-only self-link validation from firing on
-    // a normal Add (where both the duplicate lookup and the alias target are
-    // null) — see ui/shared/js/model-add-guard.js.
-    const { dupe, message: guardMessage } = modelAddGuard({
-      platformCatalog, providers: S.providers, selectedModel: S.selectedModel, aliasTarget,
+    // Platform entries already have server-owned IDs; a catalog model already in this
+    // roster is not added twice (see model-add-guard.js).
+    const { message: guardMessage } = modelAddGuard({
+      platformCatalog, providers: S.providers, selectedModel: S.selectedModel,
     });
     if (guardMessage) return setModelStatus(guardMessage);
-    if (!dupe) {
+    {
       const requestedName = displayNameInput.value.trim() || (free ? nextFreeSlotLabel() : '');
       const conflict = displayNameConflict(requestedName);
       if (conflict) return setModelStatus(conflict);
@@ -3449,14 +3420,6 @@ export function mountModelTable(host, opts = {}) {
       newP.decision_capable = !!chosen.decision_capable;
       if (pendingEffort) newP.default_effort = pendingEffort;
       const previousRoles = { ...S.roleAssignments };
-      const parentModel = aliasTarget;
-      const previousGroups = S.providers.map(row => [row, row.alias_group_id]);
-      if (parentModel) {
-        const groupId = String(parentModel.alias_group_id || parentModel.entry_id || '');
-        if (!groupId) throw new Error('Save the primary model before adding an alias');
-        parentModel.alias_group_id = groupId;
-        newP.alias_group_id = groupId;
-      }
       S.providers.push(newP);
       try {
         await saveRoster();
@@ -3470,32 +3433,10 @@ export function mountModelTable(host, opts = {}) {
       } catch (error) {
         S.providers = S.providers.filter(row => row !== newP);
         S.roleAssignments = previousRoles;
-        previousGroups.forEach(([row, group]) => { row.alias_group_id = group; });
         throw error;
       }
-      // Keep the parent group visible after a grouped add; saved rows retain
-      // independent stable IDs and credentials for runtime failover.
       renderSaved({ animate: true, enteringUids: [newP._uid] });
-      if (parentModel) {
-        table.querySelector(`.ac-saved-injected[data-mt-uid="${parentModel._uid}"] .ac-saved-name-click`)?.click();
-      }
       savedRow = newP;
-    } else {
-      const parentModel = aliasTarget;
-      const groupId = String(parentModel.alias_group_id || parentModel.entry_id || '');
-      if (dupe.alias_group_id && dupe.alias_group_id !== groupId) {
-        return setModelStatus('Unlink this connection from its current alias group first');
-      }
-      const previousGroups = S.providers.map(row => [row, row.alias_group_id]);
-      parentModel.alias_group_id = groupId; dupe.alias_group_id = groupId;
-      try { await saveRoster(); }
-      catch (error) {
-        previousGroups.forEach(([row, group]) => { row.alias_group_id = group; });
-        throw error;
-      }
-      renderSaved();
-      table.querySelector(`.ac-saved-injected[data-mt-uid="${parentModel._uid}"] .ac-saved-name-click`)?.click();
-      savedRow = dupe;
     }
     if (subscription && pendingSubscriptionRow?.entry_id === savedRow?.entry_id) {
       pendingSubscriptionRow = null;
@@ -3714,7 +3655,7 @@ export function mountModelTable(host, opts = {}) {
         entry_id: p.entry_id || '',
         connection_id: p.connection_id || '',
         catalog_source_id: p.catalog_source_id || '',
-        alias_group_id: p.alias_group_id || '',
+        aliases: Array.isArray(p.aliases) ? p.aliases.map(String) : [],
         display_name: p.display_name || '',
         // MODEL-NAME-LEVELS: the catalog's own model name for a catalog row (its
         // authored alias). Blank on a BYO row, whose model name is the real model id.

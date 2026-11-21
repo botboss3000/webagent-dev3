@@ -115,7 +115,15 @@ impl Provider {
             let (tx, mut rx) = mpsc::channel(16);
             let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
             let result = self
-                .send_subscription(request, credentials, tx, cancel.clone())
+                .send_subscription(
+                    request,
+                    credentials,
+                    std::time::Duration::from_secs(
+                        crate::backup_policy::BackupPolicy::live().response_start_seconds,
+                    ),
+                    tx,
+                    cancel.clone(),
+                )
                 .await;
             drain.abort();
             result?

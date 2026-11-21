@@ -65,3 +65,11 @@
 }
 .ac-model-cfg-modelbar > .ac-model-caps { flex: 1 1 auto; margin: 0; }
 .ac-model-cfg-modelbar > .ac-model-add-control { margin-left: auto; flex: 0 0 auto; }
+/* Model aliases: ordered backups with move/remove buttons, then the add picker. */
+.ac-model-meta-aliases { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.ac-model-alias-list:empty { display: none; }
+.ac-model-alias-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ac-model-alias-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ac-model-alias-btn { min-width: 32px; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; }
+.ac-model-alias-add-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ac-model-alias-select { flex: 1; min-width: 0; max-width: 320px; }

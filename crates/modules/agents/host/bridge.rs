@@ -170,12 +170,7 @@ impl webagent_agents::service::Effects for Bridge<'_> {
         tx.commit().await?;
         // The catalog reads every referenced roster from its agent database, so prune it first.
         let mut catalog = store.model_catalog().await?;
-        let assignments = catalog.assignments.len();
-        catalog
-            .assignments
-            .retain(|_, assignment| assignment.agent_id != agent);
-        let pruned = catalog.agent_models.remove(agent).is_some();
-        if pruned || assignments != catalog.assignments.len() {
+        if catalog.agent_models.remove(agent).is_some() {
             let revision = catalog.revision;
             store.save_model_catalog(&catalog, revision).await?;
         }

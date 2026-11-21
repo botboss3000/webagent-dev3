@@ -228,6 +228,56 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
     };
     (root, app)
 }
+/// The default agent's roster: one subscription model on the fixture's `provider_tokens`.
+async fn default_subscription_roster(store: &Store, catalog: &mut model_selection::Catalog) {
+    use model_selection::*;
+    use std::collections::{BTreeMap, BTreeSet};
+    let selection = provider::ProviderSelection::parse(
+        &store.agent_model().await.unwrap(),
+        DEFAULT_AGENT_MODEL,
+    )
+    .unwrap();
+    let grants = BTreeSet::from(["shared_default".to_owned()]);
+    let id = "default-subscription".to_owned();
+    catalog.connections.insert(
+        id.clone(),
+        Connection {
+            id: id.clone(),
+            owner_id: "admin".into(),
+            transport: Transport::OpenaiSubscription,
+            credential_ref: "provider_tokens".into(),
+            allowed_agents: grants.clone(),
+            revision: 1,
+            revoked: false,
+        },
+    );
+    catalog.entries.insert(
+        id.clone(),
+        ModelEntry {
+            id: id.clone(),
+            owner_id: "admin".into(),
+            connection_id: id.clone(),
+            upstream_model: selection.model,
+            display_name: "Default subscription".into(),
+            capabilities: BTreeSet::from(["text".into()]),
+            allowed_agents: grants,
+            revision: 1,
+        },
+    );
+    catalog.agent_models.insert(
+        "shared_default".into(),
+        AgentModels {
+            retired_limits: Default::default(),
+            efforts: BTreeMap::new(),
+            agent_id: "shared_default".into(),
+            owner_id: "admin".into(),
+            entry_ids: vec![id.clone()],
+            roles: BTreeMap::from([(ModelRole::Standard, RoleAssignment::new(id))]),
+            aliases: BTreeMap::new(),
+            revision: 1,
+        },
+    );
+}
 pub(crate) async fn fixture() -> (TempDir, App) {
     crate::tools::install_tool_defaults();
     let (root, app) = fixture_uninitialized().await;
@@ -235,12 +285,10 @@ pub(crate) async fn fixture() -> (TempDir, App) {
         .create_admin_account("admin", "fixture-only-password-hash", "fixture-generation")
         .await
         .unwrap();
-    // Test setup follows the production migration, then explicitly appoints System
-    // for compaction fixtures; capabilities alone never select a role.
-    crate::model_selection_api::migrate_legacy_default(&app.store)
-        .await
-        .unwrap();
+    // The default agent's subscription model is its Standard and, for compaction fixtures,
+    // its System role; capabilities alone never select a role.
     let mut catalog = app.store.model_catalog().await.unwrap();
+    default_subscription_roster(&app.store, &mut catalog).await;
     let roster = catalog.agent_models.get_mut("shared_default").unwrap();
     roster.roles.insert(
         model_selection::ModelRole::System,
@@ -2942,10 +2990,7 @@ async fn image_generation_stays_off_without_an_image_out_model() {
     roster.entry_ids.push("image-out".into());
     roster.roles.insert(
         model_selection::ModelRole::ImageOut,
-        model_selection::RoleAssignment {
-            entry_id: "image-out".into(),
-            backup_entry_ids: vec![],
-        },
+        model_selection::RoleAssignment::new("image-out"),
     );
     app.store
         .save_model_catalog(&catalog, catalog.revision)
@@ -5430,11 +5475,11 @@ pub(crate) async fn selection_fixture(app: &App) -> model_selection::Catalog {
             },
         );
     }
-    // Each tenant has an explicit roster and independent role appointment. Sharing
+    // Each tenant has an explicit roster, role appointments and aliases. Sharing
     // authorizes both the entry and its connection without relying on common ownership.
-    for (agent, primary, backup) in [
-        ("shared_default", "one", vec![]),
-        ("agent-a", "two", vec!["one".into()]),
+    for (agent, primary, aliases) in [
+        ("shared_default", "one", vec![("one", "two")]),
+        ("agent-a", "two", vec![("two", "one"), ("one", "two")]),
     ] {
         let revision = catalog
             .agent_models
@@ -5451,21 +5496,13 @@ pub(crate) async fn selection_fixture(app: &App) -> model_selection::Catalog {
                 entry_ids: vec!["one".into(), "two".into()],
                 revision,
                 roles: BTreeMap::from([
-                    (
-                        ModelRole::Standard,
-                        RoleAssignment {
-                            entry_id: primary.into(),
-                            backup_entry_ids: backup,
-                        },
-                    ),
-                    (
-                        ModelRole::System,
-                        RoleAssignment {
-                            entry_id: "one".into(),
-                            backup_entry_ids: vec!["two".into()],
-                        },
-                    ),
+                    (ModelRole::Standard, RoleAssignment::new(primary)),
+                    (ModelRole::System, RoleAssignment::new("one")),
                 ]),
+                aliases: aliases
+                    .into_iter()
+                    .map(|(id, alias)| (id.to_owned(), vec![alias.to_owned()]))
+                    .collect(),
             },
         );
     }
@@ -5546,10 +5583,7 @@ async fn model_selection_admission_pins_agent_model_prompt_and_credentials() {
                 .roles
                 .insert(
                     model_selection::ModelRole::Standard,
-                    model_selection::RoleAssignment {
-                        entry_id: "one".into(),
-                        backup_entry_ids: vec![],
-                    },
+                    model_selection::RoleAssignment::new("one"),
                 );
             catalog = app
                 .store
@@ -5637,7 +5671,7 @@ async fn model_selection_failover_is_ordered_durable_and_revocation_is_live() {
     assert!(restored["error"]
         .as_str()
         .unwrap()
-        .contains("no safe retry or eligible backup"));
+        .contains("no safe retry or eligible alias"));
 }
 
 #[tokio::test]
@@ -5698,13 +5732,14 @@ async fn model_roles_custom_uses_roster_without_reassigning_standard() {
     let run = app.run(accepted["run_id"].as_str().unwrap()).await.unwrap();
     assert_eq!(run["selection_plan"]["custom_entry_id"], "one");
     assert_eq!(run["provider_selection"]["model"], "model-one");
-    assert_eq!(
-        run["selection_plan"]["candidates"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    // A composer pick brings its own aliases: "one" falls back to "two".
+    let candidates: Vec<_> = run["selection_plan"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["entry_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(candidates, ["one", "two"]);
     assert_eq!(app.store.model_catalog().await.unwrap(), catalog);
     assert_eq!(
         catalog.resolve("agent-a").unwrap().candidates[0].entry_id,
@@ -5759,10 +5794,7 @@ async fn model_roles_system_is_pinned_and_failover_is_separate_after_recovery() 
         .roles
         .insert(
             model_selection::ModelRole::System,
-            model_selection::RoleAssignment {
-                entry_id: "two".into(),
-                backup_entry_ids: vec![],
-            },
+            model_selection::RoleAssignment::new("two"),
         );
     app.store
         .save_model_catalog(&catalog, catalog.revision)
@@ -6688,10 +6720,7 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
     roster.entry_ids.push("system-summary".into());
     roster.roles.insert(
         model_selection::ModelRole::System,
-        model_selection::RoleAssignment {
-            entry_id: "system-summary".into(),
-            backup_entry_ids: vec![],
-        },
+        model_selection::RoleAssignment::new("system-summary"),
     );
     app.store
         .save_model_catalog(&catalog, catalog.revision)
@@ -8710,10 +8739,7 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
         .roles
         .insert(
             model_selection::ModelRole::Standard,
-            model_selection::RoleAssignment {
-                entry_id: id.into(),
-                backup_entry_ids: vec![],
-            },
+            model_selection::RoleAssignment::new(id),
         );
     app.store
         .save_model_catalog(&catalog, catalog.revision)
@@ -10353,7 +10379,7 @@ async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent
         (row["type"].as_str(), row["auto_resume"].as_bool()),
         (Some("retry_scheduled"), Some(true))
     );
-    let settings = webagent_models::settings::Settings::default().retry;
+    let settings = webagent_models::backup_policy::BackupPolicy::default();
     assert!(
         run["provider_retry_at"].as_u64().unwrap() + 1
             >= crate::now() + settings.auto_resume_after_seconds
@@ -10457,11 +10483,7 @@ async fn provider_recovery_never_marks_partial_or_uncertain_or_contract_failures
         "summary connection failure",
     );
     // Two rounds of retries with one automatic resume between them, then the stop.
-    for _ in 0..2
-        * (webagent_models::settings::Settings::default()
-            .retry
-            .same_model_retries
-            + 1)
+    for _ in 0..2 * (webagent_models::backup_policy::BackupPolicy::default().same_model_retries + 1)
     {
         system_model_failure(&mut run, &error).unwrap();
     }

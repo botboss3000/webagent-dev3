@@ -3,7 +3,8 @@ use crate::runtime::{config, ports::*, Runtime};
 use crate::{context_accounting, context_assembly, now, provider};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use webagent_models::model_selection;
+use webagent_models::backup_policy::BackupPolicy;
+use webagent_models::model_selection::{self, SelectionPlan};
 pub fn system_dispatch_run(run: &Value) -> Result<Value> {
     let plan: model_selection::SelectionPlan =
         serde_json::from_value(run["system_selection_plan"].clone()).map_err(|_| {
@@ -28,10 +29,18 @@ pub fn system_dispatch_run(run: &Value) -> Result<Value> {
     )
 }
 pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
-    use model_selection::{FailoverState, FailureKind, NextAction, SelectionPlan};
+    use model_selection::{FailoverState, FailureKind, NextAction};
     let failure = error.downcast_ref::<provider::ProviderFailure>();
     let kind = failure.map(|e| e.kind).unwrap_or(FailureKind::Protocol);
-    let retry = webagent_models::settings::Settings::live().retry;
+    let plan: Option<SelectionPlan> = run
+        .get("selection_plan")
+        .filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value(v.clone()))
+        .transpose()?;
+    // The agent's policy pinned at admission; runs without a plan follow the live app policy.
+    let policy = plan
+        .as_ref()
+        .map_or_else(BackupPolicy::live, SelectionPlan::policy);
     let mut state: FailoverState = run
         .get("failover_state")
         .filter(|v| !v.is_null())
@@ -40,10 +49,16 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         .unwrap_or_default();
     state.response_started |= failure.is_some_and(|e| e.response_started);
     state.uncertain_tool_effect |= run["uncertain"] == true;
-    let mut action = if let Some(value) = run.get("selection_plan").filter(|v| !v.is_null()) {
-        let plan: SelectionPlan = serde_json::from_value(value.clone())?;
-        let action = state.failed_with(&plan, kind, retry.same_model_retries);
+    let mut switched = None;
+    let mut action = if let Some(plan) = &plan {
+        let from = plan
+            .candidates
+            .get(state.candidate_index)
+            .map(|c| c.upstream_model.clone());
+        let action = state.failed(plan, kind, &policy);
         if action == NextAction::Backup {
+            switched = Some(json!({"from_model":from,
+                "to_model":plan.candidates[state.candidate_index].upstream_model,"reason":kind}));
             run["provider_selection"] = provider::ProviderSelection {
                 provider: plan.candidates[state.candidate_index]
                     .transport
@@ -59,7 +74,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     } else if kind == FailureKind::Transient
         && !state.response_started
         && !state.uncertain_tool_effect
-        && state.retries < retry.same_model_retries
+        && state.retries < policy.same_model_retries
     {
         state.retries += 1;
         NextAction::Retry
@@ -68,13 +83,13 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     };
     let resumable =
         kind == FailureKind::Transient && !state.response_started && !state.uncertain_tool_effect;
-    // Once the retries run out on a run that is safe to resume, resume it automatically after
-    // `retry.auto_resume_after_seconds`, at most `auto_resume_attempts` times per run, with a fresh
-    // retry budget. It stays queued, so Stop cancels it like any queued retry.
+    // Once the retries and aliases run out on a run that is safe to resume, resume it
+    // automatically after `auto_resume_after_seconds`, at most `auto_resume_attempts` times per
+    // run, with a fresh retry budget. It stays queued, so Stop cancels it like any queued retry.
     let resumes = run["auto_resumes"].as_u64().unwrap_or(0);
     let auto_resume = resumable
         && action == NextAction::Terminal
-        && resumes < u64::from(retry.auto_resume_attempts);
+        && resumes < u64::from(policy.auto_resume_attempts);
     if auto_resume {
         state.retries = 0;
         // A fresh budget includes the per-call attempt limit (`workflow.max_attempts`), as for a
@@ -84,18 +99,19 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         action = NextAction::Retry;
     }
     let wait = if auto_resume {
-        retry.auto_resume_after_seconds
+        policy.auto_resume_after_seconds
     } else {
-        retry_delay(&retry, &state, failure.and_then(|f| f.retry_after))
+        retry_delay(&policy, &state, failure.and_then(|f| f.retry_after))
     };
     if action != NextAction::Terminal {
         let detail: String = error.to_string().chars().take(300).collect();
-        retry_activity(
-            run,
-            json!({"type":"retry_scheduled","attempt":state.retries,"of":retry.same_model_retries,
-                "wait_seconds":wait,"error":detail,"backup":action == NextAction::Backup,
-                "auto_resume":auto_resume}),
-        );
+        let mut item = json!({"type":"retry_scheduled","attempt":state.retries,
+            "of":policy.same_model_retries,"wait_seconds":wait,"error":detail,
+            "backup":action == NextAction::Backup,"auto_resume":auto_resume});
+        if let Some(switch) = switched.as_ref().and_then(Value::as_object) {
+            item.as_object_mut().unwrap().extend(switch.clone());
+        }
+        retry_activity(run, item);
     }
     // This encrypted marker permits an explicit new retry budget, never an
     // automatic reset. Partial responses and uncertain effects cannot set it.
@@ -115,21 +131,25 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         NextAction::Terminal if resumable => "stopped",
         NextAction::Terminal => "failed",
     });
-    run["error"] = json!(match action {
-        NextAction::Retry if auto_resume => {
-            format!("Provider still failing; resuming automatically in {wait} s: {error}")
-        }
-        NextAction::Retry => format!("Transient provider failure; bounded retry: {error}"),
-        NextAction::Backup => format!(
-            "Primary/backup provider failed; trying the next configured connection: {error}"
-        ),
-        NextAction::Terminal if resumable =>
-            format!("Provider recovery budget exhausted; resume to try again: {error}"),
-        NextAction::Terminal =>
-            format!("Provider request failed; no safe retry or eligible backup remains: {error}"),
-    });
+    // A switch to the next alias is silent: the activity group's retry row records it.
+    run["error"] = match action {
+        NextAction::Retry if auto_resume => json!(format!(
+            "Provider still failing; resuming automatically in {wait} s: {error}"
+        )),
+        NextAction::Retry => json!(format!(
+            "Transient provider failure; bounded retry: {error}"
+        )),
+        NextAction::Backup => Value::Null,
+        NextAction::Terminal if resumable => json!(format!(
+            "Provider recovery budget exhausted; resume to try again: {error}"
+        )),
+        NextAction::Terminal => json!(format!(
+            "Provider request failed; no safe retry or eligible alias remains: {error}"
+        )),
+    };
     Ok(())
 }
+pub use webagent_models::backup_policy::response_start_seconds as response_start;
 /// Record an activity-only row for a scheduled retry; context assembly skips `retry:` steps.
 fn retry_activity(run: &mut Value, item: Value) {
     let count = run["retry_rows"].as_u64().unwrap_or(0) + 1;
@@ -141,10 +161,10 @@ fn retry_activity(run: &mut Value, item: Value) {
     }
 }
 
-/// Seconds before the next attempt, from the live retry settings (`models-runtime.json`).
-/// A backup starts after the first delay.
+/// Seconds before the next attempt, from the run's backup policy. An alias starts after the
+/// first delay.
 fn retry_delay(
-    retry: &webagent_models::settings::Retry,
+    policy: &BackupPolicy,
     state: &model_selection::FailoverState,
     retry_after: Option<u64>,
 ) -> u64 {
@@ -152,7 +172,7 @@ fn retry_delay(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| u64::from(d.subsec_nanos()))
         .unwrap_or(0);
-    retry.delay(state.retries, retry_after, entropy)
+    policy.delay(state.retries, retry_after, entropy)
 }
 
 pub fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {

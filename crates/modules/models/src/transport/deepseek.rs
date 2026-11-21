@@ -283,6 +283,7 @@ impl Provider {
         body: Value,
         fixed_endpoint: &str,
         api_key: &str,
+        response_start: Duration,
         delta: mpsc::Sender<String>,
         cancel: CancellationToken,
     ) -> Result<Value> {
@@ -296,12 +297,12 @@ impl Provider {
             .bearer_auth(api_key)
             .header("Accept", "text/event-stream")
             .json(&body);
-        // Live limits (`models-runtime.json`), fixed for this call.
+        // Live stall limit (`models-runtime.json`), fixed for this call.
         let streaming = crate::settings::Settings::live().streaming;
         let response = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(typed_failure(FailureKind::Cancelled,false,"Provider request cancelled")),
-            result = tokio::time::timeout(Duration::from_secs(streaming.response_start_seconds), request.send()) => result
+            result = tokio::time::timeout(response_start, request.send()) => result
                 .map_err(|_|typed_failure(FailureKind::Transient,false,"Provider connection timed out"))?
                 .map_err(|e|transport_failure(e,false,"Provider connection failed"))?
         };

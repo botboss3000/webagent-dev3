@@ -20,6 +20,7 @@
     "config/browser/browser-limits.json",
     "config/browser/browser-pages.json",
     "config/chat/*.settings.json",
+    "config/chat/model-backup.json",
     "config/configuration/prompts/*.json",
     "config/configuration/prompts/*.md",
     "config/configuration/prompts/main_chat_skills/*.md",

@@ -11,6 +11,7 @@ pub fn valid_model(model: &str) -> bool {
 }
 
 pub mod account_catalog;
+pub mod backup_policy;
 pub mod discovery;
 #[path = "selection.rs"]
 pub mod model_selection;

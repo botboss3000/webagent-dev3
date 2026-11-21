@@ -274,7 +274,6 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             .execute(&mut *tx)
             .await?;
         let mut catalog = self.read_catalog_connection(&mut tx).await?;
-        catalog.migrate_stored(&mut tx).await?;
         if catalog.platform_sources.contains_key(id)
             || catalog.entries.get(id).is_none_or(|e| e.owner_id != user)
         {
@@ -285,18 +284,9 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             let before = roster.clone();
             roster.entry_ids.retain(|e| e != id);
             roster.efforts.remove(id);
-            // A role whose primary is deleted falls back to its first backup, else is cleared.
-            roster.roles.retain(|_, role| {
-                role.backup_entry_ids.retain(|e| e != id);
-                if role.entry_id != id {
-                    return true;
-                }
-                if role.backup_entry_ids.is_empty() {
-                    return false;
-                }
-                role.entry_id = role.backup_entry_ids.remove(0);
-                true
-            });
+            // A role whose model is deleted is cleared until the owner appoints another.
+            roster.roles.retain(|_, role| role.entry_id != id);
+            roster.prune_aliases();
             if *roster != before {
                 roster.revision = roster
                     .revision
@@ -305,11 +295,6 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                 agents.push(roster.agent_id.clone());
             }
         }
-        for group in catalog.groups.values_mut() {
-            group.entry_ids.retain(|e| e != id);
-        }
-        // Legacy assignments are rollback material only; one naming this model cannot survive it.
-        catalog.assignments.retain(|_, a| a.primary_entry_id != id);
         catalog.entries.remove(id);
         catalog.revision = catalog
             .revision
@@ -560,7 +545,6 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             return Ok(receipt["result"].clone());
         }
         let mut catalog = self.read_catalog_connection(&mut tx).await?;
-        catalog.migrate_stored(&mut tx).await?;
         if let Some(pin) = &platform_pin {
             if let Some(existing) = catalog.entries.get(&source.id) {
                 if existing.owner_id != "platform_catalog"
@@ -624,6 +608,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                     .into(),
                 entry_ids: vec![],
                 roles: BTreeMap::new(),
+                aliases: BTreeMap::new(),
                 revision: 0,
             }),
         };
@@ -636,10 +621,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             }
             roster.roles.insert(
                 crate::model_selection::ModelRole::Standard,
-                crate::model_selection::RoleAssignment {
-                    entry_id: source.id.clone(),
-                    backup_entry_ids: vec![],
-                },
+                crate::model_selection::RoleAssignment::new(source.id.clone()),
             );
         }
         roster.revision = previous_revision

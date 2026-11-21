@@ -1,5 +1,5 @@
 .v3-reference-models{min-width:0}
-.v3-reference-models .ac-model-meta-defaultline input:disabled,.v3-reference-models .ac-model-alias-add:disabled{cursor:not-allowed}
+.v3-reference-models .ac-model-meta-defaultline input:disabled{cursor:not-allowed}
 .v3-reference-models .ac-model-meta-editable[aria-disabled=true]{cursor:not-allowed}
 .v3-reference-models .v3-pending-feature,
 .v3-reference-models .v3-pending-feature > .ac-ability-row,

@@ -4,7 +4,7 @@ import { initModelAnalytics } from '../../../../shared/models/model-analytics.js
 import { createModelAdapter, usageFetch } from '../../../../shared/models/v3-adapter.js';
 import { showNotification } from '../../../../chat/core/chat-action-panel.js';
 
-// Actual v2_ref Models mount: analytics sibling + shared renderer; only the adapter is v3-specific.
+// Agent Models mount: analytics sibling + shared model table, through the agent catalog adapter.
 export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   const bridge=createModelAdapter(request,agentId,onAssignment);await bridge.ready();
   host.replaceChildren();
@@ -38,8 +38,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   function markPending(el){if(el)el.classList.add('v3-pending-feature');}
   function pending(){
     if(stopped)return;
-    for(const el of group.querySelectorAll('.ac-model-meta-aliases,.ac-directives-section-title,.ac-directive-hint'))markPending(el);
-    for(const el of group.querySelectorAll('.ac-model-alias-add')){el.disabled=true;markPending(el);}
+    for(const el of group.querySelectorAll('.ac-directives-section-title,.ac-directive-hint'))markPending(el);
     for(const el of group.querySelectorAll('.ac-model-meta-editable')){
       if(el.closest('.ac-model-meta-nameline'))continue;
       const line=el.closest('.ac-model-meta-line');markPending(line);el.setAttribute('aria-disabled','true');el.tabIndex=-1;el.style.pointerEvents='none';

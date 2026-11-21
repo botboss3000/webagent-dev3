@@ -4,6 +4,7 @@ use super::{projection_id, required, typed_failure, Provider, ProviderId, Provid
 use crate::transport::Projection;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -24,6 +25,16 @@ pub struct ValidatedCall<'a> {
 
 pub struct ReadyCall<'a> {
     transport: ReadyTransport<'a>,
+    response_start_seconds: Option<u64>,
+}
+
+impl ReadyCall<'_> {
+    /// How long the provider may take to start answering, from the run's pinned backup policy;
+    /// without it the live app policy applies.
+    pub fn with_response_start(mut self, seconds: u64) -> Self {
+        self.response_start_seconds = Some(seconds);
+        self
+    }
 }
 
 pub(super) struct SubscriptionRequest<'a> {
@@ -389,7 +400,10 @@ impl<'a> ValidatedCall<'a> {
                 link: required(tokens, "api_key")?,
             },
         };
-        Ok(ReadyCall { transport })
+        Ok(ReadyCall {
+            transport,
+            response_start_seconds: None,
+        })
     }
 }
 
@@ -401,9 +415,13 @@ impl Provider {
         delta: mpsc::Sender<String>,
         cancel: CancellationToken,
     ) -> Result<Value> {
+        let start =
+            Duration::from_secs(call.response_start_seconds.unwrap_or_else(|| {
+                crate::backup_policy::BackupPolicy::live().response_start_seconds
+            }));
         match call.transport {
             ReadyTransport::Subscription(request, credentials) => {
-                self.send_subscription(request, credentials, delta, cancel)
+                self.send_subscription(request, credentials, start, delta, cancel)
                     .await
             }
             ReadyTransport::Compatible {
@@ -411,7 +429,7 @@ impl Provider {
                 endpoint,
                 api_key,
             } => {
-                self.send_compatible(body, endpoint, api_key, delta, cancel)
+                self.send_compatible(body, endpoint, api_key, start, delta, cancel)
                     .await
             }
             ReadyTransport::Bridge {
@@ -463,7 +481,6 @@ mod tests {
     use super::*;
     use crate::model_selection::FailureKind;
     use crate::transport::ProviderFailure;
-    use std::time::Duration;
 
     /// Extract the classified failure expected by preparation and dispatch-boundary fixtures.
     fn kind(error: &anyhow::Error) -> FailureKind {

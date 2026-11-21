@@ -89,10 +89,9 @@ from this agent, and existing per-role backup candidates are retained.
 Pending UI remains present with `NEED BACKEND CONTRACT`: entitled catalog,
 discovery/provider presets, custom transports/base URLs, usage/analytics/reset,
 metadata/reference pricing, account defaults, named credential libraries,
-role prompt injections, and reference alias groups. Discovery is not simulated;
-supported providers allow manually entered upstream model IDs. V3's existing
-per-role backups are not equivalent to reference alias groups: their state is
-preserved, but alias-group editing stays blocked. Named credential library
+and role prompt injections. Discovery is not simulated; supported providers
+allow manually entered upstream model IDs. Each agent model's Aliases line
+(dropdown, +, up/down, remove) edits that model's ordered backups. Named credential library
 operations remain pending. Selecting ChatGPT Subscription issues the
 verification code immediately; Reset cancels that connection's pending flow.
 The picker previews the four public GPT-6 choices before authorization and

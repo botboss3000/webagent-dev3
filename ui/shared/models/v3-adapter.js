@@ -67,6 +67,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
       base_url:c.transport==='deepseek'?'https://api.deepseek.com':'codex://chatgpt',api_key:'',
       ...catalogCapabilityFlags(e.capabilities,c.transport),
       default_effort:catalog.agent_models?.[agentId]?.efforts?.[e.id]||'',
+      aliases:catalog.agent_models?.[agentId]?.aliases?.[e.id]||[],
       credential_configured:!!statuses.get(c.id)?.connected,
       credential_email:c.owner_id===data.caller_id ? (statuses.get(c.id)?.account_email||'') : '',
       catalog_origin:catalog.platform_sources?.[e.id]?'platform':'byo'};
@@ -91,7 +92,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
     const rowIds=[],efforts={},known=await presets();
     const cfg=next.agent_models[agentId]??={agent_id:agentId,owner_id:data.agent_owner_id,entry_ids:[],roles:{},revision:1};
     for(const p of providers){
-      if(p.alias_group_id || p.reference_cost_input!=null || p.reference_cost_output!=null)reject('alias groups and reference pricing');
+      if(p.reference_cost_input!=null || p.reference_cost_output!=null)reject('reference pricing');
       if(!Object.hasOwn(known,p.provider))reject('provider transport');
       let e=next.entries[p.entry_id];
       if(!e){
@@ -119,13 +120,18 @@ export function createModelAdapter(request, agentId, onAssignment) {
     // Keep records when a row is removed; roster removal must not revoke a shared credential.
     cfg.entry_ids=rowIds;
     cfg.efforts=efforts;
+    // Each saved model's ordered aliases: other roster models, never itself.
+    const aliases={};
+    for(const p of providers){
+      const list=(p.aliases||[]).filter(id=>id!==p.entry_id&&rowIds.includes(id));
+      if(p.entry_id&&list.length)aliases[p.entry_id]=list;
+    }
+    if(Object.keys(aliases).length)cfg.aliases=aliases;else delete cfg.aliases;
     const roles={};
     for(const [role,id] of Object.entries(role_assignments)){
       if(!id)continue;
       if(!cfg.entry_ids.includes(id))throw Error('Role is outside this agent roster');
-      const old=cfg.roles[role];
-      // V2's scalar appointment has no per-role backup editor; retain existing v3 backups.
-      roles[role]={entry_id:id,backup_entry_ids:(old?.backup_entry_ids||[]).filter(x=>cfg.entry_ids.includes(x)&&x!==id)};
+      roles[role]={entry_id:id};
     }
     cfg.roles=roles;
     const saved=await request(scope,'PUT',next);data=saved;catalog=saved.catalog;

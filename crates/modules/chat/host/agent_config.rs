@@ -60,10 +60,12 @@ fn session_dropdown_base(_state: &std::path::Path) -> Value {
 }
 
 async fn base(app: &App, document: &str) -> Result<Value> {
-    if document == "chat" {
-        read_chat_document(&app.chat_ui_config_path).await
-    } else {
-        Ok(session_dropdown_base(&app.store.root))
+    match document {
+        "chat" => read_chat_document(&app.chat_ui_config_path).await,
+        webagent_models::backup_policy::DOCUMENT => Ok(serde_json::to_value(
+            webagent_models::backup_policy::BackupPolicy::live(),
+        )?),
+        _ => Ok(session_dropdown_base(&app.store.root)),
     }
 }
 

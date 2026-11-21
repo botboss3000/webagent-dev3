@@ -90,9 +90,11 @@ pub async fn response<C: RuntimeStorage>(
             a.entry_ids.retain(|id| available.contains(id));
             a.efforts.retain(|id, _| available.contains(id));
             a.roles.retain(|_, r| available.contains(&r.entry_id));
-            for r in a.roles.values_mut() {
-                r.backup_entry_ids.retain(|id| available.contains(id));
+            a.aliases.retain(|id, _| available.contains(id));
+            for aliases in a.aliases.values_mut() {
+                aliases.retain(|id| available.contains(id));
             }
+            a.aliases.retain(|_, aliases| !aliases.is_empty());
         }
     }
     let adoptions = app
@@ -128,8 +130,6 @@ pub fn scoped(catalog: &Catalog, caller: &str, agent: &str) -> Catalog {
     }
     view.platform_sources
         .retain(|id, _| view.entries.contains_key(id));
-    view.groups.clear();
-    view.assignments.clear();
     view.agent_models.retain(|id, _| id == agent);
     view
 }
@@ -333,10 +333,7 @@ pub async fn save<C: RuntimeStorage>(
             return Err(denied());
         }
     }
-    if !input.assignments.is_empty()
-        || !input.groups.is_empty()
-        || input.agent_models.keys().any(|id| id != agent)
-    {
+    if input.agent_models.keys().any(|id| id != agent) {
         return Err(denied());
     }
     if let Some(models) = input.agent_models.get(agent) {
@@ -354,7 +351,6 @@ pub async fn save<C: RuntimeStorage>(
         for (role, appointment) in &models.roles {
             if previous.and_then(|r| r.roles.get(role)) != Some(appointment) {
                 new_uses.insert(&appointment.entry_id);
-                new_uses.extend(&appointment.backup_entry_ids);
             }
         }
         for id in new_uses {

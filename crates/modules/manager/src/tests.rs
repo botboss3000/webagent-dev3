@@ -827,21 +827,10 @@ mod independent_runtime_io {
                     owner_id: OWNER.into(),
                     entry_ids: vec!["fixture-model".into()],
                     revision: 1,
+                    aliases: BTreeMap::new(),
                     roles: BTreeMap::from([
-                        (
-                            ModelRole::Standard,
-                            RoleAssignment {
-                                entry_id: "fixture-model".into(),
-                                backup_entry_ids: vec![],
-                            },
-                        ),
-                        (
-                            ModelRole::System,
-                            RoleAssignment {
-                                entry_id: "fixture-model".into(),
-                                backup_entry_ids: vec![],
-                            },
-                        ),
+                        (ModelRole::Standard, RoleAssignment::new("fixture-model")),
+                        (ModelRole::System, RoleAssignment::new("fixture-model")),
                     ]),
                 },
             );

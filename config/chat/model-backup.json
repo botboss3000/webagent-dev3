@@ -1,0 +1,19 @@
+{
+  "auto_resume_after_seconds": 180,
+  "auto_resume_attempts": 1,
+  "jitter_percent": 25,
+  "max_retry_after_seconds": 60,
+  "response_start_seconds": 60,
+  "retry_delays_seconds": [
+    2,
+    8
+  ],
+  "same_model_retries": 2,
+  "schema_version": 1,
+  "switch_on": {
+    "invalid_credentials": true,
+    "model_unavailable": true,
+    "quota_exhausted": true,
+    "transient": true
+  }
+}

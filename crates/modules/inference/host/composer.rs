@@ -4,8 +4,9 @@
 //! `POST /config/apply` writes one value the user confirmed, through the owner's existing save:
 //! live configuration files through the administrator configuration save (validator, digest
 //! fence, broker write), agent settings through the agent identity update (its revision and
-//! management check), an agent's `chat.json` values through that agent's chat overlay (the
-//! chat module's per-agent overrides, which `reset` removes so the app value applies again),
+//! management check), an agent's `chat.json` and model backup policy values through that
+//! agent's overlay of that file (the chat module's per-agent overrides, which `reset` removes
+//! so the app value applies again),
 //! and the display name through the profile update. Nothing else writes.
 //! `GET /config/settings` lists every setting a page can change with its current value and
 //! revision, for the settings pages' rows; each row saves through `apply`.
@@ -107,7 +108,7 @@ struct Current {
     /// The whole document the value sits in, as its save takes it.
     document: Value,
     revision: Value,
-    /// The administrator configuration id (app layer), identity field or `chat_overlay`
+    /// The administrator configuration id (app layer), identity field or `overlay`
     /// (agent layer).
     target: String,
     /// Where a chat value comes from: `agent` (the agent's override), `app` (the app file's own
@@ -115,8 +116,19 @@ struct Current {
     source: Option<&'static str>,
 }
 
-/// Target of agent-layer values kept in the agent's `chat.json` overlay.
-const CHAT_OVERLAY: &str = "chat_overlay";
+/// Target of agent-layer values kept in an agent overlay of a live file.
+const OVERLAY: &str = "overlay";
+
+/// The agent overlay document (`/agents/{id}/chat-config/{document}`) for a live file.
+fn overlay_document(owner: &str) -> Option<&'static str> {
+    [
+        ("chat", "chat"),
+        ("model_backup", webagent_models::backup_policy::DOCUMENT),
+    ]
+    .into_iter()
+    .find(|(id, _)| super::live_configuration::live(id) == Some(owner))
+    .map(|(_, document)| document)
+}
 
 async fn current(
     app: &App,
@@ -146,15 +158,14 @@ async fn current(
                 source,
             })
         }
-        // chat.json values without an identity field live in the agent's chat overlay.
+        // Values of an overlaid file without an identity field live in the agent's overlay.
         "agent"
-            if descriptor.get("agent_pointer").is_none()
-                && super::live_configuration::live("chat") == Some(owner) =>
+            if descriptor.get("agent_pointer").is_none() && overlay_document(owner).is_some() =>
         {
             let agent = page.trim_start_matches("agent:").to_owned();
+            let document = overlay_document(owner).unwrap_or_default().to_owned();
             let Json(record) =
-                crate::chat_config::get(State(app.clone()), Path((agent, "chat".to_owned())))
-                    .await?;
+                crate::chat_config::get(State(app.clone()), Path((agent, document))).await?;
             let effective = &record["effective"];
             let own = effective.pointer(pointer).cloned();
             let source = if record["overlay"].pointer(pointer).is_some() {
@@ -174,7 +185,7 @@ async fn current(
                 revision: json!({"overlay_revision": record["revision"]}),
                 source: Some(source),
                 document: Value::Null,
-                target: CHAT_OVERLAY.into(),
+                target: OVERLAY.into(),
             })
         }
         "agent" => {
@@ -491,11 +502,11 @@ pub(crate) async fn apply(
     let params = body["params"].as_object().cloned().unwrap_or_default();
     let pointer = pointer(descriptor, layer, &params)?;
     let now = current(&app, &identity, page, layer, (descriptor, owner), &pointer).await?;
-    // Reset drops an agent's chat override, or an app surface value so Common's applies.
+    // Reset drops an agent's override, or an app surface value so Common's applies.
     let resettable =
-        now.target == CHAT_OVERLAY || (layer == "app" && inherit(descriptor, &pointer).is_some());
+        now.target == OVERLAY || (layer == "app" && inherit(descriptor, &pointer).is_some());
     if reset && !resettable {
-        return Err(bad("Only a chat setting can be reset"));
+        return Err(bad("Only an agent override or surface value can be reset"));
     }
     let value = if reset {
         Value::Null
@@ -513,7 +524,7 @@ pub(crate) async fn apply(
     }
     let mut document = now.document;
     match layer {
-        "agent" if now.target == CHAT_OVERLAY => {
+        "agent" if now.target == OVERLAY => {
             // A merge patch nested along the pointer; null drops the override.
             let mut patch = value.clone();
             for key in pointer
@@ -530,9 +541,9 @@ pub(crate) async fn apply(
             )
             .map_err(anyhow::Error::from)?;
             let agent = page.trim_start_matches("agent:").to_owned();
+            let document = overlay_document(owner).unwrap_or_default().to_owned();
             let _saved =
-                crate::chat_config::patch(State(app), Path((agent, "chat".to_owned())), Json(body))
-                    .await?;
+                crate::chat_config::patch(State(app), Path((agent, document)), Json(body)).await?;
         }
         "app" => {
             put_at(&mut document, &pointer, (!reset).then(|| value.clone()))?;

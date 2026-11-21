@@ -23,11 +23,10 @@ then rotate account access generation and stop affected work. Initial owner
 creation advances the access revision but preserves sign-in generation; it grants
 new ownership and must allow the same authenticated creator to configure models.
 
-Legacy primary records remain for rollback. Reads project absent role maps to
-Standard without appointing other roles; the next atomic save persists that
-projection. `migration:model_roles_default_v1` separately imports a connected
-default subscription once, retaining its credential in the secrets plane.
-An explicit empty role map prevents resurrection. User-owned run documents pin
+Each agent's roster lists its models, its role appointments and, per model, an
+ordered list of aliases: other roster models a call falls back to under the
+model backup policy (`config/chat/model-backup.json`, with a per-agent
+overlay). An explicit empty role map stays empty. User-owned run documents pin
 the chat plan and independent System plan and failover cursor. Role changes
 affect new runs, while live revocation and account ceilings still stop dispatch.
 No session database inspection or alternate state access path is introduced.

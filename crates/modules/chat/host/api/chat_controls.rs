@@ -191,15 +191,23 @@ pub(crate) async fn apply_chat_model_preference(app: &App, run: &mut Value) -> R
     let catalog = app.store.model_catalog().await?;
     let composer_changed = revision != run["chat_model_revision"].as_u64().unwrap_or(0);
     let roles_changed = catalog.revision != run["model_catalog_revision"].as_u64().unwrap_or(0);
-    if !composer_changed && !roles_changed {
-        return Ok(false);
-    }
     let agent = run["agent_id"]
         .as_str()
         .ok_or_else(|| anyhow!("Agent missing"))?
         .to_owned();
-    run["model_catalog_revision"] = json!(catalog.revision);
+    // Backup policy edits apply from the next model call, like Models-page changes.
+    let policy = json!(app.backup_policy(&agent).await);
     let mut changed = false;
+    for field in ["selection_plan", "system_selection_plan"] {
+        if run[field].is_object() && run[field]["backup_policy"] != policy {
+            run[field]["backup_policy"] = policy.clone();
+            changed = true;
+        }
+    }
+    if !composer_changed && !roles_changed {
+        return Ok(changed);
+    }
+    run["model_catalog_revision"] = json!(catalog.revision);
     if roles_changed {
         changed |= refresh_system_plan(app, &catalog, &agent, run).await?;
     }
@@ -228,7 +236,7 @@ pub(crate) async fn apply_chat_model_preference(app: &App, run: &mut Value) -> R
     run["selection_plan"] = json!(plan);
     run["failover_state"] = json!(model_selection::FailoverState::default());
     if composer_changed {
-        // Applies to the chosen entry only; backups use their own defaults.
+        // Applies to the chosen entry only; aliases use their own defaults.
         run["chat_effort"] = saved["effort"].clone();
         run["chat_model_revision"] = json!(revision);
     }
@@ -473,23 +481,18 @@ mod tests {
         .unwrap();
         let mut run = app.run(sent["run_id"].as_str().unwrap()).await.unwrap();
         assert!(!apply_chat_model_preference(&app, &mut run).await.unwrap());
-        let roles = &mut catalog
-            .agent_models
-            .get_mut("shared_default")
-            .unwrap()
-            .roles;
-        roles
+        let roster = catalog.agent_models.get_mut("shared_default").unwrap();
+        roster
+            .roles
             .get_mut(&model_selection::ModelRole::Standard)
             .unwrap()
             .entry_id = "two".into();
-        roles
+        roster
+            .roles
             .get_mut(&model_selection::ModelRole::System)
             .unwrap()
             .entry_id = "two".into();
-        roles
-            .get_mut(&model_selection::ModelRole::System)
-            .unwrap()
-            .backup_entry_ids = vec!["one".into()];
+        roster.aliases.insert("two".into(), vec!["one".into()]);
         app.store
             .save_model_catalog(&catalog, catalog.revision)
             .await

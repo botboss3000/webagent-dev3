@@ -3914,6 +3914,21 @@ impl webagent_models::storage::RuntimeStorage for Store {
     ) -> impl std::future::Future<Output = Result<SqlitePool>> + Send + 'a {
         async move { Ok(self.for_user(user).await?.pool.clone()) }
     }
+    /// Read through that agent's own view, so its records decode with its key.
+    fn agent_document<'a>(
+        &'a self,
+        agent: &'a str,
+        key: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<Value>>> + Send + 'a {
+        async move {
+            let view = self.for_agent(agent).await?;
+            let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+                .bind(key)
+                .fetch_optional(&view.agent_pool)
+                .await?;
+            raw.map(|raw| StoreCore::unseal(&view, &raw)).transpose()
+        }
+    }
 }
 impl Store {
     pub(crate) fn models_repository(&self) -> webagent_models::storage::Repository<'_, Self> {

@@ -1,5 +1,6 @@
-//! Per-agent sparse overlays of `config/chat.json` (`chat`) and the session dropdown component
-//! JSON (`session_dropdown`), stored encrypted in that agent's database. The base JSON stays
+//! Per-agent sparse overlays of `config/chat.json` (`chat`), the session dropdown component
+//! JSON (`session_dropdown`) and the model backup policy (`model_backup`, owned by the models
+//! module), stored encrypted in that agent's database. The base JSON stays
 //! authoritative: overlays merge over it, attachment limits only tighten, and an overlay that no
 //! longer validates against the current base is ignored at read time instead of failing reads.
 use crate::{configuration::validate_chat_config, RecordCodec};
@@ -12,7 +13,10 @@ const SURFACES: [&str; 4] = ["common", "desktop", "mobile", "widget"];
 const LIMITS: [&str; 2] = ["max_file_size_mb", "max_per_message"];
 
 pub fn known_document(document: &str) -> bool {
-    matches!(document, "chat" | "session_dropdown")
+    matches!(
+        document,
+        "chat" | "session_dropdown" | webagent_models::backup_policy::DOCUMENT
+    )
 }
 
 /// Agent-plane document key; the `agent:<id>:` prefix routes to that agent's database.
@@ -107,6 +111,13 @@ pub fn validate(document: &str, base: &Value, overlay: &Value) -> Result<(), Str
             } else {
                 Err("Session dropdown overlays allow only common, desktop, mobile and widget objects".into())
             }
+        }
+        webagent_models::backup_policy::DOCUMENT => {
+            let base = webagent_models::backup_policy::BackupPolicy::from_value(base.clone())
+                .map_err(|_| "Base model backup policy is invalid")?;
+            webagent_models::backup_policy::merged(&base, overlay)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
         }
         _ => Err("Unknown chat configuration document".into()),
     }

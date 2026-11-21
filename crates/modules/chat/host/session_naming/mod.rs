@@ -149,7 +149,11 @@ async fn generate(app: &App, original: &Value) -> Result<String> {
                     }
                     // Poll the actual transport once while authority writers remain fenced.
                     let mut completion = Box::pin(async {
-                        let ready = prepared.bind_credentials(tokens, &cancel)?;
+                        let ready = prepared
+                            .bind_credentials(tokens, &cancel)?
+                            .with_response_start(
+                                webagent_models::backup_policy::response_start_seconds(&run),
+                            );
                         app.provider.dispatch(ready, sender, cancel).await
                     });
                     let mut immediate = None;

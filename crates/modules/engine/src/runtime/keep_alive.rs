@@ -342,7 +342,9 @@ impl<
         )
         .await?;
         let tokens = self.tokens_for(&selection, &saved["token_run"]).await?;
-        let ready = prepared.bind_credentials(&tokens, &cancel)?;
+        let ready = prepared
+            .bind_credentials(&tokens, &cancel)?
+            .with_response_start(super::failure::response_start(&saved["token_run"]));
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<String>(32);
         let drain = tokio::spawn(async move { while receiver.recv().await.is_some() {} });
         let response = self.provider.dispatch(ready, sender, cancel).await;
@@ -370,7 +372,11 @@ mod tests {
         assert_eq!(of("stopped"), State::Settled(false));
         assert_eq!(of("failed"), State::Settled(false));
         assert_eq!(of("running"), State::Live);
-        assert_eq!(of("queued"), State::Live, "a new message waits for its own call");
+        assert_eq!(
+            of("queued"),
+            State::Live,
+            "a new message waits for its own call"
+        );
         let flagged = |flag: &str| state(&s, &json!({"status":"completed"}), &json!({"flag":flag}));
         assert_eq!(flagged("needs_input"), State::Settled(true));
         assert_eq!(

@@ -1032,8 +1032,6 @@ async fn run_process() -> Result<()> {
     store.backfill_shared_directory().await?;
     migrate_default_agent_model(&store).await?;
     migrate_provider_selection(&store).await?;
-    // Catalog roles become authoritative once; later clears never restore legacy defaults.
-    model_selection_api::migrate_legacy_default(&store).await?;
     crate::tools::install_tool_defaults();
     let abilities_root = std::env::var("V3_ABILITIES_ROOT").unwrap_or_else(|_| {
         webagent_configuration::paths::app()
@@ -1259,6 +1257,13 @@ impl webagent_models::runtime::SessionAuthority for ModelSessionAuthority<'_> {
     }
 }
 impl App {
+    /// An agent's effective model backup policy (app file with the agent's overlay).
+    pub(crate) async fn backup_policy(
+        &self,
+        agent: &str,
+    ) -> webagent_models::backup_policy::BackupPolicy {
+        self.models_runtime().backup_policy(agent).await
+    }
     fn models_runtime(&self) -> webagent_models::runtime::Runtime<'_, Store> {
         webagent_models::runtime::Runtime::new(
             self.store.models_repository(),

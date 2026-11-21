@@ -1,5 +1,7 @@
 //! Engine-owned claimed-run execution, context reconstruction and first-poll/tool fences.
-use super::failure::{system_dispatch_run, terminal, validate_system_summary_input};
+use super::failure::{
+    response_start, system_dispatch_run, terminal, validate_system_summary_input,
+};
 use super::ports::{
     AgentPolicy, ChatAuthority, ContextDiagnostics, CredentialBindings, FollowupQueue,
     InstallationAccess, MainGuidance, ModelDiagnostics, ModuleBindings, NativePolicy, PromptSlots,
@@ -821,7 +823,9 @@ impl<
                         )
                         .await?;
                 let tokens = app.tokens_for(&selection, &token_run).await?;
-                let ready = prepared.bind_credentials(&tokens, &cancel)?;
+                let ready = prepared
+                    .bind_credentials(&tokens, &cancel)?
+                    .with_response_start(response_start(&token_run));
                 let (sender, mut receiver) = tokio::sync::mpsc::channel::<String>(32);
                 let drain = tokio::spawn(async move { while receiver.recv().await.is_some() {} });
                 let response = app.provider.dispatch(ready, sender, cancel.clone()).await;
@@ -3236,7 +3240,9 @@ impl<
                     let mut completion = Box::pin(async {
                         let tokens = &tokens;
                         let cancel = cancel.clone();
-                        let ready = prepared_system.bind_credentials(tokens, &cancel)?;
+                        let ready = prepared_system
+                            .bind_credentials(tokens, &cancel)?
+                            .with_response_start(response_start(&system_run));
                         app.provider.dispatch(ready, sender, cancel).await
                     });
                     let mut immediate = None;
@@ -3974,13 +3980,16 @@ impl<
                 // A closing turn is short and its reply is already final: a sent-now message
                 // waits for it rather than cancelling it.
                 let closing_turn = current["closing_turn"].is_object();
+                let response_start = response_start(&current);
                 let steer_probe = json!({"session_id":current["session_id"],
                     "requester_user_id":current["requester_user_id"]});
                 drop(current);
                 drop(run);
                 let mut completion = Box::pin(async {
                     let tokens = &tokens;
-                    let ready = prepared_provider.bind_credentials(tokens, &cancel)?;
+                    let ready = prepared_provider
+                        .bind_credentials(tokens, &cancel)?
+                        .with_response_start(response_start);
                     app.provider
                         .dispatch(ready, sender, model_cancel.clone())
                         .await

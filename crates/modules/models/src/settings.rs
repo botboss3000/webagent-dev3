@@ -11,33 +11,15 @@ const MAX_BYTES: u64 = 16 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub schema_version: u32,
-    pub retry: Retry,
     pub streaming: Streaming,
     pub harness_bridge: Bridge,
 }
 
-/// Same-model retries after a transient provider failure, before failover or a stop.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Retry {
-    pub same_model_retries: u8,
-    /// Wait before each retry; the last entry repeats if there are more retries than entries.
-    pub delays_seconds: Vec<u64>,
-    /// Up to this share of a delay is added at random so parallel runs do not retry in step.
-    pub jitter_percent: u64,
-    /// A provider's own Retry-After wins when longer, up to this cap.
-    pub max_retry_after_seconds: u64,
-    /// After retries run out on a call that is safe to resume, resume it once after this wait.
-    pub auto_resume_after_seconds: u64,
-    pub auto_resume_attempts: u8,
-}
-
-/// Direct API streaming limits.
+/// Direct API streaming limits. How long a provider may take to start responding is part
+/// of the model backup policy (`crate::backup_policy`), which agents can override.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Streaming {
-    /// How long a provider may take to start responding.
-    pub response_start_seconds: u64,
     /// How long a started stream may stay silent.
     pub stall_seconds: u64,
 }
@@ -83,18 +65,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             schema_version: 1,
-            retry: Retry {
-                same_model_retries: 2,
-                delays_seconds: vec![2, 8],
-                jitter_percent: 25,
-                max_retry_after_seconds: 60,
-                auto_resume_after_seconds: 180,
-                auto_resume_attempts: 1,
-            },
-            streaming: Streaming {
-                response_start_seconds: 60,
-                stall_seconds: 120,
-            },
+            streaming: Streaming { stall_seconds: 120 },
             harness_bridge: Bridge {
                 unclaimed_call_seconds: 60,
                 client_online_seconds: 120,
@@ -130,32 +101,13 @@ impl Settings {
     }
 
     fn validate(&self) -> Result<()> {
-        let (r, s, b, c) = (
-            &self.retry,
+        let (s, b, c) = (
             &self.streaming,
             &self.harness_bridge,
             &self.harness_bridge.client,
         );
         let checks = [
             (self.schema_version == 1, "schema_version must be 1"),
-            (r.same_model_retries <= 5, "retry.same_model_retries must be 0-5"),
-            (
-                !r.delays_seconds.is_empty()
-                    && r.delays_seconds.len() <= 5
-                    && r.delays_seconds.iter().all(|d| *d <= 300),
-                "retry.delays_seconds needs 1-5 entries of at most 300",
-            ),
-            (r.jitter_percent <= 100, "retry.jitter_percent must be 0-100"),
-            (r.max_retry_after_seconds <= 600, "retry.max_retry_after_seconds must be at most 600"),
-            (
-                (10..=3600).contains(&r.auto_resume_after_seconds),
-                "retry.auto_resume_after_seconds must be 10-3600",
-            ),
-            (r.auto_resume_attempts <= 3, "retry.auto_resume_attempts must be 0-3"),
-            (
-                (5..=600).contains(&s.response_start_seconds),
-                "streaming.response_start_seconds must be 5-600",
-            ),
             ((10..=1800).contains(&s.stall_seconds), "streaming.stall_seconds must be 10-1800"),
             (
                 (5..=60).contains(&b.poll_hold_seconds),
@@ -222,18 +174,6 @@ impl Settings {
     }
 }
 
-impl Retry {
-    /// Seconds before same-model retry `attempt` (1-based), with jitter, or the provider's own
-    /// longer Retry-After up to the cap. `entropy` is any varying number; the caller passes time.
-    pub fn delay(&self, attempt: u8, retry_after: Option<u64>, entropy: u64) -> u64 {
-        let index = usize::from(attempt.max(1) - 1).min(self.delays_seconds.len() - 1);
-        let base = self.delays_seconds[index];
-        let jitter = base * self.jitter_percent / 100;
-        let delay = base + entropy % (jitter + 1);
-        delay.max(retry_after.unwrap_or(0).min(self.max_retry_after_seconds))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,19 +192,5 @@ mod tests {
         let mut settings = Settings::default();
         settings.harness_bridge.client.harness_seconds = 1800;
         assert!(settings.validate().is_err());
-        let mut settings = Settings::default();
-        settings.retry.delays_seconds.clear();
-        assert!(settings.validate().is_err());
-    }
-
-    #[test]
-    fn delays_back_off_jitter_and_honor_retry_after() {
-        let retry = Settings::default().retry;
-        assert_eq!(retry.delay(1, None, 0), 2);
-        assert!((2..=2).contains(&retry.delay(1, None, 7)));
-        assert!((8..=10).contains(&retry.delay(2, None, 13)));
-        assert!((8..=10).contains(&retry.delay(3, None, 13)));
-        assert_eq!(retry.delay(1, Some(30), 0), 30);
-        assert_eq!(retry.delay(1, Some(900), 0), 60);
     }
 }

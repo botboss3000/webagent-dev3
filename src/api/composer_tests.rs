@@ -226,10 +226,7 @@ async fn voice_composer_audio_stays_ephemeral_and_describes_uploads_in_place() {
         .roles
         .insert(
             model_selection::ModelRole::ImageIn,
-            model_selection::RoleAssignment {
-                entry_id: "one".into(),
-                backup_entry_ids: vec![],
-            },
+            model_selection::RoleAssignment::new("one"),
         );
     app.store
         .save_model_catalog(&catalog, catalog.revision)

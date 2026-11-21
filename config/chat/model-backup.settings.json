@@ -1,0 +1,251 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see config/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults. Agent values are kept in the agent's model_backup overlay.",
+  "settings": [
+    {
+      "id": "chat.model_backup.same_model_retries",
+      "description": "How many times a model call that failed with a temporary provider error is retried on the same model before it switches to the next alias or stops.",
+      "type": "integer",
+      "pointer": "/same_model_retries",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "retry overloaded providers more times",
+        "give up sooner when a provider is down"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ],
+      "unit": "retries",
+      "min": 0,
+      "max": 5,
+      "bounds": "validator",
+      "notes": "The engine also stops a call after workflow.max_attempts dispatches (loop-runtime.json, 3), which counts the first try; more retries need that raised too."
+    },
+    {
+      "id": "chat.model_backup.retry_delays_seconds",
+      "description": "Wait before each same-model retry; the last value repeats for further retries.",
+      "type": "integer",
+      "pointer": "/retry_delays_seconds/{step}",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "wait longer between retries",
+        "retry after 5 seconds first"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ],
+      "parameters": {
+        "step": [
+          "0",
+          "1"
+        ]
+      },
+      "unit": "seconds",
+      "min": 0,
+      "max": 300,
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.model_backup.jitter_percent",
+      "description": "Random extra share added to each retry wait so many runs do not retry at the same moment.",
+      "type": "integer",
+      "pointer": "/jitter_percent",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "spread out retries more",
+        "no random retry delay"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ],
+      "unit": "percent",
+      "min": 0,
+      "max": 100,
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.model_backup.max_retry_after_seconds",
+      "description": "Longest wait honored when a provider asks to retry later.",
+      "type": "integer",
+      "pointer": "/max_retry_after_seconds",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "honor provider retry hints up to two minutes"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ],
+      "unit": "seconds",
+      "min": 0,
+      "max": 600,
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.model_backup.response_start_seconds",
+      "description": "How long a model may take to start answering before the call counts as failed (and is retried or switched to the next alias).",
+      "type": "integer",
+      "pointer": "/response_start_seconds",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "allow slower first responses",
+        "fail faster when a provider does not answer",
+        "switch models sooner when one hangs"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ],
+      "unit": "seconds",
+      "min": 5,
+      "max": 600,
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.model_backup.switch_on.transient",
+      "description": "Switch to the next alias after a temporary provider error once the same-model retries are used up.",
+      "type": "boolean",
+      "pointer": "/switch_on/transient",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "don't switch models on overload errors",
+        "fall back when a provider keeps timing out"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ]
+    },
+    {
+      "id": "chat.model_backup.switch_on.quota_exhausted",
+      "description": "Switch to the next alias at once when the model's quota or credit is used up.",
+      "type": "boolean",
+      "pointer": "/switch_on/quota_exhausted",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "switch models when I run out of credit",
+        "stop instead of switching on quota errors"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ]
+    },
+    {
+      "id": "chat.model_backup.switch_on.invalid_credentials",
+      "description": "Switch to the next alias at once when the model's connection key is rejected.",
+      "type": "boolean",
+      "pointer": "/switch_on/invalid_credentials",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "fall back when an API key is invalid"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ]
+    },
+    {
+      "id": "chat.model_backup.switch_on.model_unavailable",
+      "description": "Switch to the next alias at once when the provider says the model is unavailable.",
+      "type": "boolean",
+      "pointer": "/switch_on/model_unavailable",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "switch when a model is retired or down"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ]
+    },
+    {
+      "id": "chat.model_backup.auto_resume_after_seconds",
+      "description": "After every alias has failed on a run that is safe to resume, how long to wait before resuming it automatically.",
+      "type": "integer",
+      "pointer": "/auto_resume_after_seconds",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "auto resume stopped runs after 5 minutes",
+        "resume sooner after an outage"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ],
+      "unit": "seconds",
+      "min": 10,
+      "max": 3600,
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.model_backup.auto_resume_attempts",
+      "description": "How many times a stopped run is resumed automatically before waiting for the user.",
+      "type": "integer",
+      "pointer": "/auto_resume_attempts",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "never auto resume",
+        "auto resume twice"
+      ],
+      "areas": [
+        "models",
+        "reliability",
+        "backup"
+      ],
+      "unit": "attempts",
+      "min": 0,
+      "max": 3,
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {
+    "/schema_version": "File format version; not a setting.",
+    "/retry_delays_seconds": "A list; each wait is described on its own (chat.model_backup.retry_delays_seconds)."
+  }
+}

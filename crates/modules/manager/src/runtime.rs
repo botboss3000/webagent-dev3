@@ -263,7 +263,7 @@ impl<C: RuntimeStorage + RecordEffects, A: ReviewAuthority<C>, P: Engine> Runtim
                 .resolve_role(&agent, model_selection::ModelRole::System)?;
             let pinned_plan: model_selection::SelectionPlan =
                 serde_json::from_value(record["selection_plan"].clone())?;
-            if live.assignment_revision != pinned_plan.assignment_revision
+            if live.roster_revision != pinned_plan.roster_revision
                 || live.candidates.first().map(|c| &c.entry_id) != Some(&candidate.entry_id)
             {
                 return Err(anyhow!("Manager model assignment changed"));
@@ -330,7 +330,7 @@ impl<C: RuntimeStorage + RecordEffects, A: ReviewAuthority<C>, P: Engine> Runtim
                         || current_revision != settings_revision
                         || current_selection != *selection
                         || current_candidate.entry_id != candidate.entry_id
-                        || current_role.assignment_revision != live.assignment_revision
+                        || current_role.roster_revision != live.roster_revision
                         || current_role.candidates != live.candidates
                     {
                         return Err(anyhow!("Manager settings or authority changed"));
@@ -340,7 +340,11 @@ impl<C: RuntimeStorage + RecordEffects, A: ReviewAuthority<C>, P: Engine> Runtim
                     }
                     // Poll the actual transport once while authority writers remain fenced.
                     let mut completion = Box::pin(async {
-                        let ready = prepared.bind_credentials(tokens, &cancel)?;
+                        let ready = prepared
+                            .bind_credentials(tokens, &cancel)?
+                            .with_response_start(
+                                webagent_models::backup_policy::response_start_seconds(proxy),
+                            );
                         self.provider.dispatch(ready, tx, cancel).await
                     });
                     let mut immediate = None;
@@ -404,7 +408,7 @@ impl<C: RuntimeStorage + RecordEffects, A: ReviewAuthority<C>, P: Engine> Runtim
                 .model_catalog()
                 .await?
                 .resolve_role(&agent, model_selection::ModelRole::System)?;
-            if current.assignment_revision != live.assignment_revision
+            if current.roster_revision != live.roster_revision
                 || current.candidates != live.candidates
             {
                 return Err(anyhow!("Manager model assignment changed"));

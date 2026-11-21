@@ -172,15 +172,6 @@ async fn connection_key(
         .map_err(Into::into)
 }
 
-// Default-agent compatibility is a one-time, explicit catalog migration. No run
-// silently falls back to the old model setting after this boundary.
-pub(crate) async fn migrate_legacy_default(store: &crate::store::Store) -> anyhow::Result<()> {
-    store
-        .models_repository()
-        .migrate_legacy_default(|| store.agent_model(), crate::DEFAULT_AGENT_MODEL)
-        .await
-}
-
 // TENANT-ROSTER: membership identities are visible only to this agent's administrators.
 async fn members(
     State(app): State<App>,
@@ -916,10 +907,7 @@ mod tests {
         roster.entry_ids = vec!["one".into()];
         roster.roles = std::collections::BTreeMap::from([(
             crate::model_selection::ModelRole::Standard,
-            crate::model_selection::RoleAssignment {
-                entry_id: "one".into(),
-                backup_entry_ids: vec![],
-            },
+            crate::model_selection::RoleAssignment::new("one"),
         )]);
         catalog.agent_models.insert(agent.into(), roster);
         let mut private = catalog.connections["one"].clone();

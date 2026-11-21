@@ -118,8 +118,12 @@ export function activityRows(events) {
     } else if (kind === 'retry_scheduled') {
       // A provider failure the run will retry, fail over, or resume later; not an agent tool call.
       const wait=p.wait_seconds>=120?Math.round(p.wait_seconds/60)+' min':(p.wait_seconds??0)+' s';
+      // A switch names both models and why; older rows carry no model names.
+      const reason={transient:'temporary error',quota_exhausted:'quota used up',invalid_credentials:'key rejected',
+        model_unavailable:'model unavailable'}[p.reason]||'';
       const label=p.auto_resume?'Retries used up · resuming automatically in '+wait
-        :p.backup?'Switching to the backup model in '+wait
+        :p.backup&&p.to_model?'Switched from '+(p.from_model||'the model')+' to '+p.to_model+(reason?' ('+reason+')':'')+' · in '+wait
+        :p.backup?'Switching to the next model in '+wait
         :'Retrying connection in '+wait+' · attempt '+p.attempt+' of '+p.of;
       rows.push({id:event.event_id,category:'retries',retry:true,autoResume:!!p.auto_resume,label,
         text:p.error||'',events:[event]});

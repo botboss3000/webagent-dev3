@@ -16,8 +16,11 @@ pub struct Catalog {
     pub platform_sources: BTreeMap<String, crate::account_catalog::PlatformPin>,
     pub connections: BTreeMap<String, Connection>,
     pub entries: BTreeMap<String, ModelEntry>,
-    pub groups: BTreeMap<String, BackupGroup>,
-    pub assignments: BTreeMap<String, Assignment>,
+    /// Retired backup groups and per-agent assignments; saved catalogs may still hold them.
+    #[serde(default, rename = "groups", skip_serializing)]
+    pub retired_groups: Retired,
+    #[serde(default, rename = "assignments", skip_serializing)]
+    pub retired_assignments: Retired,
     #[serde(default)]
     pub agent_models: BTreeMap<String, AgentModels>,
 }
@@ -26,8 +29,6 @@ impl Catalog {
     pub fn validate(&self) -> Result<()> {
         if self.connections.len() > 256
             || self.entries.len() > 1024
-            || self.groups.len() > 256
-            || self.assignments.len() > 1024
             || self.agent_models.len() > 1024
         {
             bail!("Model catalog exceeds record limits");
@@ -64,38 +65,6 @@ impl Catalog {
                 bail!("Invalid model entry record");
             }
         }
-        for (id, g) in &self.groups {
-            let unique: BTreeSet<_> = g.entry_ids.iter().collect();
-            if id != &g.id
-                || !valid_id(id)
-                || !valid_id(&g.owner_id)
-                || g.revision == 0
-                || g.entry_ids.len() > MAX_CANDIDATES
-                || unique.len() != g.entry_ids.len()
-                || g.entry_ids.iter().any(|id| !self.entries.contains_key(id))
-            {
-                bail!("Invalid backup group record");
-            }
-        }
-        for (id, a) in &self.assignments {
-            // Retained legacy records are rollback material once explicit roles exist.
-            if self.agent_models.contains_key(id) {
-                continue;
-            }
-            if id != &a.agent_id {
-                bail!("Assignment key does not match agent");
-            }
-            if !valid_id(id)
-                || !valid_id(&a.owner_id)
-                || a.revision == 0
-                || !self.entries.contains_key(&a.primary_entry_id)
-                || a.backup_group_id
-                    .as_ref()
-                    .is_some_and(|id| !self.groups.contains_key(id))
-            {
-                bail!("Invalid assignment record");
-            }
-        }
         for (id, roster) in &self.agent_models {
             if id != &roster.agent_id
                 || !valid_id(id)
@@ -120,187 +89,70 @@ impl Catalog {
                 }
             }
             for (role, appointment) in &roster.roles {
-                let ids = appointment.candidates()?;
-                for id in ids {
-                    let entry = self
-                        .entries
-                        .get(id)
-                        .ok_or_else(|| anyhow::anyhow!("Role entry missing"))?;
-                    if !roster.entry_ids.contains(id) || !role.supported_by(entry) {
-                        bail!("Role entry is outside roster or lacks required capability");
-                    }
+                let entry = self
+                    .entries
+                    .get(&appointment.entry_id)
+                    .ok_or_else(|| anyhow::anyhow!("Role entry missing"))?;
+                if !roster.entry_ids.contains(&appointment.entry_id) || !role.supported_by(entry) {
+                    bail!("Role entry is outside roster or lacks required capability");
                 }
             }
+            roster.validate_aliases()?;
         }
         Ok(())
     }
 
-    /// Only persisted legacy assignments confer their former same-owner grants.
-    /// An explicit role map, even an empty one, prevents a cleared Standard returning.
-    pub fn migrate_legacy(&mut self) -> Result<()> {
-        for (id, assignment) in &self.assignments {
-            if self.agent_models.contains_key(id) {
-                continue;
-            }
-            let mut ids = vec![assignment.primary_entry_id.clone()];
-            if let Some(group_id) = &assignment.backup_group_id {
-                let group = self
-                    .groups
-                    .get(group_id)
-                    .ok_or_else(|| anyhow::anyhow!("Legacy backup group missing"))?;
-                if group.owner_id != assignment.owner_id {
-                    bail!("Legacy backup owner mismatch");
-                }
-                for entry in &group.entry_ids {
-                    if entry != &assignment.primary_entry_id {
-                        ids.push(entry.clone());
-                    }
-                }
-            }
-            let appointment = RoleAssignment {
-                entry_id: assignment.primary_entry_id.clone(),
-                backup_entry_ids: ids[1..].to_vec(),
-            };
-            appointment.candidates()?;
-            for entry_id in &ids {
-                let entry = self
-                    .entries
-                    .get_mut(entry_id)
-                    .ok_or_else(|| anyhow::anyhow!("Legacy model missing"))?;
-                if entry.owner_id == assignment.owner_id {
-                    entry.allowed_agents.insert(id.clone());
-                }
-                let connection = self
-                    .connections
-                    .get_mut(&entry.connection_id)
-                    .ok_or_else(|| anyhow::anyhow!("Legacy connection missing"))?;
-                if connection.owner_id == assignment.owner_id {
-                    connection.allowed_agents.insert(id.clone());
-                }
-            }
-            self.agent_models.insert(
-                id.clone(),
-                AgentModels {
-                    retired_limits: Retired,
-                    efforts: std::collections::BTreeMap::new(),
-                    agent_id: id.clone(),
-                    owner_id: assignment.owner_id.clone(),
-                    entry_ids: ids,
-                    roles: BTreeMap::from([(ModelRole::Standard, appointment)]),
-                    revision: assignment.revision,
-                },
-            );
-        }
-        self.validate()
-    }
-
-    // Stored migration separates legacy sharing authority from tenant ownership.
-    // First preserve grants under the old assignment owner, then appoint the directory
-    // owner to newly projected rosters only. Explicit role records never transfer here.
-    pub async fn migrate_stored(&mut self, connection: &mut sqlx::SqliteConnection) -> Result<()> {
-        let mut owners = BTreeMap::new();
-        for id in self
-            .assignments
-            .keys()
-            .filter(|id| !self.agent_models.contains_key(*id))
-        {
-            let owner: Option<String> =
-                sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
-                    .bind(id)
-                    .fetch_optional(&mut *connection)
-                    .await?;
-            if let Some(owner) = owner {
-                owners.insert(id.clone(), owner);
-            }
-        }
-        self.migrate_legacy()?;
-        for (id, owner) in owners {
-            self.agent_models
-                .get_mut(&id)
-                .expect("Legacy roster was projected")
-                .owner_id = owner;
-        }
-        self.validate()
-    }
-
     // Admission uses explicit appointments; missing specialized roles never inherit Standard.
     pub fn resolve_role(&self, agent_id: &str, role: ModelRole) -> Result<SelectionPlan> {
-        if let Some(roster) = self.agent_models.get(agent_id) {
-            let appointment = roster
-                .roles
-                .get(&role)
-                .ok_or_else(|| anyhow::anyhow!("{} model required", role.label()))?;
-            return self.resolve_roster(roster, role, appointment, None);
-        }
-        if role != ModelRole::Standard {
-            bail!("{} model required", role.label());
-        }
-        let assignment = self
-            .assignments
+        let roster = self
+            .agent_models
             .get(agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Standard model required"))?;
-        let mut plan =
-            SelectionPlan::resolve(assignment, &self.entries, &self.connections, &self.groups)?;
-        plan.catalog_revision = self.revision;
-        Ok(plan)
+            .ok_or_else(|| anyhow::anyhow!("{} model required", role.label()))?;
+        let appointment = roster
+            .roles
+            .get(&role)
+            .ok_or_else(|| anyhow::anyhow!("{} model required", role.label()))?;
+        self.resolve_roster(roster, role, &appointment.entry_id, None)
     }
 
-    /// Custom chat uses an explicit roster entry and never changes Standard or inherits its backups.
+    /// Custom chat uses an explicit roster entry, with that entry's aliases, and never changes Standard.
     pub fn resolve_custom(&self, agent_id: &str, entry_id: &str) -> Result<SelectionPlan> {
         let roster = self
             .agent_models
             .get(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent model roster required"))?;
-        self.resolve_roster(
-            roster,
-            ModelRole::Standard,
-            &RoleAssignment {
-                entry_id: entry_id.into(),
-                backup_entry_ids: vec![],
-            },
-            Some(entry_id.into()),
-        )
+        self.resolve_roster(roster, ModelRole::Standard, entry_id, Some(entry_id.into()))
     }
 
+    /// The selected entry first, then its aliases in the roster's order. The selected entry must
+    /// be usable; an alias that lacks the role's capability or authorization is skipped.
     fn resolve_roster(
         &self,
         roster: &AgentModels,
         role: ModelRole,
-        appointment: &RoleAssignment,
+        entry_id: &str,
         custom_entry_id: Option<String>,
     ) -> Result<SelectionPlan> {
         if !valid_id(&roster.agent_id) || !valid_id(&roster.owner_id) || roster.revision == 0 {
             bail!("Invalid agent model roster");
         }
+        let aliases = roster.aliases.get(entry_id).map_or(&[][..], Vec::as_slice);
         let mut candidates = Vec::new();
-        for id in appointment.candidates()? {
-            if !roster.entry_ids.contains(id) {
-                bail!("Selected model is outside agent roster");
-            }
-            let entry = self
-                .entries
-                .get(id)
-                .ok_or_else(|| anyhow::anyhow!("Role entry missing"))?;
-            let connection = self
-                .connections
-                .get(&entry.connection_id)
-                .ok_or_else(|| anyhow::anyhow!("Model connection missing"))?;
-            if !role.supported_by(entry)
-                || entry.id != *id
-                || connection.id != entry.connection_id
-                || entry.revision == 0
-                || connection.revision == 0
-                || connection.revoked
-                || !entry.allowed_agents.contains(&roster.agent_id)
-                || !connection.allowed_agents.contains(&roster.agent_id)
-            {
-                bail!("Role model is incompatible or not authorized");
-            }
+        for (index, id) in std::iter::once(entry_id)
+            .chain(aliases.iter().map(String::as_str))
+            .enumerate()
+        {
+            let usable = self.usable(roster, role, id);
+            let (entry, connection) = match (usable, index) {
+                (Ok(found), _) => found,
+                (Err(error), 0) => return Err(error),
+                (Err(_), _) => continue,
+            };
             candidates.push(Candidate {
                 retired_limits: Retired,
                 default_effort: roster.efforts.get(id).cloned(),
                 platform: self.platform_sources.get(id).cloned(),
-                entry_id: id.clone(),
+                entry_id: id.to_owned(),
                 entry_revision: entry.revision,
                 connection_id: connection.id.clone(),
                 connection_revision: connection.revision,
@@ -312,16 +164,49 @@ impl Catalog {
         }
         Ok(SelectionPlan {
             version: 2,
+            retired_revisions: Retired,
+            retired_group_revision: Retired,
             agent_id: roster.agent_id.clone(),
             owner_id: roster.owner_id.clone(),
-            assignment_revision: roster.revision,
-            group_revision: None,
             candidates,
             role,
             custom_entry_id,
             roster_revision: roster.revision,
             catalog_revision: self.revision,
+            backup_policy: None,
         })
+    }
+
+    /// The roster entry `id` and its connection, when this agent may use them for `role`.
+    fn usable(
+        &self,
+        roster: &AgentModels,
+        role: ModelRole,
+        id: &str,
+    ) -> Result<(&ModelEntry, &Connection)> {
+        if !roster.entry_ids.iter().any(|entry| entry == id) {
+            bail!("Selected model is outside agent roster");
+        }
+        let entry = self
+            .entries
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Role entry missing"))?;
+        let connection = self
+            .connections
+            .get(&entry.connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Model connection missing"))?;
+        if !role.supported_by(entry)
+            || entry.id != id
+            || connection.id != entry.connection_id
+            || entry.revision == 0
+            || connection.revision == 0
+            || connection.revoked
+            || !entry.allowed_agents.contains(&roster.agent_id)
+            || !connection.allowed_agents.contains(&roster.agent_id)
+        {
+            bail!("Role model is incompatible or not authorized");
+        }
+        Ok((entry, connection))
     }
 
     pub fn resolve(&self, agent_id: &str) -> Result<SelectionPlan> {
@@ -335,9 +220,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
     pub async fn model_catalog(&self) -> Result<Catalog> {
         use sqlx::Row;
         let mut connection = self.app_pool.acquire().await?;
-        let mut catalog = self.read_catalog_connection(&mut connection).await?;
-        catalog.migrate_stored(&mut connection).await?;
-        Ok(catalog)
+        self.read_catalog_connection(&mut connection).await
     }
 
     /// Administrator API must authorize the caller before invoking this method.
@@ -348,14 +231,19 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         expected_revision: u64,
     ) -> Result<Catalog> {
         use sqlx::Row;
+        // Removing a model from a roster also removes it from that roster's aliases.
+        let mut catalog = catalog.clone();
+        for roster in catalog.agent_models.values_mut() {
+            roster.prune_aliases();
+        }
+        let catalog = &catalog;
         catalog.validate()?;
         let mut tx = self.app_pool.begin().await?;
         sqlx::query("UPDATE docs SET value=value WHERE key=?")
             .bind(CATALOG_KEY)
             .execute(&mut *tx)
             .await?;
-        let mut previous = self.read_catalog_connection(&mut tx).await?;
-        previous.migrate_stored(&mut tx).await?;
+        let previous = self.read_catalog_connection(&mut tx).await?;
         if previous.revision != expected_revision || catalog.revision != expected_revision {
             bail!("Model catalog revision changed");
         }
@@ -381,17 +269,12 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         }
         revisions!(connections);
         revisions!(entries);
-        revisions!(groups);
-        revisions!(assignments);
         revisions!(agent_models);
         for id in previous.agent_models.keys() {
             if !saved.agent_models.contains_key(id) {
                 bail!(
                     "Clear roles and roster explicitly instead of removing the agent model record"
                 );
-            }
-            if previous.assignments.get(id) != saved.assignments.get(id) {
-                bail!("Legacy assignment is read-only after role migration");
             }
         }
         // Catalog writes authorize newly appointed uses while allowing grants to be
@@ -416,22 +299,6 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                 }
             }
         }
-        for (id, assignment) in &saved.assignments {
-            if saved.agent_models.contains_key(id) {
-                continue;
-            }
-            let assignment_changed = previous.assignments.get(id) != catalog.assignments.get(id);
-            let group_changed = assignment.backup_group_id.as_ref().is_some_and(|group_id| {
-                previous.groups.get(group_id).map(|g| &g.entry_ids)
-                    != saved.groups.get(group_id).map(|g| &g.entry_ids)
-            });
-            if assignment_changed || group_changed {
-                // Existing revoked assignments can remain so that revocation cannot
-                // be blocked by their references; new use must authorize every candidate.
-                saved.resolve(id)?;
-            }
-        }
-        saved.migrate_stored(&mut tx).await?;
         saved.revision = expected_revision
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("Model catalog revision exhausted"))?;
@@ -520,26 +387,6 @@ pub struct ModelEntry {
     pub revision: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BackupGroup {
-    pub id: String,
-    pub owner_id: String,
-    /// Explicit order, independent of model-table display order. May include primary.
-    pub entry_ids: Vec<String>,
-    pub revision: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Assignment {
-    pub agent_id: String,
-    pub owner_id: String,
-    pub primary_entry_id: String,
-    pub backup_group_id: Option<String>,
-    pub revision: u64,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 // Capabilities describe support; explicit semantic appointments select workflows.
@@ -581,8 +428,8 @@ impl ModelRole {
     }
 }
 
-/// Accepts and drops a retired key in saved records (per-agent token limits were removed;
-/// calls use the provider catalog's maximums). Never serialized.
+/// Accepts and drops a retired key in saved records (per-agent token limits, which calls now
+/// take from the provider catalog, and the legacy backup groups and assignments). Never serialized.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Retired;
 impl<'de> Deserialize<'de> for Retired {
@@ -605,27 +452,52 @@ pub struct AgentModels {
     pub owner_id: String,
     pub entry_ids: Vec<String>,
     pub roles: BTreeMap<ModelRole, RoleAssignment>,
+    /// Ordered backups per roster entry: a call on that entry moves to the next alias when the
+    /// backup policy allows. Every alias is another entry of this roster.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub aliases: BTreeMap<String, Vec<String>>,
     pub revision: u64,
+}
+impl AgentModels {
+    fn validate_aliases(&self) -> Result<()> {
+        for (id, aliases) in &self.aliases {
+            let unique: BTreeSet<_> = aliases.iter().collect();
+            if !self.entry_ids.contains(id)
+                || aliases.is_empty()
+                || aliases.len() >= MAX_CANDIDATES
+                || unique.len() != aliases.len()
+                || aliases
+                    .iter()
+                    .any(|a| a == id || !self.entry_ids.contains(a))
+            {
+                bail!("Invalid model aliases");
+            }
+        }
+        Ok(())
+    }
+    /// Drop aliases (and alias lists) naming entries no longer in the roster.
+    pub fn prune_aliases(&mut self) {
+        let roster = &self.entry_ids;
+        self.aliases.retain(|id, aliases| {
+            aliases.retain(|alias| alias != id && roster.contains(alias));
+            roster.contains(id) && !aliases.is_empty()
+        });
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleAssignment {
     pub entry_id: String,
-    #[serde(default)]
-    pub backup_entry_ids: Vec<String>,
+    /// Retired role-level backups; aliases now belong to each roster entry.
+    #[serde(default, rename = "backup_entry_ids", skip_serializing)]
+    pub retired_backups: Retired,
 }
 impl RoleAssignment {
-    fn candidates(&self) -> Result<Vec<&String>> {
-        let ids: Vec<_> = std::iter::once(&self.entry_id)
-            .chain(&self.backup_entry_ids)
-            .collect();
-        if ids.len() > MAX_CANDIDATES
-            || ids.iter().any(|id| !valid_id(id))
-            || ids.iter().copied().collect::<BTreeSet<_>>().len() != ids.len()
-        {
-            bail!("Invalid or duplicate role backup candidates");
+    pub fn new(entry_id: impl Into<String>) -> Self {
+        Self {
+            entry_id: entry_id.into(),
+            retired_backups: Retired,
         }
-        Ok(ids)
     }
 }
 
@@ -654,10 +526,13 @@ pub struct Candidate {
 #[serde(deny_unknown_fields)]
 pub struct SelectionPlan {
     pub version: u32,
+    /// Retired legacy-assignment revisions; plans saved before aliases may still hold them.
+    #[serde(default, rename = "assignment_revision", skip_serializing)]
+    pub retired_revisions: Retired,
+    #[serde(default, rename = "group_revision", skip_serializing)]
+    pub retired_group_revision: Retired,
     pub agent_id: String,
     pub owner_id: String,
-    pub assignment_revision: u64,
-    pub group_revision: Option<u64>,
     pub candidates: Vec<Candidate>,
     #[serde(default)]
     pub role: ModelRole,
@@ -667,6 +542,10 @@ pub struct SelectionPlan {
     pub roster_revision: u64,
     #[serde(default)]
     pub catalog_revision: u64,
+    /// The agent's effective backup policy, pinned when the plan is admitted; plans without one
+    /// follow the live app policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_policy: Option<crate::backup_policy::BackupPolicy>,
 }
 
 fn valid_id(id: &str) -> bool {
@@ -677,107 +556,12 @@ fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"-._:".contains(&c))
 }
 
-// Ownership permits administration, never implicit runtime sharing between agents.
-fn granted(_owner: &str, allowed: &BTreeSet<String>, assignment: &Assignment) -> bool {
-    allowed.contains(&assignment.agent_id)
-}
-
 impl SelectionPlan {
-    pub fn resolve(
-        assignment: &Assignment,
-        entries: &BTreeMap<String, ModelEntry>,
-        connections: &BTreeMap<String, Connection>,
-        groups: &BTreeMap<String, BackupGroup>,
-    ) -> Result<Self> {
-        if !valid_id(&assignment.agent_id)
-            || !valid_id(&assignment.owner_id)
-            || !valid_id(&assignment.primary_entry_id)
-            || assignment.revision == 0
-        {
-            bail!("Invalid model assignment");
-        }
-        let mut ids = vec![assignment.primary_entry_id.clone()];
-        let mut group_revision = None;
-        if let Some(id) = &assignment.backup_group_id {
-            let group = groups
-                .get(id)
-                .ok_or_else(|| anyhow::anyhow!("Backup group not found"))?;
-            if group.id != *id
-                || !valid_id(id)
-                || group.owner_id != assignment.owner_id
-                || group.revision == 0
-            {
-                bail!("Backup group is not authorized");
-            }
-            if group.entry_ids.len() > MAX_CANDIDATES {
-                bail!("Too many backup candidates");
-            }
-            let mut unique = BTreeSet::new();
-            for entry_id in &group.entry_ids {
-                if !valid_id(entry_id) || !unique.insert(entry_id) {
-                    bail!("Invalid or duplicate backup entry");
-                }
-                if entry_id != &assignment.primary_entry_id {
-                    ids.push(entry_id.clone());
-                }
-            }
-            group_revision = Some(group.revision);
-        }
-        if ids.len() > MAX_CANDIDATES {
-            bail!("Too many selection candidates");
-        }
-        let mut candidates = Vec::new();
-        for id in ids {
-            let entry = entries
-                .get(&id)
-                .ok_or_else(|| anyhow::anyhow!("Assigned model entry not found"))?;
-            let connection = connections
-                .get(&entry.connection_id)
-                .ok_or_else(|| anyhow::anyhow!("Model connection not found"))?;
-            if entry.id != id
-                || connection.id != entry.connection_id
-                || entry.revision == 0
-                || connection.revision == 0
-                || !valid_id(&connection.id)
-                || !valid_id(&connection.credential_ref)
-                || !crate::platform_catalog::valid_model(&entry.upstream_model)
-                || entry.display_name.len() > 200
-                || !entry.capabilities.contains("text")
-            {
-                bail!("Invalid model or connection record");
-            }
-            if connection.revoked
-                || !granted(&entry.owner_id, &entry.allowed_agents, assignment)
-                || !granted(&connection.owner_id, &connection.allowed_agents, assignment)
-            {
-                bail!("Model candidate is not authorized");
-            }
-            candidates.push(Candidate {
-                retired_limits: Retired,
-                default_effort: None,
-                platform: None,
-                entry_id: entry.id.clone(),
-                entry_revision: entry.revision,
-                connection_id: connection.id.clone(),
-                connection_revision: connection.revision,
-                credential_ref: connection.credential_ref.clone(),
-                transport: connection.transport.clone(),
-                upstream_model: entry.upstream_model.clone(),
-                image_in: entry.capabilities.contains("image_in"),
-            });
-        }
-        Ok(Self {
-            version: 1,
-            agent_id: assignment.agent_id.clone(),
-            owner_id: assignment.owner_id.clone(),
-            assignment_revision: assignment.revision,
-            group_revision,
-            candidates,
-            role: ModelRole::Standard,
-            custom_entry_id: None,
-            roster_revision: 0,
-            catalog_revision: 0,
-        })
+    /// The backup policy pinned at admission, or the live app policy for an older plan.
+    pub fn policy(&self) -> crate::backup_policy::BackupPolicy {
+        self.backup_policy
+            .clone()
+            .unwrap_or_else(crate::backup_policy::BackupPolicy::live)
     }
 
     /// Live authorization is separate from snapshot revision: ordinary edits do not
@@ -798,24 +582,14 @@ impl SelectionPlan {
         let connection = connections
             .get(&candidate.connection_id)
             .ok_or_else(|| anyhow::anyhow!("Model connection removed"))?;
-        let assignment = Assignment {
-            agent_id: self.agent_id.clone(),
-            owner_id: self.owner_id.clone(),
-            primary_entry_id: candidate.entry_id.clone(),
-            backup_group_id: None,
-            revision: self.assignment_revision,
-        };
+        // Ownership permits administration, never implicit runtime sharing between agents.
         if entry.id != candidate.entry_id
             || connection.id != candidate.connection_id
             || connection.revoked
             || connection.credential_ref != candidate.credential_ref
             || connection.transport != candidate.transport
-            || !granted(&entry.owner_id, &entry.allowed_agents, &assignment)
-            || !granted(
-                &connection.owner_id,
-                &connection.allowed_agents,
-                &assignment,
-            )
+            || !entry.allowed_agents.contains(&self.agent_id)
+            || !connection.allowed_agents.contains(&self.agent_id)
         {
             bail!("Pinned model candidate is no longer authorized");
         }
@@ -870,18 +644,14 @@ impl Default for FailoverState {
     }
 }
 impl FailoverState {
-    /// At most one transient retry per candidate; never replay partial output or
-    /// uncertain effects. Caller must durably save this state before redispatch.
-    /// Classify one failure with the live retry budget (`models-runtime.json`).
-    pub fn failed(&mut self, plan: &SelectionPlan, kind: FailureKind) -> NextAction {
-        let retries = crate::settings::Settings::live().retry.same_model_retries;
-        self.failed_with(plan, kind, retries)
-    }
-    pub fn failed_with(
+    /// Classify one failure under the plan's backup policy: temporary errors retry on the same
+    /// model first, then any switchable failure moves to the next alias. Never replays partial
+    /// output or uncertain effects. Caller must durably save this state before redispatch.
+    pub fn failed(
         &mut self,
         plan: &SelectionPlan,
         kind: FailureKind,
-        same_model_retries: u8,
+        policy: &crate::backup_policy::BackupPolicy,
     ) -> NextAction {
         if self.response_started
             || self.uncertain_tool_effect
@@ -896,12 +666,12 @@ impl FailoverState {
         {
             return NextAction::Terminal;
         }
-        if kind == FailureKind::Transient && self.retries < same_model_retries {
+        if kind == FailureKind::Transient && self.retries < policy.same_model_retries {
             self.retries += 1;
             return NextAction::Retry;
         }
         let next = self.candidate_index + 1;
-        if next >= plan.candidates.len() {
+        if next >= plan.candidates.len() || !policy.switches(kind) {
             return NextAction::Terminal;
         }
         self.history.push(FailoverEvent {
@@ -918,102 +688,14 @@ impl FailoverState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn retired_limits_in_saved_rosters_and_plans_are_ignored() {
-        let mut c = catalog_fixture();
-        c.migrate_legacy().unwrap();
-        let mut roster = serde_json::to_value(&c.agent_models["agent-a"]).unwrap();
-        assert!(roster.get("limits").is_none());
-        roster["limits"] = serde_json::json!({"a":{"input_tokens":150_000,"output_tokens":2_000}});
-        let loaded: AgentModels = serde_json::from_value(roster).unwrap();
-        assert_eq!(loaded, c.agent_models["agent-a"]);
-        let plan = c.resolve("agent-a").unwrap();
-        let mut saved = serde_json::to_value(&plan).unwrap();
-        assert!(saved["candidates"][0].get("limits").is_none());
-        saved["candidates"][0]["limits"] = serde_json::json!({"input_tokens":1,"output_tokens":1});
-        assert_eq!(
-            serde_json::from_value::<SelectionPlan>(saved).unwrap(),
-            plan
-        );
+    use crate::backup_policy::BackupPolicy;
+    use serde_json::json;
+
+    fn role(entry_id: &str) -> RoleAssignment {
+        RoleAssignment::new(entry_id)
     }
-    #[test]
-    fn default_efforts_pin_per_candidate_and_stay_inside_the_roster() {
-        let mut c = catalog_fixture();
-        c.migrate_legacy().unwrap();
-        c.agent_models
-            .get_mut("agent-a")
-            .unwrap()
-            .efforts
-            .insert("a".into(), "high".into());
-        c.validate().unwrap();
-        let plan = c.resolve("agent-a").unwrap();
-        assert_eq!(plan.candidates[0].default_effort.as_deref(), Some("high"));
-        assert!(plan.candidates[1..]
-            .iter()
-            .all(|c| c.default_effort.is_none()));
-        c.agent_models
-            .get_mut("agent-a")
-            .unwrap()
-            .efforts
-            .insert("a".into(), "turbo".into());
-        assert!(c.validate().is_err());
-        c.agent_models.get_mut("agent-a").unwrap().efforts.clear();
-        c.agent_models
-            .get_mut("agent-a")
-            .unwrap()
-            .efforts
-            .insert("outside".into(), "low".into());
-        assert!(c.validate().is_err());
-    }
-    #[test]
-    fn decision_requires_an_explicit_compatible_role() {
-        let mut c = catalog_fixture();
-        c.migrate_legacy().unwrap();
-        c.entries
-            .get_mut("b")
-            .unwrap()
-            .capabilities
-            .insert("decision".into());
-        assert!(c.resolve_role("agent-a", ModelRole::Decision).is_err());
-        c.agent_models.get_mut("agent-a").unwrap().roles.insert(
-            ModelRole::Decision,
-            RoleAssignment {
-                entry_id: "b".into(),
-                backup_entry_ids: vec![],
-            },
-        );
-        assert_eq!(
-            c.resolve_role("agent-a", ModelRole::Decision)
-                .unwrap()
-                .candidates[0]
-                .entry_id,
-            "b"
-        );
-        assert_eq!(
-            serde_json::to_value(ModelRole::Decision).unwrap(),
-            "decision"
-        );
-        assert_eq!(c.resolve("agent-a").unwrap().candidates[0].entry_id, "a");
-        c.entries
-            .get_mut("b")
-            .unwrap()
-            .capabilities
-            .remove("decision");
-        assert!(c.resolve_role("agent-a", ModelRole::Decision).is_err());
-    }
-    fn fixture() -> (
-        Assignment,
-        BTreeMap<String, ModelEntry>,
-        BTreeMap<String, Connection>,
-        BTreeMap<String, BackupGroup>,
-    ) {
-        let assignment = Assignment {
-            agent_id: "agent-a".into(),
-            owner_id: "owner".into(),
-            primary_entry_id: "a".into(),
-            backup_group_id: Some("group".into()),
-            revision: 1,
-        };
+    /// Roster a, b, c on distinct connections; Standard is a with aliases c then b.
+    fn catalog_fixture() -> Catalog {
         let mut entries = BTreeMap::new();
         let mut connections = BTreeMap::new();
         for id in ["a", "b", "c"] {
@@ -1043,103 +725,174 @@ mod tests {
                 },
             );
         }
-        let groups = BTreeMap::from([(
-            "group".into(),
-            BackupGroup {
-                id: "group".into(),
-                owner_id: "owner".into(),
-                entry_ids: vec!["c".into(), "a".into(), "b".into()],
-                revision: 3,
-            },
-        )]);
-        (assignment, entries, connections, groups)
-    }
-    fn catalog_fixture() -> Catalog {
-        let (assignment, entries, connections, mut groups) = fixture();
-        for group in groups.values_mut() {
-            group.revision = 1;
-        }
+        let roster = AgentModels {
+            retired_limits: Retired,
+            efforts: BTreeMap::new(),
+            agent_id: "agent-a".into(),
+            owner_id: "owner".into(),
+            entry_ids: vec!["a".into(), "b".into(), "c".into()],
+            roles: BTreeMap::from([(ModelRole::Standard, role("a"))]),
+            aliases: BTreeMap::from([("a".into(), vec!["c".into(), "b".into()])]),
+            revision: 1,
+        };
         Catalog {
             revision: 0,
             platform_sources: BTreeMap::new(),
             entries,
             connections,
-            groups,
-            assignments: BTreeMap::from([(assignment.agent_id.clone(), assignment)]),
-            agent_models: BTreeMap::new(),
+            retired_groups: Retired,
+            retired_assignments: Retired,
+            agent_models: BTreeMap::from([("agent-a".into(), roster)]),
         }
     }
+    fn ids(plan: &SelectionPlan) -> Vec<&str> {
+        plan.candidates
+            .iter()
+            .map(|c| c.entry_id.as_str())
+            .collect()
+    }
     #[test]
-    fn legacy_migration_is_explicit_ordered_idempotent_and_does_not_resurrect_cleared_roles() {
-        let mut catalog = catalog_fixture();
-        for entry in catalog.entries.values_mut() {
-            entry.allowed_agents.clear();
-        }
-        for connection in catalog.connections.values_mut() {
-            connection.allowed_agents.clear();
-        }
-        catalog.migrate_legacy().unwrap();
-        let before = catalog.clone();
-        catalog.migrate_legacy().unwrap();
-        assert_eq!(catalog, before);
+    fn retired_keys_in_saved_catalogs_rosters_and_plans_are_ignored() {
+        let c = catalog_fixture();
+        let mut saved = serde_json::to_value(&c).unwrap();
+        assert!(saved.get("groups").is_none() && saved.get("assignments").is_none());
+        saved["groups"] = json!({});
+        saved["assignments"] = json!({});
+        let roster = &mut saved["agent_models"]["agent-a"];
+        roster["limits"] = json!({"a":{"input_tokens":150_000,"output_tokens":2_000}});
+        roster["roles"]["standard"]["backup_entry_ids"] = json!([]);
+        assert_eq!(serde_json::from_value::<Catalog>(saved).unwrap(), c);
+        let plan = c.resolve("agent-a").unwrap();
+        let mut saved = serde_json::to_value(&plan).unwrap();
+        assert!(saved["candidates"][0].get("limits").is_none());
+        saved["candidates"][0]["limits"] = json!({"input_tokens":1,"output_tokens":1});
+        saved["assignment_revision"] = json!(1);
+        saved["group_revision"] = json!(null);
         assert_eq!(
-            catalog.agent_models["agent-a"].entry_ids,
-            vec!["a", "c", "b"]
+            serde_json::from_value::<SelectionPlan>(saved).unwrap(),
+            plan
         );
+    }
+    #[test]
+    fn aliases_follow_the_selected_entry_in_order() {
+        let mut c = catalog_fixture();
+        c.validate().unwrap();
+        assert_eq!(ids(&c.resolve("agent-a").unwrap()), vec!["a", "c", "b"]);
+        // A custom choice brings its own aliases; one without any runs alone.
+        assert_eq!(ids(&c.resolve_custom("agent-a", "b").unwrap()), vec!["b"]);
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.aliases.insert("b".into(), vec!["a".into()]);
         assert_eq!(
-            catalog
-                .resolve("agent-a")
+            ids(&c.resolve_custom("agent-a", "b").unwrap()),
+            vec!["b", "a"]
+        );
+        let plan = c.resolve("agent-a").unwrap();
+        assert_ne!(
+            plan.candidates[0].credential_ref,
+            plan.candidates[1].credential_ref
+        );
+        assert_eq!(plan.version, 2);
+        assert!(plan.backup_policy.is_none());
+    }
+    #[test]
+    fn invalid_aliases_are_rejected_and_pruning_follows_the_roster() {
+        for aliases in [
+            vec!["a".to_owned()],
+            vec!["b".into(), "b".into()],
+            vec!["outside".into()],
+            vec![],
+        ] {
+            let mut c = catalog_fixture();
+            c.agent_models
+                .get_mut("agent-a")
                 .unwrap()
-                .candidates
-                .iter()
-                .map(|c| c.entry_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "c", "b"]
-        );
-        catalog
-            .agent_models
+                .aliases
+                .insert("a".into(), aliases);
+            assert!(c.validate().is_err());
+        }
+        let mut c = catalog_fixture();
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.entry_ids.retain(|id| id != "c");
+        roster.prune_aliases();
+        assert_eq!(roster.aliases["a"], vec!["b"]);
+        roster.entry_ids.retain(|id| id != "b");
+        roster.prune_aliases();
+        assert!(roster.aliases.is_empty());
+    }
+    #[test]
+    fn unusable_aliases_are_skipped_but_the_selected_entry_must_be_usable() {
+        let mut c = catalog_fixture();
+        c.connections.get_mut("c").unwrap().revoked = true;
+        assert_eq!(ids(&c.resolve("agent-a").unwrap()), vec!["a", "b"]);
+        c.entries.get_mut("b").unwrap().allowed_agents.clear();
+        assert_eq!(ids(&c.resolve("agent-a").unwrap()), vec!["a"]);
+        c.entries.get_mut("a").unwrap().allowed_agents.clear();
+        assert!(c.resolve("agent-a").is_err());
+    }
+    #[test]
+    fn default_efforts_pin_per_candidate_and_stay_inside_the_roster() {
+        let mut c = catalog_fixture();
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.efforts.insert("a".into(), "high".into());
+        c.validate().unwrap();
+        let plan = c.resolve("agent-a").unwrap();
+        assert_eq!(plan.candidates[0].default_effort.as_deref(), Some("high"));
+        assert!(plan.candidates[1..]
+            .iter()
+            .all(|c| c.default_effort.is_none()));
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.efforts.insert("a".into(), "turbo".into());
+        assert!(c.validate().is_err());
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.efforts.clear();
+        roster.efforts.insert("outside".into(), "low".into());
+        assert!(c.validate().is_err());
+    }
+    #[test]
+    fn decision_requires_an_explicit_compatible_role() {
+        let mut c = catalog_fixture();
+        c.entries
+            .get_mut("b")
+            .unwrap()
+            .capabilities
+            .insert("decision".into());
+        assert!(c.resolve_role("agent-a", ModelRole::Decision).is_err());
+        c.agent_models
             .get_mut("agent-a")
             .unwrap()
             .roles
-            .clear();
-        catalog.entries.get_mut("a").unwrap().allowed_agents.clear();
-        catalog.migrate_legacy().unwrap();
-        assert!(catalog
-            .resolve("agent-a")
-            .unwrap_err()
-            .to_string()
-            .contains("Standard model required"));
-        assert!(catalog.entries["a"].allowed_agents.is_empty());
+            .insert(ModelRole::Decision, role("b"));
+        assert_eq!(
+            c.resolve_role("agent-a", ModelRole::Decision)
+                .unwrap()
+                .candidates[0]
+                .entry_id,
+            "b"
+        );
+        assert_eq!(
+            serde_json::to_value(ModelRole::Decision).unwrap(),
+            "decision"
+        );
+        assert_eq!(c.resolve("agent-a").unwrap().candidates[0].entry_id, "a");
+        c.entries
+            .get_mut("b")
+            .unwrap()
+            .capabilities
+            .remove("decision");
+        assert!(c.resolve_role("agent-a", ModelRole::Decision).is_err());
     }
-
     #[test]
     fn roles_and_custom_selections_stay_explicit_and_pinned() {
         let mut catalog = catalog_fixture();
-        catalog.migrate_legacy().unwrap();
         let standard = catalog.resolve("agent-a").unwrap();
         assert!(catalog.resolve_role("agent-a", ModelRole::System).is_err());
         let roster = catalog.agent_models.get_mut("agent-a").unwrap();
-        roster.roles.insert(
-            ModelRole::System,
-            RoleAssignment {
-                entry_id: "b".into(),
-                backup_entry_ids: vec!["a".into()],
-            },
-        );
-        roster.roles.insert(
-            ModelRole::Premium,
-            roster.roles[&ModelRole::Standard].clone(),
-        );
+        roster.roles.insert(ModelRole::System, role("b"));
+        roster.aliases.insert("b".into(), vec!["a".into()]);
+        roster.roles.insert(ModelRole::Premium, role("a"));
         let system = catalog.resolve_role("agent-a", ModelRole::System).unwrap();
         assert_eq!(system.role, ModelRole::System);
-        assert_eq!(
-            system
-                .candidates
-                .iter()
-                .map(|c| c.entry_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["b", "a"]
-        );
+        assert_eq!(ids(&system), vec!["b", "a"]);
         let custom = catalog.resolve_custom("agent-a", "c").unwrap();
         assert_eq!(custom.custom_entry_id.as_deref(), Some("c"));
         assert_eq!(custom.candidates.len(), 1);
@@ -1151,42 +904,32 @@ mod tests {
                 .candidates,
             standard.candidates
         );
-        catalog
-            .agent_models
-            .get_mut("agent-a")
-            .unwrap()
-            .roles
-            .get_mut(&ModelRole::System)
-            .unwrap()
-            .entry_id = "c".into();
+        let roster = catalog.agent_models.get_mut("agent-a").unwrap();
+        roster.roles.get_mut(&ModelRole::System).unwrap().entry_id = "c".into();
         assert_eq!(system.candidates[0].entry_id, "b");
         assert_eq!(system.roster_revision, 1);
         let mut failed = FailoverState::default();
         assert_eq!(
-            failed.failed(&system, FailureKind::ModelUnavailable),
+            failed.failed(
+                &system,
+                FailureKind::ModelUnavailable,
+                &BackupPolicy::default()
+            ),
             NextAction::Backup
         );
         assert_eq!(failed.history[0].to_entry_id, "a");
     }
-
     #[test]
     fn every_role_checks_capability_roster_and_both_explicit_grants() {
         let mut catalog = catalog_fixture();
-        catalog.migrate_legacy().unwrap();
-        for role in [ModelRole::ImageIn, ModelRole::ImageOut, ModelRole::Voice] {
+        for model_role in [ModelRole::ImageIn, ModelRole::ImageOut, ModelRole::Voice] {
             catalog
                 .agent_models
                 .get_mut("agent-a")
                 .unwrap()
                 .roles
-                .insert(
-                    role,
-                    RoleAssignment {
-                        entry_id: "a".into(),
-                        backup_entry_ids: vec![],
-                    },
-                );
-            assert!(catalog.resolve_role("agent-a", role).is_err());
+                .insert(model_role, role("a"));
+            assert!(catalog.resolve_role("agent-a", model_role).is_err());
         }
         assert!(!catalog.resolve("agent-a").unwrap().candidates[0].image_in);
         assert!(
@@ -1200,8 +943,12 @@ mod tests {
             "image_out".into(),
             "voice".into(),
         ]);
-        for role in [ModelRole::ImageIn, ModelRole::ImageOut, ModelRole::Voice] {
-            assert!(catalog.resolve_role("agent-a", role).is_ok());
+        for model_role in [ModelRole::ImageIn, ModelRole::ImageOut, ModelRole::Voice] {
+            // Aliases without the role's capability are left out of the plan.
+            assert_eq!(
+                ids(&catalog.resolve_role("agent-a", model_role).unwrap()),
+                vec!["a"]
+            );
         }
         // The plan pins whether each candidate reads images, so the loop can send them directly.
         assert!(catalog.resolve("agent-a").unwrap().candidates[0].image_in);
@@ -1235,122 +982,94 @@ mod tests {
         assert!(catalog.resolve_custom("agent-a", "a").is_err());
         assert!(catalog.validate().is_err());
     }
-
     #[test]
-    fn old_plan_defaults_to_standard_without_altering_candidates() {
-        let (a, e, c, g) = fixture();
-        let original = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
-        let mut value = serde_json::to_value(&original).unwrap();
-        for key in [
-            "role",
-            "custom_entry_id",
-            "roster_revision",
-            "catalog_revision",
-        ] {
-            value.as_object_mut().unwrap().remove(key);
-        }
-        let restored: SelectionPlan = serde_json::from_value(value).unwrap();
-        assert_eq!(restored, original);
-    }
-
-    // The old installer could configure a different owner's agent. Migration keeps
-    // its grant authority but uses the canonical tenant owner for future role edits.
-
-    // Newly accepted legacy-form writes use the same directory projection, while
-    // an already explicit record is never rewritten as an implicit ownership transfer.
-
-    #[test]
-    fn explicit_order_and_distinct_connections() {
-        let (a, e, c, g) = fixture();
-        let p = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
+    fn editing_the_roster_does_not_reroute_a_pinned_plan() {
+        let mut c = catalog_fixture();
+        let p = c.resolve("agent-a").unwrap();
+        c.agent_models
+            .get_mut("agent-a")
+            .unwrap()
+            .roles
+            .insert(ModelRole::Standard, role("b"));
+        c.entries.get_mut("a").unwrap().upstream_model = "changed".into();
         assert_eq!(
-            p.candidates
-                .iter()
-                .map(|x| x.entry_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "c", "b"]
-        );
-        assert_ne!(
-            p.candidates[0].credential_ref,
-            p.candidates[1].credential_ref
-        );
-        assert_eq!(p.group_revision, Some(3));
-    }
-    #[test]
-    fn editing_assignment_does_not_reroute_snapshot() {
-        let (mut a, mut e, c, g) = fixture();
-        let p = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
-        a.primary_entry_id = "b".into();
-        a.revision += 1;
-        e.get_mut("a").unwrap().upstream_model = "changed".into();
-        assert_eq!(
-            p.authorize_candidate(0, &e, &c).unwrap().upstream_model,
+            p.authorize_candidate(0, &c.entries, &c.connections)
+                .unwrap()
+                .upstream_model,
             "same-upstream"
         );
-        assert_eq!(
-            SelectionPlan::resolve(&a, &e, &c, &g).unwrap().candidates[0].entry_id,
-            "b"
-        );
+        assert_eq!(c.resolve("agent-a").unwrap().candidates[0].entry_id, "b");
     }
     #[test]
-    fn every_backup_requires_model_and_connection_grants() {
-        let (a, mut e, mut c, g) = fixture();
-        e.get_mut("c").unwrap().owner_id = "private".into();
-        e.get_mut("c").unwrap().allowed_agents.clear();
-        assert!(SelectionPlan::resolve(&a, &e, &c, &g).is_err());
-        e.get_mut("c")
-            .unwrap()
-            .allowed_agents
-            .insert(a.agent_id.clone());
-        c.get_mut("c").unwrap().owner_id = "private".into();
-        c.get_mut("c").unwrap().allowed_agents.clear();
-        assert!(SelectionPlan::resolve(&a, &e, &c, &g).is_err());
-        c.get_mut("c")
-            .unwrap()
-            .allowed_agents
-            .insert(a.agent_id.clone());
-        let p = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
-        c.get_mut("c").unwrap().revoked = true;
-        assert!(p.authorize_candidate(1, &e, &c).is_err());
-    }
-    #[test]
-    fn replaced_credentials_are_not_silently_used() {
-        let (a, e, mut c, g) = fixture();
-        let p = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
-        c.get_mut("a").unwrap().credential_ref = "new-credential".into();
-        assert!(p.authorize_candidate(0, &e, &c).is_err());
-    }
-    #[test]
-    fn duplicate_or_missing_group_rejected() {
-        let (a, e, c, mut g) = fixture();
-        g.get_mut("group").unwrap().entry_ids.push("c".into());
-        assert!(SelectionPlan::resolve(&a, &e, &c, &g).is_err());
-        g.clear();
-        assert!(SelectionPlan::resolve(&a, &e, &c, &g).is_err());
+    fn revoked_or_replaced_connections_are_not_silently_used() {
+        let mut c = catalog_fixture();
+        let p = c.resolve("agent-a").unwrap();
+        c.connections.get_mut("c").unwrap().revoked = true;
+        assert!(p
+            .authorize_candidate(1, &c.entries, &c.connections)
+            .is_err());
+        c.connections.get_mut("a").unwrap().credential_ref = "new-credential".into();
+        assert!(p
+            .authorize_candidate(0, &c.entries, &c.connections)
+            .is_err());
+        c.connections.get_mut("b").unwrap().allowed_agents.clear();
+        assert!(p
+            .authorize_candidate(2, &c.entries, &c.connections)
+            .is_err());
     }
     #[test]
     fn bounded_retry_then_ordered_failover_then_terminal() {
-        let (a, e, c, g) = fixture();
-        let p = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
+        let p = catalog_fixture().resolve("agent-a").unwrap();
+        let policy = BackupPolicy::default();
         let mut s = FailoverState::default();
-        assert_eq!(s.failed(&p, FailureKind::Transient), NextAction::Retry);
-        assert_eq!(s.failed(&p, FailureKind::Transient), NextAction::Retry);
-        assert_eq!(s.failed(&p, FailureKind::Transient), NextAction::Backup);
+        assert_eq!(
+            s.failed(&p, FailureKind::Transient, &policy),
+            NextAction::Retry
+        );
+        assert_eq!(
+            s.failed(&p, FailureKind::Transient, &policy),
+            NextAction::Retry
+        );
+        assert_eq!(
+            s.failed(&p, FailureKind::Transient, &policy),
+            NextAction::Backup
+        );
         assert_eq!(s.history[0].to_entry_id, "c");
         assert_eq!(
-            s.failed(&p, FailureKind::QuotaExhausted),
+            s.failed(&p, FailureKind::QuotaExhausted, &policy),
             NextAction::Backup
         );
         assert_eq!(s.history[1].to_entry_id, "b");
         assert_eq!(
-            s.failed(&p, FailureKind::InvalidCredentials),
+            s.failed(&p, FailureKind::InvalidCredentials, &policy),
+            NextAction::Terminal
+        );
+    }
+    #[test]
+    fn the_policy_sets_retries_and_which_failures_switch() {
+        let p = catalog_fixture().resolve("agent-a").unwrap();
+        let mut policy = BackupPolicy::default();
+        policy.same_model_retries = 0;
+        policy.switch_on.quota_exhausted = false;
+        let mut s = FailoverState::default();
+        assert_eq!(
+            s.failed(&p, FailureKind::QuotaExhausted, &policy),
+            NextAction::Terminal
+        );
+        assert_eq!(
+            s.failed(&p, FailureKind::Transient, &policy),
+            NextAction::Backup
+        );
+        policy.switch_on.transient = false;
+        assert_eq!(
+            s.failed(&p, FailureKind::Transient, &policy),
             NextAction::Terminal
         );
     }
     #[test]
     fn unsafe_failures_never_failover() {
-        let (a, e, c, g) = fixture();
-        let p = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
+        let p = catalog_fixture().resolve("agent-a").unwrap();
+        let policy = BackupPolicy::default();
         for kind in [
             FailureKind::MalformedRequest,
             FailureKind::Cancelled,
@@ -1358,7 +1077,7 @@ mod tests {
             FailureKind::Protocol,
         ] {
             assert_eq!(
-                FailoverState::default().failed(&p, kind),
+                FailoverState::default().failed(&p, kind, &policy),
                 NextAction::Terminal
             );
         }
@@ -1366,26 +1085,29 @@ mod tests {
             response_started: true,
             ..Default::default()
         };
-        assert_eq!(s.failed(&p, FailureKind::Transient), NextAction::Terminal);
+        assert_eq!(
+            s.failed(&p, FailureKind::Transient, &policy),
+            NextAction::Terminal
+        );
         let mut s = FailoverState {
             uncertain_tool_effect: true,
             ..Default::default()
         };
         assert_eq!(
-            s.failed(&p, FailureKind::ModelUnavailable),
+            s.failed(&p, FailureKind::ModelUnavailable, &policy),
             NextAction::Terminal
         );
     }
     #[test]
     fn snapshot_and_history_round_trip() {
-        let (a, e, c, g) = fixture();
-        let p = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
+        let mut p = catalog_fixture().resolve("agent-a").unwrap();
+        p.backup_policy = Some(BackupPolicy::default());
         assert_eq!(
             p,
             serde_json::from_str::<SelectionPlan>(&serde_json::to_string(&p).unwrap()).unwrap()
         );
         let mut s = FailoverState::default();
-        s.failed(&p, FailureKind::ModelUnavailable);
+        s.failed(&p, FailureKind::ModelUnavailable, &p.policy());
         assert_eq!(
             s,
             serde_json::from_str::<FailoverState>(&serde_json::to_string(&s).unwrap()).unwrap()

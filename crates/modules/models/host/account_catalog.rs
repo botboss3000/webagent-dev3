@@ -142,10 +142,11 @@ mod tests {
         assert!(!catalog.entries.contains_key(&owned));
         for roster in catalog.agent_models.values() {
             assert!(!roster.entry_ids.contains(&owned));
+            assert!(roster.roles.values().all(|r| r.entry_id != owned));
             assert!(roster
-                .roles
-                .values()
-                .all(|r| r.entry_id != owned && !r.backup_entry_ids.contains(&owned)));
+                .aliases
+                .iter()
+                .all(|(id, aliases)| id != &owned && !aliases.contains(&owned)));
         }
         let choices = app.store.account_model_choices("admin").await.unwrap();
         assert!(!choices.to_string().contains(&source));
