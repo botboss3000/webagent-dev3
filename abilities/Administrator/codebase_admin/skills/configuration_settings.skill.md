@@ -104,6 +104,12 @@ saving creates it. The matcher reads the surface from the request ("on my phone"
 otherwise uses Common. On an agent's page they save into that agent's chat overlay; `reset`
 removes an agent override, or an app surface value so Common's applies again.
 
+App → All Settings also has an Advanced section listing every live file under `config/`
+(JSON and Markdown) for administrators: `GET/PUT /api/v3/admin/config-files/{path}` with a
+digest fence, the owner's validator where one exists (administrator configuration ids, browser
+pages, provider schema) and otherwise a JSON-object check. Give a new config file a validator
+there when a malformed value could break its owner.
+
 If a setting has wording its type does not give ("close registration" = `restricted`, "by
 accident" = smaller), add it to `config/inference/value-words.json` under the id.
 

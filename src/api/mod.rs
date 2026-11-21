@@ -212,6 +212,11 @@ pub(super) fn router(app: App) -> Router {
         .route("/status", get(overview))
         .route("/settings", put(settings))
         .route("/admin/configuration", get(live_configuration::list))
+        .route("/admin/config-files", get(live_configuration::files_list))
+        .route(
+            "/admin/config-files/{*path}",
+            get(live_configuration::file_get).put(live_configuration::file_put),
+        )
         .route(
             "/admin/configuration/{id}",
             get(live_configuration::get_config).put(live_configuration::put_config),

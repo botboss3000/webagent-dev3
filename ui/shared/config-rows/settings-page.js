@@ -10,8 +10,8 @@
 // Used by App → All Settings (mountSettingsPage) and an agent's Identity → Chat customization.
 
 import { createSubpage, createSubpageList } from '../subpage-list/subpage-list.js';
-import { createConfigList, createLengthRow, createLongTextRow, createNumberRow, createSelectRow, createTextRow,
-  createToggleRow } from './config-rows.js';
+import { createConfigForm, createConfigList, createLengthRow, createLongTextRow, createNumberRow, createSelectRow,
+  createTextRow, createToggleRow } from './config-rows.js';
 import { createTextField } from '../controls/controls.js';
 import { requestTouchVibration } from '../vibrate/vibrate.js';
 
@@ -139,44 +139,71 @@ export function withValue(document, pointer, value) {
   return copy;
 }
 
-// Raw config files editable on App → All Settings, by administrator configuration id. Prompts are
-// edited as files and the encryption switch on its own page, so neither is listed.
-const RAW_FILES = {app_ui: 'App layout', chat: 'Chat', context_compaction: 'Context compaction',
-  loop_runtime: 'Loop runtime', tool_output_retention: 'Tool output retention', access_policy: 'Access policy',
-  message_visibility: 'Message visibility gate', closing_status: 'Closing status gate', voice: 'Voice',
-  browser_limits: 'Browser limits', admin_alerts: 'Admin alerts', find_ranking: 'Find ranking',
-  models_runtime: 'Models runtime'};
-
-/** Every value of every editable config file, one lazily drawn section per file, saved through
- *  the administrator configuration save (its validator and digest fence apply). */
+/** Every live file under config/ (JSON and Markdown), grouped by folder, one lazily drawn
+ *  section per file. JSON files show each value as a row and the whole file as text; Markdown
+ *  files show their text. Saves go through PUT /admin/config-files/{path}: the owner's
+ *  validator, a fence on the bytes read and the broker's write all apply. */
 async function drawRawFiles(host, request, onSaved) {
-  const listing = await request('/admin/configuration');
-  host.append(node('p', 'ac-hint', 'Every value in the app\u2019s config files, by key name. Each save is checked by '
-    + 'that file\u2019s own validator. Prompts and the database encryption switch are edited elsewhere.'));
-  for (const {id} of listing.configurations || []) {
-    if (!RAW_FILES[id]) continue;
-    const section = node('details', 'stp-unavailable');
-    section.append(node('summary', 'ac-hint', RAW_FILES[id]));
-    host.append(section);
-    section.addEventListener('toggle', async () => {
-      if (!section.open || section.dataset.drawn) return;
-      section.dataset.drawn = '1';
-      const path = '/admin/configuration/' + encodeURIComponent(id);
-      let file;
-      try { file = await request(path); } catch (error) { section.append(node('p', 'ac-hint', error.message)); return; }
-      let queue = Promise.resolve();
-      createRawRows(createConfigList(section, {label: RAW_FILES[id]}), file.config, '', {
-        onSave: (pointer, value) => {
-          const task = queue.then(async () => {
-            const config = withValue(file.config, pointer, value);
-            const saved = await request(path, 'PUT', {expected_digest: file.digest, config});
-            file = {config, digest: saved.digest};
-            await onSaved?.();
-          });
-          queue = task.catch(() => {});
-          return task;
+  const {files = []} = await request('/admin/config-files');
+  host.append(node('p', 'ac-hint', 'Every config file, by key name. Each save is checked by that file\u2019s own '
+    + 'validator where it has one and only replaces the file if nobody changed it meanwhile.'));
+  const folders = new Map();
+  for (const path of files) {
+    const folder = path.split('/').slice(1, -1).join(' / ') || 'config';
+    if (!folders.has(folder)) folders.set(folder, []);
+    folders.get(folder).push(path);
+  }
+  for (const [folder, paths] of folders) {
+    host.append(node('div', 'ac-label stp-area', capital(words(folder))));
+    for (const path of paths) {
+      const section = node('details', 'stp-unavailable');
+      section.append(node('summary', 'ac-hint', path.split('/').pop()));
+      host.append(section);
+      section.addEventListener('toggle', () => {
+        if (section.open && !section.dataset.drawn) { section.dataset.drawn = '1'; void drawFile(section, path); }
+      });
+    }
+  }
+  async function drawFile(section, path) {
+    const url = '/admin/config-files/' + path.split('/').map(encodeURIComponent).join('/');
+    const body = node('div');
+    section.append(body);
+    let file;
+    try { file = await request(url); } catch (error) { body.append(node('p', 'ac-hint', error.message)); return; }
+    let queue = Promise.resolve();
+    const put = text => {
+      const task = queue.then(async () => {
+        const saved = await request(url, 'PUT', {text, expected_digest: file.digest});
+        file = {...file, text, digest: saved.digest};
+        await onSaved?.();
+      });
+      queue = task.catch(() => {});
+      return task;
+    };
+    const redraw = () => { body.replaceChildren(); draw(); };
+    const draw = () => {
+      const json = path.endsWith('.json');
+      let config = null;
+      if (json) {
+        try { config = JSON.parse(file.text); } catch { body.append(node('p', 'ac-hint', 'This file is not valid JSON; fix it as text.')); }
+      }
+      if (config && typeof config === 'object') {
+        createRawRows(createConfigList(body, {label: path}), config, '', {onSave: async (pointer, value) => {
+          await put(JSON.stringify(withValue(config, pointer, value), null, 2));
+          config = JSON.parse(file.text);
         }});
-    });
+      }
+      // The whole file as text, saved with one button: lists and Markdown are edited here.
+      const raw = node('details', 'stp-unavailable');
+      raw.open = !json;
+      raw.append(node('summary', 'ac-hint', json ? 'Edit as text' : 'Text'));
+      body.append(raw);
+      const form = createConfigForm(raw, {saveLabel: 'Save file', onSave: async values => { await put(values.text); redraw(); }});
+      createLongTextRow(createConfigList(raw, {label: path + ' text'}), {title: path.split('/').pop(), value: file.text,
+        minHeight: 160, maxHeight: 520, key: 'text', form});
+      form.attach();
+    };
+    draw();
   }
 }
 
@@ -396,7 +423,7 @@ export async function mountSettingsPage(host, {page}) {
   }
   if (page === 'app') {
     const raw = node('details', 'stp-unavailable');
-    raw.append(node('summary', 'ac-hint', 'Advanced: every value in the config files'));
+    raw.append(node('summary', 'ac-hint', 'Advanced: every config file (JSON and Markdown)'));
     host.append(raw);
     raw.addEventListener('toggle', () => {
       if (raw.open && !raw.dataset.drawn) {

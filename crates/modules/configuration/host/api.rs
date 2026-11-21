@@ -268,6 +268,139 @@ pub(crate) async fn put_config(
         json!({"id":id,"digest":digest(value),"restart_required":false}),
     ))
 }
+/// Every live file under `config/` (each file a `live-files.json` pattern there names), for
+/// All Settings' raw editor. The broker's writer re-checks the list on every save.
+fn config_files() -> Result<Vec<String>> {
+    let root = webagent_configuration::paths::checkout();
+    let index: Value = serde_json::from_slice(&std::fs::read(root.join("live-files.json"))?)?;
+    let patterns: Vec<&str> = index["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|pattern| pattern.starts_with("config/"))
+        .collect();
+    let mut files = Vec::new();
+    let mut pending = vec![root.join("config")];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(relative) = path.strip_prefix(&root) {
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                if patterns.iter().any(|pattern| glob(pattern, &relative)) {
+                    files.push(relative);
+                }
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// `pattern` matches `path` segment by segment; `*` matches within one segment.
+fn glob(pattern: &str, path: &str) -> bool {
+    fn wild(p: &[u8], s: &[u8]) -> bool {
+        match p.split_first() {
+            None => s.is_empty(),
+            Some((b'*', rest)) => (0..=s.len()).any(|i| wild(rest, &s[i..])),
+            Some((c, rest)) => s.first() == Some(c) && wild(rest, &s[1..]),
+        }
+    }
+    let (p, s): (Vec<&str>, Vec<&str>) = (pattern.split('/').collect(), path.split('/').collect());
+    p.len() == s.len()
+        && p.iter()
+            .zip(&s)
+            .all(|(p, s)| wild(p.as_bytes(), s.as_bytes()))
+}
+
+/// One listed config file, or an error that names no other path.
+fn listed(path: &str) -> std::result::Result<String, crate::ApiError> {
+    config_files()?
+        .into_iter()
+        .find(|file| file == path)
+        .ok_or_else(|| bad("Unknown config file"))
+}
+
+/// Fence over a file's exact bytes.
+fn text_digest(bytes: &[u8]) -> String {
+    digest(&json!(String::from_utf8_lossy(bytes)))
+}
+
+/// Check a JSON config file with its owner's validator where one exists: the administrator
+/// configuration validators, the browser pages rules and the provider schema; any other file
+/// must hold a JSON object.
+fn check_file(app: &App, path: &str, value: &Value) -> Result<()> {
+    if let Some(id) = id_for_live(app, path) {
+        return validate(id, value);
+    }
+    let bytes = serde_json::to_vec(value)?;
+    if path == webagent_browser::pages::LIVE_PAGES {
+        webagent_browser::pages::Pages::parse(&bytes)?;
+    } else if let Some(name) = path.strip_prefix("config/models/providers/") {
+        // The provider loader validates a folder; check this file alone in a scratch one.
+        let scratch = tempfile::tempdir()?;
+        std::fs::write(scratch.path().join(name), &bytes)?;
+        webagent_models::providers::validate_folder(scratch.path())?;
+    } else {
+        anyhow::ensure!(value.is_object(), "A config file holds a JSON object");
+    }
+    Ok(())
+}
+
+/// `GET /admin/config-files` → every editable live config file.
+pub(crate) async fn files_list(State(_app): State<App>) -> Api {
+    Ok(Json(json!({"files": config_files()?})))
+}
+
+/// `GET /admin/config-files/{path}` → the file's text and the digest a save sends back.
+pub(crate) async fn file_get(State(_app): State<App>, Path(path): Path<String>) -> Api {
+    let path = listed(&path)?;
+    let bytes = crate::live_files::current(&path, LIVE_LIMIT)?;
+    let text = String::from_utf8(bytes.clone()).map_err(|_| bad("Not a text file"))?;
+    Ok(Json(
+        json!({"path": path, "text": text, "digest": text_digest(&bytes)}),
+    ))
+}
+
+/// `PUT /admin/config-files/{path}` `{"text", "expected_digest"}` → replace the file. JSON is
+/// parsed and checked by its owner's validator and kept pretty-printed; Markdown is saved as
+/// typed. The broker replaces the file only while it still holds the bytes read.
+pub(crate) async fn file_put(
+    State(app): State<App>,
+    Path(path): Path<String>,
+    Json(body): Json<Value>,
+) -> Api {
+    let path = listed(&path)?;
+    let expected = required(&body, "expected_digest", 64)?.to_owned();
+    let text = body["text"].as_str().ok_or_else(|| bad("Text required"))?;
+    if text.len() as u64 > LIVE_LIMIT {
+        return Err(bad("File too large"));
+    }
+    let bytes = if path.ends_with(".json") {
+        let value: Value = serde_json::from_str(text).map_err(|_| bad("Invalid JSON"))?;
+        check_file(&app, &path, &value)
+            .map_err(|error| bad(&format!("Invalid configuration: {error:#}")))?;
+        crate::live_files::pretty(&value)?
+    } else {
+        let mut bytes = text.as_bytes().to_vec();
+        if !bytes.ends_with(b"\n") {
+            bytes.push(b'\n');
+        }
+        bytes
+    };
+    let _guard = app.gate.lock().await;
+    let current = crate::live_files::current(&path, LIVE_LIMIT)?;
+    if text_digest(&current) != expected {
+        return Err(conflict("File changed; reload before saving"));
+    }
+    crate::live_files::save(&app, &path, &bytes, &current)
+        .await
+        .map_err(|_| conflict("File changed; reload before saving"))?;
+    Ok(Json(json!({"path": path, "digest": text_digest(&bytes)})))
+}
+
 /// Report only catalog identities and bounded API/loop adoption receipts.
 pub(crate) async fn publication(State(app): State<App>) -> Api {
     let consumers=["api","loop"].iter().map(|role|{
@@ -282,6 +415,19 @@ pub(crate) async fn publication(State(app): State<App>) -> Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn globs_match_within_one_segment() {
+        assert!(glob("config/ui/*.json", "config/ui/vibrate.json"));
+        assert!(glob(
+            "config/configuration/prompts/*.md",
+            "config/configuration/prompts/a.md"
+        ));
+        assert!(!glob("config/ui/*.json", "config/ui/chat/chat.json"));
+        assert!(!glob(
+            "config/media/voice.json",
+            "config/media/voice.json.bak"
+        ));
+    }
     #[tokio::test]
     async fn invalid_configuration_and_stale_digest_preserve_current() {
         let (_root, app) = crate::runtime_tests::fixture().await;
