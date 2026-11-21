@@ -74,6 +74,42 @@ class SettingsTests(unittest.TestCase):
         # Other errors keep their start and end, bounded.
         reason=executor.Executor.sidekick_reason(ValueError("x"*2000+"the cause"))
         self.assertLessEqual(len(reason),600);self.assertTrue(reason.endswith("the cause"))
+    def test_a_failure_the_server_recheck_passes_is_a_false_alarm_and_one_it_fails_stays_final(self):
+        """Job b63208a5 failed on the NUC and the same source passed four minutes later: only the named
+        tests re-run here, in the failing step's executable; they decide whether the job fails."""
+        script=["set -e","cargo test --workspace --locked --offline --doc -- --test-threads=8","echo '@@sidekick-step-passed doctests'",
+            "cd /build/v3 && /output/artifacts/tests/webagent_v3-0123456789abcdef --test-threads=8","echo x",
+            "cd /build/v3/crates/a && /output/artifacts/tests/a-fedcba9876543210 --test-threads=8"]
+        def run(output):
+            w=worker();seen=[]
+            def phase(job,name,kind,application,out,argv,recipe):
+                seen.append(argv[2])
+                if isinstance(output,Exception):raise output
+                return output
+            w.phase=phase
+            job={"sidekick":{"decision":"failed","failing_tests":["policy::tests::a","policy::tests::b"]}}
+            state={"script":script,"done":["doctests"],"partial":"doctests ok\n"}
+            return w.sidekick_recheck(job,None,None,state),job["sidekick"],state,seen
+        passed,record,state,seen=run("test policy::tests::a ... ok\ntest policy::tests::b ... ok\ntest result: ok. 2 passed\n")
+        self.assertTrue(passed);self.assertEqual((record["decision"],record["recheck"]),("fallback","passed"))
+        self.assertIn("cd /build/v3 && /output/artifacts/tests/webagent_v3-0123456789abcdef --exact policy::tests::a policy::tests::b --test-threads=",seen[0])
+        self.assertEqual(state["done"],["doctests","tests/webagent_v3-0123456789abcdef"])
+        self.assertTrue(state["partial"].startswith("doctests ok\ntest policy::tests::a ... ok"))
+        # The remainder then runs only the steps after it.
+        selection={"argv":["sh","-c","\n".join(script)]}
+        self.assertEqual([executor.Executor.suite_step(l)for l in executor.Executor.suite_remainder(selection,state["done"])[2].split("\n")if executor.Executor.suite_step(l)],["tests/a-fedcba9876543210"])
+        for output in (RuntimeError("test result: FAILED"),"test policy::tests::a ... ok\nrunning 0 tests\n"):
+            passed,record,state,_=run(output)
+            self.assertFalse(passed);self.assertEqual((record["decision"],record["recheck"]),("failed","failed"))
+            self.assertEqual(state["done"],["doctests"])
+        # The doctests, no names, or a list that may be cut off are not re-run.
+        w=worker();w.phase=lambda *a:self.fail("ran")
+        job={"sidekick":{"failing_tests":["x"]}}
+        self.assertFalse(w.sidekick_recheck(job,None,None,{"script":script,"done":[]}));self.assertEqual(job["sidekick"]["recheck"],"not_possible")
+        for tests in ([],["t%d"%i for i in range(10)]):
+            self.assertFalse(w.sidekick_recheck({"sidekick":{"failing_tests":tests}},None,None,{"script":script,"done":["doctests"]}))
+        # Replay scripts run the executables without a package folder.
+        self.assertEqual(executor.Executor.failed_step_command(["/output/artifacts/tests/b-0000000000000001 --test-threads=8"],[]),"/output/artifacts/tests/b-0000000000000001")
     def test_control_replies_skip_the_log_scrubber_and_phase_logs_do_not(self):
         """The scrubber masks hash-like values; a masked hash broke the status JSON on the first real job."""
         seen=[]

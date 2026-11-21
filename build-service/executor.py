@@ -393,6 +393,33 @@ class Executor:
         self.sidekick_outcome(settings,error)
         return final
     @staticmethod
+    def failed_step_command(script,done):
+        """The command (without arguments) of the first test executable in the suite script that did not pass;
+        None when that step is the doctests or every step passed."""
+        for line in script:
+            found=re.match(r"((?:cd \S+ && )?/output/artifacts/(tests/[a-z0-9_]+-[a-f0-9]{16})) ",line)
+            if found and found[2]not in done:return found[1]
+            if Executor.suite_step(line)=="doctests"and "doctests"not in done:return None
+        return None
+    def sidekick_recheck(self,job,application,output,state):
+        """After a test failure on the sidekick, run only its failing tests here, in the same executable. True when
+        they all pass: a false alarm, so that step counts as passed and the rest of the suite runs here. False when
+        any fails again, the step is the doctests or the names may be incomplete: the job fails as before."""
+        record=job["sidekick"];tests=record.get("failing_tests")or[]
+        command=Executor.failed_step_command(state.get("script")or[],state.get("done")or[])
+        if not tests or len(tests)>=10 or command is None:record["recheck"]="not_possible";return False
+        threads="--test-threads="+str(self.tuning("test_threads",TEST_THREADS))
+        script=['export LD_LIBRARY_PATH="$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"',
+            command+" --exact "+" ".join(shlex.quote(name)for name in tests)+" "+threads]
+        try:logs=self.phase(job,"test","test",application,output,["sh","-c","\n".join(script)],"engine:rust1.90:test")
+        except PermissionError:raise
+        except Exception:record["recheck"]="failed";return False
+        if sorted(re.findall(r"^test (\S+) \.\.\. ok$",logs,re.M))!=sorted(tests):record["recheck"]="failed";return False
+        record.update(recheck="passed",decision="fallback")
+        state["done"]=[*(state.get("done")or[]),command.rsplit("/output/artifacts/",1)[1]]
+        state["partial"]=state.get("partial","")+logs
+        return True
+    @staticmethod
     def sidekick_infrastructure(error):
         """A connection, timeout, transfer or capacity problem, as opposed to a compile or test result or a decline."""
         if isinstance(error,SidekickDeclined):return False
@@ -529,7 +556,8 @@ class Executor:
     def sidekick_replay(self,job,application,output,artifacts,manifest,settings,state):
         """Replay the retained test executables on the sidekick, which holds them by sha256 (only missing ones are
         sent). A marker follows each one, so those that passed survive a disconnect; the caller replays the rest
-        here, except after a test failure, which fails the job unless trust_test_failures is off. Staged hashes must equal the retained manifest's."""
+        here; after a test failure the caller re-runs only the failing tests here (sidekick_recheck), unless
+        trust_test_failures is off. Staged hashes must equal the retained manifest's."""
         jid=job["job_id"];record=job["sidekick"];record["mode"]="replay"
         image,digest_value,synced=self.sidekick_prepare(job,application,settings,record)
         record.update(image=image,source_sha256=digest_value,source_changed=synced.get("changed"))
@@ -553,6 +581,7 @@ class Executor:
         lines=["set -e",'export LD_LIBRARY_PATH="$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"']
         for row in sorted(manifest["tests"],key=lambda r:r["file"]):
             lines+=["/output/artifacts/"+row["file"]+" "+threads,"echo "+shlex.quote(SUITE_MARK+row["file"])];steps.append(row["file"])
+        state["script"]=lines
         remote={"settings":settings,"image":image,"cargo_key":None,"output":"replay"}
         try:logs=self.phase(job,"test","test",application,output,["sh","-c","\n".join(lines)],"engine:rust1.90:test",sidekick=remote)
         except PermissionError:raise
@@ -575,8 +604,9 @@ class Executor:
         Runs beside the release compile. It fills state as it goes (manifest, smoke proof, selection, and the suite
         steps that passed), so the caller finishes here from the last completed step if anything fails. Passing
         results are trusted: same image by ID, same source by digest, staged binaries hash-checked against the
-        manifest built here, so a test that fails in the suite fails the job (trust_test_failures, default on);
-        anything else, or a failure with that setting off, is rerun here before it can fail the job."""
+        manifest built here, so a test that fails in the suite fails the job once those tests also fail when re-run
+        here (sidekick_recheck; trust_test_failures, default on); anything else, or a failure with that setting
+        off, is rerun here before it can fail the job."""
         jid=job["job_id"];record=job["sidekick"]
         image,digest_value,synced=self.sidekick_prepare(job,application,settings,record)
         key=(job.get("dependency_cache")or{}).get("key")
@@ -597,7 +627,7 @@ class Executor:
         # if the staged hashes equal the manifest built here and its script equals the one that manifest gives.
         staged=self.sidekick_json(settings,"stage",jid,stdin=json.dumps([[row["source"],row["file"]]for row in rows]).encode(),timeout=300)
         early={"argv":self.early_suite_argv(output,rows)}
-        argv,steps=self.sidekick_suite_argv(early)
+        argv,steps=self.sidekick_suite_argv(early);state["script"]=argv[2].split("\n")if argv[:2]==["sh","-c"]else[]
         def suite_run():
             try:return self.phase(job,"test","test",application,output,argv,"engine:rust1.90:test",sidekick=remote)
             except PermissionError:raise
@@ -2064,9 +2094,9 @@ class Executor:
                         except Exception as error:
                             final=self.sidekick_note(job,sidekick,error,state,"suite"if state.get("held")else"claim",mode="replay")
                             self.sidekick_release(sidekick,job,"fallback")
-                            if final:raise
+                            if final and not self.sidekick_recheck(job,application,output,state):raise
                             replay=state.get("partial","");done=[name.removeprefix("tests/")for name in state.get("done")or[]]
-                            logs+="Broker sidekick did not finish the replay ("+job["sidekick"]["reason"][:200]+"); "+("kept %d, the rest replay here.\n"%len(done)if done else"it replays here.\n")
+                            logs+="Broker sidekick did not finish the replay ("+job["sidekick"]["reason"][:200]+"); "+("its failing tests passed when re-run here (a false alarm); "if job["sidekick"].get("recheck")=="passed"else"")+("kept %d, the rest replay here.\n"%len(done)if done else"it replays here.\n")
                         else:
                             self.sidekick_outcome(sidekick);self.sidekick_release(sidekick,job,"passed")
                     for binary in binaries:
@@ -2152,8 +2182,8 @@ class Executor:
                 except Exception as error:
                     # Finish here at once, beside the release compile that is still running.
                     final=note_fallback(error);self.sidekick_release(sidekick,job,"fallback")
-                    if final:raise
-                    state["logs"]=state.get("logs","")+"Broker sidekick did not finish ("+job["sidekick"]["reason"][:200]+"); the rest of the test half runs here.\n"
+                    if final and not self.sidekick_recheck(job,application,output,state):raise
+                    state["logs"]=state.get("logs","")+"Broker sidekick did not finish ("+job["sidekick"]["reason"][:200]+"); "+("its failing tests passed when re-run here (a false alarm); "if job["sidekick"].get("recheck")=="passed"else"")+"the rest of the test half runs here.\n"
                     if state.get("manifest")is None:state.pop("logs",None);local_test_half();state["logs"]="Broker sidekick did not finish ("+job["sidekick"]["reason"][:200]+"); the test half runs here.\n"+state["logs"]
                     if state.get("proof")is None:state["logs"]+=self.linked_reference(job,application,output,state)
                     selection=state.get("selection")or self.test_selection(job,blob,application,output,state["manifest"]);state["selection"]=selection
