@@ -44,7 +44,7 @@ try{
    };
    window.remount=async()=>{await renderIdentity(document.querySelector('#host'),request,{agentId:'one'});};await remount();
   },light);
-  const titles=['Profile','Member access','Website chat widget','Shared conversations','Main Chat','Context compaction','Duplicate tool results','Lifetime/budget retention','Chat modes','Review incoming messages','Final response','Voice output'];
+  const titles=['Profile','Member access','Website chat widget','Shared conversations','Main Chat','Context compaction','Duplicate tool results','Lifetime/budget retention','Chat modes','Review incoming messages','Final response','Voice output','Chat customization'];
   const rowFor=title=>page.locator('.spl-row',{hasText:title}).first();
   const openRow=async title=>{
    await rowFor(title).click();
@@ -200,5 +200,5 @@ try{
   if(touch)assert.equal(await page.evaluate(()=>window.__unclaimed),0);
   assert.deepEqual(errors,[]);await context.close();
  }
- console.log('Identity settings register: twelve categories, one panel at a time, focus returns to the row, touch pulse per tap, review validation focus, explicit saves, revision fences, shared policy, modes, promotion, closing, remount persistence, read-only, both themes.');
+ console.log('Identity settings register: thirteen categories, one panel at a time, focus returns to the row, touch pulse per tap, review validation focus, explicit saves, revision fences, shared policy, modes, promotion, closing, remount persistence, read-only, both themes.');
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

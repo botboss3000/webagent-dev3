@@ -22,3 +22,8 @@
 .stp-match { outline: var(--border-width) solid var(--brand); outline-offset: -2px; transition: outline-color .6s; }
 .stp-unavailable { max-width: 750px; margin: 12px auto 0; }
 .stp-unavailable ul { margin: 6px 0 0; padding-left: 18px; }
+.stp-results { display: flex; flex-direction: column; gap: 8px; max-width: 750px; margin: 0 auto 12px; }
+.stp-result { border: var(--border-width) solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.stp-result-title { font-weight: 600; }
+.stp-change { font-variant-numeric: tabular-nums; }
+.stp-area { max-width: 750px; margin: 16px auto 6px; }

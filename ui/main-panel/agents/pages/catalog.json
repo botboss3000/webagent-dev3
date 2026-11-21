@@ -25,16 +25,6 @@
       "type": "agent_configuration"
     },
     {
-      "id": "settings",
-      "operator": true,
-      "title": "All Settings",
-      "description": "Every described setting this agent can override, with a search box.",
-      "order": 7,
-      "panelId": "all-settings-page",
-      "icon": "sliders",
-      "type": "agent_configuration"
-    },
-    {
       "id": "model",
       "operator": true,
       "title": "Primary Models",

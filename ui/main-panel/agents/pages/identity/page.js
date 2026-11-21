@@ -8,6 +8,7 @@ import { renderVoiceOutput } from './voice.js';
 import { renderManager } from './manager.js';
 import { renderCompaction } from './compaction.js';
 import { renderToolOutputPolicy } from './tool-output-policy.js';
+import { renderChatCustomization } from './chat-customization.js';
 import { createConfigList, createLongTextRow, createSelectRow, createTextRow } from '../../../../shared/config-rows/config-rows.js';
 
 const ICONS = {
@@ -23,6 +24,7 @@ const ICONS = {
   'review-incoming-messages': '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.4 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.4-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.8 1.1z"/>',
   'final-response': '<circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/>',
   'voice-output': '<path d="M11 5 6.5 9H3v6h3.5L11 19z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>',
+  'chat-customization': '<path d="M4 7h16"/><circle cx="9" cy="7" r="2.5"/><path d="M4 17h16"/><circle cx="15" cy="17" r="2.5"/>',
 };
 
 const HINTS = {
@@ -38,6 +40,7 @@ const HINTS = {
   'review-incoming-messages': 'Screen visitors’ messages before the agent answers.',
   'final-response': 'Promote all messages, completion flag and statement.',
   'voice-output': 'Choose the voice that reads replies aloud, and dictation cleanup.',
+  'chat-customization': 'How this agent\u2019s chats look and behave, per surface, by request or row.',
 };
 
 // List order, one-line description and icon tile for each Identity category.
@@ -160,6 +163,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
 
   renderClosing(stage, agent, persist);
   renderVoiceOutput(stage, agent, persist);
+  renderChatCustomization(stage, request, {agentId, canManage: agent.can_manage});
 
   register.present();
 }
