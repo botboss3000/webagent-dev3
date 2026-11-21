@@ -81,6 +81,19 @@ static INCREASE: LazyLock<Regex> =
     LazyLock::new(|| regex(&format!(r"\b({UP}|too (small|narrow|slow|short))\b")));
 static DECREASE: LazyLock<Regex> =
     LazyLock::new(|| regex(&format!(r"\b({DOWN}|too (big|large|wide|long))\b")));
+static SURFACES: LazyLock<[(&str, Regex); 3]> = LazyLock::new(|| {
+    [
+        (
+            "desktop",
+            regex(r"\b(desktop|computer|laptop|big screen)\b"),
+        ),
+        ("mobile", regex(r"\b(mobile|phone|phones|touch)\b")),
+        (
+            "widget",
+            regex(r"\b(widget|embedded|embed|website chat|launcher)\b"),
+        ),
+    ]
+});
 static TIERS: LazyLock<[(&str, Regex); 3]> = LazyLock::new(|| {
     [
         ("free", regex(r"\b(free|basic|base|regular|member)\b")),
@@ -330,6 +343,14 @@ pub fn parameters(text: &str, setting: &Setting) -> Result<Map<String, Value>, S
         return Ok(Map::new());
     }
     let t = text.to_lowercase();
+    // A chat surface the request names, else the shared Common profile.
+    if setting.surface {
+        let surface = SURFACES
+            .iter()
+            .find(|(_, pattern)| pattern.is_match(&t))
+            .map_or("common", |(surface, _)| surface);
+        return Ok(Map::from_iter([("surface".to_owned(), json!(surface))]));
+    }
     TIERS
         .iter()
         .find(|(_, pattern)| pattern.is_match(&t))

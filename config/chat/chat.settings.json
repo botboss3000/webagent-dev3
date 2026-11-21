@@ -5,11 +5,10 @@
       "id": "chat.message_bubbles.font_size_px",
       "description": "Text size of chat message bubbles, in pixels.",
       "type": "number",
-      "pointer": "/chat_common/message_bubbles/font_size_px",
+      "pointer": "/chat_{surface}/message_bubbles/font_size_px",
       "layers": [
         "app",
-        "agent",
-        "user"
+        "agent"
       ],
       "examples": [
         "bigger chat text",
@@ -25,7 +24,16 @@
       "unit": "px",
       "min": 10,
       "max": 32,
-      "bounds": "proposed"
+      "bounds": "proposed",
+      "inherit_pointer": "/chat_common/message_bubbles/font_size_px",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      }
     },
     {
       "id": "chat.execution_mode.default_mode",
@@ -215,7 +223,7 @@
       "id": "chat.composer.placeholder",
       "description": "Hint text shown in the empty message box.",
       "type": "string",
-      "pointer": "/chat_common/composer/placeholder",
+      "pointer": "/chat_{surface}/composer/placeholder",
       "layers": [
         "app",
         "agent"
@@ -230,17 +238,25 @@
         "text"
       ],
       "max_length": 80,
-      "bounds": "proposed"
+      "bounds": "proposed",
+      "inherit_pointer": "/chat_common/composer/placeholder",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      }
     },
     {
       "id": "chat.main_notes.enabled",
       "description": "Show the Main Notes panel below the chat header in Main Chat.",
       "type": "boolean",
-      "pointer": "/chat_common/chat_header/controls/main_notes/enabled",
+      "pointer": "/chat_{surface}/chat_header/controls/main_notes/enabled",
       "layers": [
         "app",
-        "agent",
-        "user"
+        "agent"
       ],
       "examples": [
         "hide the notes panel",
@@ -252,7 +268,16 @@
         "header",
         "notes"
       ],
-      "bounds": "validator"
+      "bounds": "validator",
+      "inherit_pointer": "/chat_common/chat_header/controls/main_notes/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      }
     },
     {
       "id": "chat.mobile.transcript_window.messages_above",
@@ -320,6 +345,1708 @@
       "enum": [
         "left",
         "right"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.chat_header.enabled",
+      "description": "Show the header bar with the title and controls above the conversation.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/chat_header/enabled",
+      "inherit_pointer": "/chat_common/chat_header/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "hide the chat header",
+        "show the top bar of the chat",
+        "remove the header above the messages"
+      ],
+      "areas": [
+        "chat",
+        "header"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.chat_header.max_width",
+      "description": "Widest the chat header may grow, as a CSS length such as 750px.",
+      "type": "string",
+      "pointer": "/chat_{surface}/chat_header/max_width",
+      "inherit_pointer": "/chat_common/chat_header/max_width",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "make the header narrower",
+        "header max width 600px",
+        "let the top bar stretch wider"
+      ],
+      "areas": [
+        "chat",
+        "header"
+      ],
+      "bounds": "proposed",
+      "max_length": 40
+    },
+    {
+      "id": "chat.content_max_width",
+      "description": "Widest the conversation column may grow, as a CSS length or percentage such as 1000px.",
+      "type": "string",
+      "pointer": "/chat_{surface}/content_max_width",
+      "inherit_pointer": "/chat_common/content_max_width",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "make the conversation column wider",
+        "messages column max 800px",
+        "narrower message area"
+      ],
+      "areas": [
+        "chat",
+        "content",
+        "max"
+      ],
+      "bounds": "proposed",
+      "max_length": 40
+    },
+    {
+      "id": "chat.composer.enter_behavior",
+      "description": "What Enter does in the message box: newline adds a line, send sends, auto sends on desktop and adds a line on touch devices.",
+      "type": "enum",
+      "pointer": "/chat_{surface}/composer/enter_behavior",
+      "inherit_pointer": "/chat_common/composer/enter_behavior",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "send the message when I press enter",
+        "enter should add a new line",
+        "make enter send on desktop only"
+      ],
+      "areas": [
+        "chat",
+        "composer"
+      ],
+      "bounds": "proposed",
+      "enum": [
+        "newline",
+        "send",
+        "auto"
+      ]
+    },
+    {
+      "id": "chat.composer.keyboard_focus.new_session",
+      "description": "Put the cursor in the message box when a new conversation opens.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/composer/keyboard_focus/new_session",
+      "inherit_pointer": "/chat_common/composer/keyboard_focus/new_session",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "focus the message box on new chats",
+        "don't jump to the text box in a new conversation",
+        "autofocus the composer for new sessions"
+      ],
+      "areas": [
+        "chat",
+        "composer"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.composer.keyboard_focus.existing_session",
+      "description": "Put the cursor in the message box when an existing conversation opens.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/composer/keyboard_focus/existing_session",
+      "inherit_pointer": "/chat_common/composer/keyboard_focus/existing_session",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "focus the text box when I open an old chat",
+        "don't focus the composer on existing conversations",
+        "autofocus when reopening a conversation"
+      ],
+      "areas": [
+        "chat",
+        "composer"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.fade.top",
+      "description": "Height, in pixels, of the fade at the top of the message list.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/fade/top",
+      "inherit_pointer": "/chat_common/fade/top",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "less fade at the top of the messages",
+        "top fade 100 pixels",
+        "remove the top fade"
+      ],
+      "areas": [
+        "chat",
+        "fade"
+      ],
+      "bounds": "proposed",
+      "unit": "px",
+      "min": 0,
+      "max": 600
+    },
+    {
+      "id": "chat.fade.bottom",
+      "description": "Height, in pixels, of the fade at the bottom of the message list.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/fade/bottom",
+      "inherit_pointer": "/chat_common/fade/bottom",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "shorter fade at the bottom",
+        "bottom fade 80 px",
+        "no fade above the message box"
+      ],
+      "areas": [
+        "chat",
+        "fade"
+      ],
+      "bounds": "proposed",
+      "unit": "px",
+      "min": 0,
+      "max": 600
+    },
+    {
+      "id": "chat.pill_fade.top",
+      "description": "Height, in pixels, of the fade above the message box pill.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/pill_fade/top",
+      "inherit_pointer": "/chat_common/pill_fade/top",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "smaller fade above the input pill",
+        "pill top fade 4px",
+        "remove the fade over the composer"
+      ],
+      "areas": [
+        "chat",
+        "pill",
+        "fade"
+      ],
+      "bounds": "proposed",
+      "unit": "px",
+      "min": 0,
+      "max": 100
+    },
+    {
+      "id": "chat.pill_fade.bottom",
+      "description": "Height, in pixels, of the fade below the message box pill.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/pill_fade/bottom",
+      "inherit_pointer": "/chat_common/pill_fade/bottom",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "fade under the input pill 10px",
+        "no fade below the composer",
+        "bigger fade below the pill"
+      ],
+      "areas": [
+        "chat",
+        "pill",
+        "fade"
+      ],
+      "bounds": "proposed",
+      "unit": "px",
+      "min": 0,
+      "max": 100
+    },
+    {
+      "id": "chat.component_panel.enabled",
+      "description": "Show the component panel where the agent presents pages and elements.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/component_panel/enabled",
+      "inherit_pointer": "/chat_common/component_panel/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "turn off the component panel",
+        "enable the side panel for agent elements",
+        "hide the presentation panel"
+      ],
+      "areas": [
+        "chat",
+        "component",
+        "panel"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.component_panel.auto_open_on_present",
+      "description": "Open the component panel by itself when the agent presents something.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/component_panel/auto_open_on_present",
+      "inherit_pointer": "/chat_common/component_panel/auto_open_on_present",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "open the panel automatically when the agent shows something",
+        "don't pop open the component panel",
+        "auto open presented elements"
+      ],
+      "areas": [
+        "chat",
+        "component",
+        "panel"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.glimmer.agent.enabled",
+      "description": "Show the soft glow behind the agent's messages.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/glimmer/agent/enabled",
+      "inherit_pointer": "/chat_common/glimmer/agent/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "turn off the glow on agent messages",
+        "add a glimmer to replies",
+        "no shine behind the assistant bubbles"
+      ],
+      "areas": [
+        "chat",
+        "glimmer"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.glimmer.user.enabled",
+      "description": "Show the soft glow behind your own messages.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/glimmer/user/enabled",
+      "inherit_pointer": "/chat_common/glimmer/user/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "remove the glow from my messages",
+        "glimmer on user bubbles",
+        "turn on the shine behind what I type"
+      ],
+      "areas": [
+        "chat",
+        "glimmer"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.glimmer.agent.intensity",
+      "description": "Strength of the glow behind the agent's messages, from 0 (none) to 1 (strongest).",
+      "type": "number",
+      "pointer": "/chat_{surface}/glimmer/agent/intensity",
+      "inherit_pointer": "/chat_common/glimmer/agent/intensity",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "stronger glow on replies",
+        "agent glimmer intensity 0.3",
+        "fainter shine behind agent messages"
+      ],
+      "areas": [
+        "chat",
+        "glimmer"
+      ],
+      "bounds": "proposed",
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "chat.gutter_presentation.reveal",
+      "description": "When the action buttons under a message appear: click shows them on tap, engagement on hover or focus, always keeps them visible.",
+      "type": "enum",
+      "pointer": "/chat_{surface}/gutter_presentation/reveal",
+      "inherit_pointer": "/chat_common/gutter_presentation/reveal",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "always show the message action buttons",
+        "show message buttons only when I click",
+        "reveal the actions on hover"
+      ],
+      "areas": [
+        "chat",
+        "gutter",
+        "presentation"
+      ],
+      "bounds": "proposed",
+      "enum": [
+        "click",
+        "engagement",
+        "always"
+      ]
+    },
+    {
+      "id": "chat.gutter_presentation.rest_opacity",
+      "description": "How visible the message action buttons are while idle, from 0 (hidden) to 1 (solid).",
+      "type": "number",
+      "pointer": "/chat_{surface}/gutter_presentation/rest_opacity",
+      "inherit_pointer": "/chat_common/gutter_presentation/rest_opacity",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "make the idle message buttons fainter",
+        "action buttons fully visible at rest",
+        "gutter opacity 0.4"
+      ],
+      "areas": [
+        "chat",
+        "gutter",
+        "presentation"
+      ],
+      "bounds": "proposed",
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "chat.gutter_presentation.font_size_px",
+      "description": "Text size, in pixels, of the labels under each message.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/gutter_presentation/font_size_px",
+      "inherit_pointer": "/chat_common/gutter_presentation/font_size_px",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "bigger text under the messages",
+        "message footer text 13px",
+        "smaller gutter labels"
+      ],
+      "areas": [
+        "chat",
+        "gutter",
+        "presentation"
+      ],
+      "bounds": "proposed",
+      "unit": "px",
+      "min": 8,
+      "max": 24
+    },
+    {
+      "id": "chat.gutter_presentation.icon_size_px",
+      "description": "Size, in pixels, of the action icons under each message.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/gutter_presentation/icon_size_px",
+      "inherit_pointer": "/chat_common/gutter_presentation/icon_size_px",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "bigger icons under messages",
+        "message action icons 18 px",
+        "smaller copy and retry icons"
+      ],
+      "areas": [
+        "chat",
+        "gutter",
+        "presentation"
+      ],
+      "bounds": "proposed",
+      "unit": "px",
+      "min": 8,
+      "max": 32
+    },
+    {
+      "id": "chat.message_bubbles.agent.line_height",
+      "description": "Line spacing in the agent's messages, as a multiple of the text size.",
+      "type": "number",
+      "pointer": "/chat_{surface}/message_bubbles/agent/line_height",
+      "inherit_pointer": "/chat_common/message_bubbles/agent/line_height",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "more space between lines in replies",
+        "agent line height 1.7",
+        "tighter lines in assistant messages"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "bubbles"
+      ],
+      "bounds": "proposed",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "id": "chat.message_bubbles.user.line_height",
+      "description": "Line spacing in your own messages, as a multiple of the text size.",
+      "type": "number",
+      "pointer": "/chat_{surface}/message_bubbles/user/line_height",
+      "inherit_pointer": "/chat_common/message_bubbles/user/line_height",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "more line spacing in my messages",
+        "user line height 1.3",
+        "tighter lines in what I send"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "bubbles"
+      ],
+      "bounds": "proposed",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "id": "chat.message_bubbles.user.bg_light",
+      "description": "Colour of your message bubbles in light mode, as a CSS colour such as #93c5fd.",
+      "type": "string",
+      "pointer": "/chat_{surface}/message_bubbles/user/bg_light",
+      "inherit_pointer": "/chat_common/message_bubbles/user/bg_light",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "make my bubbles green in light mode",
+        "user bubble colour #ffd6a5",
+        "lighter blue for my messages"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "bubbles"
+      ],
+      "bounds": "proposed",
+      "max_length": 60
+    },
+    {
+      "id": "chat.message_bubbles.user.bg_dark",
+      "description": "Colour of your message bubbles in dark mode, as a CSS colour such as #2563eb.",
+      "type": "string",
+      "pointer": "/chat_{surface}/message_bubbles/user/bg_dark",
+      "inherit_pointer": "/chat_common/message_bubbles/user/bg_dark",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "dark mode bubble colour purple",
+        "my messages #1e3a8a in dark mode",
+        "darker bubbles at night"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "bubbles"
+      ],
+      "bounds": "proposed",
+      "max_length": 60
+    },
+    {
+      "id": "chat.message_bubbles.user.background_opacity",
+      "description": "How solid your message bubbles are, from 0 (see-through) to 1 (solid).",
+      "type": "number",
+      "pointer": "/chat_{surface}/message_bubbles/user/background_opacity",
+      "inherit_pointer": "/chat_common/message_bubbles/user/background_opacity",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "make my bubbles more transparent",
+        "solid user bubbles",
+        "user bubble opacity 0.8"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "bubbles"
+      ],
+      "bounds": "proposed",
+      "min": 0,
+      "max": 1,
+      "nullable": true
+    },
+    {
+      "id": "chat.message_gutters.enabled",
+      "description": "Show the action buttons (copy, retry, more) under messages.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/message_gutters/enabled",
+      "inherit_pointer": "/chat_common/message_gutters/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "hide the buttons under messages",
+        "show copy and retry under each message",
+        "remove message actions"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "gutters"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.message_gutters.hideable",
+      "description": "Start each message's action buttons hidden until you tap the message.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/message_gutters/hideable",
+      "inherit_pointer": "/chat_common/message_gutters/hideable",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "keep message buttons hidden until I tap",
+        "always show the message actions",
+        "tap to reveal message buttons"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "gutters"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.message_headings.agent.visible",
+      "description": "Show a name heading above the agent's messages.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/message_headings/agent/visible",
+      "inherit_pointer": "/chat_common/message_headings/agent/visible",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "show the agent's name above replies",
+        "hide the heading on agent messages",
+        "label the assistant messages"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "headings"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.message_headings.agent.label",
+      "description": "Name shown in the heading above the agent's messages.",
+      "type": "string",
+      "pointer": "/chat_{surface}/message_headings/agent/label",
+      "inherit_pointer": "/chat_common/message_headings/agent/label",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "call the agent Ava above its messages",
+        "agent heading should say Assistant",
+        "rename the reply label"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "headings"
+      ],
+      "bounds": "proposed",
+      "max_length": 60
+    },
+    {
+      "id": "chat.message_headings.user.visible",
+      "description": "Show a name heading above your own messages.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/message_headings/user/visible",
+      "inherit_pointer": "/chat_common/message_headings/user/visible",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "show my name above my messages",
+        "hide the You label",
+        "label my messages"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "headings"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.message_headings.user.label",
+      "description": "Name shown in the heading above your own messages.",
+      "type": "string",
+      "pointer": "/chat_{surface}/message_headings/user/label",
+      "inherit_pointer": "/chat_common/message_headings/user/label",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "my messages should be labelled Me",
+        "user heading text Customer",
+        "rename the You label"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "headings"
+      ],
+      "bounds": "proposed",
+      "max_length": 60
+    },
+    {
+      "id": "chat.message_spacing.message_gap_px",
+      "description": "Space, in pixels, between one message and the next.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/message_spacing/message_gap_px",
+      "inherit_pointer": "/chat_common/message_spacing/message_gap_px",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "more space between messages",
+        "message gap 20px",
+        "pack the messages closer together"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "spacing"
+      ],
+      "bounds": "proposed",
+      "unit": "px",
+      "min": 0,
+      "max": 80
+    },
+    {
+      "id": "chat.message_spacing.turn_gap_px",
+      "description": "Extra space, in pixels, between one exchange (your message and its reply) and the next.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/message_spacing/turn_gap_px",
+      "inherit_pointer": "/chat_common/message_spacing/turn_gap_px",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "more space between turns",
+        "turn gap 24 px",
+        "no extra space between exchanges"
+      ],
+      "areas": [
+        "chat",
+        "message",
+        "spacing"
+      ],
+      "bounds": "proposed",
+      "unit": "px",
+      "min": 0,
+      "max": 120
+    },
+    {
+      "id": "chat.messages.greeting",
+      "description": "Greeting shown to someone starting a chat.",
+      "type": "string",
+      "pointer": "/chat_{surface}/messages/greeting",
+      "inherit_pointer": "/chat_common/messages/greeting",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "change the greeting to Hello there",
+        "greeting should say How can I help?",
+        "new greeting text"
+      ],
+      "areas": [
+        "chat",
+        "messages"
+      ],
+      "bounds": "proposed",
+      "max_length": 300
+    },
+    {
+      "id": "chat.messages.title",
+      "description": "Title shown at the top of the chat.",
+      "type": "string",
+      "pointer": "/chat_{surface}/messages/title",
+      "inherit_pointer": "/chat_common/messages/title",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "call the chat Support",
+        "chat title Ask our team",
+        "change the chat heading text"
+      ],
+      "areas": [
+        "chat",
+        "messages"
+      ],
+      "bounds": "proposed",
+      "max_length": 80
+    },
+    {
+      "id": "chat.messages.subtitle",
+      "description": "Small line shown under the chat title.",
+      "type": "string",
+      "pointer": "/chat_{surface}/messages/subtitle",
+      "inherit_pointer": "/chat_common/messages/subtitle",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "add a subtitle Usually replies in a minute",
+        "subtitle text under the title",
+        "remove the subtitle"
+      ],
+      "areas": [
+        "chat",
+        "messages"
+      ],
+      "bounds": "proposed",
+      "max_length": 120
+    },
+    {
+      "id": "chat.messages.welcome_bubble",
+      "description": "Text of the first welcome message in a chat.",
+      "type": "string",
+      "pointer": "/chat_{surface}/messages/welcome_bubble",
+      "inherit_pointer": "/chat_common/messages/welcome_bubble",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "welcome message should say Hi, I'm Ava",
+        "change the welcome bubble",
+        "first message text"
+      ],
+      "areas": [
+        "chat",
+        "messages"
+      ],
+      "bounds": "proposed",
+      "max_length": 300
+    },
+    {
+      "id": "chat.messages.new_session_bubble",
+      "description": "Text shown when a new conversation starts.",
+      "type": "string",
+      "pointer": "/chat_{surface}/messages/new_session_bubble",
+      "inherit_pointer": "/chat_common/messages/new_session_bubble",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "new session message Ready when you are",
+        "change the new chat bubble text",
+        "what it says when a conversation starts"
+      ],
+      "areas": [
+        "chat",
+        "messages"
+      ],
+      "bounds": "proposed",
+      "max_length": 300
+    },
+    {
+      "id": "chat.screen_display.enabled",
+      "description": "Manage the phone screen during chat: keep it awake or dim it.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/screen_display/enabled",
+      "inherit_pointer": "/chat_common/screen_display/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "let the phone screen sleep normally",
+        "keep the screen awake while chatting",
+        "stop managing the screen"
+      ],
+      "areas": [
+        "chat",
+        "screen",
+        "display"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.screen_display.dim_after_ms",
+      "description": "Idle time, in milliseconds, before the screen dims during chat; 0 never dims.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/screen_display/dim_after_ms",
+      "inherit_pointer": "/chat_common/screen_display/dim_after_ms",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "dim the screen after a minute",
+        "never dim the screen",
+        "dim after 10 seconds"
+      ],
+      "areas": [
+        "chat",
+        "screen",
+        "display"
+      ],
+      "bounds": "proposed",
+      "unit": "ms",
+      "min": 0,
+      "max": 3600000
+    },
+    {
+      "id": "chat.screen_display.dim_opacity",
+      "description": "How dark the dimmed screen gets, from 0 (no dimming) to 0.95.",
+      "type": "number",
+      "pointer": "/chat_{surface}/screen_display/dim_opacity",
+      "inherit_pointer": "/chat_common/screen_display/dim_opacity",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "dim the screen less",
+        "darker dimming",
+        "dim strength 0.3"
+      ],
+      "areas": [
+        "chat",
+        "screen",
+        "display"
+      ],
+      "bounds": "proposed",
+      "min": 0,
+      "max": 0.95
+    },
+    {
+      "id": "chat.show_tool_calls",
+      "description": "Show the agent's tool calls in the activity view.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/show_tool_calls",
+      "inherit_pointer": "/chat_common/show_tool_calls",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "hide tool calls",
+        "show what tools the agent uses",
+        "don't show tool activity"
+      ],
+      "areas": [
+        "chat",
+        "show",
+        "tool"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.show_activity_groups",
+      "description": "Group the agent's activity entries together.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/show_activity_groups",
+      "inherit_pointer": "/chat_common/show_activity_groups",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "group the activity entries",
+        "show each activity step separately",
+        "ungroup activity"
+      ],
+      "areas": [
+        "chat",
+        "show",
+        "activity"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.show_activity_preview",
+      "description": "Show short previews of the agent's activity.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/show_activity_preview",
+      "inherit_pointer": "/chat_common/show_activity_preview",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "show activity previews",
+        "hide the activity preview",
+        "compact activity summaries"
+      ],
+      "areas": [
+        "chat",
+        "show",
+        "activity"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.mirror_activity_in_transcript",
+      "description": "Also show the agent's activity inside the message list.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/mirror_activity_in_transcript",
+      "inherit_pointer": "/chat_common/mirror_activity_in_transcript",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "show activity in the conversation",
+        "keep activity out of the transcript",
+        "mirror tool activity in the chat"
+      ],
+      "areas": [
+        "chat",
+        "mirror",
+        "activity"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.transcript_window.remember_position",
+      "description": "Reopen each conversation where you left off reading.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/transcript_window/remember_position",
+      "inherit_pointer": "/chat_common/transcript_window/remember_position",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "remember where I was in each chat",
+        "always open conversations at the newest message",
+        "don't keep my scroll position"
+      ],
+      "areas": [
+        "chat",
+        "transcript",
+        "window"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.user_message_truncation.enabled",
+      "description": "Shorten long messages you sent, with a See more link.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/user_message_truncation/enabled",
+      "inherit_pointer": "/chat_common/user_message_truncation/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "don't cut off my long messages",
+        "collapse long user messages",
+        "truncate what I send"
+      ],
+      "areas": [
+        "chat",
+        "user",
+        "message"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.user_message_truncation.max_lines",
+      "description": "Lines of a long message you sent that show before See more.",
+      "type": "integer",
+      "pointer": "/chat_{surface}/user_message_truncation/max_lines",
+      "inherit_pointer": "/chat_common/user_message_truncation/max_lines",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "show 6 lines before see more",
+        "cut my messages after 2 lines",
+        "more lines before collapsing"
+      ],
+      "areas": [
+        "chat",
+        "user",
+        "message"
+      ],
+      "bounds": "proposed",
+      "min": 1,
+      "max": 50
+    },
+    {
+      "id": "chat.user_turn_anchor.enabled",
+      "description": "Scroll your new message to the top so the reply appears under it.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/user_turn_anchor/enabled",
+      "inherit_pointer": "/chat_common/user_turn_anchor/enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "stop scrolling my message to the top",
+        "anchor my message when I send",
+        "don't jump when I send a message"
+      ],
+      "areas": [
+        "chat",
+        "user",
+        "turn"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.user_turn_anchor.snap_enabled",
+      "description": "Snap gently to your last message while scrolling near it.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/user_turn_anchor/snap_enabled",
+      "inherit_pointer": "/chat_common/user_turn_anchor/snap_enabled",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "turn off scroll snapping",
+        "snap to my message when scrolling",
+        "no snapping in the transcript"
+      ],
+      "areas": [
+        "chat",
+        "user",
+        "turn"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.idle_footer.margin_bottom",
+      "description": "Gap below the message box while it is empty, as a CSS length such as 24px.",
+      "type": "string",
+      "pointer": "/chat_{surface}/idle_footer/margin_bottom",
+      "inherit_pointer": "/chat_common/idle_footer/margin_bottom",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "raise the empty message box",
+        "idle footer bottom margin 40px",
+        "move the input closer to the bottom"
+      ],
+      "areas": [
+        "chat",
+        "idle",
+        "footer"
+      ],
+      "bounds": "proposed",
+      "max_length": 40
+    },
+    {
+      "id": "chat.idle_footer.chat_pill.pill_width",
+      "description": "Width of the message box while it is empty, as a CSS length such as 500px.",
+      "type": "string",
+      "pointer": "/chat_{surface}/idle_footer/chat_pill/pill_width",
+      "inherit_pointer": "/chat_common/idle_footer/chat_pill/pill_width",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "wider message box",
+        "input pill width 600px",
+        "narrower composer when idle"
+      ],
+      "areas": [
+        "chat",
+        "idle",
+        "footer"
+      ],
+      "bounds": "proposed",
+      "max_length": 60
+    },
+    {
+      "id": "chat.idle_footer.chat_pill.pill_radius",
+      "description": "Corner roundness of the message box while it is empty, as a CSS length such as 41px.",
+      "type": "string",
+      "pointer": "/chat_{surface}/idle_footer/chat_pill/pill_radius",
+      "inherit_pointer": "/chat_common/idle_footer/chat_pill/pill_radius",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "square corners on the message box",
+        "rounder input pill",
+        "pill radius 12px"
+      ],
+      "areas": [
+        "chat",
+        "idle",
+        "footer"
+      ],
+      "bounds": "proposed",
+      "max_length": 40
+    },
+    {
+      "id": "chat.active_footer.margin_bottom",
+      "description": "Gap below the message box while you type, as a CSS length such as 0px.",
+      "type": "string",
+      "pointer": "/chat_{surface}/active_footer/margin_bottom",
+      "inherit_pointer": "/chat_common/active_footer/margin_bottom",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "raise the message box while typing",
+        "active footer margin 12px",
+        "input at the very bottom while typing"
+      ],
+      "areas": [
+        "chat",
+        "active",
+        "footer"
+      ],
+      "bounds": "proposed",
+      "max_length": 40
+    },
+    {
+      "id": "chat.classify_main_messages",
+      "description": "Mark which agent messages are main answers and which are side notes.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/classify_main_messages",
+      "inherit_pointer": "/chat_common/classify_main_messages",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "stop classifying main messages",
+        "tag the main answers",
+        "label main versus side messages"
+      ],
+      "areas": [
+        "chat",
+        "classify",
+        "main"
+      ],
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.fold_main_messages",
+      "description": "Fold everything except main answers in the conversation.",
+      "type": "boolean",
+      "pointer": "/chat_{surface}/fold_main_messages",
+      "inherit_pointer": "/chat_common/fold_main_messages",
+      "parameters": {
+        "surface": [
+          "common",
+          "desktop",
+          "mobile",
+          "widget"
+        ]
+      },
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "fold the side messages",
+        "show only main answers",
+        "don't fold messages"
+      ],
+      "areas": [
+        "chat",
+        "fold",
+        "main"
       ],
       "bounds": "proposed"
     }

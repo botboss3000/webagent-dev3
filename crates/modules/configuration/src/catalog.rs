@@ -14,7 +14,7 @@ const STORES: [&str; 2] = ["agent_metadata", "user_profile"];
 const KINDS: [&str; 8] = [
     "boolean", "integer", "number", "enum", "string", "length", "object", "agent_id",
 ];
-const FIELDS: [&str; 19] = [
+const FIELDS: [&str; 20] = [
     "id",
     "description",
     "type",
@@ -34,6 +34,7 @@ const FIELDS: [&str; 19] = [
     "bounds",
     "notes",
     "nullable",
+    "inherit_pointer",
 ];
 
 /// One validated descriptor, the descriptor file it came from and the live configuration file
@@ -187,9 +188,14 @@ fn validate<'a>(descriptor: &'a Value, config: Option<&Value>) -> Result<&'a str
             layers.contains(&"app"),
             "{id}: a file setting needs the app layer"
         );
+        // A surface without its own value (`/chat_desktop/...`) shows `inherit_pointer`'s.
+        let inherited = descriptor["inherit_pointer"]
+            .as_str()
+            .and_then(|pointer| config.pointer(pointer));
         for pointer in pointers {
             let value = config
                 .pointer(&pointer)
+                .or(inherited)
                 .ok_or_else(|| anyhow!("{id}: {pointer} is missing"))?;
             // `nullable` settings store null for "no limit".
             let null_ok = value.is_null() && descriptor["nullable"] == true;

@@ -110,8 +110,9 @@ struct Current {
     /// The administrator configuration id (app layer), identity field or `chat_overlay`
     /// (agent layer).
     target: String,
-    /// For an agent's chat overlay: whether the agent overrides the app value.
-    overridden: Option<bool>,
+    /// Where a chat value comes from: `agent` (the agent's override), `app` (the app file's own
+    /// value on that surface) or `common` (a surface without its own value shows Common's).
+    source: Option<&'static str>,
 }
 
 /// Target of agent-layer values kept in the agent's `chat.json` overlay.
@@ -131,12 +132,18 @@ async fn current(
             let id = super::live_configuration::id_for_live(app, owner).ok_or_else(unsupported)?;
             let bytes = crate::live_files::current(owner, LIVE_LIMIT)?;
             let document: Value = serde_json::from_slice(&bytes).map_err(anyhow::Error::from)?;
+            let own = document.pointer(pointer).cloned();
+            let source =
+                inherit(descriptor, pointer).map(|_| if own.is_some() { "app" } else { "common" });
+            let value = own
+                .or_else(|| inherit(descriptor, pointer).and_then(|p| document.pointer(p).cloned()))
+                .ok_or_else(unsupported)?;
             Ok(Current {
-                value: document.pointer(pointer).cloned().ok_or_else(unsupported)?,
+                value,
                 revision: json!({"digest": webagent_configuration::digest(&document)}),
                 document,
                 target: id.to_owned(),
-                overridden: None,
+                source,
             })
         }
         // chat.json values without an identity field live in the agent's chat overlay.
@@ -148,13 +155,24 @@ async fn current(
             let Json(record) =
                 crate::chat_config::get(State(app.clone()), Path((agent, "chat".to_owned())))
                     .await?;
+            let effective = &record["effective"];
+            let own = effective.pointer(pointer).cloned();
+            let source = if record["overlay"].pointer(pointer).is_some() {
+                "agent"
+            } else if own.is_some() {
+                "app"
+            } else {
+                "common"
+            };
+            let value = own
+                .or_else(|| {
+                    inherit(descriptor, pointer).and_then(|p| effective.pointer(p).cloned())
+                })
+                .ok_or_else(unsupported)?;
             Ok(Current {
-                value: record["effective"]
-                    .pointer(pointer)
-                    .cloned()
-                    .ok_or_else(unsupported)?,
+                value,
                 revision: json!({"overlay_revision": record["revision"]}),
-                overridden: Some(record["overlay"].pointer(pointer).is_some()),
+                source: Some(source),
                 document: Value::Null,
                 target: CHAT_OVERLAY.into(),
             })
@@ -175,7 +193,7 @@ async fn current(
                 revision: json!({"revision": identity_doc["revision"]}),
                 document: identity_doc,
                 target: field,
-                overridden: None,
+                source: None,
             })
         }
         _ => {
@@ -188,10 +206,45 @@ async fn current(
                 revision: json!({}),
                 document: json!({"username": me["user"]}),
                 target: "profile".into(),
-                overridden: None,
+                source: None,
             })
         }
     }
+}
+
+/// A surface pointer's Common fallback (`inherit_pointer`), when this pointer isn't Common's.
+fn inherit<'a>(descriptor: &'a Value, pointer: &str) -> Option<&'a str> {
+    descriptor["inherit_pointer"]
+        .as_str()
+        .filter(|common| *common != pointer)
+}
+
+/// Set `pointer` in `document`, creating missing objects on the way; `None` removes the key.
+fn put_at(document: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), ApiError> {
+    let keys: Vec<String> = pointer
+        .split('/')
+        .skip(1)
+        .map(|key| key.replace("~1", "/").replace("~0", "~"))
+        .collect();
+    let (last, parents) = keys.split_last().ok_or_else(|| bad("Unknown setting"))?;
+    let mut node = document;
+    for key in parents {
+        node = node
+            .as_object_mut()
+            .ok_or_else(|| bad("Unknown setting"))?
+            .entry(key.clone())
+            .or_insert_with(|| json!({}));
+    }
+    let object = node.as_object_mut().ok_or_else(|| bad("Unknown setting"))?;
+    match value {
+        Some(value) => {
+            object.insert(last.clone(), value);
+        }
+        None => {
+            object.remove(last);
+        }
+    }
+    Ok(())
 }
 
 /// `{width, unit}` and `{enabled}` values replace only the keys they name.
@@ -332,7 +385,7 @@ async fn review(
                     .as_ref()
                     .and_then(|p| values::out_of_range(setting, p, limit));
                 json!({"current": now.value, "proposed": proposed, "revision": now.revision,
-                    "out_of_range": range, "overridden": now.overridden})
+                    "out_of_range": range, "source": now.source})
             }
             Err(ApiError(_, reason)) => json!({"unavailable": reason}),
         },
@@ -405,8 +458,8 @@ pub(crate) async fn settings(
                 Ok(now) => {
                     entry["value"] = now.value;
                     entry["revision"] = now.revision;
-                    if let Some(overridden) = now.overridden {
-                        entry["overridden"] = json!(overridden);
+                    if let Some(source) = now.source {
+                        entry["source"] = json!(source);
                     }
                 }
                 Err(ApiError(_, reason)) => entry["unavailable"] = json!(reason),
@@ -438,10 +491,11 @@ pub(crate) async fn apply(
     let params = body["params"].as_object().cloned().unwrap_or_default();
     let pointer = pointer(descriptor, layer, &params)?;
     let now = current(&app, &identity, page, layer, (descriptor, owner), &pointer).await?;
-    if reset && now.target != CHAT_OVERLAY {
-        return Err(bad(
-            "Only an agent's chat setting can be reset to the app value",
-        ));
+    // Reset drops an agent's chat override, or an app surface value so Common's applies.
+    let resettable =
+        now.target == CHAT_OVERLAY || (layer == "app" && inherit(descriptor, &pointer).is_some());
+    if reset && !resettable {
+        return Err(bad("Only a chat setting can be reset"));
     }
     let value = if reset {
         Value::Null
@@ -481,9 +535,7 @@ pub(crate) async fn apply(
                     .await?;
         }
         "app" => {
-            *document
-                .pointer_mut(&pointer)
-                .ok_or_else(|| bad("Unknown setting"))? = value.clone();
+            put_at(&mut document, &pointer, (!reset).then(|| value.clone()))?;
             let save = json!({"expected_digest": now.revision["digest"], "config": document});
             let _saved =
                 super::live_configuration::put_config(State(app), Path(now.target), Json(save))
@@ -563,6 +615,21 @@ mod tests {
             ),
             json!({"enabled": true, "voice": "a"})
         );
+    }
+
+    #[test]
+    fn surface_values_are_created_and_removed() {
+        let mut doc = json!({"chat_common": {"fade": {"top": 200}}});
+        put_at(&mut doc, "/chat_desktop/fade/top", Some(json!(120))).unwrap();
+        assert_eq!(doc["chat_desktop"]["fade"]["top"], 120);
+        put_at(&mut doc, "/chat_desktop/fade/top", None).unwrap();
+        assert_eq!(doc["chat_desktop"]["fade"], json!({}));
+        let descriptor = json!({"inherit_pointer": "/chat_common/fade/top"});
+        assert_eq!(
+            inherit(&descriptor, "/chat_mobile/fade/top"),
+            Some("/chat_common/fade/top")
+        );
+        assert_eq!(inherit(&descriptor, "/chat_common/fade/top"), None);
     }
 
     #[test]

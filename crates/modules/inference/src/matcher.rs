@@ -20,8 +20,8 @@ use crate::values::{self, Reading};
 const NONE: f32 = 0.65;
 const PRE: f32 = 0.75;
 const MARGIN: f32 = 0.10;
-/// A pick list offers the best four, then every other on-page setting scoring at least `NONE`,
-/// up to this many.
+/// A pick list offers the best four, then every other on-page setting scoring within twice
+/// `MARGIN` of the best and at least `NONE`, up to this many.
 const PICKS: usize = 12;
 
 const STOP: &str = "a an the to of for and or in on at my me i it is be should can please set \
@@ -48,6 +48,8 @@ pub struct Setting {
     pub max: Option<f64>,
     pub choices: Vec<String>,
     pub parameterized: bool,
+    /// Parameterized by chat surface (`common`, `desktop`, `mobile`, `widget`).
+    pub surface: bool,
     /// The description and example requests, each embedded on its own.
     pub texts: Vec<String>,
 }
@@ -78,6 +80,7 @@ impl Setting {
             max: descriptor["max"].as_f64(),
             choices: list("enum"),
             parameterized: descriptor.get("parameters").is_some(),
+            surface: descriptor["parameters"].get("surface").is_some(),
         }
     }
 }
@@ -237,7 +240,11 @@ impl<S: FnMut(&str) -> Result<Vec<f32>>> Matcher<S> {
             let candidates: Vec<&str> = on
                 .iter()
                 .enumerate()
-                .filter(|(n, i)| *n < 4 || scores[**i] >= NONE)
+                .filter(|(n, i)| {
+                    *n < 4
+                        || (scores[**i] >= NONE
+                            && scores[**i] >= scores[top] * (1.0 - 2.0 * MARGIN))
+                })
                 .take(PICKS)
                 .map(|(_, i)| self.settings[*i].id.as_str())
                 .collect();

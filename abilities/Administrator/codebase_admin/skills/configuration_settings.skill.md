@@ -97,6 +97,13 @@ setting descriptor in the same patch as the value.
   numbers only, so say in `notes` how to make it unlimited.
 - Descriptors hold no default or current values; those are always read live.
 
+Chat settings (`config/ui/chat/chat.json`) take a `surface` parameter
+(`common`, `desktop`, `mobile`, `widget`) with `"pointer": "/chat_{surface}/..."` and
+`"inherit_pointer": "/chat_common/..."`: a surface without its own value shows Common's, and
+saving creates it. The matcher reads the surface from the request ("on my phone" → mobile) and
+otherwise uses Common. On an agent's page they save into that agent's chat overlay; `reset`
+removes an agent override, or an app surface value so Common's applies again.
+
 If a setting has wording its type does not give ("close registration" = `restricted`, "by
 accident" = smaller), add it to `config/inference/value-words.json` under the id.
 

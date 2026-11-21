@@ -7,8 +7,7 @@
       "type": "length",
       "pointer": "/ui/chat_panel",
       "layers": [
-        "app",
-        "user"
+        "app"
       ],
       "examples": [
         "make the chat panel wider",
@@ -35,8 +34,7 @@
       "type": "boolean",
       "pointer": "/ui/mobile_mode/full_height",
       "layers": [
-        "app",
-        "user"
+        "app"
       ],
       "examples": [
         "edge to edge chat on my phone",
@@ -56,8 +54,7 @@
       "type": "number",
       "pointer": "/ui/pull_to_refresh/start_zone_px",
       "layers": [
-        "app",
-        "user"
+        "app"
       ],
       "examples": [
         "pull to refresh triggers too easily",
