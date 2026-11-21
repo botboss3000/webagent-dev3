@@ -27,7 +27,14 @@ class FilesTests(unittest.TestCase):
         (self.home / "state" / "encryption.key").write_text("secret")
         (self.home / "projects" / "notes.txt").write_text("hello\n")
         self.now = 1000.0
+        import pwd
+        from unittest import mock
+        # File operations run as the operator account; here the test user, setgroups stubbed (no root).
+        patch = mock.patch.object(files_module.os, "setgroups", lambda groups: None)
+        patch.start()
+        self.addCleanup(patch.stop)
         profile = {**files_module.DEFAULTS, "state": str(self.state), "app_uid": APP,
+                   "operator_account": pwd.getpwuid(os.getuid()).pw_name,
                    "files_checkout": str(self.home / "code"),
                    "files_locked": [str(self.home / "state"), str(self.home / "runtime")]}
         self.files = files_module.Files(profile, clock=lambda: self.now)
@@ -99,7 +106,9 @@ class FilesTests(unittest.TestCase):
         self.assertEqual(0o640, os.stat(notes).st_mode & 0o777)  # edits keep the mode
         made = str(self.home / "projects" / "new")
         self.ok("create", path=made, kind="dir")
+        self.assertEqual(0o700, os.stat(made).st_mode & 0o777)  # new folders 700, files 600
         self.ok("write", path=made + "/a.txt", content="a", encoding="utf-8", expected_sha256="")
+        self.assertEqual((os.getuid(), 0o600), (os.stat(made + "/a.txt").st_uid, os.stat(made + "/a.txt").st_mode & 0o777))
         self.assertIn("exists", self.call("rename", path=notes, new_path=made + "/a.txt")["output"])
         self.ok("rename", path=made + "/a.txt", new_path=made + "/b.txt")
         self.ok("delete", path=made)
@@ -107,6 +116,19 @@ class FilesTests(unittest.TestCase):
         log = [json.loads(line) for line in (self.state / "files-log.jsonl").read_text().splitlines()]
         self.assertEqual(["write", "create", "write", "rename", "delete"], [entry["op"] for entry in log])
         self.assertTrue(all(entry["admin"] == "admin" for entry in log))
+
+    def test_operations_run_as_the_operator_account(self):
+        from unittest import mock
+        self.grant()
+        seen = []
+        with mock.patch.object(files_module.os, "setuid", lambda uid: seen.append(uid)):
+            self.ok("tree", path=str(self.home))
+        self.assertEqual([], seen)  # the change happened in the child, not in this process
+        private = self.home / "projects" / "private.txt"
+        private.write_text("x")
+        os.chmod(private, 0)
+        if os.geteuid() != 0:
+            self.assertIn("Permission denied", self.call("read", path=str(private))["output"])
 
     def test_editor_limit_and_binary_files(self):
         self.grant()

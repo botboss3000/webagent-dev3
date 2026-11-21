@@ -229,9 +229,9 @@ class Helper:
             if action == "terminal_grant":
                 return ("Let administrator " + args["admin"] + " open terminals in the File Manager " + limit + ": a shell as "
                         + self.profile["operator_account"] + " without the sudo and docker groups. Revoke it here any time.")
-            return ("Let administrator " + args["admin"] + " browse and change files anywhere on this computer through "
-                    "the File Manager " + limit + " (read and write, except app data and sockets). "
-                    "Root-equivalent while active: a compromised app could act as root. Revoke it here any time.")
+            return ("Let administrator " + args["admin"] + " browse and change files outside the checkout through the "
+                    "File Manager " + limit + ", with the file permissions of " + self.profile["operator_account"]
+                    + " (no sudo or docker group; app data and sockets stay locked). Revoke it here any time.")
         if action == "unit_restart":
             return "Restart systemd unit " + args["unit"] + "."
         if action == "container_restart":
@@ -612,7 +612,7 @@ class Helper:
             if record["state"] != "pending":
                 raise ValueError("request is " + record["state"])
             # Boot and disk approvals need the host approval passphrase, checked here, never by the app.
-            # So do File Manager grants outside the checkout (root-equivalent while live).
+            # So do File Manager grants (files and terminals outside the checkout).
             if decision == "approve" and (record["boot_disk"] or record.get("passphrase")):
                 self.check_passphrase(message.get("passphrase"))
             if decision == "approve" and record["action"] in GRANTS:

@@ -3,9 +3,11 @@
 Runs as root (webagent-host-files.service, installed by the host helper's supervisor_update).
 Only the app's uid may call it, and every file operation needs a live grant for the signed-in
 administrator. Grants are written only by the host helper after a Host Admin approval with
-the host approval passphrase; they expire (24 h by default) and Host Admin can revoke them.
-While a grant is live the app can read and change any file except the locked folders (app
-data, sockets, kernel views) - an accepted risk recorded in docs/security-spec.md (FILES-1).
+the host approval passphrase; they last the time set at approval and Host Admin can revoke them.
+Each file operation runs in a child process as the operator account without its sudo and
+docker groups, so it can read and change only what that account can; new files are created
+ar:ar 600 (folders 700). The locked folders (app data, sockets, kernel views) stay refused
+on top of that (docs/security-spec.md FILES-1). Grants and the log stay with the root parent.
 The checkout itself stays with the worker (/live-checkout). Every change is logged.
 
 Terminals (FILES-3) need their own grant (terminal_grant). Each runs a login shell on a
@@ -31,6 +33,7 @@ import sys
 import termios
 import threading
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -76,9 +79,15 @@ class Terminal:
         self.opened_at = self.seen = clock()
         self.output, self.base, self.exited = bytearray(), 0, False
         self.changed = threading.Condition()
+        # Guards the descriptor's lifetime only: writers hold it while writing, the reader takes
+        # it to close. Reads never wait on it, so output keeps draining while a write blocks.
+        self.fd_lock = threading.Lock()
+        self.fd_closed = False
         threading.Thread(target=self.pump, daemon=True).start()
 
     def pump(self):
+        # Only this thread closes the pseudo-terminal: closing it elsewhere while a read is
+        # pending lets the number be reused by another open file, which this read would consume.
         while True:
             try:
                 data = os.read(self.fd, 65536)
@@ -88,7 +97,15 @@ class Terminal:
                 if not data:
                     self.exited = True
                     self.changed.notify_all()
-                    return
+            if not data:
+                with self.fd_lock:
+                    self.fd_closed = True
+                    try:
+                        os.close(self.fd)
+                    except OSError:
+                        pass
+                return
+            with self.changed:
                 self.output += data
                 if len(self.output) > TERMINAL_BUFFER:
                     drop = len(self.output) - TERMINAL_BUFFER
@@ -109,14 +126,16 @@ class Terminal:
                 "truncated": offset < self.base, "exited": self.exited}
 
     def close(self):
-        try:
-            os.killpg(self.pid, signal.SIGHUP)
-        except OSError:
-            pass
-        try:
-            os.close(self.fd)
-        except OSError:
-            pass
+        """End the shell; the reader sees end of output and closes the pseudo-terminal itself.
+        A shell that ignores the hangup is killed two seconds later."""
+        for signum, delay in ((signal.SIGHUP, 0), (signal.SIGKILL, 2)):
+            def send(signum=signum):
+                if not self.exited:
+                    try:
+                        os.killpg(self.pid, signum)
+                    except OSError:
+                        pass
+            threading.Timer(delay, send).start() if delay else send()
         try:
             os.waitpid(self.pid, os.WNOHANG)
         except OSError:
@@ -133,6 +152,7 @@ class Files:
         self.locked = [os.path.realpath(p) for p in profile["files_locked"]]
         self.terminals = {}
         self.terminals_lock = threading.Lock()
+        self.pending_log = None
 
     # Grants and log ----------------------------------------------------------------------
     def granted(self, admin, name="file-grants.json"):
@@ -142,6 +162,9 @@ class Files:
         return bool(until) and until > self.clock()
 
     def log(self, admin, op, path, **extra):
+        if self.pending_log is not None:  # in the operator child: the root parent writes it
+            self.pending_log.append([admin, op, path, extra])
+            return
         with (self.state / "files-log.jsonl").open("a") as stream:
             stream.write(json.dumps({"at": self.clock(), "admin": admin, "op": op, "path": path, **extra}, sort_keys=True) + "\n")
 
@@ -253,15 +276,21 @@ class Files:
         if not isinstance(data, str) or len(data) > 65536:
             raise Refused("Invalid terminal input")
         terminal = self.terminal(admin, terminal_id)
-        view = memoryview(data.encode())
-        while view:
-            view = view[os.write(terminal.fd, view):]
+        with terminal.fd_lock:
+            if terminal.fd_closed:
+                raise Refused("The shell has exited")
+            view = memoryview(data.encode())
+            while view:
+                view = view[os.write(terminal.fd, view):]
         return {"id": terminal.id, "status": "ok"}
 
     def terminal_resize(self, admin, terminal_id, cols, rows):
         terminal = self.terminal(admin, terminal_id)
-        fcntl.ioctl(terminal.fd, termios.TIOCSWINSZ,
-                    struct.pack("HHHH", max(2, min(int(rows), 500)), max(2, min(int(cols), 500)), 0, 0))
+        with terminal.fd_lock:
+            if terminal.fd_closed:
+                raise Refused("The shell has exited")
+            fcntl.ioctl(terminal.fd, termios.TIOCSWINSZ,
+                        struct.pack("HHHH", max(2, min(int(rows), 500)), max(2, min(int(cols), 500)), 0, 0))
         return {"id": terminal.id, "status": "ok"}
 
     def terminal_list(self, admin):
@@ -362,22 +391,29 @@ class Files:
         if old is None:
             if expected:
                 raise Refused("File disappeared; reload before saving")
-            folder = os.stat(parent)
-            mode, uid, gid = 0o644, folder.st_uid, folder.st_gid
+            mode = 0o600
         else:
             if not stat.S_ISREG(old.st_mode):
                 raise Refused("Only regular files can be saved")
             with open(real, "rb") as stream:
                 if sha256(stream.read(MAX_FILE + 1)) != expected:
                     raise Refused("File changed; reload before saving")
-            mode, uid, gid = stat.S_IMODE(old.st_mode), old.st_uid, old.st_gid
+            mode = stat.S_IMODE(old.st_mode)
+            if old.st_uid != os.geteuid():
+                # Someone else's file this account may write: rewrite it in place, keeping its owner.
+                with open(real, "r+b") as stream:
+                    stream.write(data)
+                    stream.truncate()
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                self.log(admin, "write", real, bytes=len(data))
+                return {"path": real, "size": len(data), "status": "ok", "sha256": sha256(data)}
         temporary = os.path.join(parent, ".webagent-files-" + uuid.uuid4().hex)
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         try:
             with os.fdopen(fd, "wb") as stream:
                 stream.write(data)
                 stream.flush()
-                os.fchown(stream.fileno(), uid, gid)
                 os.fchmod(stream.fileno(), mode)
                 os.fsync(stream.fileno())
             if old is None:
@@ -396,13 +432,11 @@ class Files:
         if kind not in ("file", "dir"):
             raise Refused("Invalid entry kind")
         real = self.entry(raw)
-        folder = os.stat(os.path.dirname(real))
         if kind == "dir":
-            os.mkdir(real, 0o755)
+            os.mkdir(real, 0o700)
         else:
-            os.close(os.open(real, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644))
-        os.lchown(real, folder.st_uid, folder.st_gid)
-        os.chmod(real, 0o755 if kind == "dir" else 0o644)
+            os.close(os.open(real, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600))
+        os.chmod(real, 0o700 if kind == "dir" else 0o600)
         self.log(admin, "create", real, kind=kind)
         return {"path": real, "kind": kind, "status": "ok"}
 
@@ -428,7 +462,7 @@ class Files:
 
     def handle(self, uid, message):
         if uid != self.app_uid:
-            raise PermissionError("only the app may use the host file service")
+            raise Refused("Only the app may use the host file service")
         op = message.get("op")
         if op == "locate":
             # Where the checkout sits, so the File Manager can offer its parent; changes nothing.
@@ -456,6 +490,11 @@ class Files:
             raise Refused("Unsupported terminal action")
         if not self.granted(admin):
             raise NeedsGrant("Host Admin must authorize browsing outside the checkout")
+        if op not in ("tree", "read", "write", "create", "rename", "delete"):
+            raise Refused("Unsupported File Manager action")
+        return self.as_operator(admin, op, message)
+
+    def file_op(self, admin, op, message):
         if op == "tree":
             return self.tree(message.get("path") or "/", message.get("show_hidden") is True)
         if op == "read":
@@ -467,9 +506,58 @@ class Files:
             return self.create(admin, message.get("path"), message.get("kind"))
         if op == "rename":
             return self.rename(admin, message.get("path"), message.get("new_path"))
-        if op == "delete":
-            return self.delete(admin, message.get("path"))
-        raise Refused("Unsupported File Manager action")
+        return self.delete(admin, message.get("path"))
+
+    def as_operator(self, admin, op, message):
+        """Run one file operation in a child that has become the operator account (no sudo or
+        docker group); its result, refusal or error and its log lines come back over a pipe."""
+        account, groups = self.shell_identity()
+        reader, writer = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.close(reader)
+                os.setgroups(groups)
+                os.setgid(account.pw_gid)
+                os.setuid(account.pw_uid)
+                os.umask(0o077)
+                self.pending_log = []
+                try:
+                    reply = {"output": self.file_op(admin, op, message)}
+                except Refused as error:
+                    reply = {"refused": str(error)}
+                except OSError as error:
+                    reply = {"errno": error.errno, "error": str(error.strerror or error)}
+                except Exception as error:
+                    reply = {"error": type(error).__name__, "detail": traceback.format_exc(limit=1)[-200:]}
+                reply["log"] = self.pending_log
+                data = json.dumps(reply).encode()
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(writer, view):]
+            finally:
+                os._exit(0)
+        os.close(writer)
+        chunks = []
+        with os.fdopen(reader, "rb") as stream:
+            while chunk := stream.read(1 << 20):
+                chunks.append(chunk)
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:  # SIGCHLD is ignored in the service: the kernel reaped it
+            pass
+        if not chunks:
+            raise Refused("File operation failed")
+        reply = json.loads(b"".join(chunks))
+        for entry_admin, entry_op, entry_path, extra in reply.get("log", []):
+            self.log(entry_admin, entry_op, entry_path, **extra)
+        if "output" in reply:
+            return reply["output"]
+        if "refused" in reply:
+            raise Refused(reply["refused"])
+        if reply.get("errno") is not None:
+            raise OSError(reply["errno"], reply["error"])
+        raise Refused("File operation failed (" + str(reply.get("error")) + ")")
 
 
 def reply_for(files, uid, message):
@@ -483,7 +571,9 @@ def reply_for(files, uid, message):
         return {"status": "failed", "output": "No such file or folder"}
     except FileExistsError:
         return {"status": "failed", "output": "An entry with that name already exists"}
-    except (PermissionError, OSError) as error:
+    except PermissionError:
+        return {"status": "failed", "output": "Permission denied: the operator account cannot do this"}
+    except OSError as error:
         return {"status": "failed", "output": type(error).__name__ + ": " + str(error)[:200]}
     except Exception as error:  # a malformed request must not stop the service
         return {"status": "failed", "output": type(error).__name__}
