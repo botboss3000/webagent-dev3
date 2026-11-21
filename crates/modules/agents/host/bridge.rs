@@ -150,7 +150,9 @@ impl webagent_agents::service::Effects for Bridge<'_> {
             }
         }
         store.shared_schema().await?;
-        let mut tx = store.app_pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = store.app_pool.begin_with("BEGIN IMMEDIATE").await?;
         for table in [
             "shared_participants",
             "shared_invitations",

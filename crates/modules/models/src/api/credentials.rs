@@ -107,7 +107,9 @@ async fn upsert<C: RuntimeStorage>(
     key: &str,
     record: &Value,
 ) -> anyhow::Result<bool> {
-    let mut tx = pool.begin().await?;
+    // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+    // (busy_timeout) instead of failing with 'database is locked'.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM docs WHERE key=?")
         .bind(key)
         .fetch_optional(&mut *tx)

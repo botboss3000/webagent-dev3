@@ -252,7 +252,9 @@ impl Store {
         }
         let notes_key = format!("panel_notes:{sid}");
         let _guard = self.context_gate.write().await;
-        let mut tx = self.pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&key)
             .fetch_optional(&mut *tx)

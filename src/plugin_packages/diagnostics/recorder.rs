@@ -367,7 +367,9 @@ pub async fn insert_snapshot(
 
 #[cfg(any(test, feature = "test-support"))]
 pub async fn prune(pool: &SqlitePool, config: &Config) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+    // (busy_timeout) instead of failing with 'database is locked'.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     sqlx::query("DELETE FROM diagnostics WHERE id IN (SELECT id FROM diagnostics WHERE ts<? ORDER BY id LIMIT 1000)")
   .bind(crate::now() as i64-(config.retention.hours*3600) as i64).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM diagnostics WHERE id IN (SELECT id FROM diagnostics WHERE id<=COALESCE((SELECT id FROM diagnostics ORDER BY id DESC LIMIT 1 OFFSET ?),0) ORDER BY id LIMIT 1000)")

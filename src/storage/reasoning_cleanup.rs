@@ -82,7 +82,9 @@ impl Store {
             }
             *hashes.entry(hash.to_owned()).or_default() += 1;
         }
-        let mut tx = self.pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let segment_raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
             .bind(format!("compaction_segment:{sid}:{segment_id}"))
             .fetch_one(&mut *tx)

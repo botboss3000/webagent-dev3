@@ -88,7 +88,9 @@ impl<'a, C: RecordCodec> Ledger<'a, C> {
         let id = candidate["id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing action ID"))?;
-        let mut tx = self.pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query(LOCK).execute(&mut *tx).await?;
         let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
             .bind(record_key(id))

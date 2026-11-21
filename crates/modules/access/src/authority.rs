@@ -595,7 +595,9 @@ impl<C: RecordCodec> Repository<'_, C> {
     ) -> Result<Value> {
         validate_set_agent_tool_permissions(agent_id, expected_revision, &permissions)?;
         let view = self.for_agent(agent_id).await?;
-        let mut tx = view.agent_pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = view.agent_pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
             .bind(agent_id)
             .fetch_optional(&mut *tx)
@@ -656,7 +658,9 @@ impl<C: RecordCodec> Repository<'_, C> {
     ) -> Result<Value> {
         validate_set_agent_ability_permissions(agent_id, expected_revision, &permissions)?;
         let view = self.for_agent(agent_id).await?;
-        let mut tx = view.agent_pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = view.agent_pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
             .bind(agent_id)
             .fetch_optional(&mut *tx)
@@ -718,7 +722,9 @@ impl<C: RecordCodec> Repository<'_, C> {
     ) -> Result<Value> {
         validate_set_agent_tool_callers(agent_id, expected_revision, &callers)?;
         let view = self.for_agent(agent_id).await?;
-        let mut tx = view.agent_pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = view.agent_pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
             .bind(agent_id)
             .fetch_optional(&mut *tx)

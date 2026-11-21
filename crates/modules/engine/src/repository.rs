@@ -1061,7 +1061,9 @@ impl<
             if !crate::send_future(self.admission.requester_claim_ready(&saved)).await? {
                 return Ok(false);
             }
-            let mut tx = self.pool.begin().await?;
+            // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+            // (busy_timeout) instead of failing with 'database is locked'.
+            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
                 .bind(format!("run:{rid}"))
                 .fetch_optional(&mut *tx)

@@ -54,7 +54,9 @@ impl<C: RecordCodec> Repository<'_, C> {
     }
 
     pub async fn record_user_login(&self, id: &str, timestamp: u64) -> Result<()> {
-        let mut tx = self.app_pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.app_pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query("SELECT value FROM user_profiles WHERE user_id=?")
             .bind(id)
             .fetch_one(&mut *tx)
@@ -88,7 +90,9 @@ impl<C: RecordCodec> Repository<'_, C> {
         {
             bail!("Invalid profile input");
         }
-        let mut tx = self.app_pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.app_pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query("SELECT value FROM user_accounts WHERE user_id=?")
             .bind(user_id)
             .fetch_one(&mut *tx)
@@ -152,7 +156,9 @@ impl<C: RecordCodec> Repository<'_, C> {
             account["role"] != "guest",
             "Guest sign-in duration is fixed"
         );
-        let mut tx = self.app_pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.app_pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query("SELECT value FROM user_profiles WHERE user_id=?")
             .bind(id)
             .fetch_one(&mut *tx)
@@ -208,7 +214,9 @@ impl<C: RecordCodec> Repository<'_, C> {
         {
             bail!("Invalid password update");
         }
-        let mut tx = self.app_pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.app_pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query("SELECT value FROM user_accounts WHERE user_id=?")
             .bind(user_id)
             .fetch_one(&mut *tx)
