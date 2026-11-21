@@ -1,5 +1,6 @@
 //! Bounded ephemeral specialized-model calls. No audio or quick answers enter durable chat.
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use webagent_engine::runtime::lane::{LaneError, LaneStatus};
 /// Public status and message for an Engine lane rejection.
 fn api_error(error: LaneError) -> ApiError {
@@ -55,32 +56,73 @@ pub(crate) async fn lane_answer(
         .map_err(api_error)
 }
 
-/// Admit at most four concurrent media HTTP requests without queueing excess callers.
+/// Requests in one lane, released when the guard drops (also on a cancelled request).
+struct InFlight(&'static AtomicUsize);
+impl InFlight {
+    /// Takes a slot when fewer than `limit` are in use.
+    fn take(count: &'static AtomicUsize, limit: usize) -> Option<Self> {
+        count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < limit).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Self(count))
+    }
+}
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// The live scheduler limits (`config/engine/loop-runtime.json`); the defaults if the app is
+/// not attached to the request. Takes the cloned handle: a borrowed request held across the
+/// await would make the middleware future not Send.
+async fn limits(app: Option<App>) -> (usize, usize) {
+    let Some(app) = app else {
+        return (4, 16);
+    };
+    let config = app.runtime.read().await;
+    (
+        config.scheduler.max_media_requests,
+        config.scheduler.max_attachment_reads,
+    )
+}
+
+fn busy() -> Response {
+    ApiError(
+        StatusCode::TOO_MANY_REQUESTS,
+        "Media is busy; try again shortly".into(),
+    )
+    .into_response()
+}
+
+/// Admit `scheduler.max_media_requests` concurrent media HTTP requests without queueing excess
+/// callers.
 pub(crate) async fn limit(request: Request, next: Next) -> Response {
-    static SLOTS: std::sync::OnceLock<Semaphore> = std::sync::OnceLock::new();
-    let Ok(_permit) = SLOTS.get_or_init(|| Semaphore::new(4)).try_acquire() else {
-        return ApiError(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Media is busy; try again shortly".into(),
-        )
-        .into_response();
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+    let (max, _) = limits(request.extensions().get::<App>().cloned()).await;
+    let Some(_slot) = InFlight::take(&IN_FLIGHT, max) else {
+        return busy();
     };
     next.run(request).await
 }
 
-/// Attachment reads (a strip of screenshot thumbnails loads together) wait briefly for one of
-/// sixteen slots instead of sharing the four model-call slots and failing at once.
+/// Attachment reads (a strip of screenshot thumbnails loads together) wait up to ten seconds
+/// for one of `scheduler.max_attachment_reads` slots instead of sharing the media-call slots
+/// and failing at once.
 pub(crate) async fn limit_reads(request: Request, next: Next) -> Response {
-    static SLOTS: std::sync::OnceLock<Semaphore> = std::sync::OnceLock::new();
-    let slots = SLOTS.get_or_init(|| Semaphore::new(16));
-    let Ok(Ok(_permit)) =
-        tokio::time::timeout(std::time::Duration::from_secs(10), slots.acquire()).await
-    else {
-        return ApiError(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Media is busy; try again shortly".into(),
-        )
-        .into_response();
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+    let (_, max) = limits(request.extensions().get::<App>().cloned()).await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let _slot = loop {
+        if let Some(slot) = InFlight::take(&IN_FLIGHT, max) {
+            break slot;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return busy();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     };
     next.run(request).await
 }

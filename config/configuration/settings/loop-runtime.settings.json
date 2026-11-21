@@ -20,7 +20,69 @@
       ],
       "min": 1,
       "max": 64,
-      "bounds": "proposed"
+      "bounds": "validator"
+    },
+    {
+      "id": "loop.scheduler.max_background_workers",
+      "description": "How many background tasks (detached tool calls and follow-ups) the server runs at the same time, across all users.",
+      "type": "integer",
+      "pointer": "/scheduler/max_background_workers",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "run 8 background tasks at once",
+        "fewer background tasks"
+      ],
+      "areas": [
+        "server",
+        "performance",
+        "runs"
+      ],
+      "min": 1,
+      "max": 64,
+      "bounds": "validator"
+    },
+    {
+      "id": "loop.scheduler.max_media_requests",
+      "description": "How many uploads and voice requests the server handles at the same time; more are told the server is busy.",
+      "type": "integer",
+      "pointer": "/scheduler/max_media_requests",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow 16 uploads at once",
+        "limit voice requests"
+      ],
+      "areas": [
+        "server",
+        "performance",
+        "media"
+      ],
+      "min": 1,
+      "max": 256,
+      "bounds": "validator"
+    },
+    {
+      "id": "loop.scheduler.max_attachment_reads",
+      "description": "How many attachment downloads the server serves at the same time; more wait up to ten seconds for a turn.",
+      "type": "integer",
+      "pointer": "/scheduler/max_attachment_reads",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "serve 64 attachments at once"
+      ],
+      "areas": [
+        "server",
+        "performance",
+        "media"
+      ],
+      "min": 1,
+      "max": 1024,
+      "bounds": "validator"
     },
     {
       "id": "loop.tools.max_parallel_calls",
@@ -40,7 +102,7 @@
       ],
       "min": 1,
       "max": 16,
-      "bounds": "proposed"
+      "bounds": "validator"
     },
     {
       "id": "loop.tools.approval_expiry_seconds",

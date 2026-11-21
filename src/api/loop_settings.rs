@@ -25,6 +25,9 @@ pub(crate) async fn update(State(app): State<App>, Json(body): Json<Value>) -> A
                     | "poll_interval_ms"
                     | "recovery_interval_ms"
                     | "background_rescan_interval_ms"
+                    | "max_background_workers"
+                    | "max_media_requests"
+                    | "max_attachment_reads"
                     | "max_parallel_calls"
             )
         })
@@ -99,7 +102,7 @@ mod tests {
             assert_eq!(result["config"]["scheduler"]["max_active_runs"], 0);
         }
         for settings in [
-            json!({"max_active_runs":17}),
+            json!({"max_active_runs":65}),
             json!({"max_active_runs":-1}),
             json!({"max_active_runs":1.5}),
             json!({"max_unresolved_runs":0}),

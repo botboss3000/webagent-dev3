@@ -41,6 +41,24 @@ pub struct Scheduler {
     /// it is detached into a background task and the model answers the message.
     #[serde(default)]
     pub message_detach_grace_ms: u64,
+    /// Background tasks (detached tool calls, follow-ups) running at once across the server.
+    #[serde(default = "default_max_background_workers")]
+    pub max_background_workers: usize,
+    /// Model-backed media requests (uploads, voice) handled at once; more are refused.
+    #[serde(default = "default_max_media_requests")]
+    pub max_media_requests: usize,
+    /// Attachment downloads served at once; more wait up to ten seconds for a slot.
+    #[serde(default = "default_max_attachment_reads")]
+    pub max_attachment_reads: usize,
+}
+fn default_max_background_workers() -> usize {
+    4
+}
+fn default_max_media_requests() -> usize {
+    4
+}
+fn default_max_attachment_reads() -> usize {
+    16
 }
 fn default_drain_timeout_seconds() -> u64 {
     180
@@ -197,6 +215,9 @@ impl<C: SchemaCatalog> Default for Config<C> {
                 background_rescan_interval_ms: default_background_rescan_interval_ms(),
                 drain_timeout_seconds: default_drain_timeout_seconds(),
                 message_detach_grace_ms: 0,
+                max_background_workers: default_max_background_workers(),
+                max_media_requests: default_max_media_requests(),
+                max_attachment_reads: default_max_attachment_reads(),
             },
             context: Context {
                 max_context_bytes: 262144,
@@ -250,7 +271,7 @@ impl<C: SchemaCatalog> Config<C> {
             }
         }
         // BATCH-CONFIG-VALIDATION: unknown names and modes fail closed at startup.
-        if !(1..=4).contains(&self.tools.max_parallel_calls)
+        if !(1..=16).contains(&self.tools.max_parallel_calls)
             || self.tools.parallel_modes.len() > 64
             || !(1..=50).contains(&self.tools.scripts.max_steps)
             || !(1..=1000).contains(&self.tools.scripts.max_per_tree)
@@ -269,10 +290,13 @@ impl<C: SchemaCatalog> Config<C> {
             bail!("Invalid parallel tool mode");
         }
         if self.schema_version != 2
-            || self.scheduler.max_active_runs > 16
+            || self.scheduler.max_active_runs > 64
+            || !(1..=64).contains(&self.scheduler.max_background_workers)
+            || !(1..=256).contains(&self.scheduler.max_media_requests)
+            || !(1..=1024).contains(&self.scheduler.max_attachment_reads)
             || self.scheduler.max_unresolved_runs == 0
             || self.scheduler.max_unresolved_runs < self.scheduler.max_active_runs
-            || self.scheduler.max_unresolved_runs > 200
+            || self.scheduler.max_unresolved_runs > 2000
             || !(10..=60000).contains(&self.scheduler.poll_interval_ms)
             || !(1000..=3600000).contains(&self.scheduler.recovery_interval_ms)
             || self.scheduler.drain_timeout_seconds > 1800

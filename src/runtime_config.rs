@@ -42,9 +42,15 @@ mod tests {
         c.validate().unwrap();
         assert_eq!(c.scheduler.max_active_runs, 0);
         let mut c = c;
-        c.scheduler.max_active_runs = 16;
+        c.scheduler.max_active_runs = 64;
         c.validate().unwrap();
-        c.scheduler.max_active_runs = 17;
+        c.scheduler.max_active_runs = 65;
+        assert!(c.validate().is_err());
+        c.scheduler.max_active_runs = 0;
+        c.scheduler.max_background_workers = 0;
+        assert!(c.validate().is_err());
+        c.scheduler.max_background_workers = 64;
+        c.scheduler.max_media_requests = 257;
         assert!(c.validate().is_err());
     }
     #[test]

@@ -665,10 +665,13 @@ impl<
                         active.remove(&id);
                     }
                 }
-                let rescan_interval_ms = crate::send_future(app.runtime.read())
-                    .await
-                    .scheduler
-                    .background_rescan_interval_ms;
+                let (rescan_interval_ms, max_workers) = {
+                    let config = crate::send_future(app.runtime.read()).await;
+                    (
+                        config.scheduler.background_rescan_interval_ms,
+                        config.scheduler.max_background_workers,
+                    )
+                };
                 let mut retry_ms = rescan_interval_ms;
                 if let Some(delay) = crate::components::background_failure_retry_ms(
                     crate::ports::AgentMetadata::root(app.store.records()),
@@ -761,7 +764,7 @@ impl<
                                 let request = Request {
                                     version: INTERFACE_VERSION,
                                     now: now(),
-                                    slots: 4usize.saturating_sub(workers.len()),
+                                    slots: max_workers.saturating_sub(workers.len()),
                                     rescan_interval_ms,
                                     tasks: projection,
                                 };
@@ -795,7 +798,7 @@ impl<
                                     }
                                 }
                                 for index in plan.dispatch {
-                                    if workers.len() >= 4
+                                    if workers.len() >= max_workers
                                         || !crate::components::component_available(
                                             crate::ports::AgentMetadata::root(app.store.records()),
                                             crate::components::BACKGROUND,
