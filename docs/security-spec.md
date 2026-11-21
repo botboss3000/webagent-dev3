@@ -211,6 +211,16 @@ Each requirement has an ID for reference in commits and reviews.
 | UI-2 | Markdown always through DOMPurify; plain text through `textContent`. | In force | skill "Rendering untrusted text" |
 | UI-3 | User uploads are never served inline as active content (HTML, SVG) from the app origin. | Reviewed | sweep upload review; keep on every new download route |
 
+### 3.12 File Manager outside the checkout (FILES)
+
+| ID | Requirement | Status | Evidence / work item |
+| --- | --- | --- | --- |
+| FILES-1 | The File Manager reaches folders outside the checkout only through the root host file service (`build-service/host_files.py`, socket `runtime/files/files.sock`). The service serves only uid 1100 (SO_PEERCRED), and every file operation needs a live grant for the signed-in administrator. A grant comes only from a Host Admin approval with the host approval passphrase, no allow window covers it, it expires after 24 h (`files_grant_seconds`), and Host Admin can revoke it without the passphrase. App data (`state/`), sockets (`runtime/`), `/proc`, `/sys` and `/dev` stay locked; the checkout stays with the worker (`/live-checkout`). Every write, create, rename and delete is logged and shown on Host Admin. | In force | `host_files.py`, `host_helper.py` `files_grant`/`files_revoke`, `file_manager.rs` `host_files`; tests `tests/test_host_files.py`, `tests/test_host_helper.py` |
+| FILES-2 | In-app agents never use the host file service; agent access outside the checkout would be a separate Administrator ability, off by default. | In force (by construction) | only the admin File Manager route calls the socket; sandboxed commands cannot open Unix sockets (TOOL-14) |
+
+The socket `runtime/files/files.sock` is a new socket reachable from the API container (rule
+5.6): it is needed so the File Manager can reach host folders, and it answers only uid 1100.
+
 ## 4. Multi-tenant and other hosted servers
 
 A hosted deployment for other people must meet all **In force** requirements plus:
@@ -257,6 +267,7 @@ A hosted deployment for other people must meet all **In force** requirements plu
 | Shared-chat writers can approve tools that use the owner's data and connections (SHARE-3). | User | 2026-11-20 | SHARE-3/4 ship |
 | The operator may open a 24 h allow-all host window for all requesters (`session: "*"`) during active release work. | User ("I'm controlling it") | 2026-11-20 | HOSTACT-5 ships |
 | SSH listens on all interfaces; the firewall restricts it to Tailscale. | sec-host recommendation | 2026-11-20 | — |
+| While a File Manager grant is live (up to 24 h), a compromised app process can read and change any host file outside the locked folders, including the approval system's own files: root-equivalent (FILES-1). | User | 2026-11-20 | — |
 
 ## 7. Work items and decision log
 
@@ -276,3 +287,6 @@ ABUSE-3, HOST-8 (after approval), HOST-10, TOOL-15, remaining sweep Low items.
   (`bd30aa60`, `acc1ef0`). User accepted the shared-chat member risk and the operator allow
   window (section 6). Tool code is compiled in; the open question is classification, not the
   tools' code (TOOL-4).
+- 2026-11-20: File Manager outside the checkout (FILES-1): passphrase-approved, 24 h grant per
+  administrator, root host file service, whole computer except app data and sockets; the user
+  accepted the root-equivalent risk while a grant is live (section 6).

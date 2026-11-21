@@ -172,7 +172,8 @@ fn host_admin_routes() -> Router<App> {
             "/admin/host/requests/{id}/decision",
             post(host_admin::decide),
         )
-        .route("/admin/host/allow", post(host_admin::allow));
+        .route("/admin/host/allow", post(host_admin::allow))
+        .route("/admin/host/files/revoke", post(host_admin::files_revoke));
     routes
 }
 

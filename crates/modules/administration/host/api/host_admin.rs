@@ -15,10 +15,26 @@ const MAX_REPLY: usize = 2 * 1024 * 1024;
 
 /// One request to the helper's peer-checked socket under the runtime root.
 async fn helper(message: Value) -> Result<Value, crate::ApiError> {
-    let path = webagent_configuration::paths::runtime().join("host/helper.sock");
-    let unavailable = |_| bad("Host helper unavailable");
+    let value = call("host/helper.sock", "Host helper", &message).await?;
+    if value["status"] != "success" {
+        return Err(bad(value["output"]
+            .as_str()
+            .unwrap_or("Host helper refused the request")));
+    }
+    Ok(value["output"].clone())
+}
+
+/// One newline-delimited JSON exchange with a root host service's socket at `socket` under
+/// the runtime root; returns the whole reply (`status`, `output`, optional `code`).
+pub(crate) async fn call(
+    socket: &str,
+    service: &str,
+    message: &Value,
+) -> Result<Value, crate::ApiError> {
+    let path = webagent_configuration::paths::runtime().join(socket);
+    let unavailable = |_| bad(&format!("{service} unavailable"));
     let mut stream = UnixStream::connect(&path).await.map_err(unavailable)?;
-    let mut line = serde_json::to_vec(&message).map_err(|_| bad("Invalid host request"))?;
+    let mut line = serde_json::to_vec(message).map_err(|_| bad("Invalid host request"))?;
     line.push(b'\n');
     stream.write_all(&line).await.map_err(unavailable)?;
     let mut reply = Vec::new();
@@ -27,14 +43,33 @@ async fn helper(message: Value) -> Result<Value, crate::ApiError> {
         .read_until(b'\n', &mut reply)
         .await
         .map_err(unavailable)?;
-    let value: Value =
-        serde_json::from_slice(&reply).map_err(|_| bad("Host helper reply unreadable"))?;
-    if value["status"] != "success" {
-        return Err(bad(value["output"]
-            .as_str()
-            .unwrap_or("Host helper refused the request")));
+    serde_json::from_slice(&reply).map_err(|_| bad(&format!("{service} reply unreadable")))
+}
+
+/// File a File Manager grant request for `admin` (one waiting request per administrator).
+pub(crate) async fn request_files_grant(admin: &str) -> Result<Value, crate::ApiError> {
+    helper(
+        json!({"op": "request", "action": "files_grant", "args": {"admin": admin},
+        "requester": {"user": admin}}),
+    )
+    .await
+}
+
+/// End one administrator's File Manager grant outside the checkout: `{"admin": "<name>"}`.
+/// Narrowing access needs no passphrase.
+pub(crate) async fn files_revoke(
+    State(_app): State<App>,
+    Extension(identity): Extension<Value>,
+    Json(body): Json<Value>,
+) -> Api {
+    let admin = body["admin"].as_str().unwrap_or_default();
+    if admin.is_empty() || admin.len() > 80 {
+        return Err(bad("Administrator required"));
     }
-    Ok(value["output"].clone())
+    let by = identity["_user_id"].as_str().unwrap_or_default();
+    Ok(Json(
+        helper(json!({"op": "files_revoke", "admin": admin, "by": by})).await?,
+    ))
 }
 
 /// Raise one administrator alert for each host request that starts waiting, so the

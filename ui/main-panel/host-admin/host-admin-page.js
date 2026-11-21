@@ -23,6 +23,7 @@ function when(seconds) {
 
 function who(requester) {
   if (requester.channel === 'ssh') return 'SSH key ' + (requester.identity || '?');
+  if (!requester.session && requester.user) return 'File Manager, administrator ' + requester.user;
   return 'App session ' + String(requester.session || '?').slice(0, 8);
 }
 
@@ -77,9 +78,10 @@ export function start(mount) {
       const actions = el('div', 'host-actions');
       const approve = el('button', 'host-approve', 'Approve');
       const deny = el('button', '', 'Deny');
-      // Boot and disk changes need the host approval passphrase, set at the server console.
+      // Boot and disk changes, and File Manager access outside the checkout, need the host
+      // approval passphrase, set at the server console.
       let passphrase = null;
-      if (request.boot_disk) {
+      if (request.boot_disk || request.passphrase) {
         passphrase = el('input');
         passphrase.type = 'password';
         passphrase.autocomplete = 'off';
@@ -93,7 +95,7 @@ export function start(mount) {
           decision === 'approve' && passphrase ? {decision, passphrase: passphrase.value} : {decision}, button);
       }
       actions.append(approve, deny);
-      if (request.allow_key && request.undo !== 'none' && !request.boot_disk) {
+      if (request.allow_key && request.undo !== 'none' && !request.boot_disk && !request.passphrase) {
         const select = el('select');
         select.setAttribute('aria-label', 'Allow-all window for this requester');
         for (const [seconds, label] of WINDOWS.slice(1)) select.append(new Option('Allow all for ' + label, String(seconds)));
@@ -175,6 +177,43 @@ export function start(mount) {
     return box;
   }
 
+  // File Manager outside the checkout: live grants (revoke needs no passphrase) and the
+  // newest changes the host file service made.
+  function fileAccess(page) {
+    const box = el('section', 'host-files');
+    box.append(el('h2', '', 'File Manager outside the checkout'));
+    const grants = Object.entries(page.file_grants || {});
+    box.append(el('p', 'host-help', grants.length
+      ? 'Root-equivalent while active: these administrators can read and change any file except app data and sockets.'
+      : 'No administrator can browse outside the checkout. Going up from the checkout in the File Manager asks here.'));
+    const list = el('ul', 'host-list');
+    for (const [admin, until] of grants) {
+      const item = el('li', 'host-item');
+      item.append(el('strong', '', admin), el('span', 'host-meta', 'Until ' + when(until)));
+      const revoke = el('button', '', 'Revoke');
+      revoke.type = 'button';
+      revoke.onclick = () => post('/api/v3/admin/host/files/revoke', {admin}, revoke);
+      const actions = el('div', 'host-actions');
+      actions.append(revoke);
+      item.append(actions);
+      list.append(item);
+    }
+    if (grants.length) box.append(list);
+    const log = page.file_log || [];
+    if (log.length) {
+      const details = el('details', 'host-files-log');
+      details.append(el('summary', '', 'Recent file changes (' + log.length + ')'));
+      const changes = el('ul', 'host-list');
+      for (const entry of log) {
+        changes.append(el('li', 'host-meta', when(entry.at) + ' · ' + entry.admin + ' · ' + entry.op + ' ' + entry.path
+          + (entry.to ? ' → ' + entry.to : '') + (entry.bytes !== undefined ? ' (' + entry.bytes + ' bytes)' : '')));
+      }
+      details.append(changes);
+      box.append(details);
+    }
+    return box;
+  }
+
   function render(page, production) {
     const wrap = el('div', 'host-wrap');
     wrap.append(el('h2', '', 'Waiting for approval' + (page.pending.length ? ' (' + page.pending.length + ')' : '')));
@@ -184,6 +223,7 @@ export function start(mount) {
     for (const request of page.pending) pending.append(card(request, true));
     wrap.append(page.pending.length ? pending : el('p', 'host-empty', 'Nothing is waiting.'));
     wrap.append(releases(production));
+    wrap.append(fileAccess(page));
     wrap.append(el('h2', '', 'Recent'));
     const recent = el('ul', 'host-list');
     for (const request of page.recent) recent.append(card(request, false));
@@ -211,7 +251,11 @@ export function start(mount) {
     const response = await fetch('/api/v3/auth/me', {credentials: 'same-origin'});
     me = response.ok ? await response.json() : null;
     if (!me?.is_admin) return;
-    const refresh = () => load().catch(error => { mount.textContent = error.message; });
+    const refresh = () => {
+      // Never wipe a passphrase being typed.
+      if ([...mount.querySelectorAll('input[type=password]')].some(input => input.value)) return Promise.resolve();
+      return load().catch(error => { mount.textContent = error.message; });
+    };
     await refresh();
     timer = setInterval(refresh, 15000);
   }

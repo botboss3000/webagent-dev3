@@ -87,6 +87,27 @@ const KC_SCROLL_POS   = 'explorer:scrollPos';
 const fileDigests = new Map();
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
+const NEEDS_GRANT = 'Host Admin must authorize';
+let toastTimer = null;
+
+// A short notice at the bottom of the File Manager (role=status, so screen readers hear it).
+function showToast(message) {
+  const host = document.getElementById('file-manager');
+  if (!host) return;
+  let box = document.getElementById('files-toast');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'files-toast';
+    box.className = 'files-toast';
+    box.setAttribute('role', 'status');
+    host.appendChild(box);
+  }
+  box.textContent = message;
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, 6000);
+}
+
 async function apiFetch(path, opts = {}) {
   const [route, query = ''] = path.split('?');
   const params = new URLSearchParams(query);
@@ -112,7 +133,12 @@ async function apiFetch(path, opts = {}) {
     body: JSON.stringify(payload)
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Error(data.error || data.detail || 'File Manager request failed (' + response.status + ')');
+  if (!response.ok) {
+    const message = data.error || data.detail || 'File Manager request failed (' + response.status + ')';
+    // Outside the checkout: Host Admin must approve (with the host passphrase) first.
+    if (message.startsWith(NEEDS_GRANT)) { showToast(message); throw Object.assign(Error(message), {needsGrant: true}); }
+    throw Error(message);
+  }
   if (action === 'read' || action === 'write') fileDigests.set(data.path, data.sha256);
   if (action === 'create' && data.kind === 'file') fileDigests.set(data.path, EMPTY_SHA256);
   if (action === 'rename') {
@@ -1057,6 +1083,21 @@ function renderTreeNode(entry, depth) {
 
   const row = renderTreeRow(entry, depth);
   node.appendChild(row);
+  // Locked for security (app data and sockets outside the checkout): listed, never opened.
+  if (entry.locked) {
+    node.classList.add('is-locked');
+    const lock = document.createElement('i');
+    lock.dataset.lucide = 'lock';
+    lock.className = 'lucide-icon files-tree-lock';
+    lock.setAttribute('aria-label', 'Locked');
+    row.appendChild(lock);
+    row.title = 'Locked for security: app data and sockets stay closed';
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showToast('Locked for security: app data and sockets stay closed');
+    });
+    return node;
+  }
 
   // Right-click → context menu with the advanced actions
   row.addEventListener('contextmenu', (e) => {
@@ -1322,6 +1363,8 @@ async function loadRoot() {
     if (currentRoot && currentRoot !== projectRoot) {
       currentRoot = '';
       kvDelete(KC_CURRENT_ROOT, LS_CURRENT_ROOT);
+      // A saved folder outside the checkout whose access ended: go home instead.
+      if (e.needsGrant) loadRoot();
     }
   }
 }
@@ -1355,6 +1398,13 @@ function renderBreadcrumb(absPath, parentPath) {
 
 async function setRoot(absPath) {
   if (!absPath || absPath === currentRoot) return;
+  // Leaving the checkout: ask first, so a refusal (toast) keeps the current tree.
+  if (absPath.startsWith('/') && absPath !== projectRoot && !absPath.startsWith(projectRoot + '/')) {
+    try { await apiFetch('/tree?path=' + encodeURIComponent(absPath)); } catch (e) {
+      if (!e.needsGrant) showToast(e.message || 'Folder unavailable');
+      return;
+    }
+  }
   currentRoot = absPath;
   // Keep expandedDirs intact — entries are keyed by absolute path, so
   // a stale path simply doesn't match anything in the new tree, while

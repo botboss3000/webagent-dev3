@@ -3356,3 +3356,15 @@ input.fg-remote-input-inline {
   padding: 1px 4px;
   border-radius: 3px;
 }
+
+/* Folders outside the checkout: locked rows and the authorization toast. */
+.files-tree-node.is-locked > .files-tree-row { color: var(--files-text-muted); cursor: not-allowed; }
+.files-tree-lock { width: 12px; height: 12px; margin-left: auto; flex-shrink: 0; color: var(--files-text-muted); }
+.files-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50;
+  max-width: min(480px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 8px;
+  background: var(--files-bg-menu); color: var(--files-text-strong);
+  border: 1px solid var(--files-border-strong); box-shadow: 0 8px 24px rgba(var(--shadow-rgb), 0.25);
+  font-size: 13px; line-height: 1.4;
+}
+.files-toast[hidden] { display: none; }
