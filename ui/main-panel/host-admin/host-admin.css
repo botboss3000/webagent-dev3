@@ -32,3 +32,35 @@
 .host-files.is-active{display:grid;gap:8px;padding:12px 14px;border:var(--border-width) solid var(--danger);border-radius:var(--r-lg);background:var(--bg-elev)}
 .host-files.is-active h2{margin:0}
 .host-hours{width:64px}
+/* Production release cards: the Builds page's task-card form (builds.css .task-panel). */
+#tab-host-admin .host-release{display:grid;gap:8px;min-width:0;padding:14px 16px;font-size:.8rem;border:var(--border-width) solid var(--border-soft,var(--border));border-radius:var(--r-lg);background:var(--bg-elev)}
+#tab-host-admin .host-release[data-active="false"]{background:color-mix(in srgb,var(--bg-elev) 55%,transparent)}
+#tab-host-admin .host-release[data-status=progress],#tab-host-admin .host-release[data-status=pending]{box-shadow:inset 3px 0 0 var(--accent)}
+#tab-host-admin .tp-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:10px}
+#tab-host-admin .tp-glyph{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;font-size:.85rem;font-weight:700;line-height:1;color:var(--fg-3)}
+#tab-host-admin .host-release[data-status=success] .tp-glyph{color:var(--success)}
+#tab-host-admin .host-release[data-status=danger] .tp-glyph{color:var(--danger)}
+#tab-host-admin .host-release[data-status=progress] .tp-glyph,#tab-host-admin .host-release[data-status=pending] .tp-glyph{color:var(--warning)}
+#tab-host-admin .tp-spin{animation:tp-pulse 1.4s ease-in-out infinite}
+@keyframes tp-pulse{50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){#tab-host-admin .tp-spin{animation:none}}
+#tab-host-admin .tp-titles{display:grid;gap:2px;min-width:0}
+#tab-host-admin .tp-name{font-size:.92rem;line-height:1.3;overflow-wrap:anywhere}
+#tab-host-admin .tp-meta{font-size:.74rem;color:var(--fg-3);overflow-wrap:anywhere}
+#tab-host-admin .tp-side{display:grid;gap:2px;justify-items:end;text-align:right;font-size:.74rem;color:var(--fg-3);font-variant-numeric:tabular-nums}
+#tab-host-admin .tp-pos{font-weight:700;color:var(--fg-2)}
+#tab-host-admin .tp-seq{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--fg-2)}
+#tab-host-admin .tp-label{padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:.72rem;font-weight:700}
+#tab-host-admin .tp-counter,#tab-host-admin .tp-notes{margin:0;color:var(--fg-2);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+#tab-host-admin .tp-stages{display:grid;min-width:0;border-top:var(--border-width) solid var(--border-soft,var(--border))}
+#tab-host-admin .tp-stage{display:grid;grid-template-columns:2.2em minmax(0,1fr) 5.5em 6.5em 6.5em;gap:8px;align-items:baseline;padding:4px 0;border-bottom:var(--border-width) solid var(--border-soft,var(--border));font-variant-numeric:tabular-nums}
+#tab-host-admin .tp-stage-head{font-size:.7rem;color:var(--fg-3);text-transform:uppercase;letter-spacing:.03em}
+#tab-host-admin .tp-sid,#tab-host-admin .tp-normal{color:var(--fg-3)}
+#tab-host-admin .tp-sname{min-width:0;overflow-wrap:anywhere}
+#tab-host-admin .tp-time,#tab-host-admin .tp-normal,#tab-host-admin .tp-state{text-align:right}
+#tab-host-admin .tp-stage-done .tp-state{color:var(--success)}
+#tab-host-admin .tp-stage-running{color:var(--fg-1);font-weight:600}
+#tab-host-admin .tp-stage-running .tp-state{color:var(--accent)}
+#tab-host-admin .tp-stage-failed,#tab-host-admin .tp-stage-failed .tp-state{color:var(--danger);font-weight:600}
+#tab-host-admin .tp-stage-upcoming{color:var(--fg-3)}
+@media(max-width:600px){#tab-host-admin .tp-stage{grid-template-columns:1.4em minmax(0,1fr) 4.6em 5.6em 4.8em;gap:6px}}

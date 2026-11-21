@@ -127,20 +127,78 @@ export function start(mount) {
     return item;
   }
 
-  function releaseCard(release) {
+  // A release card in the Builds page's task-card form: status glyph, title and owner, state
+  // line, then one row per stage with its time, the normal range from earlier published
+  // releases and its state.
+  const RELEASE_STAGES = [['export', 'Export'], ['credential_guard', 'Credential guard'], ['build', 'Stable build and tests'],
+    ['installers', 'Installers'], ['push', 'Push release'], ['dev_tag', 'Tag dev commit'], ['upload', 'Upload installers']];
+  const minutes = seconds => (seconds / 60).toFixed(1);
+
+  function normalRange(name, history) {
+    const times = history.map(r => r.stages?.[name]).filter(s => s?.started_at && s.finished_at)
+      .map(s => s.finished_at - s.started_at).sort((a, b) => a - b);
+    return times.length ? minutes(times[0]) + '–' + minutes(times[times.length - 1]) : 'no history';
+  }
+
+  function stageRows(release, history) {
+    const table = el('div', 'tp-stages');
+    table.setAttribute('role', 'table');
+    const head = el('div', 'tp-stage tp-stage-head');
+    head.setAttribute('role', 'row');
+    for (const [label, cell] of [['#', 'tp-sid'], ['Stage', 'tp-sname'], ['Time', 'tp-time'], ['Normal', 'tp-normal'], ['Status', 'tp-state']]) head.append(el('span', cell, label));
+    table.append(head);
+    const stopped = ['failed', 'interrupted'].includes(release.status);
+    RELEASE_STAGES.forEach(([name, label], at) => {
+      const stage = (release.stages || {})[name];
+      const state = !stage ? 'upcoming' : stage.finished_at ? 'done' : stopped ? 'failed' : 'running';
+      const seconds = !stage ? null : (stage.finished_at || Date.now() / 1000) - stage.started_at;
+      const row = el('div', 'tp-stage tp-stage-' + state);
+      row.setAttribute('role', 'row');
+      // where: the sidekick, or the main server (with the reason) when it could not build there.
+      const where = stage?.where ? ' (' + stage.where + ')' : '';
+      row.append(el('span', 'tp-sid', String(at + 1)), el('span', 'tp-sname', label + where),
+        el('span', 'tp-time', seconds == null ? '—' : minutes(seconds) + ' min'),
+        el('span', 'tp-normal', normalRange(name, history)), el('span', 'tp-state', state === 'failed' ? 'stopped' : state));
+      table.append(row);
+    });
+    return table;
+  }
+
+  function releaseCard(release, history) {
     const waiting = release.status === 'awaiting_approval';
-    const item = el('li', 'host-item');
-    item.dataset.state = waiting ? 'pending' : release.status;
-    const top = el('div', 'host-top');
-    top.append(el('strong', 'host-action', 'Production release v' + release.version),
-      el('span', 'host-pill', RELEASE_STATES[release.status] || release.status));
-    item.append(top);
-    if (release.notes) item.append(el('pre', 'host-preview', release.notes));
-    const stage = release.status === 'running' && release.stage ? ' · stage ' + release.stage.replace('_', ' ') : '';
-    item.append(el('span', 'host-meta', 'Requested by ' + release.requested_by + ' · ' + when(release.requested_at)
-      + ' · ' + release.bump + ' bump from dev commit ' + String(release.commit || '').slice(0, 10) + stage
-      + (release.decided_by ? ' · decided by ' + release.decided_by : '')));
-    if (release.error) item.append(el('span', 'host-error', release.error));
+    const live = ['approved', 'running'].includes(release.status);
+    const tone = release.status === 'published' ? 'success' : ['failed', 'interrupted'].includes(release.status) ? 'danger'
+      : live ? 'progress' : waiting ? 'pending' : 'idle';
+    const card = el('li', 'build-card task-panel host-release');
+    card.dataset.status = tone;
+    card.dataset.active = String(live || waiting);
+    const head = el('header', 'tp-head');
+    const glyph = el('span', 'tp-glyph' + (live ? ' tp-spin' : ''), tone === 'success' ? '✓' : tone === 'danger' ? '!' : '●');
+    glyph.setAttribute('role', 'img');
+    glyph.setAttribute('aria-label', RELEASE_STATES[release.status] || release.status);
+    const titles = el('div', 'tp-titles');
+    titles.append(el('strong', 'tp-name', 'Production release v' + release.version),
+      el('span', 'tp-meta', 'Requested by ' + release.requested_by + ' · ' + when(release.requested_at)
+        + (release.decided_by ? ' · decided by ' + release.decided_by : '')));
+    const side = el('div', 'tp-side');
+    side.append(el('span', 'tp-pos', release.bump + ' bump'), el('span', 'tp-ab', 'dev ' + String(release.commit || '').slice(0, 10)));
+    head.append(glyph, titles, side);
+    card.append(head);
+    const sequence = el('div', 'tp-seq');
+    if (live) sequence.append(el('span', 'tp-label', 'Building now'));
+    const stageName = RELEASE_STAGES.find(([name]) => name === release.stage)?.[1];
+    sequence.append(el('span', '', (RELEASE_STATES[release.status] || release.status) + (live && stageName ? ' · ' + stageName : '')));
+    card.append(sequence);
+    const begun = Object.values(release.stages || {}).map(s => s.started_at).filter(Boolean);
+    if (begun.length) {
+      const total = (release.finished_at || Date.now() / 1000) - Math.min(...begun);
+      card.append(el('p', 'tp-counter', (live ? 'running for ' : 'finished in ') + minutes(total) + ' min'));
+    }
+    if (release.notes) card.append(el('p', 'tp-notes', release.notes));
+    if (!waiting && release.status !== 'denied') card.append(stageRows(release, history));
+    const installers = release.installers || {};
+    if (installers.files?.length) card.append(el('p', 'tp-notes', 'Installers: ' + installers.files.join(', ')));
+    for (const problem of [release.error, installers.error, installers.apk].filter(Boolean)) card.append(el('p', 'host-error', problem));
     if (waiting) {
       const actions = el('div', 'host-actions');
       const approve = el('button', 'host-approve', 'Approve release');
@@ -150,9 +208,9 @@ export function start(mount) {
         button.onclick = () => post('/api/v3/admin/production/' + encodeURIComponent(release.id) + '/decision', {decision}, button);
       }
       actions.append(approve, deny);
-      item.append(actions);
+      card.append(actions);
     }
-    return item;
+    return card;
   }
 
   function releases(page) {
@@ -165,7 +223,8 @@ export function start(mount) {
     box.append(el('p', 'host-help', 'Approving builds the stable app from the requested dev commit, then pushes it as one release commit to the public repository. Published version: '
       + (page.published_version ? 'v' + page.published_version : 'none yet') + '.'));
     const list = el('ul', 'host-list');
-    for (const release of page.releases.slice(0, 5)) list.append(releaseCard(release));
+    const history = page.releases.filter(r => r.status === 'published');
+    for (const release of page.releases.slice(0, 5)) list.append(releaseCard(release, history));
     box.append(page.releases.length ? list : el('p', 'host-empty', 'No production releases yet.'));
     return box;
   }
