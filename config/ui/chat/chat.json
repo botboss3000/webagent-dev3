@@ -552,7 +552,7 @@
     "live_reload": {
       "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again.",
       "enabled": true,
-      "interval_ms": 2000
+      "interval_ms": 15000
     },
     "message_bubbles": {
       "_instructions": "font_size_px: Text size in pixels for this surface. padding_y_px: Bubble internal top/bottom padding in pixels. padding_x_px: Bubble internal left/right padding in pixels. agent_padding_left_px: Agent-bubble text inset from its left edge, in pixels.",

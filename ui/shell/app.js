@@ -618,7 +618,10 @@ async function boot(){
     window.__boot?.appReady();
     clearInterval(poll);
     // An idle-paused tab (chat/core/idle-pause.js) skips the status poll; it resumes on input.
-    poll=setInterval(()=>{if(idlePaused())return;refresh().then(()=>issues.resolve('status_poll')).catch(error=>issues.fail('status_poll',error));},3000);
+    // Status is reread every 3 s while a run is active, every 15 s otherwise: the open
+    // conversation's stream already carries its own run changes.
+    let statusAt=0;
+    poll=setInterval(()=>{if(idlePaused())return;const busy=(state?.runs||[]).some(run=>['queued','running','waiting_gate'].includes(run.status));if(!busy&&Date.now()-statusAt<15000)return;statusAt=Date.now();refresh().then(()=>issues.resolve('status_poll')).catch(error=>issues.fail('status_poll',error));},3000);
   };
   // Phase C: the active page and the transcript open independently of each other.
   // On a phone a session deep link shows only the chat, so its tab loads when the user switches

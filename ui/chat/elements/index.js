@@ -121,7 +121,13 @@ async function refresh() {
   const latest=changed&&[...summaries.values()].find(summary=>summary.latest);
   if(latest)document.dispatchEvent(new CustomEvent('v3:activity-latest',{detail:{session_id:id,run_id:latest.run_id,counts:latest.counts}}));
 }
-function schedule(){clearTimeout(timer);if(enabled)timer=setTimeout(()=>{void refresh().finally(schedule);},2000);}
+// Activity changes while a run works: poll every 2 s then, every 15 s otherwise. New messages
+// and run updates arriving on the session stream repaint the panel, which refreshes sooner.
+const ACTIVE_POLL_MS=2000,QUIET_POLL_MS=15000,ACTIVE_STATUSES=new Set(['queued','running','waiting_gate']);
+// The panel's runs carry the server status; callers with only a display state use that.
+function runActive(){return (publicState?.runs||[]).some(run=>(!run.session_id||run.session_id===session)&&ACTIVE_STATUSES.has(run.status||run.state));}
+let dueAt=0;
+function schedule(delay=runActive()?ACTIVE_POLL_MS:QUIET_POLL_MS){clearTimeout(timer);if(!enabled)return;dueAt=Date.now()+delay;timer=setTimeout(()=>{void refresh().finally(()=>schedule());},delay);}
 // Progress-pill state at the last paint, so a poll repaints when the pill toggles.
 let paintedProgress=null;
 // Place groups after matching public-message anchors and refresh labels from summary state.
@@ -251,7 +257,9 @@ function renderActivity(state,target) {
   if(!chatUiFlag('show_activity_groups',false) || config?.activity_group?.enabled===false || !isAdmin()) {
     stopActivity();return;
   }
-  if(!enabled){enabled=true;void refresh().finally(schedule);}
+  if(!enabled){enabled=true;void refresh().finally(()=>schedule());}
+  // A repaint from the stream pulls the next refresh forward, never later than it was due.
+  else if(!busy&&dueAt-Date.now()>500)schedule(500);
   paint();
 }
 // The panel owns render/disconnect and calls disconnect on session change or teardown.
