@@ -37,8 +37,11 @@ DEFAULTS = {"host_id": socket.gethostname(), "socket": "/home/ar/webagent-dev3/r
             "unit_dir": "/etc/systemd/system", "health_seconds": 120,
             # broker_install drains after approval, then waits this long for running jobs to end.
             "drain_seconds": 3600,
-            # files_grant: how long an administrator may use the host file service (host_files.py).
-            "files_grant_seconds": 86400, "files_unit": "webagent-host-files.service"}
+            # files_grant / terminal_grant: how long an administrator may use the host file service
+            # (host_files.py); the approver picks the time, up to the maximum.
+            "grant_default_seconds": 3600, "grant_max_seconds": 86400, "files_unit": "webagent-host-files.service"}
+# Grant actions and the file each one's live grants are kept in (host_files.py reads them too).
+GRANTS = {"files_grant": "file-grants.json", "terminal_grant": "terminal-grants.json"}
 FILES_UNIT = """[Unit]
 Description=WebAgent root host file service (File Manager outside the checkout)
 After=network.target
@@ -70,6 +73,8 @@ ACTIONS = {
     # revoked. It is root-equivalent while live, so it always needs the host approval
     # passphrase and no allow-all window covers it.
     "files_grant": {"read": False, "undo": "exact", "boot_disk": False, "passphrase": True},
+    # The same for a terminal in the File Manager: a shell as the operator account (no sudo or docker group).
+    "terminal_grant": {"read": False, "undo": "exact", "boot_disk": False, "passphrase": True},
 }
 SUPERVISED = ("broker_install", "supervisor_update")
 MAX_FILE = 1024 * 1024
@@ -142,7 +147,7 @@ class Helper:
         """Validate arguments against the profile; returns whether the action is a boot/disk change."""
         expected = {"file_write": {"path", "content"}, "host_revert": {"request_id"}, "unit_restart": {"unit"},
                     "container_restart": {"container"}, "broker_install": {"task_id", "tree_hash"},
-                    "files_grant": {"admin"}}.get(action, set())
+                    "files_grant": {"admin"}, "terminal_grant": {"admin"}}.get(action, set())
         optional = {"allow_stale_tree"} if action == "broker_install" else set()
         if not expected <= set(args) <= expected | optional:
             raise ValueError(action + " takes " + (", ".join(sorted(expected)) or "no arguments"))
@@ -173,10 +178,10 @@ class Helper:
                 raise ValueError("allow_stale_tree is true or false")
             if not (self.tree_root(tree) / "v3/build-service").is_dir():
                 raise ValueError("no task tree with that hash")
-        if action == "files_grant":
+        if action in GRANTS:
             admin = args["admin"]
             if not isinstance(admin, str) or not 0 < len(admin) <= 80 or not all(c.isalnum() or c in "._@-" for c in admin):
-                raise ValueError("files_grant needs the administrator's account name")
+                raise ValueError(action + " needs the administrator's account name")
         if action == "unit_restart" and args["unit"] not in self.profile["units"]:
             raise PermissionError("unit is not listed in the host profile")
         if action == "container_restart" and args["container"] not in self.profile["containers"]:
@@ -218,10 +223,14 @@ class Helper:
                     "restart them; the previous helper is restored if it does not answer.\n\n"
                     + (diff[:20000] or "No change: the helper is already current.")
                     + ("\n\n" + files_diff[:20000] if files_diff else ""))
-        if action == "files_grant":
-            hours = round(self.profile["files_grant_seconds"] / 3600)
+        if action in GRANTS:
+            limit = "for the time you set when approving (" + str(round(self.profile["grant_default_seconds"] / 3600)) \
+                + " h by default, at most " + str(round(self.profile["grant_max_seconds"] / 3600)) + " h)"
+            if action == "terminal_grant":
+                return ("Let administrator " + args["admin"] + " open terminals in the File Manager " + limit + ": a shell as "
+                        + self.profile["operator_account"] + " without the sudo and docker groups. Revoke it here any time.")
             return ("Let administrator " + args["admin"] + " browse and change files anywhere on this computer through "
-                    "the File Manager for " + str(hours) + " h (read and write, except app data and sockets). "
+                    "the File Manager " + limit + " (read and write, except app data and sockets). "
                     "Root-equivalent while active: a compromised app could act as root. Revoke it here any time.")
         if action == "unit_restart":
             return "Restart systemd unit " + args["unit"] + "."
@@ -280,11 +289,12 @@ class Helper:
             return self.install_broker(args, request_id, run)
         if action == "supervisor_update":
             return self.update_helper(request_id)
-        if action == "files_grant":
+        if action in GRANTS:
+            seconds = args.get("seconds", self.profile["grant_default_seconds"])
             with self.grants_lock:
-                grants = self.file_grants()
-                grants[args["admin"]] = self.clock() + self.profile["files_grant_seconds"]
-                self.save_file_grants(grants)
+                grants = self.grants(action)
+                grants[args["admin"]] = self.clock() + seconds
+                self.save_grants(action, grants)
             return {"admin": args["admin"], "until": grants[args["admin"]]}
         if action == "host_revert":
             target = self.load(args["request_id"])
@@ -500,7 +510,7 @@ class Helper:
             return
         thread = threading.Thread(target=self.settle, args=(record,), daemon=True)
         thread.start()
-        if record["action"] in ("noop", "host_status", "files_grant"):
+        if record["action"] in ("noop", "host_status", *GRANTS):
             thread.join()
             record.update(self.load(record["id"]))
 
@@ -531,7 +541,8 @@ class Helper:
             pending = [r for r in records if r["state"] == "pending"]
             recent = sorted((r for r in records if r["state"] != "pending"), key=lambda r: -r.get("decided_at", 0))[:50]
             return {"pending": pending, "recent": recent, "windows": self.windows(),
-                    "file_grants": self.file_grants(), "file_log": self.file_log(50)}
+                    "file_grants": self.grants("files_grant"), "terminal_grants": self.grants("terminal_grant"),
+                    "file_log": self.file_log(50)}
         if op == "decide" and app:
             return self.decide(message)
         if op == "allow" and app:
@@ -550,11 +561,11 @@ class Helper:
         spec = ACTIONS[action]
         boot_disk = spec["boot_disk"] or self.check(action, args)
         now = self.clock()
-        if action == "files_grant":
+        if action in GRANTS:
             # Only the File Manager files these (app channel, no chat session): an agent's
             # host_admin call never asks for root-equivalent file access (FILES-2).
             if channel != "app" or requester.get("session") or requester.get("user") != args.get("admin"):
-                raise PermissionError("files_grant is requested only by the File Manager for its own administrator")
+                raise PermissionError(action + " is requested only by the File Manager for its own administrator")
             # One waiting grant per administrator: each further click finds the same request.
             with self.lock:
                 for path in sorted((self.state / "requests").glob("*.json")):
@@ -591,6 +602,12 @@ class Helper:
             # So do File Manager grants outside the checkout (root-equivalent while live).
             if decision == "approve" and (record["boot_disk"] or record.get("passphrase")):
                 self.check_passphrase(message.get("passphrase"))
+            if decision == "approve" and record["action"] in GRANTS:
+                # The approver sets how long the grant lasts: default 1 h, never above the maximum.
+                seconds = message.get("seconds", self.profile["grant_default_seconds"])
+                if type(seconds) is not int or not 60 <= seconds <= self.profile["grant_max_seconds"]:
+                    raise ValueError("grant time must be between 1 minute and " + str(self.profile["grant_max_seconds"] // 3600) + " h")
+                record["args"] = {**record["args"], "seconds": seconds}
             record.update(state="approved" if decision == "approve" else "denied", decided_at=self.clock(), decided_by=admin)
             self.save(record)
             self.log({"event": record["state"], "id": record["id"], "by": admin})
@@ -635,14 +652,14 @@ class Helper:
         self.log({"event": "passphrase_set"})
 
     # File Manager outside the checkout ----------------------------------------------------
-    def file_grants(self):
-        """Live grants: administrator -> expiry time. host_files.py reads the same file."""
-        path = self.state / "file-grants.json"
+    def grants(self, action):
+        """Live grants for one grant action: administrator -> expiry time. host_files.py reads the same file."""
+        path = self.state / GRANTS[action]
         grants = json.loads(path.read_text()) if path.exists() else {}
         return {admin: until for admin, until in grants.items() if until > self.clock()}
 
-    def save_file_grants(self, grants):
-        path = self.state / "file-grants.json"
+    def save_grants(self, action, grants):
+        path = self.state / GRANTS[action]
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(grants, sort_keys=True))
         os.chmod(temporary, 0o600)
@@ -669,14 +686,15 @@ class Helper:
     def files_revoke(self, message):
         """Narrowing needs no passphrase: any administrator may end a grant at once."""
         admin, by = message.get("admin"), message.get("by")
-        if not isinstance(admin, str) or not admin or not isinstance(by, str) or not by:
-            raise ValueError("files_revoke takes the granted admin and the revoking admin")
+        action = {"files": "files_grant", "terminal": "terminal_grant"}.get(message.get("kind", "files"))
+        if not isinstance(admin, str) or not admin or not isinstance(by, str) or not by or not action:
+            raise ValueError("files_revoke takes the granted admin, the revoking admin and kind files or terminal")
         with self.grants_lock:
-            grants = self.file_grants()
+            grants = self.grants(action)
             existed = grants.pop(admin, None) is not None
-            self.save_file_grants(grants)
-        self.log({"event": "files_revoke", "admin": admin, "by": by})
-        return {"admin": admin, "revoked": existed}
+            self.save_grants(action, grants)
+        self.log({"event": "files_revoke", "kind": message.get("kind", "files"), "admin": admin, "by": by})
+        return {"admin": admin, "kind": message.get("kind", "files"), "revoked": existed}
 
     def allow(self, message):
         session, seconds, admin = message.get("session"), message.get("seconds", self.profile["allow_default_seconds"]), message.get("admin")

@@ -7,16 +7,28 @@ the host approval passphrase; they expire (24 h by default) and Host Admin can r
 While a grant is live the app can read and change any file except the locked folders (app
 data, sockets, kernel views) - an accepted risk recorded in docs/security-spec.md (FILES-1).
 The checkout itself stays with the worker (/live-checkout). Every change is logged.
+
+Terminals (FILES-3) need their own grant (terminal_grant). Each runs a login shell on a
+pseudo-terminal as the operator account without its sudo and docker groups, so it has that
+account's file permissions only. They outlive a page reload and close when the grant ends,
+after 30 idle minutes, or on request; only their opening and closing are logged.
 """
 import base64
+import fcntl
+import grp
 import hashlib
 import json
 import os
+import pty
+import pwd
+import secrets
 import shutil
+import signal
 import socket
 import stat
 import struct
 import sys
+import termios
 import threading
 import time
 import uuid
@@ -26,7 +38,11 @@ PROFILE = Path(os.environ.get("WEBAGENT_HOST_PROFILE", "/etc/webagent/host-profi
 DEFAULTS = {"state": "/var/lib/webagent-host", "app_uid": 1100,
             "files_socket": "/home/ar/webagent-dev3/runtime/files/files.sock",
             "files_checkout": "/home/ar/webagent-dev3/code",
-            "files_locked": ["/home/ar/webagent-dev3/state", "/home/ar/webagent-dev3/runtime", "/proc", "/sys", "/dev"]}
+            "files_locked": ["/home/ar/webagent-dev3/state", "/home/ar/webagent-dev3/runtime", "/proc", "/sys", "/dev"],
+            "operator_account": "ar", "terminal_drop_groups": ["sudo", "docker"], "terminal_idle_seconds": 1800,
+            "terminal_max": 4}
+TERMINAL_BUFFER = 262144
+TERMINAL_WAIT = 20
 CHECKOUT_VIRTUAL = "/live-checkout"
 MAX_FILE = 1024 * 1024
 MAX_ENTRIES = 2000
@@ -52,6 +68,61 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+class Terminal:
+    """One shell on a pseudo-terminal; a reader thread keeps the newest output."""
+
+    def __init__(self, admin, cwd, pid, fd, clock):
+        self.id, self.admin, self.cwd, self.pid, self.fd = secrets.token_hex(8), admin, cwd, pid, fd
+        self.opened_at = self.seen = clock()
+        self.output, self.base, self.exited = bytearray(), 0, False
+        self.changed = threading.Condition()
+        threading.Thread(target=self.pump, daemon=True).start()
+
+    def pump(self):
+        while True:
+            try:
+                data = os.read(self.fd, 65536)
+            except OSError:
+                data = b""
+            with self.changed:
+                if not data:
+                    self.exited = True
+                    self.changed.notify_all()
+                    return
+                self.output += data
+                if len(self.output) > TERMINAL_BUFFER:
+                    drop = len(self.output) - TERMINAL_BUFFER
+                    del self.output[:drop]
+                    self.base += drop
+                self.changed.notify_all()
+
+    def read(self, offset, wait):
+        """Output after offset, waiting up to wait seconds for some; offsets count every byte ever written."""
+        with self.changed:
+            end = self.base + len(self.output)
+            if offset >= end and not self.exited and wait:
+                self.changed.wait(wait)
+            end = self.base + len(self.output)
+            start = max(offset, self.base)
+            data = bytes(self.output[start - self.base:])
+        return {"id": self.id, "data": base64.b64encode(data).decode(), "offset": end,
+                "truncated": offset < self.base, "exited": self.exited}
+
+    def close(self):
+        try:
+            os.killpg(self.pid, signal.SIGHUP)
+        except OSError:
+            pass
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        try:
+            os.waitpid(self.pid, os.WNOHANG)
+        except OSError:
+            pass
+
+
 class Files:
     def __init__(self, profile, clock=time.time):
         self.profile = profile
@@ -60,10 +131,12 @@ class Files:
         self.app_uid = profile["app_uid"]
         self.checkout = os.path.realpath(profile["files_checkout"])
         self.locked = [os.path.realpath(p) for p in profile["files_locked"]]
+        self.terminals = {}
+        self.terminals_lock = threading.Lock()
 
     # Grants and log ----------------------------------------------------------------------
-    def granted(self, admin):
-        path = self.state / "file-grants.json"
+    def granted(self, admin, name="file-grants.json"):
+        path = self.state / name
         grants = json.loads(path.read_text()) if path.exists() else {}
         until = grants.get(admin) if isinstance(admin, str) and admin else None
         return bool(until) and until > self.clock()
@@ -115,6 +188,104 @@ class Files:
 
     def shown(self, real):
         return CHECKOUT_VIRTUAL if real == self.checkout else real
+
+    # Terminals ---------------------------------------------------------------------------
+    def shell_identity(self):
+        """The operator account and its groups minus the dropped ones (no sudo, no docker)."""
+        account = pwd.getpwnam(self.profile["operator_account"])
+        dropped = set()
+        for name in self.profile["terminal_drop_groups"]:
+            try:
+                dropped.add(grp.getgrnam(name).gr_gid)
+            except KeyError:
+                pass
+        groups = [g for g in os.getgrouplist(account.pw_name, account.pw_gid) if g not in dropped]
+        return account, groups
+
+    def terminal_open(self, admin, cwd, cols, rows):
+        with self.terminals_lock:
+            if sum(1 for t in self.terminals.values() if t.admin == admin) >= self.profile["terminal_max"]:
+                raise Refused("At most " + str(self.profile["terminal_max"]) + " terminals; close one first")
+        account, groups = self.shell_identity()
+        folder = account.pw_dir
+        if isinstance(cwd, str) and cwd.startswith("/") and "\0" not in cwd and os.path.isdir(cwd):
+            folder = os.path.realpath(cwd)
+        size = struct.pack("HHHH", max(2, min(int(rows or 24), 500)), max(2, min(int(cols or 80), 500)), 0, 0)
+        environment = {"HOME": account.pw_dir, "USER": account.pw_name, "LOGNAME": account.pw_name,
+                       "SHELL": account.pw_shell or "/bin/bash", "TERM": "xterm-256color", "LANG": "C.UTF-8",
+                       "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+        pid, fd = pty.fork()
+        if pid == 0:  # child: become the operator account, then the shell; never returns
+            try:
+                fcntl.ioctl(0, termios.TIOCSWINSZ, size)
+                os.setgroups(groups)
+                os.setgid(account.pw_gid)
+                os.setuid(account.pw_uid)
+                os.chdir(folder)
+                shell = account.pw_shell or "/bin/bash"
+                os.execve(shell, [shell, "-l"], environment)
+            finally:
+                os._exit(127)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, size)
+        terminal = Terminal(admin, folder, pid, fd, self.clock)
+        with self.terminals_lock:
+            self.terminals[terminal.id] = terminal
+        self.log(admin, "terminal_open", folder, terminal=terminal.id)
+        return {"id": terminal.id, "cwd": folder, "opened_at": terminal.opened_at}
+
+    def terminal(self, admin, terminal_id):
+        with self.terminals_lock:
+            terminal = self.terminals.get(terminal_id)
+        if terminal is None or terminal.admin != admin:
+            raise Refused("No such terminal")
+        terminal.seen = self.clock()
+        return terminal
+
+    def terminal_close(self, admin, terminal_id, reason="closed"):
+        terminal = self.terminal(admin, terminal_id)
+        with self.terminals_lock:
+            self.terminals.pop(terminal.id, None)
+        terminal.close()
+        self.log(admin, "terminal_close", terminal.cwd, terminal=terminal.id, reason=reason)
+        return {"id": terminal.id, "status": "closed"}
+
+    def terminal_send(self, admin, terminal_id, data):
+        if not isinstance(data, str) or len(data) > 65536:
+            raise Refused("Invalid terminal input")
+        terminal = self.terminal(admin, terminal_id)
+        view = memoryview(data.encode())
+        while view:
+            view = view[os.write(terminal.fd, view):]
+        return {"id": terminal.id, "status": "ok"}
+
+    def terminal_resize(self, admin, terminal_id, cols, rows):
+        terminal = self.terminal(admin, terminal_id)
+        fcntl.ioctl(terminal.fd, termios.TIOCSWINSZ,
+                    struct.pack("HHHH", max(2, min(int(rows), 500)), max(2, min(int(cols), 500)), 0, 0))
+        return {"id": terminal.id, "status": "ok"}
+
+    def terminal_list(self, admin):
+        with self.terminals_lock:
+            mine = [t for t in self.terminals.values() if t.admin == admin]
+        return {"terminals": [{"id": t.id, "cwd": t.cwd, "opened_at": t.opened_at, "exited": t.exited} for t in mine]}
+
+    def reap(self):
+        """Close terminals whose grant ended, that sat idle too long, or whose shell exited."""
+        with self.terminals_lock:
+            terminals = list(self.terminals.values())
+        for terminal in terminals:
+            reason = None
+            if not self.granted(terminal.admin, "terminal-grants.json"):
+                reason = "grant ended"
+            elif self.clock() - terminal.seen > self.profile["terminal_idle_seconds"]:
+                reason = "idle"
+            elif terminal.exited and self.clock() - terminal.seen > 60:
+                reason = "exited"
+            if reason:
+                try:
+                    self.terminal_close(terminal.admin, terminal.id, reason)
+                except Refused:
+                    pass
 
     # Operations --------------------------------------------------------------------------
     def tree(self, raw, show_hidden):
@@ -263,6 +434,26 @@ class Files:
             # Where the checkout sits, so the File Manager can offer its parent; changes nothing.
             return {"checkout": self.checkout, "parent": os.path.dirname(self.checkout)}
         admin = message.get("admin")
+        if isinstance(op, str) and op.startswith("terminal_"):
+            if not self.granted(admin, "terminal-grants.json"):
+                raise NeedsGrant("Host Admin must authorize terminal access")
+            if op == "terminal_open":
+                return self.terminal_open(admin, message.get("cwd"), message.get("cols"), message.get("rows"))
+            if op == "terminal_list":
+                return self.terminal_list(admin)
+            terminal_id = message.get("id")
+            if op == "terminal_read":
+                offset, wait = message.get("offset", 0), message.get("wait", 0)
+                if type(offset) is not int or offset < 0 or type(wait) not in (int, float):
+                    raise Refused("Invalid terminal read")
+                return self.terminal(admin, terminal_id).read(offset, max(0, min(wait, TERMINAL_WAIT)))
+            if op == "terminal_send":
+                return self.terminal_send(admin, terminal_id, message.get("data"))
+            if op == "terminal_resize":
+                return self.terminal_resize(admin, terminal_id, message.get("cols"), message.get("rows"))
+            if op == "terminal_close":
+                return self.terminal_close(admin, terminal_id)
+            raise Refused("Unsupported terminal action")
         if not self.granted(admin):
             raise NeedsGrant("Host Admin must authorize browsing outside the checkout")
         if op == "tree":
@@ -301,7 +492,7 @@ def reply_for(files, uid, message):
 def client(files, connection):
     with connection:
         try:
-            connection.settimeout(30)
+            connection.settimeout(TERMINAL_WAIT + 30)
             _, uid, _ = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
             raw = connection.makefile("rb").readline(MAX_REQUEST + 1)
             if len(raw) > MAX_REQUEST or not raw.endswith(b"\n"):
@@ -333,7 +524,15 @@ def main():
     if os.geteuid() != 0:
         sys.exit("host file service must run as root")
     profile = load_profile()
-    serve(Files(profile), profile["files_socket"])
+    files = Files(profile)
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # finished shells are reaped by the kernel
+
+    def reaper():
+        while True:
+            time.sleep(30)
+            files.reap()
+    threading.Thread(target=reaper, daemon=True).start()
+    serve(files, profile["files_socket"])
 
 
 if __name__ == "__main__":

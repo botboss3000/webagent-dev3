@@ -1,4 +1,5 @@
 """Root host file service: grants, locked folders, the checkout hand-off and the change log (no root needed)."""
+import base64
 import hashlib
 import importlib.util
 import json
@@ -115,6 +116,69 @@ class FilesTests(unittest.TestCase):
         small = self.home / "projects" / "small.bin"
         small.write_bytes(b"\xff\x00")
         self.assertEqual("base64", self.ok("read", path=str(small))["encoding"])
+
+
+class TerminalTests(unittest.TestCase):
+    """Shells run as the operator account; here the test user, with setgroups stubbed (no root)."""
+
+    def setUp(self):
+        import pwd
+        from unittest import mock
+        self.temp = tempfile.TemporaryDirectory()
+        self.state = Path(self.temp.name)
+        self.now = 1000.0
+        profile = {**files_module.DEFAULTS, "state": str(self.state), "app_uid": APP,
+                   "operator_account": pwd.getpwuid(os.getuid()).pw_name, "terminal_max": 2}
+        self.files = files_module.Files(profile, clock=lambda: self.now)
+        patch = mock.patch.object(files_module.os, "setgroups", lambda groups: None)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def tearDown(self):
+        for terminal in list(self.files.terminals.values()):
+            terminal.close()
+        self.temp.cleanup()
+
+    def call(self, op, admin="admin", **args):
+        return files_module.reply_for(self.files, APP, {"op": op, "admin": admin, **args})
+
+    def grant(self, admin="admin"):
+        (self.state / "terminal-grants.json").write_text(json.dumps({admin: self.now + 3600}))
+
+    def test_terminals_need_their_own_grant(self):
+        (self.state / "file-grants.json").write_text(json.dumps({"admin": self.now + 3600}))
+        self.assertEqual("authorization_required", self.call("terminal_open").get("code"))
+
+    def test_open_send_read_close_and_log(self):
+        self.grant()
+        opened = self.call("terminal_open", cwd=self.temp.name, cols=80, rows=24)["output"]
+        self.assertEqual(os.path.realpath(self.temp.name), opened["cwd"])
+        self.call("terminal_send", id=opened["id"], data="echo from-$((40+2))\n")
+        seen, offset = b"", 0
+        for _ in range(20):
+            read = self.call("terminal_read", id=opened["id"], offset=offset, wait=1)["output"]
+            seen += base64.b64decode(read["data"])
+            offset = read["offset"]
+            if b"from-42" in seen:
+                break
+        self.assertIn(b"from-42", seen)
+        (self.state / "terminal-grants.json").write_text(json.dumps({"admin": self.now + 3600, "other": self.now + 3600}))
+        self.assertEqual("No such terminal", self.call("terminal_read", admin="other", id=opened["id"])["output"])
+        self.assertEqual(1, len(self.call("terminal_list")["output"]["terminals"]))
+        self.call("terminal_open")
+        self.assertIn("At most 2", self.call("terminal_open")["output"])
+        self.call("terminal_close", id=opened["id"])
+        ops = [json.loads(line)["op"] for line in (self.state / "files-log.jsonl").read_text().splitlines()]
+        self.assertEqual(["terminal_open", "terminal_open", "terminal_close"], ops)
+
+    def test_reaper_closes_terminals_when_the_grant_ends(self):
+        self.grant()
+        opened = self.call("terminal_open")["output"]
+        self.now += 3601
+        self.files.reap()
+        self.assertEqual({}, self.files.terminals)
+        log = [json.loads(line) for line in (self.state / "files-log.jsonl").read_text().splitlines()]
+        self.assertEqual(("terminal_close", "grant ended", opened["id"]), (log[-1]["op"], log[-1]["reason"], log[-1]["terminal"]))
 
 
 if __name__ == "__main__":

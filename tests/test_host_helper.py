@@ -135,12 +135,19 @@ class HelperTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "no host approval passphrase"):
             self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
         self.helper.set_passphrase("correct horse battery")
+        with self.assertRaisesRegex(ValueError, "grant time"):
+            self.approve(record, passphrase="correct horse battery", seconds=86401)
         self.assertEqual("done", self.approve(record, passphrase="correct horse battery")["state"])
         page = self.helper.handle(APP, {"op": "list"})
-        self.assertEqual(self.now + 86400, page["file_grants"]["alex"])
-        self.now += 86401
+        self.assertEqual(self.now + 3600, page["file_grants"]["alex"])  # 1 h unless the approver sets a time
+        terminal = self.helper.handle(APP, {"op": "request", "action": "terminal_grant", "args": {"admin": "alex"}, "requester": {"user": "alex"}})
+        self.assertEqual("done", self.approve(terminal, passphrase="correct horse battery", seconds=7200)["state"])
+        self.assertEqual(self.now + 7200, self.helper.handle(APP, {"op": "list"})["terminal_grants"]["alex"])
+        self.assertTrue(self.helper.handle(APP, {"op": "files_revoke", "kind": "terminal", "admin": "alex", "by": "admin"})["revoked"])
+        self.assertEqual({}, self.helper.handle(APP, {"op": "list"})["terminal_grants"])
+        self.now += 3601
         self.assertEqual({}, self.helper.handle(APP, {"op": "list"})["file_grants"])  # expired
-        self.now -= 86401
+        self.now -= 3601
         with self.assertRaises(PermissionError):
             self.helper.handle(OPERATOR, {"op": "files_revoke", "admin": "alex", "by": "me"})
         self.assertTrue(self.helper.handle(APP, {"op": "files_revoke", "admin": "alex", "by": "admin"})["revoked"])
