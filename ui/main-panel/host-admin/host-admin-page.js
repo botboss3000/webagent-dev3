@@ -151,7 +151,9 @@ export function start(mount) {
     RELEASE_STAGES.forEach(([name, label], at) => {
       const stage = (release.stages || {})[name];
       const state = !stage ? 'upcoming' : stage.finished_at ? 'done' : stopped ? 'failed' : 'running';
-      const seconds = !stage ? null : (stage.finished_at || Date.now() / 1000) - stage.started_at;
+      // A stopped stage ran until the release ended; only a running one counts up to now.
+      const end = stage?.finished_at || (stopped ? release.finished_at : null) || Date.now() / 1000;
+      const seconds = !stage ? null : end - stage.started_at;
       const row = el('div', 'tp-stage tp-stage-' + state);
       row.setAttribute('role', 'row');
       // where: the sidekick, or the main server (with the reason) when it could not build there.
