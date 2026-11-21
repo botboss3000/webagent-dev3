@@ -18,6 +18,9 @@ use webagent_models::{
 };
 
 const CALLS: &str = "harness_bridge_call:";
+/// The request body of a call, kept apart from its small state document: the loop polls that
+/// state every `store_poll_ms` and clients list it on every poll, so neither decodes the body.
+const BODIES: &str = "harness_bridge_body:";
 const SEEN: &str = "harness_bridge_seen:";
 /// `{link, expires}` for one unused pairing code, keyed by the code's digest.
 const PAIRINGS: &str = "harness_bridge_pairing:";
@@ -127,7 +130,10 @@ impl BridgeQueue for Queue {
             }
             let id = Uuid::new_v4().to_string();
             let key = format!("{CALLS}{link}:{id}");
-            self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"body":call.body,"fork":call.fork,"state":"pending","created":now()})).await?;
+            self.0
+                .put(&body_key(&key), &json!({"body":call.body}))
+                .await?;
+            self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"fork":call.fork,"state":"pending","created":now()})).await?;
             // Stop usually drops this future rather than firing `call.cancel`; the guard settles
             // the call either way.
             let mut guard = Abandoned {
@@ -177,7 +183,7 @@ impl BridgeQueue for Queue {
             if cancelled {
                 let _ = settle_cancelled(&self.0, &key).await;
             } else {
-                let _ = self.0.delete(&key).await;
+                let _ = remove_call(&self.0, &key).await;
             }
             result
         })
@@ -213,6 +219,17 @@ fn failure_of(doc: &Value) -> anyhow::Error {
     )
 }
 
+/// The body document belonging to a call key.
+fn body_key(call_key: &str) -> String {
+    call_key.replacen(CALLS, BODIES, 1)
+}
+
+/// Remove a call together with its body.
+async fn remove_call(store: &Store, key: &str) -> Result<()> {
+    let _ = store.delete(&body_key(key)).await;
+    store.delete(key).await
+}
+
 /// Settles a stopped call: one a client is running is marked cancelled, so that client's next
 /// poll interrupts its harness; any other is removed.
 async fn settle_cancelled(store: &Store, key: &str) -> Result<()> {
@@ -221,9 +238,11 @@ async fn settle_cancelled(store: &Store, key: &str) -> Result<()> {
             doc["state"] = json!("cancelled");
             doc["cancelled"] = json!(now());
             store.put(key, &doc).await?;
+            // The client running it already has the body.
+            let _ = store.delete(&body_key(key)).await;
         }
         _ => {
-            let _ = store.delete(key).await;
+            let _ = remove_call(store, key).await;
         }
     }
     Ok(())
@@ -342,7 +361,19 @@ pub async fn next(
     let settings = json!(b.client);
     mark_seen(&app, &caller).await?;
     loop {
-        {
+        // Most polls find nothing to do; only take the API gate when this process could act.
+        let actionable = app
+            .store
+            .list(&format!("{CALLS}{}:", caller.link))
+            .await?
+            .iter()
+            .any(|call| {
+                stale(call, now(), &b)
+                    || (call["state"] == "cancelled"
+                        && call["instance"] == caller.instance.as_str())
+                    || open(call, now(), &b)
+            });
+        if actionable {
             let _guard = app.gate.lock().await;
             let mut cancelled = Vec::new();
             for mut call in app.store.list(&format!("{CALLS}{}:", caller.link)).await? {
@@ -352,11 +383,11 @@ pub async fn next(
                     call["id"].as_str().unwrap_or("")
                 );
                 if stale(&call, now(), &b) {
-                    app.store.delete(&key).await?;
+                    remove_call(&app.store, &key).await?;
                     continue;
                 }
                 if call["state"] == "cancelled" && call["instance"] == caller.instance.as_str() {
-                    app.store.delete(&key).await?;
+                    remove_call(&app.store, &key).await?;
                     cancelled.push(call["id"].clone());
                     continue;
                 }
@@ -367,13 +398,25 @@ pub async fn next(
                 if call["fork"] == true && !caller.fork.iter().any(|p| p == provider) {
                     continue;
                 }
+                // Calls queued before bodies moved out still carry theirs.
+                let body = if call["body"].is_null() {
+                    match app.store.get(&body_key(&key)).await? {
+                        Some(doc) => doc["body"].clone(),
+                        None => {
+                            remove_call(&app.store, &key).await?;
+                            continue;
+                        }
+                    }
+                } else {
+                    call["body"].clone()
+                };
                 call["state"] = json!("offered");
                 call["offered"] = json!(now());
                 call["client"] = json!(caller.client);
                 call["instance"] = json!(caller.instance);
                 app.store.put(&key, &call).await?;
                 return Ok(Json(
-                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":call["body"],"fork":call["fork"] == true},"cancelled":cancelled,"settings":settings}),
+                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":body,"fork":call["fork"] == true},"cancelled":cancelled,"settings":settings}),
                 ));
             }
             if !cancelled.is_empty() {
@@ -661,6 +704,59 @@ pub async fn revoke(
         }
     }
     Ok(Json(json!({"revoked":true})))
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::*;
+    use webagent_models::provider::ProviderId;
+
+    #[tokio::test]
+    async fn polled_call_state_carries_no_body_and_both_documents_go_with_the_call() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let store = app.store.clone();
+        let link = link_id("fixture-link-value");
+        store
+            .put(&format!("{SEEN}{link}"), &json!({"at":now()}))
+            .await
+            .unwrap();
+        let waiter = tokio::spawn({
+            let store = store.clone();
+            async move {
+                Queue(store)
+                    .exchange(BridgeCall {
+                        link: "fixture-link-value".into(),
+                        session: "session".into(),
+                        provider: ProviderId::MuseBridge,
+                        body: json!({"messages":[{"role":"user","content":"large request"}]}),
+                        fork: false,
+                        cancel: tokio_util::sync::CancellationToken::new(),
+                    })
+                    .await
+            }
+        });
+        let prefix = format!("{CALLS}{link}:");
+        let call = loop {
+            if let Some(call) = store.list(&prefix).await.unwrap().pop() {
+                break call;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let key = format!("{prefix}{}", call["id"].as_str().unwrap());
+        assert!(call.get("body").is_none());
+        assert_eq!(
+            store.get(&body_key(&key)).await.unwrap().unwrap()["body"]["messages"][0]["content"],
+            "large request"
+        );
+        let mut replied = call.clone();
+        replied["state"] = json!("replied");
+        replied["reply"] = json!({"message":{"role":"assistant","content":"OK"}});
+        store.put(&key, &replied).await.unwrap();
+        let reply = waiter.await.unwrap().unwrap();
+        assert_eq!(reply["message"]["content"], "OK");
+        assert!(store.get(&key).await.unwrap().is_none());
+        assert!(store.get(&body_key(&key)).await.unwrap().is_none());
+    }
 }
 
 #[cfg(test)]
