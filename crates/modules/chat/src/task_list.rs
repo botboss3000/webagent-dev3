@@ -698,9 +698,24 @@ pub enum Gate {
     Refuse(String),
 }
 
-/// The task gate for one call that needs it (see [`Gate`]).
+/// The task gate for one call that needs it (see [`Gate`]). With `every_tool` (the gate
+/// covers every tool call, not only changes) a newest request that was set aside as
+/// needing no tools refuses the call, so a request that gets tool calls is always cited.
 #[must_use]
-pub fn gate(list: &List, requests: &Requests, texts: &Value) -> Gate {
+pub fn gate(list: &List, requests: &Requests, texts: &Value, every_tool: bool) -> Gate {
+    if every_tool {
+        if let Some(newest) = requests.items.last().filter(|newest| {
+            !cited(list).contains(newest.id.as_str())
+                && list
+                    .set_aside
+                    .iter()
+                    .any(|aside| aside.request == newest.id)
+        }) {
+            return Gate::Refuse(
+                text_field(texts, "gate_set_aside_newest").replace("{request}", &newest.id),
+            );
+        }
+    }
     let unfiled = unfiled(list, requests);
     let in_progress = step_in_progress(list);
     if unfiled.is_empty() && in_progress {
@@ -1279,17 +1294,20 @@ mod tests {
         assert_eq!(requests.items[1].id, "u2");
 
         let empty = List::default();
-        let Gate::Open(opening) = gate(&empty, &requests, &texts) else {
+        let Gate::Open(opening) = gate(&empty, &requests, &texts, false) else {
             panic!("no open section opens one");
         };
         let (opened, _) = apply(&empty, opening, 10).unwrap();
         assert_eq!(opened.sections[0].requests, vec!["u1", "u2"]);
         assert_eq!(opened.sections[0].origin, Origin::User);
         assert_eq!(opened.sections[0].steps[0].status, Status::InProgress);
-        assert!(matches!(gate(&opened, &requests, &texts), Gate::Pass));
+        assert!(matches!(
+            gate(&opened, &requests, &texts, false),
+            Gate::Pass
+        ));
 
         requests.add("user:c", "Now the CSS", 20);
-        let Gate::Refuse(message) = gate(&opened, &requests, &texts) else {
+        let Gate::Refuse(message) = gate(&opened, &requests, &texts, false) else {
             panic!("an unfiled request with a section open is refused");
         };
         assert!(message.contains("u3 \"Now the CSS\""), "{message}");
@@ -1302,13 +1320,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(changes, vec!["u3 set aside: question only"]);
-        assert!(matches!(gate(&aside, &requests, &texts), Gate::Pass));
+        assert!(matches!(gate(&aside, &requests, &texts, false), Gate::Pass));
+        // When the gate covers every tool, the newest request set aside refuses tools.
+        let Gate::Refuse(message) = gate(&aside, &requests, &texts, true) else {
+            panic!("a set-aside newest request refuses a tool call");
+        };
+        assert!(message.contains("u3"), "{message}");
         assert_eq!(unfiled_line(&aside, &requests, &texts), None);
 
         let (restored, _) =
             apply(&aside, write(serde_json::json!({"restore":["u3"]})), 22).unwrap();
         assert!(matches!(
-            gate(&restored, &requests, &texts),
+            gate(&restored, &requests, &texts, false),
             Gate::Refuse(_)
         ));
         let (cited, changes) = apply(
@@ -1319,7 +1342,7 @@ mod tests {
         )
         .unwrap();
         assert!(changes.contains(&"s1.2 cites u3".to_owned()), "{changes:?}");
-        assert!(matches!(gate(&cited, &requests, &texts), Gate::Pass));
+        assert!(matches!(gate(&cited, &requests, &texts, false), Gate::Pass));
         assert!(unknown_requests(&restored, &cited, &requests).is_empty());
 
         let (unknown, _) = apply(
@@ -1343,7 +1366,7 @@ mod tests {
             26,
         )
         .unwrap();
-        let Gate::Refuse(message) = gate(&finished, &requests, &texts) else {
+        let Gate::Refuse(message) = gate(&finished, &requests, &texts, false) else {
             panic!("an open section with no step in progress is refused");
         };
         assert!(message.contains("No step is in progress"), "{message}");

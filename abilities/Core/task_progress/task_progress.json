@@ -16,10 +16,24 @@
     "settings": [
       {
         "key": "task_gate",
-        "label": "Require A Task Before Changes",
-        "type": "boolean",
-        "default": true,
-        "hint": "ON (default): before a tool that changes something runs, every user request must be in the session task list (cited on a section or step, or set aside with a reason) and a step must be in progress; with no open section the app opens one itself. OFF: the agent is only reminded.",
+        "label": "Require A Task",
+        "type": "select",
+        "default": "all_tools",
+        "options": [
+          {
+            "value": "all_tools",
+            "label": "All tool calls — every request with tool work goes in the task list"
+          },
+          {
+            "value": "changes",
+            "label": "Changes only — tools that change something"
+          },
+          {
+            "value": "off",
+            "label": "Off — reminders only"
+          }
+        ],
+        "hint": "Before a tool call runs, its user request must be cited on a section or step of the session task list, with a step in progress (the app opens a section itself when none is open). All tool calls (default): every tool except the core basics (task list, skills, time, mode); a request set aside as needing no tools cannot get tool calls. Changes only: just tools that change something. Off: the agent is only reminded.",
         "scope": "agent"
       }
     ]

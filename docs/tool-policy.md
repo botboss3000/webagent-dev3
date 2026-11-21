@@ -39,8 +39,8 @@ checked against the tool's `parameters` (`crates/modules/engine/src/tools/argume
 
 ## 4. The task gate
 
-A tool whose `task` is `required` runs only when the session task list accounts for every
-user request and a step is in progress (`Engine::task_gate` in `run.rs`, also on the
+A tool call the gate covers runs only when the session task list accounts for every user
+request and a step is in progress (`Engine::task_gate` in `run.rs`, also on the
 parallel batch path in `batch.rs`; rules in `crates/modules/chat/src/task_list.rs` `gate`).
 
 - `task` in `<tool>.tool.json` is `required` or `exempt`. Absent: a core tool is exempt,
@@ -62,8 +62,11 @@ parallel batch path in `batch.rs`; rules in `crates/modules/chat/src/task_list.r
 - A `task_list_write` in the same model step counts as made, whichever order the calls run
   in, so a step can file its work and make its change in parallel; a write the rules would
   refuse, or one citing an unknown request, counts as not made.
-- On by default; the agent's Task Progress setting `task_gate` switches it off (the
-  per-step and end-of-turn reminders stay).
+- What it covers is the agent's Task Progress setting `task_gate`: `all_tools` (the
+  default: every tool call except core tools, the task list, skill, time and mode basics,
+  whatever `task` says; a newest request set aside as needing no tools refuses the call,
+  so a request that gets tool calls is always cited), `changes` (only tools whose `task`
+  is required) or `off` (the per-step and end-of-turn reminders stay).
 - Plan mode is independent: approving a plan still seeds its section.
 
 ## 5. Messaging, the action ledger and the repeat guard

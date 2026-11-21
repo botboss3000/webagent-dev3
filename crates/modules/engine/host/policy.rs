@@ -185,11 +185,12 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
         pending_id: &'a str,
         generation: &'a str,
         batch_writes: &'a [Value],
+        every_tool: bool,
     ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
         async move {
             Ok(
                 match store
-                    .task_list_gate(sid, rid, pending_id, generation, batch_writes)
+                    .task_list_gate(sid, rid, pending_id, generation, batch_writes, every_tool)
                     .await?
                 {
                     crate::store::TaskGate::Refused(message) => Some(message),

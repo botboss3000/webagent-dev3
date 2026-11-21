@@ -34,7 +34,9 @@ it, naming exactly its tool folders. `<tool>.tool.json` holds:
 - `task` (optional): `required` or `exempt`, whether the task gate applies (the session
   task list must account for every user request, with a step in progress, before the call
   runs). Absent: a core tool is exempt, otherwise a write is required and a read exempt.
-  Mark coordination and housekeeping writes `exempt`. See [tool-policy.md](tool-policy.md)
+  Mark coordination and housekeeping writes `exempt`. It decides only when the agent's
+  Task Progress setting `task_gate` is `changes`; the default, `all_tools`, covers every
+  non-core tool. See [tool-policy.md](tool-policy.md)
   for the whole decision path.
 - `default_policy` per role (`operator`, `member`, `visitor`): `allow`,
   `require_approval` or `deny`. A level with no saved permission for the tool uses its

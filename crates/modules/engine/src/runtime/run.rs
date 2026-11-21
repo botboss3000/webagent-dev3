@@ -933,11 +933,11 @@ impl<
         run["error"] = json!(format!("Context preparation failed at {stage}: {error}"));
         app.save(run).await
     }
-    /// Bound freshness reconstruction independently of normal model/tool turn limits.
-    /// The task gate's refusal for tool `name` of `run`, or `None` when it may run. The gate
-    /// covers tools whose `task` is required while the agent's Task Progress setting
-    /// `task_gate` is on; an agent that never saved it follows [`TASK_GATE_DEFAULT`]. With no
-    /// section open it opens one instead.
+    /// The task gate's refusal for tool `name` of `run`, or `None` when it may run. The
+    /// agent's Task Progress setting `task_gate` picks what it covers: `all_tools` (every
+    /// call but the core basics; the default), `changes` (tools whose `task` is required)
+    /// or `off`. An agent that never saved it follows [`TASK_GATE_DEFAULT`]. With no
+    /// section open the gate opens one instead.
     pub(crate) async fn task_gate(
         app: &Self,
         run: &Value,
@@ -946,11 +946,21 @@ impl<
         name: &str,
         visibility: &Value,
     ) -> Result<Option<String>> {
-        if !webagent_abilities::tool_definitions::task_required(name)
-            || !visibility["settings"]["task_progress"]["task_gate"]
-                .as_bool()
-                .unwrap_or_else(|| TASK_GATE_DEFAULT.load(std::sync::atomic::Ordering::Relaxed))
-        {
+        let mode = match &visibility["settings"]["task_progress"]["task_gate"] {
+            Value::String(mode) => mode.as_str(),
+            Value::Bool(false) => "off",
+            Value::Bool(true) => "all_tools",
+            _ if TASK_GATE_DEFAULT.load(std::sync::atomic::Ordering::Relaxed) => "all_tools",
+            _ => "off",
+        };
+        let every_tool = !matches!(mode, "off" | "changes");
+        let covered = match mode {
+            "off" => false,
+            "changes" => webagent_abilities::tool_definitions::task_required(name),
+            // The core basics (task list, skills, time, mode) file the work, never are it.
+            _ => !webagent_abilities::tool_definitions::is_core(name),
+        };
+        if !covered {
             return Ok(None);
         }
         // The list writes of this model step count as made, whichever order the calls run
@@ -971,9 +981,11 @@ impl<
                 run["pending"]["id"].as_str().unwrap_or(""),
                 run["generation"].as_str().unwrap_or(""),
                 &batch_writes,
+                every_tool,
             )
             .await
     }
+    /// Bound freshness reconstruction independently of normal model/tool turn limits.
     async fn rebuild_context(app: &Self, run: &mut Value) -> Result<bool> {
         let count = run["context_rebuilds"].as_u64().unwrap_or(0) + 1;
         run["context_rebuilds"] = json!(count);

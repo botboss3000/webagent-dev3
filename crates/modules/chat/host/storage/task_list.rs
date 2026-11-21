@@ -146,6 +146,7 @@ impl Store {
         pending_id: &str,
         generation: &str,
         batch_writes: &[Value],
+        every_tool: bool,
     ) -> Result<TaskGate> {
         let receipt_key = format!("receipt:base:{sid}:{rid}:{pending_id}:gate_tasks");
         let _guard = self.context_gate.write().await;
@@ -182,7 +183,7 @@ impl Store {
                 judged = next;
             }
         }
-        let write = match webagent_chat::task_list::gate(&judged, &requests, &texts) {
+        let write = match webagent_chat::task_list::gate(&judged, &requests, &texts, every_tool) {
             webagent_chat::task_list::Gate::Pass => {
                 tx.commit().await?;
                 return Ok(TaskGate::Pass);
@@ -655,7 +656,7 @@ mod tests {
         );
 
         let TaskGate::Opened(revision) = store
-            .task_list_gate("s", "r", "call-1", "g", &[])
+            .task_list_gate("s", "r", "call-1", "g", &[], false)
             .await
             .unwrap()
         else {
@@ -664,14 +665,14 @@ mod tests {
         assert_eq!(revision, 1);
         assert!(matches!(
             store
-                .task_list_gate("s", "r", "call-1", "g", &[])
+                .task_list_gate("s", "r", "call-1", "g", &[], false)
                 .await
                 .unwrap(),
             TaskGate::Opened(1)
         ));
         assert!(matches!(
             store
-                .task_list_gate("s", "r", "call-2", "g", &[])
+                .task_list_gate("s", "r", "call-2", "g", &[], false)
                 .await
                 .unwrap(),
             TaskGate::Pass
@@ -693,7 +694,7 @@ mod tests {
 
         record("user:b", "Also check mobile").await;
         let TaskGate::Refused(message) = store
-            .task_list_gate("s", "r", "call-3", "g", &[])
+            .task_list_gate("s", "r", "call-3", "g", &[], false)
             .await
             .unwrap()
         else {
@@ -739,7 +740,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             store
-                .task_list_gate("s", "r", "call-4", "g", &[])
+                .task_list_gate("s", "r", "call-4", "g", &[], false)
                 .await
                 .unwrap(),
             TaskGate::Pass
@@ -778,7 +779,7 @@ mod tests {
             "steps":[{"label":"Patch the cookie path","status":"in_progress"}]});
         assert!(matches!(
             store
-                .task_list_gate("s", "r", "call-1", "g", &[filing])
+                .task_list_gate("s", "r", "call-1", "g", &[filing], false)
                 .await
                 .unwrap(),
             TaskGate::Pass
@@ -788,7 +789,14 @@ mod tests {
             "steps":[{"label":"Patch the cookie path","status":"in_progress"}]});
         assert!(matches!(
             store
-                .task_list_gate("s", "r", "call-2", "g", &[unknown, json!({"bad":true})])
+                .task_list_gate(
+                    "s",
+                    "r",
+                    "call-2",
+                    "g",
+                    &[unknown, json!({"bad":true})],
+                    false
+                )
                 .await
                 .unwrap(),
             TaskGate::Opened(1)
