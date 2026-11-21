@@ -89,49 +89,6 @@
     margin-bottom: 0;
   }
 
-/* ── Footer drag handle ───────────────────────────────────────────────────
-   A horizontal line just below the pill's bottom edge. Drag up to reveal
-   the abilities/device/mode chips, drag down to hide. The line follows the
-   pointer during drag and springs back on release. */
-  /* After an idle→active transition, block clicks on newly-appeared
-     buttons for a brief window so the user's finger can't hit them. */
-  #chat-input-row.grab-spring {
-    transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-  /* Slower overshoot for click-triggered toggles */
-  #chat-input-row.grab-spring-click {
-    transition: transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-  .chat-footer-handle.grab-spring-click {
-    transition: transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-.chat-footer-handle-line {
-    width: 32px;
-    height: 3px;
-    border-radius: 2px;
-    background: var(--fg-4);
-    opacity: 0.35;
-    transition: opacity 0.15s ease, width 0.2s ease, background 0.15s ease;
-  }
-.chat-footer-handle:hover .chat-footer-handle-line,
-.chat-footer-handle:focus-visible .chat-footer-handle-line {
-    opacity: 0.75;
-    width: 40px;
-    background: var(--fg-2);
-  }
-.chat-footer-handle:not(.expanded) .chat-footer-handle-line {
-    animation: footerHandlePulse 3s ease-in-out infinite;
-  }
-@media (prefers-reduced-motion: reduce) {
-    .chat-footer-handle:not(.expanded) .chat-footer-handle-line {
-      animation: none;
-    }
-}
-/* Spring-back transition — applied after drag release */
-.chat-footer-handle.grab-spring {
-    transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-
 /* ── Chat token bar ──────────────────────────────────────────────────────
    Sits below the chat pill, left-aligned. Shows tokens-in, a spinning shape
    during activity, and tokens-out. The spinner animates while the agent is

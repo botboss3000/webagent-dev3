@@ -77,42 +77,9 @@
     margin-top: 2px;
     margin-bottom: 2px;
   }
-/* ── Footer drag handle ───────────────────────────────────────────────────
-   A horizontal line just below the pill's bottom edge. Drag up to reveal
-   the abilities/device/mode chips, drag down to hide. The line follows the
-   pointer during drag and springs back on release. */
-.chat-footer-handle {
-    position: absolute;
-    bottom: -14px;
-    left: 50%;
-    /* --grab-drag-y is set inline by JS during drag; grab-spring
-       transition animates it back to 0 on release */
-    transform: translateX(-50%) translateY(calc(var(--grab-drag-y, 0px)));
-    width: 48px;
-    height: 20px;
-    margin: 0;
-    padding: 0;
-    background: none;
-    border: none;
-    cursor: ns-resize;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    touch-action: none;
-    -webkit-tap-highlight-color: transparent;
-    z-index: 10;
-    transition: bottom 0.25s ease;
-  }
-/* When the footer is expanded, the handle line sits above the pill's
-     bottom edge (handle bottom at -6px with height 20px → line center
-     at 4px above the edge). */
-  .chat-footer-handle.expanded {
-    bottom: -6px;
-  }
-/* Pill-level drag offset — the pill edge itself moves during drag so the
-     rubber-band is visible on the pill's bottom border, not just the handle. */
+/* The footer drag handle on the pill's bottom edge is the shared grab handle
+   (ui/shared/grab-handle): it styles the handle and moves the pill edge while dragging. */
   #chat-input-row {
-    transform: translateY(calc(var(--grab-panel-y, 0px)));
     position: relative;
     z-index: 2;
     /* Smooth transition for idle ↔ active footer pill changes */

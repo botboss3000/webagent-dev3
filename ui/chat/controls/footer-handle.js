@@ -3,7 +3,7 @@ import { attachGrabHandle } from '../../shared/grab-handle/grab-handle.js';
 
 // SISTER-PANEL: V2-FOOTER-HANDLE — v2 chat-ui.js interaction, v3-only storage scope.
 /**
- * Mounts the footer handle's visibility, pointer-drag, click, and session restore behavior.
+ * Mounts the footer handle's visibility and session restore; drag and tap come from the shared grab handle.
  * Reads the active session from the URL and persists expansion under a v3-prefixed localStorage key; storage errors propagate.
  * Binds a document-lifetime v3:session-open listener and returns its reload callback, not a teardown.
  * chat-config.applyFooter calls this after populating controls and ignores the returned callback.
@@ -62,10 +62,7 @@ const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
 
   // Synchronizes handle and row classes/ARIA state, then saves the preference.
   function _applyFooterExpanded(expanded) {
-    if (_footerHandle) {
-      _footerHandle.classList.toggle('expanded', expanded);
-      _footerHandle.setAttribute('aria-expanded', String(expanded));
-    }
+    if (_footerHandle) _footerHandle.setAttribute('aria-expanded', String(expanded));
     if (_footerRow) _footerRow.classList.toggle('expanded', expanded);
     _saveFooterExpanded(expanded);
   }
@@ -77,7 +74,7 @@ const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
     // Drag, rubber band and tap bounce come from the shared grab handle; the pill edge stretches with it.
     attachGrabHandle(_footerHandle, {
       panel: _footerHandle.parentElement,
-      opens: 'up',
+      edge: 'bottom',
       isExpanded: () => _footerRow.classList.contains('expanded'),
       setExpanded: expanded => _applyFooterExpanded(expanded),
     });

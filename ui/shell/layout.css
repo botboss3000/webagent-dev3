@@ -75,12 +75,6 @@ body {
     to { transform: rotate(360deg); }
   }
 
-/* ── Footer drag handle */
-/* Pulse hint — subtle breathe when footer is closed */
-@keyframes footerHandlePulse {
-    0%, 100% { opacity: 0.25; }
-    50% { opacity: 0.55; }
-  }
 /* ── Chat token bar ──────────────────────────────────────────────────────
    Sits below the chat pill, left-aligned. Shows tokens-in, a spinning shape
    during activity, and tokens-out. The spinner animates while the agent is

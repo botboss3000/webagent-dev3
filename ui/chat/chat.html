@@ -73,9 +73,9 @@
     <button id="chat-stop-btn" class="chat-pill-stop" title="Stop generation" data-header-control="stop" hidden><i data-lucide="octagon" style="width:18px;height:18px;"></i></button>
     <button id="chat-continue-btn" class="chat-pill-continue" title="Continue" data-header-control="continue" hidden><i data-lucide="play" style="width:18px;height:18px;"></i></button>
     <input type="file" id="chat-file-input" multiple accept="image/*,audio/*,video/*,.pdf,.txt,.md,.csv,.json" hidden>
-    <div id="chat-footer-handle" class="chat-footer-handle" title="Drag to show/hide footer" aria-expanded="false" aria-controls="chat-footer-row">
-      <div class="chat-footer-handle-line"></div>
-    </div>
+    <button type="button" id="chat-footer-handle" class="grab-handle" data-edge="bottom" title="Drag to show/hide footer" aria-label="Show or hide the footer" aria-expanded="false" aria-controls="chat-footer-row">
+      <span class="grab-handle-line" aria-hidden="true"></span>
+    </button>
   </div>
   <div id="chat-footer-row" class="chat-footer-row" hidden>
     <button id="chat-abilities-btn" class="chat-skills-btn" title="Abilities — click to turn each on/off for this chat" data-header-control="abilities">

@@ -277,9 +277,6 @@ function applyFooter(profile, mode) {
       }
       footerNodes.stats.style.display = '';
       initFooterHandle();
-      const handle = byId('chat-footer-handle');
-      handle.tabIndex = 0; handle.setAttribute('role','button');
-      handle.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handle.click(); } });
     }
     area.classList.toggle('footer-mode-idle', mode === 'idle');
     area.classList.toggle('footer-mode-active', mode === 'active');
@@ -425,7 +422,7 @@ export async function initChatConfig({config:provided,root=null} = {}) {
     // Keyboard focus and editable popup fields retain their normal behavior.
     document.addEventListener('pointerdown', event => {
       if (event.button !== 0 || document.activeElement !== byId('chat-input')) return;
-      const control = event.target.closest?.('button, [role="button"], #chat-footer-handle, [data-header-control]');
+      const control = event.target.closest?.('button, [role="button"], [data-header-control]');
       if (!control || !control.closest('#chat-input-area, #chat-header, .v3-context-panel, .v3-chat-model-list, .session-dropdown-menu')) return;
       event.preventDefault();
     }, true);
