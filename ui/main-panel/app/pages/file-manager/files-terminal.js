@@ -29,8 +29,30 @@ function xterm() {
 function colors(pane) {
   const style = getComputedStyle(pane);
   const pick = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+  // The selection must show on light and dark themes: the brand colour, partly transparent.
+  const brand = pick('--brand-rgb', '59, 130, 246');
   return {background: pick('--files-bg', '#111'), foreground: pick('--files-text-strong', '#ddd'),
-          cursor: pick('--files-text-strong', '#ddd')};
+          cursor: pick('--files-text-strong', '#ddd'),
+          selectionBackground: 'rgba(' + brand + ', 0.4)', selectionInactiveBackground: 'rgba(' + brand + ', 0.25)'};
+}
+
+// Ctrl+C (or Cmd+C, Ctrl+Shift+C) copies the selection; with nothing selected Ctrl+C still
+// interrupts the running command. Ctrl+V (Cmd+V, Ctrl+Shift+V) pastes through the browser.
+function clipboardKeys(term) {
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== 'keydown' || !(event.ctrlKey || event.metaKey) || event.altKey) return true;
+    const key = event.key.toLowerCase();
+    if (key === 'c' && (term.hasSelection() || event.shiftKey || event.metaKey)) {
+      const text = term.getSelection();
+      if (text) navigator.clipboard?.writeText(text).catch(() => {});
+      term.clearSelection();
+      event.preventDefault();
+      return false;
+    }
+    // Returning false leaves the key to the browser, whose paste event xterm turns into input.
+    if (key === 'v') return false;
+    return true;
+  });
 }
 
 function bytes(base64) {
@@ -56,6 +78,7 @@ export async function mountTerminal(pane, tab, post) {
   const fit = new lib.FitAddon();
   term.loadAddon(fit);
   term.open(host);
+  clipboardKeys(term);
   const state = {term, fit, closed: false, offset: 0, sending: Promise.resolve()};
   tab._terminal = state;
   const resize = () => {
