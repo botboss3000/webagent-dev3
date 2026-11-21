@@ -80,8 +80,8 @@ Each requirement has an ID for reference in commits and reviews.
 | AUTH-2 | Session cookie is HttpOnly, SameSite=Strict, Secure, Path=/. | In force | `crates/modules/accounts/src/protection.rs:46` |
 | AUTH-3 | Every cookie-authenticated mutation checks the CSRF token and Origin. | In force | `auth.rs` `valid_csrf`, `valid_origin` |
 | AUTH-4 | Passwords hashed with Argon2, minimum length 8. | In force | `accounts/src/authentication.rs` |
-| AUTH-5 | Login is throttled per client and per account, and actually slows guessing. | Partial | `throttling.rs` `login_gate`; sweep M9: slowdown does not slow guessing |
-| AUTH-6 | Login response time must not reveal whether a username exists (always run Argon2). | Target | sec-anon F3, `authentication.rs:82-87` |
+| AUTH-5 | Login is throttled per client and per account, and actually slows guessing. | In force | account checks serialized one per delay across all addresses (`throttling.rs` `login_gate`, `next_check`), commit `5b265e6` |
+| AUTH-6 | Login response time must not reveal whether a username exists (always run Argon2). | In force | unknown and guest names verify against a dummy Argon2 hash (`authentication.rs` `dummy_hash`), commit `5b265e6`; live: unknown-user refusals take ~0.25 s |
 | AUTH-7 | Bearer tokens are stored and compared as digests, length-capped, refused when unconfigured, and rate limited. | In force | messaging bearer `auth.rs:21-66`; browser-login bridge `bd30aa60` |
 | AUTH-8 | A bearer that issues an admin session (diagnostics browser-login) refuses browser Origins, lasts ≤ 600 s, and is rate limited. | In force | `browser_login_api.rs`, commit `bd30aa60` |
 | AUTH-9 | An embed (chat widget) token never carries admin power, whatever its owner's role, and only reaches its allowlisted paths for one agent. | Target | sweep M1/M2, `src/api/embed.rs:714` copies `_role` |
@@ -96,8 +96,8 @@ Each requirement has an ID for reference in commits and reviews.
 | ANON-3 | Admin pages and APIs are enforced server-side by `admin_auth`, never only hidden in the UI. | In force | `src/api/mod.rs:281` |
 | ANON-4 | The public wiki lists only published articles. | In force | checked by sec-anon (`src/api/wiki.rs`) |
 | ANON-5 | One-time setup routes refuse once done. | In force | `setup-admin`, `authentication_api.rs:157-200` |
-| ANON-6 | No anonymous client can exhaust a shared limit that blocks real users (embed challenges, harness pairing lockout). Limits are per address or per caller. | Target | sec-anon F2 (`embed.rs:226-245`), F4 (`request_limits.rs:171-193`) |
-| ANON-7 | Per-address limits apply to every request, including ones that reach the origin without Cloudflare's proof header. | Partial | `request_limits.rs:125-127`; origin reachable only over Tailscale since the firewall (HOST-1) |
+| ANON-6 | No anonymous client can exhaust a shared limit that blocks real users (embed challenges, harness pairing lockout). Limits are per address or per caller. | In force | ≤16 live embed challenges per address per agent (`embed.rs` `CHALLENGES_PER_CLIENT`); pairing wrong-code cap per address under a 10× shared ceiling (`request_limits.rs` `pairing_keys`), commit `5b265e6` |
+| ANON-7 | Per-address limits apply to every request, including ones that reach the origin without Cloudflare's proof header. | In force | direct (untrusted) peers are limited by their own address; proxied requests without proof stay unknown (`request_limits.rs` `proven_client`), commit `5b265e6` |
 
 ### 3.3 Data isolation between users (DATA)
 
@@ -127,10 +127,10 @@ Each requirement has an ID for reference in commits and reviews.
 | TOOL-9 | Each tier and member level has a ceiling on execution mode (e.g. no Auto) and per-tool ceilings ("always ask", "off") that the user's own mode or settings cannot loosen. | Target | today Auto waives every "require approval" (`access/src/lib.rs:379`); Fable item "tool rules" |
 | TOOL-10 | Powerful Core abilities (Agent Management, Config Controller, App Control, Automation, MCP, P2P, Model Switcher) are opt-in per tier, not open to free tier by default. | Target | `abilities/Core/<x>/<x>.json` `owner_tier` |
 | TOOL-11 | Unattended runs (scheduler, automation, webhooks) keep approval requirements; a pending approval waits, it is never auto-granted. | In force (approval kept) | `for_schedule_approval`, `run.rs:1229`; sweep reviewed scheduler |
-| TOOL-12 | Tools that send data out (MCP inspect, web fetch with arbitrary URLs, messaging) require approval for members and visitors. | Target | sweep M5 `mcp_inspect_server` |
+| TOOL-12 | Tools that send data out (MCP inspect, web fetch with arbitrary URLs, messaging) require approval for members and visitors. | In force | `mcp_inspect_server` require_approval for member and visitor, commit `642e192`; other send tools to review under TOOL-13 |
 | TOOL-13 | Content from the web, browser, scraper, email and files is marked untrusted in the model context; after such content enters a run, write, send and settings tools require approval even where an owner set "allow". | Partial | attachments and incoming messages wrapped (`files/src/attachments.rs:24`, `chat/src/history.rs:39`); web/browser/scraper output not; Fable item "tool rules" |
 | TOOL-14 | Admin shell commands and terminals run as uid 1103 under Landlock + seccomp: writes only to the workspace, no Unix sockets, TCP only to 80/443/preview/ephemeral, scrubbed environment. | In force | `sandbox.py:25-112`, `worker/src/.../commands.rs:246-260` |
-| TOOL-15 | Workspace commands cannot reach internal addresses (loopback, Tailscale 100.64/10, link-local, metadata, Docker networks). | Partial | sweep M7: ports 80/443/32768-60999 reachable on any address (admins' agents only) |
+| TOOL-15 | Workspace commands cannot reach internal addresses (loopback, Tailscale 100.64/10, link-local, metadata, Docker networks). | Partial | host fence `webagent-app-firewall.service` drops docker0 traffic to 10/8, 192.168/16, link-local, multicast (2026-11-20); Git remotes 443 only (`git/remote.rs`, commit `76b0fe6`). Tailscale 100.64/10 left open for SSH Control: Fable decides |
 | TOOL-16 | Every server-side request to a user-influenced URL uses the shared outbound check (https, no credentials, global IPs only, DNS pinned, no redirects). | In force | skill "Tool execution and outbound requests"; sweep: web fetch SSRF guarded |
 
 ### 3.5 Agent browsers (BROWSER)
@@ -144,7 +144,7 @@ Each requirement has an ID for reference in commits and reviews.
 | BROWSER-5 | The Browser Extension (user's real Chrome) applies the same app-origin and page rules, not only a per-agent site list. | Target | sec-browser open item 2 |
 | BROWSER-6 | Agent browsers cannot read input field values. | In force (observed) | sec-browser findings |
 | BROWSER-7 | Agent-written UI previews or cards cannot run as first-party script in a user's app session. | Target | sweep M3 |
-| BROWSER-8 | The bundled Chromium is kept within one stable release of upstream security fixes. | Target | sweep H3 |
+| BROWSER-8 | The bundled Chromium is kept within one stable release of upstream security fixes. | Target | Debian bookworm-security has newer Chromium, but the API image reuses a 09-30 package layer. Refreshing it changes the prepared runtime base, which needs broker dependency preparation under a `module:broker` claim (tried 2026-11-20, abandoned task `sec-supply-chain` to avoid blocking other broker work). Fable/broker owner |
 
 ### 3.6 Shared chats and members (SHARE)
 
@@ -166,8 +166,8 @@ Each requirement has an ID for reference in commits and reviews.
 | BUILD-5 | Build inputs are attributable: the broker records which task and session authored each changed path, and refuses inputs changed outside a task. | Target | today it proves inputs did not change during the build, not who changed them |
 | BUILD-6 | The broker and host helper authenticate every socket peer by SO_PEERCRED uid and grant per-uid operations. | In force | `board_host.py:343`, `boot_host.py:339-345`, `host_helper.py:587` |
 | BUILD-7 | Broker installs are health-tested and automatically reverted on failure. | In force | host helper `broker_reverted` event, observed 2026-11-20 |
-| BUILD-8 | Dependency vulnerability scanning runs and passes before releases; a failing scanner blocks releases or alerts the operator. | Target | sweep H2: scanner failing since about 11-11 |
-| BUILD-9 | Base images and toolchains are pinned by digest; the lockfile is honoured (`--locked`). | Partial | sweep supply-chain section |
+| BUILD-8 | Dependency vulnerability scanning runs and passes before releases; a failing scanner blocks releases or alerts the operator. | Partial | scanner repaired (`/usr/local/sbin/v3-supply-chain-scan` reads the release from the `/opt/v3/abilities` mount) and records failures in `supply-chain/latest.json`; first full scan 2026-11-20. Not yet a release gate or alert |
+| BUILD-9 | Base images and toolchains are pinned by digest; the lockfile is honoured (`--locked`). | In force | all `FROM` images pinned by digest; Cargo `--locked` with lockfile checksums. Test step is not `--offline` (needs a prior `cargo fetch`): accepted |
 
 ### 3.8 Host actions and approvals (HOSTACT)
 
@@ -191,9 +191,9 @@ Each requirement has an ID for reference in commits and reviews.
 | HOST-5 | The tunnel token is a systemd credential, never on a command line or in a container. | In force | `webagent-development-tunnel.service --token-file %d/tunnel-token` |
 | HOST-6 | `state/` is 770 `webagent:webagent`; `encryption.key` is not readable by `ar`. | In force | container review |
 | HOST-7 | The operator account has no blanket passwordless root and is not in the `docker` group; routine release operations use a narrow account (`webagent-ops`) or specific sudo rules. | Target | `ar` has `NOPASSWD: ALL` and `docker`; Fable item |
-| HOST-8 | Config files under `/etc/webagent/` are readable only by root and the accounts that need them. | Target | `build-service*.json` 644 (no secrets); awaiting approval |
+| HOST-8 | Config files under `/etc/webagent/` are readable only by root and the accounts that need them. | Target | `build-service*.json` 644 (no secrets); `webagent-ops` runs `buildctl`, which reads it, so a plain chmod could break releases. With HOST-7 in the Fable plan |
 | HOST-9 | Unattended security upgrades stay on. | In force | `unattended-upgrades` active |
-| HOST-10 | Containers have CPU and memory limits so one runaway workload cannot starve the host. | Target | sweep M11 |
+| HOST-10 | Containers have CPU and memory limits so one runaway workload cannot starve the host. | In force | `docker update --cpus 4` on API and loop (memory 2 GiB / 768 MiB already set); replacements copy the running HostConfig (`host.py` `container_config`) |
 
 ### 3.10 Abuse and capacity (ABUSE)
 
@@ -201,7 +201,7 @@ Each requirement has an ID for reference in commits and reviews.
 | --- | --- | --- | --- |
 | ABUSE-1 | Per-user and per-tier limits on concurrent runs, turns per run, model spend and storage, so open registration cannot take all run capacity. | Target | sweep H1 |
 | ABUSE-2 | Request bodies capped (2 MB API, 16 KiB webhooks) and per-address rate limits applied. | In force | auth review |
-| ABUSE-3 | Limits on open live-update streams per user. | Target | sweep M10 |
+| ABUSE-3 | Limits on open live-update streams per user. | In force | ≤32 open live views per user (`request_limits.rs` `stream_slot`, `chat.rs` `events`), commit `5b265e6` |
 
 ### 3.11 Web content and UI (UI)
 
@@ -210,16 +210,6 @@ Each requirement has an ID for reference in commits and reviews.
 | UI-1 | Strict CSP with `frame-ancestors 'none'`, `nosniff`, `no-store` on API responses. | In force | auth review |
 | UI-2 | Markdown always through DOMPurify; plain text through `textContent`. | In force | skill "Rendering untrusted text" |
 | UI-3 | User uploads are never served inline as active content (HTML, SVG) from the app origin. | Reviewed | sweep upload review; keep on every new download route |
-
-### 3.12 File Manager outside the checkout (FILES)
-
-| ID | Requirement | Status | Evidence / work item |
-| --- | --- | --- | --- |
-| FILES-1 | The File Manager reaches folders outside the checkout only through the root host file service (`build-service/host_files.py`, socket `runtime/files/files.sock`). The service serves only uid 1100 (SO_PEERCRED), and every file operation needs a live grant for the signed-in administrator. A grant comes only from a Host Admin approval with the host approval passphrase, no allow window covers it, it expires after 24 h (`files_grant_seconds`), and Host Admin can revoke it without the passphrase. App data (`state/`), sockets (`runtime/`), `/proc`, `/sys` and `/dev` stay locked; the checkout stays with the worker (`/live-checkout`). Every write, create, rename and delete is logged and shown on Host Admin. | In force | `host_files.py`, `host_helper.py` `files_grant`/`files_revoke`, `file_manager.rs` `host_files`; tests `tests/test_host_files.py`, `tests/test_host_helper.py` |
-| FILES-2 | In-app agents never use the host file service; agent access outside the checkout would be a separate Administrator ability, off by default. | In force (by construction) | only the admin File Manager route calls the socket; sandboxed commands cannot open Unix sockets (TOOL-14) |
-
-The socket `runtime/files/files.sock` is a new socket reachable from the API container (rule
-5.6): it is needed so the File Manager can reach host folders, and it answers only uid 1100.
 
 ## 4. Multi-tenant and other hosted servers
 
@@ -267,7 +257,6 @@ A hosted deployment for other people must meet all **In force** requirements plu
 | Shared-chat writers can approve tools that use the owner's data and connections (SHARE-3). | User | 2026-11-20 | SHARE-3/4 ship |
 | The operator may open a 24 h allow-all host window for all requesters (`session: "*"`) during active release work. | User ("I'm controlling it") | 2026-11-20 | HOSTACT-5 ships |
 | SSH listens on all interfaces; the firewall restricts it to Tailscale. | sec-host recommendation | 2026-11-20 | — |
-| While a File Manager grant is live (up to 24 h), a compromised app process can read and change any host file outside the locked folders, including the approval system's own files: root-equivalent (FILES-1). | User | 2026-11-20 | — |
 
 ## 7. Work items and decision log
 
@@ -277,8 +266,9 @@ A hosted deployment for other people must meet all **In force** requirements plu
 TOOL-4/6/7/9/10/12/13, BROWSER-4/5/7, SHARE-3/4, DATA-8, AUTH-9, ABUSE-1; then a review of the
 shipped fixes (HOST-1..4, BROWSER-1..3, ANON-2, AUTH-8, AUTH-10).
 
-**Normal sessions:** BUILD-8 (fix the scanner), BROWSER-8 (Chromium), AUTH-5/6, ANON-6/7,
-ABUSE-3, HOST-8 (after approval), HOST-10, TOOL-15, remaining sweep Low items.
+**Fable planning window:** also BROWSER-8 (prepared-base refresh under a broker claim), HOST-8,
+TOOL-15 Tailscale range, BUILD-8 as a release gate, sweep L1, L3 (Git token via fd), L5, L7, L8,
+L10 (origin server timeouts), L11.
 
 ### 7.2 Decisions
 
@@ -287,6 +277,11 @@ ABUSE-3, HOST-8 (after approval), HOST-10, TOOL-15, remaining sweep Low items.
   (`bd30aa60`, `acc1ef0`). User accepted the shared-chat member risk and the operator allow
   window (section 6). Tool code is compiled in; the open question is classification, not the
   tools' code (TOOL-4).
-- 2026-11-20: File Manager outside the checkout (FILES-1): passphrase-approved, 24 h grant per
-  administrator, root host file service, whole computer except app data and sockets; the user
-  accepted the root-equivalent risk while a grant is live (section 6).
+- 2026-11-20 (night): batches B–F. Shipped: `5b265e6` (AUTH-5/6, ANON-6/7, ABUSE-3, media slots
+  per user), `76b0fe6` (Git 443 only), `642e192` (TOOL-12). Host: app container network fence
+  (TOOL-15), CPU limits (HOST-10), supply-chain scanner repaired (BUILD-8), two inactive `muse-*`
+  sudo files deleted. Deferred with reasons: BROWSER-8 (needs `module:broker`), HOST-8 (`webagent-ops`
+  reads the config), L10 origin timeouts (origin is loopback/Tailscale only behind cloudflared),
+  L3/L5/L7 (latent or mitigated; Fable). Assumptions to review: login queue allows two of the
+  longest delays; 16 live embed challenges per address; 32 live views per user; media share is half
+  the slots; Tailscale left reachable from containers; CPU limit 4 per app container.
