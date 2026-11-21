@@ -266,6 +266,9 @@ struct PairState {
 struct AccountState {
     failures: Failures,
     delay: u64,
+    // While slowed, attempts are spaced `delay` apart across all addresses: the time the
+    // next admitted attempt may be checked. Parallel guesses queue instead of overlapping.
+    next_check: u64,
 }
 #[derive(Default)]
 struct State {
@@ -289,6 +292,7 @@ impl State {
                 .prune(now, protection.account.window_seconds);
             if !account.failures.reached(protection.account.failures) {
                 account.delay = 0;
+                account.next_check = 0;
             }
             !account.failures.0.is_empty()
         });
@@ -417,8 +421,24 @@ impl LoginAttempts {
         if state.pairs.len() + state.accounts.len() + new_keys > KEY_LIMIT {
             return LoginGate::Blocked { retry_after: 60 };
         }
-        let delay = state.accounts.get(username).map_or(0, |a| a.delay);
-        LoginGate::Proceed { delay }
+        // Room for the attempt already waiting plus one more, so the owner's correct password
+        // is still checked behind a guess in progress.
+        let max_wait = protection.account.max_delay_seconds.saturating_mul(2);
+        let Some(account) = state.accounts.get_mut(username).filter(|a| a.delay > 0) else {
+            return LoginGate::Proceed { delay: 0 };
+        };
+        // One check per `delay` for the whole account, so concurrent requests cannot
+        // multiply the guessing rate. A queue longer than two of the longest delays is refused.
+        let check_at = account.next_check.max(now).saturating_add(account.delay);
+        if check_at - now > max_wait {
+            return LoginGate::Blocked {
+                retry_after: check_at - now - max_wait,
+            };
+        }
+        account.next_check = check_at;
+        LoginGate::Proceed {
+            delay: check_at - now,
+        }
     }
     /// Record a rejected password. Gate-admitted attempts insert even at the key bound;
     /// the overshoot is limited by concurrent password verifications.
@@ -695,17 +715,26 @@ mod tests {
             b.failed_login(&p, ip(n), "carol", 100).await;
         }
         let mut expected = 5;
+        let mut now = 100;
         for n in 5..12 {
-            assert_eq!(b.login_gate(&p, ip(n), "carol", 100).await, gate(expected));
-            b.failed_login(&p, ip(n), "carol", 100).await;
+            assert_eq!(b.login_gate(&p, ip(n), "carol", now).await, gate(expected));
+            now += expected;
+            b.failed_login(&p, ip(n), "carol", now).await;
             expected = (expected * 2).min(60);
         }
         assert_eq!(expected, 60);
-        assert_eq!(b.login_gate(&p, ip(99), "carol", 100).await, gate(60));
-        assert_eq!(b.login_gate(&p, ip(99), "dave", 100).await, gate(0));
-        // The slowdown never blocks: a correct password is still checked, and success clears it.
+        assert_eq!(b.login_gate(&p, ip(99), "carol", now).await, gate(60));
+        assert_eq!(b.login_gate(&p, ip(99), "dave", now).await, gate(0));
+        // Concurrent guesses queue behind the one already waiting: the account is checked at
+        // most once per delay, and a queue longer than two of the longest delays is refused.
+        assert_eq!(b.login_gate(&p, ip(98), "carol", now).await, gate(120));
+        assert_eq!(
+            b.login_gate(&p, ip(97), "carol", now).await,
+            LoginGate::Blocked { retry_after: 60 }
+        );
+        // A correct password is still checked once its turn comes, and success clears it.
         b.successful_login(ip(99), "carol").await;
-        assert_eq!(b.login_gate(&p, ip(1), "carol", 100).await, gate(0));
+        assert_eq!(b.login_gate(&p, ip(1), "carol", now).await, gate(0));
     }
     #[tokio::test]
     async fn account_slowdown_ends_with_its_window() {
@@ -743,6 +772,7 @@ mod tests {
                     AccountState {
                         failures: Failures(vec![10]),
                         delay: 0,
+                        next_check: 0,
                     },
                 );
             }

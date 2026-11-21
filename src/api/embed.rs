@@ -183,6 +183,8 @@ pub(super) async fn page(
     );
     Ok(response)
 }
+/// Live embed challenges or credentials one client address may hold for one agent.
+const CHALLENGES_PER_CLIENT: usize = 16;
 static EMBED_ATTEMPTS: std::sync::OnceLock<
     Mutex<HashMap<(PathBuf, String, std::net::IpAddr, &'static str), Vec<u64>>>,
 > = std::sync::OnceLock::new();
@@ -217,6 +219,7 @@ async fn rate(
     }
     attempts.push(now());
     drop(roots);
+    let client = client.to_string();
     // These credentials/challenges are transient, bounded encrypted app records.
     for (prefix, limit) in [
         ("embed:challenge:", 512usize),
@@ -224,6 +227,7 @@ async fn rate(
     ] {
         let records = app.store.list(prefix).await?;
         let mut retained = 0;
+        let mut own = 0;
         for doc in records {
             if doc["expires"].as_u64().unwrap_or(0) <= now() {
                 let key = if prefix == "embed:challenge:" {
@@ -236,7 +240,18 @@ async fn rate(
                 }
             } else if doc["agent_id"].as_str() == Some(agent) {
                 retained += 1;
+                if doc["client"].as_str() == Some(client.as_str()) {
+                    own += 1;
+                }
             }
+        }
+        // One address may hold only a few live challenges, so a handful of senders cannot
+        // fill the agent's cap and block real sign-ins.
+        if own >= CHALLENGES_PER_CLIENT {
+            return Err(ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Try again in a few minutes".into(),
+            ));
         }
         if retained >= limit {
             return Err(ApiError(
@@ -282,7 +297,7 @@ pub(super) async fn challenge(
     rate(&app, &id, client, "challenge").await?;
     let challenge = uuid();
     let expires = now() + 300;
-    app.store.put(&format!("embed:challenge:{challenge}"),&json!({"challenge_key":format!("embed:challenge:{challenge}"),"agent_id":id,"origin":origin,"revision":config["revision"],"proof":proof,"expires":expires})).await?;
+    app.store.put(&format!("embed:challenge:{challenge}"),&json!({"challenge_key":format!("embed:challenge:{challenge}"),"agent_id":id,"client":client.to_string(),"origin":origin,"revision":config["revision"],"proof":proof,"expires":expires})).await?;
     Ok(Json(json!({"challenge_id":challenge,"expires_at":expires})))
 }
 pub(super) async fn challenge_info(
@@ -1027,6 +1042,27 @@ mod tests {
         assert_eq!(
             router(app).oneshot(request).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
+        );
+    }
+    #[tokio::test]
+    async fn one_address_cannot_fill_the_agent_challenge_cap() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        for n in 0..CHALLENGES_PER_CLIENT {
+            app.store
+                .put(
+                    &format!("embed:challenge:c{n}"),
+                    &json!({"challenge_key":format!("embed:challenge:c{n}"),"agent_id":"agent-a",
+                        "client":"192.0.2.7","expires":now() + 300}),
+                )
+                .await
+                .unwrap();
+        }
+        let refused = rate(&app, "agent-a", "192.0.2.7".parse().unwrap(), "challenge").await;
+        assert_eq!(refused.unwrap_err().0, StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            rate(&app, "agent-a", "192.0.2.8".parse().unwrap(), "challenge")
+                .await
+                .is_ok()
         );
     }
     #[tokio::test]

@@ -120,6 +120,13 @@ pub(crate) async fn events(
         .await?
         .filter(|s| s["status"] == "active")
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Session not found".into()))?;
+    let slot = crate::request_limits::stream_slot(auth_doc["_user_id"].as_str().unwrap_or(""))
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many open live views; close some tabs".into(),
+            )
+        })?;
     let execution_epoch = opening["execution_epoch"].as_u64().unwrap_or(0);
     let after = params
         .get("after")
@@ -373,6 +380,11 @@ pub(crate) async fn events(
             }
         },
     );
+    // The slot lives as long as the stream, so a closed tab frees it.
+    let stream = futures_util::StreamExt::map(stream, move |event| {
+        let _slot = &slot;
+        event
+    });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 pub(crate) async fn control(State(app): State<App>, Json(body): Json<Value>) -> Api {

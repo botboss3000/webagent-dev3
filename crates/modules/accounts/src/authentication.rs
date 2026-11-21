@@ -45,6 +45,14 @@ pub async fn verify_password(hash: String, password: String) -> Result<bool> {
     })
     .await
 }
+/// A real Argon2 hash of a random password, made once, for timing-equal refusals.
+async fn dummy_hash() -> Result<String> {
+    static DUMMY: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+    DUMMY
+        .get_or_try_init(|| hash_password(SaltString::generate(&mut OsRng).as_str().to_owned()))
+        .await
+        .cloned()
+}
 pub fn message_api_token_hash(token: &str) -> Result<Option<[u8; 32]>> {
     if token.is_empty() {
         return Ok(None);
@@ -79,12 +87,13 @@ impl<C: RecordCodec> Repository<'_, C> {
         username: &str,
         password: String,
     ) -> Result<Option<VerifiedCredentials>> {
-        let Some(account) = self.account_by_username(username).await? else {
+        let account = self.account_by_username(username).await?;
+        // Unknown names and guests still pay for one Argon2 verification, so the answer
+        // time does not reveal which usernames exist.
+        let Some(account) = account.filter(|a| a["role"] != "guest") else {
+            verify_password(dummy_hash().await?, password).await?;
             return Ok(None);
         };
-        if account["role"] == "guest" {
-            return Ok(None);
-        }
         let valid = verify_password(
             account["password_hash"].as_str().unwrap_or("").into(),
             password,

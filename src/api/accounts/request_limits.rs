@@ -121,16 +121,24 @@ pub(crate) async fn messaging(State(app): State<App>, request: Request, next: Ne
     next.run(request).await
 }
 
-/// The client address a trusted front proves, if any; `None` for unknown clients.
+/// The client's address: a direct (untrusted) peer, or one a trusted front proves.
+/// `None` for unknown clients, such as a trusted proxy's request without the edge's proof.
 pub(crate) fn proven_client(app: &App, request: &Request) -> Option<std::net::IpAddr> {
-    // Without the edge's proof header the address can never be proven: skip the file reads.
-    request.headers().get("x-webagent-client-proof")?;
     let peer = request
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|info| info.0);
+    client_from(app, peer, request.headers())
+}
+
+/// `proven_client` for handlers that extract the peer and headers themselves.
+pub(crate) fn client_from(
+    app: &App,
+    peer: Option<std::net::SocketAddr>,
+    headers: &axum::http::HeaderMap,
+) -> Option<std::net::IpAddr> {
     let (_, settings) = current(app);
-    webagent_accounts::client_ip(peer, request.headers(), &settings)
+    webagent_accounts::client_ip(peer, headers, &settings)
         .ok()
         .filter(|ip| !ip.is_unspecified())
 }
@@ -167,16 +175,29 @@ pub(crate) async fn per_address(State(app): State<App>, request: Request, next: 
     next.run(request).await
 }
 
-/// Seconds to wait while wrong pairing codes from everyone have used this minute's cap.
-pub(crate) async fn pairing_wait(app: &App) -> u64 {
+/// Wrong pairing codes are capped per client address, and all clients together get ten
+/// times that, so one sender cannot lock pairing for everyone. Unknown clients share one key.
+const PAIRING_GLOBAL_FACTOR: u32 = 10;
+fn pairing_keys(client: Option<std::net::IpAddr>) -> [String; 2] {
+    let client = client.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string());
+    [
+        format!("pairing:failures:{client}"),
+        "pairing:failures".to_owned(),
+    ]
+}
+
+/// Seconds to wait while this client's, or everyone's, wrong pairing codes used their cap.
+pub(crate) async fn pairing_wait(app: &App, client: Option<std::net::IpAddr>) -> u64 {
     let (limits, _) = current(app);
-    app.login_attempts
-        .retry_after(
-            "pairing:failures",
-            limits.pairing_failures_per_minute,
-            now(),
-        )
-        .await
+    let cap = limits.pairing_failures_per_minute;
+    let [own, all] = pairing_keys(client);
+    let now = now();
+    let own = app.login_attempts.retry_after(&own, cap, now).await;
+    let all = app
+        .login_attempts
+        .retry_after(&all, cap.saturating_mul(PAIRING_GLOBAL_FACTOR), now)
+        .await;
+    own.max(all)
 }
 
 /// Count one new account against the shared daily cap; false once today's cap is used.
@@ -192,22 +213,66 @@ pub(crate) async fn new_account_admitted(app: &App) -> bool {
         .await
 }
 
-/// Record one wrong pairing code against the shared cap.
-pub(crate) async fn pairing_failed(app: &App) {
+/// Record one wrong pairing code against the client's cap and the shared ceiling.
+pub(crate) async fn pairing_failed(app: &App, client: Option<std::net::IpAddr>) {
     let (limits, _) = current(app);
+    let cap = limits.pairing_failures_per_minute;
+    let [own, all] = pairing_keys(client);
+    let now = now();
+    app.login_attempts.hit(own, cap, 60, now).await;
     app.login_attempts
-        .hit(
-            "pairing:failures".into(),
-            limits.pairing_failures_per_minute,
-            60,
-            now(),
-        )
+        .hit(all, cap.saturating_mul(PAIRING_GLOBAL_FACTOR), 60, now)
         .await;
+}
+
+/// Open live-update streams one user may hold at once: each polls the database several times
+/// a second, so the count is what bounds a user's background load.
+const STREAMS_PER_USER: usize = 32;
+static STREAMS: SyncMutex<Option<std::collections::HashMap<String, usize>>> = SyncMutex::new(None);
+
+/// One open stream; dropping it (the stream ends or the client goes away) frees the slot.
+pub(crate) struct StreamSlot(String);
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        let mut streams = STREAMS.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(map) = streams.as_mut() {
+            if let Some(count) = map.get_mut(&self.0) {
+                *count -= 1;
+                if *count == 0 {
+                    map.remove(&self.0);
+                }
+            }
+        }
+    }
+}
+
+/// A slot for one more open stream, or `None` once the user holds `STREAMS_PER_USER`.
+pub(crate) fn stream_slot(user: &str) -> Option<StreamSlot> {
+    let mut streams = STREAMS.lock().unwrap_or_else(|p| p.into_inner());
+    let count = streams
+        .get_or_insert_with(Default::default)
+        .entry(user.to_owned())
+        .or_insert(0);
+    if *count >= STREAMS_PER_USER {
+        return None;
+    }
+    *count += 1;
+    Some(StreamSlot(user.to_owned()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::user_lane;
+    use super::{stream_slot, user_lane, STREAMS_PER_USER};
+    #[test]
+    fn open_streams_are_capped_per_user_and_freed_on_drop() {
+        let held: Vec<_> = (0..STREAMS_PER_USER)
+            .map(|_| stream_slot("stream-cap-user").unwrap())
+            .collect();
+        assert!(stream_slot("stream-cap-user").is_none());
+        assert!(stream_slot("stream-cap-other").is_some());
+        drop(held);
+        assert!(stream_slot("stream-cap-user").is_some());
+    }
     use axum::http::Method;
     #[test]
     fn sends_and_uploads_are_the_limited_lanes() {

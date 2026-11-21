@@ -102,10 +102,52 @@ fn busy() -> Response {
 pub(crate) async fn limit(request: Request, next: Next) -> Response {
     static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
     let (max, _) = limits(request.extensions().get::<App>().cloned()).await;
+    let user = request
+        .extensions()
+        .get::<Value>()
+        .and_then(|identity| identity["_user_id"].as_str())
+        .unwrap_or("")
+        .to_owned();
+    // One user may hold at most half the slots, so media stays available to others.
+    let Some(_own) = UserSlot::take(&user, max.div_ceil(2).max(1)) else {
+        return busy();
+    };
     let Some(_slot) = InFlight::take(&IN_FLIGHT, max) else {
         return busy();
     };
     next.run(request).await
+}
+
+/// One user's in-flight media requests, released when the guard drops.
+struct UserSlot(String);
+static USER_SLOTS: std::sync::Mutex<Option<std::collections::HashMap<String, usize>>> =
+    std::sync::Mutex::new(None);
+impl UserSlot {
+    fn take(user: &str, limit: usize) -> Option<Self> {
+        let mut slots = USER_SLOTS.lock().unwrap_or_else(|p| p.into_inner());
+        let count = slots
+            .get_or_insert_with(Default::default)
+            .entry(user.to_owned())
+            .or_insert(0);
+        if *count >= limit {
+            return None;
+        }
+        *count += 1;
+        Some(Self(user.to_owned()))
+    }
+}
+impl Drop for UserSlot {
+    fn drop(&mut self) {
+        let mut slots = USER_SLOTS.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(map) = slots.as_mut() {
+            if let Some(count) = map.get_mut(&self.0) {
+                *count -= 1;
+                if *count == 0 {
+                    map.remove(&self.0);
+                }
+            }
+        }
+    }
 }
 
 /// Attachment reads (a strip of screenshot thumbnails loads together) wait up to ten seconds
@@ -129,6 +171,15 @@ pub(crate) async fn limit_reads(request: Request, next: Next) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn one_user_holds_at_most_its_share_of_media_slots() {
+        let a = super::UserSlot::take("media-share-user", 2).unwrap();
+        let _b = super::UserSlot::take("media-share-user", 2).unwrap();
+        assert!(super::UserSlot::take("media-share-user", 2).is_none());
+        assert!(super::UserSlot::take("media-share-other", 2).is_some());
+        drop(a);
+        assert!(super::UserSlot::take("media-share-user", 2).is_some());
+    }
     use super::*;
     use axum::{routing::post, Router};
 

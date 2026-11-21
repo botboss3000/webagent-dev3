@@ -543,8 +543,11 @@ pub async fn pairing(
 /// Trade a pairing code for this client's own secret, returned once.
 pub async fn pair(
     State(app): State<App>,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: axum::http::HeaderMap,
     Json(input): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
+    let client = crate::request_limits::client_from(&app, peer.map(|p| p.0 .0), &headers);
     let code = normalize_code(input["code"].as_str().unwrap_or(""));
     let name = input["name"]
         .as_str()
@@ -563,8 +566,8 @@ pub async fn pair(
             "Pairing code is invalid, used or expired".into(),
         )
     };
-    // Wrong codes from all clients share one cap, so guessing needs no address at all.
-    let wait = crate::request_limits::pairing_wait(&app).await;
+    // Wrong codes are capped per client, under a shared ceiling for all clients together.
+    let wait = crate::request_limits::pairing_wait(&app, client).await;
     if wait > 0 {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -574,7 +577,7 @@ pub async fn pair(
     let key = format!("{PAIRINGS}{}", digest(&code));
     let _guard = app.gate.lock().await;
     let Some(pairing) = app.store.get(&key).await? else {
-        crate::request_limits::pairing_failed(&app).await;
+        crate::request_limits::pairing_failed(&app, client).await;
         return Err(invalid());
     };
     // A code works once, even when it has expired.
