@@ -145,11 +145,15 @@ pub fn idle(envelope: &Value, latest: i64, generation: &str) -> bool {
 }
 
 /// Milliseconds until the next tick: one second after any change or unadmitted
-/// proposal, otherwise up to fifteen seconds but never past a schedule or retry deadline.
+/// proposal, otherwise up to [`FALLBACK_MS`] but never past a schedule or retry deadline.
 /// The reducer bumps `revision` on every tick, so that field alone is not a change;
 /// counting it kept an idle user re-ticking every second.
 /// Queued and admitted occurrences wait on a run: its end sends a wake that ticks at
 /// once, so they do not poll every second (a stuck run kept that going for days).
+/// Longest wait between ticks with nothing due. Events and run ends wake the tick at once, so
+/// this only bounds recovery from a missed wake; each tick starts the reducer process.
+pub const FALLBACK_MS: u64 = 60_000;
+
 #[must_use]
 pub fn delay(before: &Value, after: &Value, next: Option<u64>, now_ms: u64) -> u64 {
     let occurrences = || {
@@ -179,8 +183,8 @@ pub fn delay(before: &Value, after: &Value, next: Option<u64>, now_ms: u64) -> u
     next.into_iter()
         .chain(retry)
         .min()
-        .map_or(15_000, |deadline| {
-            deadline.saturating_sub(now_ms).clamp(1, 15_000)
+        .map_or(FALLBACK_MS, |deadline| {
+            deadline.saturating_sub(now_ms).clamp(1, FALLBACK_MS)
         })
 }
 
@@ -230,7 +234,7 @@ mod tests {
     #[test]
     fn idle_backoff_respects_deadlines_retries_and_state_changes() {
         let before = json!({"state":{"definitions":{},"occurrences":{}}});
-        assert_eq!(delay(&before, &before, None, 1000), 15_000);
+        assert_eq!(delay(&before, &before, None, 1000), FALLBACK_MS);
         assert_eq!(delay(&before, &before, Some(1500), 1000), 500);
         let mut retry = before.clone();
         retry["state"]["occurrences"]["retry"] = json!({"status":"retry_wait","retry_ms":1200});
@@ -238,11 +242,11 @@ mod tests {
         assert_eq!(delay(&before, &retry, None, 1000), 1000);
         let mut bumped = before.clone();
         bumped["state"]["revision"] = json!(before["state"]["revision"].as_u64().unwrap_or(0) + 1);
-        assert_eq!(delay(&before, &bumped, None, 1000), 15_000);
+        assert_eq!(delay(&before, &bumped, None, 1000), FALLBACK_MS);
         let mut waiting = before.clone();
         waiting["state"]["occurrences"]["review"] = json!({"status":"admitted"});
         waiting["state"]["occurrences"]["next"] = json!({"status":"queued"});
-        assert_eq!(delay(&waiting, &waiting, None, 1000), 15_000);
+        assert_eq!(delay(&waiting, &waiting, None, 1000), FALLBACK_MS);
         let mut proposed = waiting.clone();
         proposed["pending"] = json!([{"occurrence_id":"next"}]);
         assert_eq!(delay(&proposed, &proposed, None, 1000), 1000);

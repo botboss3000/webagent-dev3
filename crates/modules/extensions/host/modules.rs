@@ -1549,6 +1549,8 @@ pub(crate) async fn service(app: App) {
     }
     while workers.join_next().await.is_some() {}
 }
+/// Seconds between health probes of an unchanged module installation.
+const PROBE_INTERVAL_SECONDS: u64 = 60;
 async fn package_service(app: App, id: &'static str) {
     let mut jobs = tokio::task::JoinSet::new();
     let mut inflight = std::collections::HashSet::new();
@@ -1556,14 +1558,25 @@ async fn package_service(app: App, id: &'static str) {
     let mut next_poll = HashMap::new();
     let mut last_dispatched_wake = HashMap::new();
     let mut wake_hints = crate::wake::subscribe();
+    let mut last_check = 0;
     let mut last_probe = 0;
+    let mut probed_generation = String::new();
     let mut cursor = 0usize;
     loop {
         if app.stop.is_cancelled() {
             break;
         }
-        if now().saturating_sub(last_probe) >= 5 {
-            if let Ok(gen) = generation(id) {
+        // Each probe starts the module process (a fork of this one): check the installed
+        // generation every five seconds, but probe it only when it changed or once a minute.
+        if now().saturating_sub(last_check) >= 5 {
+            last_check = now();
+            let due = |gen: &String| {
+                *gen != probed_generation
+                    || now().saturating_sub(last_probe) >= PROBE_INTERVAL_SECONDS
+            };
+            if let Some(gen) = generation(id).ok().filter(due) {
+                probed_generation = gen.clone();
+                last_probe = now();
                 if let Ok(_lease) = package_lock(&app, id, false) {
                     let installed = app
                         .store
@@ -1598,7 +1611,6 @@ async fn package_service(app: App, id: &'static str) {
                     }
                 }
             }
-            last_probe = now();
         }
         // Omitted packages do not scan users. Separate package workers and two
         // bounded reducers prevent a slow webhook from delaying agent schedules.
