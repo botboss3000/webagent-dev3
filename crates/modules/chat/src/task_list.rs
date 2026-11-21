@@ -485,7 +485,7 @@ pub fn render_snapshot(list: &List, texts: &Value) -> String {
 }
 
 /// The one-line task state for each step's guidance message: each open section with its
-/// active steps and open count, or `None` with no open work. It carries no revision, so it
+/// active steps, next open step and open count, or `None` with no open work. It carries no revision, so it
 /// changes only when a section or step starts or finishes.
 #[must_use]
 pub fn step_line(list: &List, texts: &Value) -> Option<String> {
@@ -508,14 +508,21 @@ pub fn step_line(list: &List, texts: &Value) -> Option<String> {
                 .filter(|step| step.status == Status::InProgress)
                 .map(|step| format!("{} \"{}\"", step.id, step.label))
                 .collect::<Vec<_>>();
+            // The next step to start, so the agent always sees what comes after this one.
+            let next = section
+                .steps
+                .iter()
+                .find(|step| step.status == Status::Open)
+                .map(|step| format!(", next {} \"{}\"", step.id, step.label))
+                .unwrap_or_default();
             Some(if active.is_empty() {
                 format!(
-                    "{} \"{}\", {open} open, none in progress",
+                    "{} \"{}\", {open} open, none in progress{next}",
                     section.id, section.title
                 )
             } else {
                 format!(
-                    "{} \"{}\", {open} open, active {}",
+                    "{} \"{}\", {open} open, active {}{next}",
                     section.id,
                     section.title,
                     active.join(", ")
@@ -571,12 +578,15 @@ pub fn end_reminder(list: &List, texts: &Value) -> Option<String> {
 }
 
 /// The reminder to file tool work in the list, once `calls` tool calls since the user's last
-/// message reach the configured threshold without a `task_list_write` among them.
+/// message reach the configured threshold without a `task_list_write` among them. `{calls}`
+/// in the text is that count, so the text changes each call and a harness that passes the
+/// guidance message on only when it changes still shows it on every call.
 #[must_use]
 pub fn unfiled_reminder(calls: u64, filed: bool, texts: &Value) -> Option<String> {
     let threshold = texts["unfiled_after_calls"].as_u64().unwrap_or(0);
     let text = text_field(texts, "unfiled_reminder");
-    (threshold > 0 && calls >= threshold && !filed && !text.is_empty()).then_some(text)
+    (threshold > 0 && calls >= threshold && !filed && !text.is_empty())
+        .then(|| text.replace("{calls}", &calls.to_string()))
 }
 
 /// One line per section: id, title, origin, status and step counts.
@@ -900,7 +910,7 @@ mod tests {
         );
         assert_eq!(
             step_line(&list, &texts).unwrap(),
-            "Session tasks: s1 \"Fix login\", 2 open, active s1.2 \"Patch\"."
+            "Session tasks: s1 \"Fix login\", 2 open, active s1.2 \"Patch\", next s1.3 \"Verify\"."
         );
         // An outcome edit changes nothing the line shows.
         let (edited, _) = apply(
@@ -919,8 +929,14 @@ mod tests {
              earlier reply."
         );
         assert_eq!(end_reminder(&List::default(), &texts), None);
-        assert!(unfiled_reminder(8, false, &texts).is_some());
-        assert_eq!(unfiled_reminder(7, false, &texts), None);
-        assert_eq!(unfiled_reminder(9, true, &texts), None);
+        assert!(unfiled_reminder(3, false, &texts)
+            .unwrap()
+            .starts_with("Session tasks: 3 tool calls"));
+        assert_ne!(
+            unfiled_reminder(4, false, &texts),
+            unfiled_reminder(3, false, &texts)
+        );
+        assert_eq!(unfiled_reminder(2, false, &texts), None);
+        assert_eq!(unfiled_reminder(4, true, &texts), None);
     }
 }

@@ -56,7 +56,7 @@ pub mod self_edit;
 pub mod session;
 #[path = "../../../../../abilities/Core/base/tools/shared/task.rs"]
 pub mod task;
-#[path = "../../../../../abilities/Memory/task_progress/tools/shared/task_list.rs"]
+#[path = "../../../../../abilities/Core/task_progress/tools/shared/task_list.rs"]
 pub mod task_list;
 #[path = "../../../../../abilities/Core/base/tools/shared/text_search.rs"]
 pub mod text_search;

@@ -27,8 +27,8 @@ one piece of work: a user's request (`"origin":"user"`) or your own investigatio
   `cancelled` drops the whole section. Reopen a closed section with `"status":"open"`
   when a follow-up needs it.
 
-Track every multi-step piece of work here as you go; a plan the user approved already has
-its section, and that section's progress also updates the plan's checklist. The user can tick, add and remove steps in the chat's task panel; each change reaches
+When to keep the list and how is in the Task Progress skill. A plan the user approved
+already has its section, and that section's progress also updates the plan's checklist. The user can tick, add and remove steps in the chat's task panel; each change reaches
 you as a `task_list_read` result from the user, and the list's revision moves with it.
 If you end a turn while steps are still open you are reminded once; answer without a tool
 call to keep your earlier reply, or keep working. Statuses are your claims, not verified evidence: report what checks proved.

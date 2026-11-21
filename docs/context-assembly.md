@@ -346,10 +346,11 @@ providers and for bridge harnesses.
 | --- | --- | --- |
 | Rules | `crates/modules/chat/src/task_list.rs` | Sections (`s1`) and steps (`s1.2`) with server-assigned ids; statuses `open`, `in_progress`, `blocked`, `done`, `cancelled`; section notes, closing summary and plan flag; step outcome, evidence ids and `started_at`/`finished_at` (ms); one write adds or updates one section (`apply`), with the change lines and the sections it `created`, `started` and `closed` (`marks`); snapshot, step line and reminder texts |
 | Storage | `crates/modules/chat/host/storage/task_list.rs` | Current list `base_tasks:{sid}` and every revision `base_tasks:{sid}:r{n}` in the session owner's user plane, erased with the session; revision-fenced writes with a receipt per tool call (`task_list_write`) or user request (`task_list_user_write`); the user's changes wait in the current document until delivered; the snapshot view `base_tasks:{sid}:view` |
-| Tools | `abilities/Memory/task_progress/tools/` | `task_list_read` (overview, one section, an old revision, or the changes between two) and `task_list_write` (one section and its steps, `expected_revision` required); both core and allowed for every role |
+| Tools | `abilities/Core/task_progress/tools/` | `task_list_read` (overview, one section, an old revision, or the changes between two) and `task_list_write` (one section and its steps, `expected_revision` required); both core and allowed for every role |
 | Plan seeding | `set_execution_mode` | Leaving Plan with an approved plan adds a user-requested section from its checklist (plan flag set, no step started) and reports it as `task_list` in the result; the plan artifact's checklist follows that section's progress, from agent writes and panel edits |
 | Panel | `ui/chat/controls/tasks-chip.js`, `GET/POST /api/v3/sessions/{sid}/tasks` | The Tasks chip (done/total) and panel with History; everyone who can view the chat reads it, anyone who can send edits it (observers read-only); every write adds a session event so open chats refresh |
-| Texts | `config/configuration/prompts/task_list.json` | Snapshot heading and rule, empty text, step line, end reminder, unfiled reminder and its `unfiled_after_calls` threshold, user change heading; read live, no compile |
+| Texts | `config/configuration/prompts/task_list.json` | Snapshot heading and rule, empty text, step line, end reminder, unfiled reminder (with its `{calls}` count) and its `unfiled_after_calls` threshold (3), user change heading; read live, no compile |
+| Skill | `abilities/Core/task_progress/skills/task_progress.skill.md` | When to keep the list and how; loaded by default (`task_progress.skill.json`), so it is in the instructions whenever the ability is on |
 
 ### What reaches the model
 
@@ -358,8 +359,8 @@ providers and for bridge harnesses.
 | Snapshot | Instructions, right after Main Notes (definition `session-tasks-{revision}`) | Frozen per `notes_basis` | A rewind, a merge or a major reorder rebuilds it from the current list |
 | Agent writes | The agent's own `task_list_write` call and result in the history (new revision, change lines, `created`/`started`/`closed`) | Durable | Each write |
 | User edits | A server-added `task_list_read-<id>` exchange (`changed_by: the user`, the revision and its change lines) at the end of the history before the next call | Durable, delivered once each | Each panel edit |
-| Step line | Per-step guidance message: `Session tasks: s1 "Title", 2 open, active s1.2 "Label".` (each open section with unfinished steps) | One call, never saved | A step starts or finishes; it carries no revision |
-| Unfiled reminder | Per-step guidance message, after the step line | One call, never saved | `unfiled_after_calls` (default 8) tool calls since the user's last message with no `task_list_write` among them |
+| Step line | Per-step guidance message: `Session tasks: s1 "Title", 2 open, active s1.2 "Label", next s1.3 "Label".` (each open section with unfinished steps) | One call, never saved | A step starts or finishes; it carries no revision |
+| Unfiled reminder | Per-step guidance message, after the step line | One call, never saved | `unfiled_after_calls` (3) tool calls since the user's last message with no `task_list_write` among them; its text carries the count, so it changes every call |
 | End reminder | One extra call: the history (ending with the draft reply) plus a user message naming the open steps | One call, never saved | The first final reply of a run while open sections have open or in-progress steps |
 
 The list belongs to the session: every participant's runs get the snapshot, step line and
@@ -423,7 +424,7 @@ harness session, which it resumes while the history only grows.
   there is a new user message, its text differs from the last copy, or the session is fresh;
   each copy stays in the harness transcript. Because the step line has no revision and
   changes only when a step starts or finishes, copies appear only at those points; the
-  unfiled reminder adds one copy when it first appears and one when it clears.
+  unfiled reminder carries its call count, so a copy goes with every call while it applies.
 - Agent writes and user-edit rows reach the harness as new items rendered as text; the
   harness model sees ids on tool results (`[tool result <id>]`) but not on its own calls, so
   `evidence` should name result ids. Step times record the evidence window without ids.
