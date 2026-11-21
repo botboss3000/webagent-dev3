@@ -970,8 +970,16 @@ impl<
             self.store.scan_user_ids().await?
         };
         for user_id in users {
+            // One unreadable account must not stop every other account's work.
+            let store = match self.store.for_user(&user_id).await {
+                Ok(store) => store,
+                Err(error) => {
+                    tracing::warn!(%error, "Account skipped: its storage could not be opened");
+                    continue;
+                }
+            };
             let mut view = self.clone();
-            view.store = self.store.for_user(&user_id).await?;
+            view.store = store;
             views.push(view);
         }
         Ok(views)

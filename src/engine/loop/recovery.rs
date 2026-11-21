@@ -13,8 +13,16 @@ pub(crate) async fn recover(app: &App, startup: bool) -> Result<()> {
 pub(crate) async fn user_apps(app: &App) -> Result<Vec<App>> {
     let mut views = Vec::new();
     for user in app.store.scan_user_ids().await? {
+        // One unreadable account must not stop every other account's module work.
+        let store = match app.store.for_user(&user).await {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(%error, "Account skipped: its storage could not be opened");
+                continue;
+            }
+        };
         let mut view = app.clone();
-        view.store = app.store.for_user(&user).await?;
+        view.store = store;
         views.push(view);
     }
     Ok(views)

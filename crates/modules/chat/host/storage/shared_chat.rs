@@ -133,6 +133,51 @@ impl Store {
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn backfill_skips_an_unreadable_account_and_runs_once_per_account() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let id = |account: Value| account["user_id"].as_str().unwrap().to_owned();
+        let good = id(store
+            .create_user_account("good", "long-hash-placeholder")
+            .await
+            .unwrap());
+        let bad = id(store
+            .create_user_account("bad", "long-hash-placeholder")
+            .await
+            .unwrap());
+        store
+            .for_user(&good)
+            .await
+            .unwrap()
+            .put(
+                "session:older",
+                &json!({"id":"older","agent_id":"shared_default"}),
+            )
+            .await
+            .unwrap();
+        // A folder where the database file belongs: this account cannot be opened.
+        let blocked = root.path().join("user_data").join(&bad);
+        std::fs::create_dir_all(blocked.join(format!("{bad}.db"))).unwrap();
+        store.backfill_shared_directory().await.unwrap();
+        assert!(store.shared_directory("older").await.unwrap().is_some());
+        let marked = |user: &str| format!("shared_directory_backfilled:{user}");
+        assert!(store.get(&marked(&good)).await.unwrap().is_some());
+        assert!(store.get(&marked(&bad)).await.unwrap().is_none());
+        // Once marked, an account is not read again.
+        store
+            .for_user(&good)
+            .await
+            .unwrap()
+            .put(
+                "session:newer",
+                &json!({"id":"newer","agent_id":"shared_default"}),
+            )
+            .await
+            .unwrap();
+        store.backfill_shared_directory().await.unwrap();
+        assert!(store.shared_directory("newer").await.unwrap().is_none());
+    }
+    #[tokio::test]
     async fn invitations_are_single_use_hashed_and_shared_directory_is_immutable() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
@@ -204,20 +249,37 @@ mod tests {
 }
 
 impl Store {
+    /// Register each account's older sessions in the shared directory, once per account (new
+    /// sessions register when they are created). An account that cannot be read is skipped
+    /// and retried at the next start, so it never stops startup for everyone else.
     pub async fn backfill_shared_directory(&self) -> Result<()> {
         self.shared_schema().await?;
         for user in self.all_user_ids().await? {
-            let store = self.for_user(&user).await?;
-            for session in store.list("session:").await? {
-                let Some(sid) = session["id"].as_str() else {
-                    continue;
-                };
-                self.register_shared_session(
-                    &user,
-                    sid,
-                    session["agent_id"].as_str().unwrap_or("shared_default"),
-                )
-                .await?;
+            let marker = format!("shared_directory_backfilled:{user}");
+            if self.get(&marker).await?.is_some() {
+                continue;
+            }
+            let backfilled = async {
+                let store = self.for_user(&user).await?;
+                for session in store.list("session:").await? {
+                    let Some(sid) = session["id"].as_str() else {
+                        continue;
+                    };
+                    self.register_shared_session(
+                        &user,
+                        sid,
+                        session["agent_id"].as_str().unwrap_or("shared_default"),
+                    )
+                    .await?;
+                }
+                anyhow::Ok(())
+            }
+            .await;
+            match backfilled {
+                Ok(()) => self.put(&marker, &json!({})).await?,
+                Err(error) => {
+                    tracing::warn!(%error, "Shared directory backfill skipped an unreadable account")
+                }
             }
         }
         Ok(())
