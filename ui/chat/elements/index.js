@@ -113,7 +113,7 @@ async function refresh() {
   } catch(failure) {
     if(epoch!==generation)return;
     if([401,403,404].includes(failure.status)){disconnectActivity();return;}
-    error='Activity connection lost; retrying…';
+    error='Loading…';
   } finally {if(epoch===generation)busy=false;}
   // An idle poll with no new summaries, messages, error or progress change leaves the DOM untouched.
   if(changed || error!==before || (document.querySelector('#chat-above-pill.visible')!==null)!==paintedProgress)paint();
