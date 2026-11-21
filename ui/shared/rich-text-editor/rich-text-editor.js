@@ -11,7 +11,9 @@ const CSS = `
 .rte-bar{display:flex;align-items:center;gap:2px;padding:4px;border-bottom:var(--border-width) solid var(--border);overflow-x:auto;scrollbar-width:none}
 .rte-bar::-webkit-scrollbar{display:none}
 .rte:not([data-bar-open]) .rte-bar{display:none}
-.rte[data-bar-open] .rte-bar{padding-right:32px}
+/* The open bar stops short of the chevron so scrolled buttons never slide under it; the line under it moves to the writing area. */
+.rte[data-bar-open] .rte-bar{margin-right:32px;border-bottom:0}
+.rte[data-bar-open] .rte-doc{border-top:var(--border-width) solid var(--border)}
 .rte:not([data-bar-open]):not([data-readonly]) .rte-doc{padding-right:30px}
 .rte-toggle{position:absolute;top:7px;right:6px;z-index:1;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--fg-3);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background-color .15s ease,color .15s ease}
 .rte:not([data-bar-open]) .rte-toggle{top:3px;right:4px}
