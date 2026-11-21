@@ -59,6 +59,9 @@ parallel batch path in `batch.rs`; rules in `crates/modules/chat/src/task_list.r
   agent receives the new section as a `task_list_read` row on its next call. With a section
   open, a call that finds unfiled requests or no step in progress is refused
   (`error_kind: task_required`) with the requests named and what to do.
+- A `task_list_write` in the same model step counts as made, whichever order the calls run
+  in, so a step can file its work and make its change in parallel; a write the rules would
+  refuse, or one citing an unknown request, counts as not made.
 - On by default; the agent's Task Progress setting `task_gate` switches it off (the
   per-step and end-of-turn reminders stay).
 - Plan mode is independent: approving a plan still seeds its section.

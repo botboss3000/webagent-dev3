@@ -363,7 +363,7 @@ providers and for bridge harnesses.
 | Unfiled requests | Per-step guidance message, after the step line: `Unfiled requests: u7 "first words", ...` (requests neither cited by a section or step nor set aside) | One call, never saved | A user request arrives, or the agent cites or sets one aside; the task gate refuses changes while any are unfiled (docs/tool-policy.md) |
 | Gate section | A section the task gate opened reaches the history as a `task_list_read-<id>` row under `gate_change_heading` | Durable, delivered once | The gate opens a section because none was open |
 | Unfiled reminder | Per-step guidance message, after the step line | One call, never saved | `unfiled_after_calls` (3) tool calls since the user's last message with no `task_list_write` among them; its text carries the count, so it changes every call |
-| End reminder | One extra call: the history (ending with the draft reply) plus a user message naming the open steps and unfiled requests | One call, never saved | The first final reply of a run while open sections have open or in-progress steps, or requests are unfiled |
+| End reminder | One extra call: the history (ending with the draft reply) plus a user message naming the open steps and unfiled requests | One call, never saved | The first final reply of a run while open sections have open or in-progress steps, or requests are unfiled; not while the run's own background work (a broker check or release) is still running, since its notice starts the next run |
 
 The list belongs to the session: every participant's runs get the snapshot, step line and
 reminders, and the agent's tool calls write the session owner's list.

@@ -202,6 +202,8 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
     /// The task gate for tool call `pending_id` of run `rid` (generation `generation`) in
     /// session `sid`: `None` lets the call run, `Some(text)` refuses it with that message
     /// for the agent. With no section open the gate opens one and lets the call run.
+    /// `batch_writes` are the arguments of `task_list_write` calls in the same model step,
+    /// which the gate counts as made.
     fn session_task_gate<'a>(
         &'a self,
         store: &'a S,
@@ -209,6 +211,7 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         rid: &'a str,
         pending_id: &'a str,
         generation: &'a str,
+        batch_writes: &'a [Value],
     ) -> impl Future<Output = Result<Option<String>>> + Send + 'a;
     /// The reminder sent once when a turn of session `sid` ends while its task list still
     /// has open steps, or `None`.

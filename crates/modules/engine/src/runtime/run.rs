@@ -953,6 +953,16 @@ impl<
         {
             return Ok(None);
         }
+        // The list writes of this model step count as made, whichever order the calls run
+        // in, so a step can file its work and make its change in parallel.
+        let batch_writes: Vec<Value> = run["calls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|call| call["name"] == "task_list_write")
+            .filter_map(|call| call["arguments"].as_str())
+            .filter_map(|arguments| serde_json::from_str::<Value>(arguments).ok())
+            .collect();
         app.native
             .session_task_gate(
                 app.store.records(),
@@ -960,6 +970,7 @@ impl<
                 rid,
                 run["pending"]["id"].as_str().unwrap_or(""),
                 run["generation"].as_str().unwrap_or(""),
+                &batch_writes,
             )
             .await
     }
@@ -4287,11 +4298,28 @@ impl<
                                     &run,
                                     app.store.current_user_id(),
                                 )?;
-                                if let Some(message) = Box::pin(
-                                    app.native.session_tasks_end(app.store.records(), &task_sid),
-                                )
-                                .await?
-                                {
+                                // A turn that ends waiting on its own background work (a
+                                // broker check or release) leaves its step open on purpose;
+                                // the result arrives as a notice that starts the next run.
+                                let waiting = app
+                                    .store
+                                    .background_scan(Some(&task_sid))
+                                    .await?
+                                    .iter()
+                                    .any(|task| {
+                                        task["run_id"] == json!(id)
+                                            && !super::background::finished(task)
+                                    });
+                                let reminder = if waiting {
+                                    None
+                                } else {
+                                    Box::pin(
+                                        app.native
+                                            .session_tasks_end(app.store.records(), &task_sid),
+                                    )
+                                    .await?
+                                };
+                                if let Some(message) = reminder {
                                     run["task_reminder"] =
                                         json!({"draft":text,"message":message,"pending":true});
                                     run["phase"] = json!("model");

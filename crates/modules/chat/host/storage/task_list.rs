@@ -133,15 +133,19 @@ impl Store {
     }
 
     /// The task gate for tool call `pending_id` of run `rid` (see
-    /// [`webagent_chat::task_list::gate`]). Opening a section commits a revision attributed
-    /// to the gate, which the agent receives with its next model call; a retried call
-    /// returns its first answer through its receipt.
+    /// [`webagent_chat::task_list::gate`]). `batch_writes` are the arguments of the
+    /// `task_list_write` calls made in the same model step: the gate judges the list as
+    /// those writes leave it (one that would be refused counts as not made), so a batch
+    /// can file its work and make its change in parallel. Opening a section commits a
+    /// revision attributed to the gate, which the agent receives with its next model call;
+    /// a retried call returns its first answer through its receipt.
     pub(crate) async fn task_list_gate(
         &self,
         sid: &str,
         rid: &str,
         pending_id: &str,
         generation: &str,
+        batch_writes: &[Value],
     ) -> Result<TaskGate> {
         let receipt_key = format!("receipt:base:{sid}:{rid}:{pending_id}:gate_tasks");
         let _guard = self.context_gate.write().await;
@@ -158,7 +162,27 @@ impl Store {
         let (_, list) = list_in(self, &mut tx, sid).await?;
         let requests = requests_in(self, &mut tx, sid).await?;
         let texts = webagent_chat::task_list::texts();
-        let write = match webagent_chat::task_list::gate(&list, &requests, &texts) {
+        let mut judged = list.clone();
+        for arguments in batch_writes {
+            let mut write = arguments.clone();
+            if let Some(fields) = write.as_object_mut() {
+                for key in ["expected_revision", "fold_earlier", "fold_focus"] {
+                    fields.remove(key);
+                }
+            }
+            let applied = serde_json::from_value::<webagent_chat::task_list::Write>(write)
+                .ok()
+                .and_then(|write| {
+                    webagent_chat::task_list::apply(&judged, write, crate::now()).ok()
+                })
+                .filter(|(next, _)| {
+                    webagent_chat::task_list::unknown_requests(&judged, next, &requests).is_empty()
+                });
+            if let Some((next, _)) = applied {
+                judged = next;
+            }
+        }
+        let write = match webagent_chat::task_list::gate(&judged, &requests, &texts) {
             webagent_chat::task_list::Gate::Pass => {
                 tx.commit().await?;
                 return Ok(TaskGate::Pass);
@@ -630,18 +654,26 @@ mod tests {
             "{lines:?}"
         );
 
-        let TaskGate::Opened(revision) =
-            store.task_list_gate("s", "r", "call-1", "g").await.unwrap()
+        let TaskGate::Opened(revision) = store
+            .task_list_gate("s", "r", "call-1", "g", &[])
+            .await
+            .unwrap()
         else {
             panic!("no open section opens one");
         };
         assert_eq!(revision, 1);
         assert!(matches!(
-            store.task_list_gate("s", "r", "call-1", "g").await.unwrap(),
+            store
+                .task_list_gate("s", "r", "call-1", "g", &[])
+                .await
+                .unwrap(),
             TaskGate::Opened(1)
         ));
         assert!(matches!(
-            store.task_list_gate("s", "r", "call-2", "g").await.unwrap(),
+            store
+                .task_list_gate("s", "r", "call-2", "g", &[])
+                .await
+                .unwrap(),
             TaskGate::Pass
         ));
         let (_, lines, updates) = store
@@ -660,8 +692,10 @@ mod tests {
         );
 
         record("user:b", "Also check mobile").await;
-        let TaskGate::Refused(message) =
-            store.task_list_gate("s", "r", "call-3", "g").await.unwrap()
+        let TaskGate::Refused(message) = store
+            .task_list_gate("s", "r", "call-3", "g", &[])
+            .await
+            .unwrap()
         else {
             panic!("an unfiled request is refused while a section is open");
         };
@@ -704,8 +738,60 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            store.task_list_gate("s", "r", "call-4", "g").await.unwrap(),
+            store
+                .task_list_gate("s", "r", "call-4", "g", &[])
+                .await
+                .unwrap(),
             TaskGate::Pass
+        ));
+    }
+
+    /// A list write in the same model step counts as made, so the change in that step
+    /// passes without the gate opening its own section; a write naming an unknown request
+    /// or refused by the rules counts as not made.
+    #[tokio::test]
+    async fn the_gate_counts_the_steps_own_list_write() {
+        let (_root, app) = crate::runtime_tests::fixture_uninitialized().await;
+        let store = &app.store;
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active","created_at":1}),
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                "run:r",
+                &json!({"id":"r","session_id":"s","agent_id":"shared_default",
+                    "status":"running","generation":"g","lease_epoch":0}),
+            )
+            .await
+            .unwrap();
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .record_task_request(&mut tx, "s", "user:a", "Fix the login redirect")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let filing = json!({"expected_revision":0,"section":{"title":"Fix login","requests":["u1"]},
+            "steps":[{"label":"Patch the cookie path","status":"in_progress"}]});
+        assert!(matches!(
+            store
+                .task_list_gate("s", "r", "call-1", "g", &[filing])
+                .await
+                .unwrap(),
+            TaskGate::Pass
+        ));
+        assert!(store.task_list_current("s").await.unwrap().is_none());
+        let unknown = json!({"expected_revision":0,"section":{"title":"Fix login","requests":["u9"]},
+            "steps":[{"label":"Patch the cookie path","status":"in_progress"}]});
+        assert!(matches!(
+            store
+                .task_list_gate("s", "r", "call-2", "g", &[unknown, json!({"bad":true})])
+                .await
+                .unwrap(),
+            TaskGate::Opened(1)
         ));
     }
 
