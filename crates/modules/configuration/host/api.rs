@@ -364,9 +364,9 @@ pub(crate) async fn file_get(State(_app): State<App>, Path(path): Path<String>) 
     ))
 }
 
-/// `PUT /admin/config-files/{path}` `{"text", "expected_digest"}` → replace the file. JSON is
-/// parsed and checked by its owner's validator and kept pretty-printed; Markdown is saved as
-/// typed. The broker replaces the file only while it still holds the bytes read.
+/// `PUT /admin/config-files/{path}` `{"text", "expected_digest"}` → replace the file with the
+/// text as sent (key order and layout kept), after JSON is parsed and checked by its owner's
+/// validator. The broker replaces the file only while it still holds the bytes read.
 pub(crate) async fn file_put(
     State(app): State<App>,
     Path(path): Path<String>,
@@ -378,18 +378,15 @@ pub(crate) async fn file_put(
     if text.len() as u64 > LIVE_LIMIT {
         return Err(bad("File too large"));
     }
-    let bytes = if path.ends_with(".json") {
+    if path.ends_with(".json") {
         let value: Value = serde_json::from_str(text).map_err(|_| bad("Invalid JSON"))?;
         check_file(&app, &path, &value)
             .map_err(|error| bad(&format!("Invalid configuration: {error:#}")))?;
-        crate::live_files::pretty(&value)?
-    } else {
-        let mut bytes = text.as_bytes().to_vec();
-        if !bytes.ends_with(b"\n") {
-            bytes.push(b'\n');
-        }
-        bytes
-    };
+    }
+    let mut bytes = text.as_bytes().to_vec();
+    if !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+    }
     let _guard = app.gate.lock().await;
     let current = crate::live_files::current(&path, LIVE_LIMIT)?;
     if text_digest(&current) != expected {
