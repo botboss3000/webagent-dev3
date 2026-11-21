@@ -2,6 +2,7 @@
   "name": "message_session",
   "description": "Send an attributed message to a session in scope; returns admission, not the reply.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "allow",
     "member": "allow",

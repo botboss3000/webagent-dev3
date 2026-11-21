@@ -84,7 +84,10 @@
     ],
     "additionalProperties": false
   },
-  "effect": "read",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "none"
+  },
   "default_policy": {
     "operator": "allow",
     "member": "require_approval",

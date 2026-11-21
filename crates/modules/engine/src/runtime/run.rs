@@ -586,6 +586,12 @@ mod history_journal_tests {
     }
 }
 
+/// The task gate for agents that never saved the Task Progress setting `task_gate`: on in
+/// the app. Test fixtures switch it off because most runtime tests count model calls
+/// exactly; a saved setting always wins.
+pub static TASK_GATE_DEFAULT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
 impl<
         S: ScopedStorage
             + ModelRecords
@@ -928,6 +934,35 @@ impl<
         app.save(run).await
     }
     /// Bound freshness reconstruction independently of normal model/tool turn limits.
+    /// The task gate's refusal for tool `name` of `run`, or `None` when it may run. The gate
+    /// covers tools whose `task` is required while the agent's Task Progress setting
+    /// `task_gate` is on; an agent that never saved it follows [`TASK_GATE_DEFAULT`]. With no
+    /// section open it opens one instead.
+    pub(crate) async fn task_gate(
+        app: &Self,
+        run: &Value,
+        sid: &str,
+        rid: &str,
+        name: &str,
+        visibility: &Value,
+    ) -> Result<Option<String>> {
+        if !webagent_abilities::tool_definitions::task_required(name)
+            || !visibility["settings"]["task_progress"]["task_gate"]
+                .as_bool()
+                .unwrap_or_else(|| TASK_GATE_DEFAULT.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Ok(None);
+        }
+        app.native
+            .session_task_gate(
+                app.store.records(),
+                sid,
+                rid,
+                run["pending"]["id"].as_str().unwrap_or(""),
+                run["generation"].as_str().unwrap_or(""),
+            )
+            .await
+    }
     async fn rebuild_context(app: &Self, run: &mut Value) -> Result<bool> {
         let count = run["context_rebuilds"].as_u64().unwrap_or(0) + 1;
         run["context_rebuilds"] = json!(count);
@@ -1395,6 +1430,23 @@ impl<
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
             }
+        }
+        // The task gate: a change waits until the session task list accounts for every user
+        // request and a step is in progress (see docs/tool-policy.md).
+        if let Some(message) = Self::task_gate(&app, &run, &sid, &id, &name, &visibility).await? {
+            app.actions
+                .not_dispatched(app.store.records(), &run, &run["pending"])
+                .await?;
+            let result = json!({"status":"rejected","error_kind":"task_required","output":message});
+            Self::append_tool(&mut run, &result)?;
+            app.store
+                .save_run_observed(
+                    &mut run,
+                    "tool_result",
+                    &json!({"run_id":id,"name":name,"result":result}),
+                )
+                .await?;
+            return Ok(std::ops::ControlFlow::Continue(()));
         }
         if effective.permission != access::Permission::Deny && H::messaging_owns(&name) {
             if let Err(error) = app

@@ -407,6 +407,14 @@ impl Store {
         self.write_document(&mut tx,&format!("message_meta:{rid}"),&json!({"author_id":message["author_id"],"message_kind":message["message_kind"],"context_eligible":eligible,"queued":queued})).await?;
         self.insert_chat(&mut tx, sid, rid, "user", &message["content"])
             .await?;
+        // A participant's or another session's message is a request; a notice is not.
+        if !message["platform_notice"].is_object() {
+            let text = message["content"]
+                .as_str()
+                .map_or_else(|| message["content"].to_string(), str::to_owned);
+            self.record_message_request(&mut tx, sid, &format!("user:{rid}"), &text)
+                .await?;
+        }
         if queued {
             let queue = session
                 .as_object_mut()

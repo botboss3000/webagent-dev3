@@ -2,6 +2,7 @@
   "name": "terminal_open",
   "description": "Open a persistent isolated workspace PTY; policy-gated",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "require_approval",
     "member": "deny",

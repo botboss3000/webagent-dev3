@@ -154,6 +154,25 @@ impl Store {
             self.write_document(&mut t, &k, &v).await?;
         }
         self.legacy_message_meta(&mut t, &e, false).await?;
+        // A message the user sends while the agent works is a request too; a background
+        // notice (build result, board note) is not.
+        if !e["platform_notice"].is_object() {
+            let text = e["content"]
+                .as_str()
+                .map_or_else(|| e["content"].to_string(), str::to_owned);
+            self.record_message_request(
+                &mut t,
+                s,
+                &format!(
+                    "user:{}",
+                    e["id"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Invalid follow-up record"))?
+                ),
+                &text,
+            )
+            .await?;
+        }
         self.insert_chat(
             &mut t,
             s,

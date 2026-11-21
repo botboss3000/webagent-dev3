@@ -22,7 +22,178 @@ fn list_key(sid: &str) -> Result<String> {
     Ok(format!("base_tasks:{sid}"))
 }
 
+/// Session `sid`'s counted user requests (`u1`, `u2`, ...), the task gate's input. Not
+/// revisioned with the list, so a new message never makes the agent's write stale.
+fn requests_key(sid: &str) -> Result<String> {
+    Ok(format!("{}:labels", list_key(sid)?))
+}
+
+/// The requests record in `tx`, or an empty one.
+async fn requests_in(
+    store: &Store,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    sid: &str,
+) -> Result<webagent_chat::task_list::Requests> {
+    let raw = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+        .bind(requests_key(sid)?)
+        .fetch_optional(&mut **tx)
+        .await?;
+    match raw.map(|raw| store.unseal(&raw)).transpose()? {
+        Some(document) if document["session_id"] == sid => {
+            Ok(serde_json::from_value(document["requests"].clone())?)
+        }
+        _ => Ok(webagent_chat::task_list::Requests::default()),
+    }
+}
+
+/// The current task list in `tx`: its document (null before the first write) and list.
+async fn list_in(
+    store: &Store,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    sid: &str,
+) -> Result<(Value, webagent_chat::task_list::List)> {
+    let document = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+        .bind(list_key(sid)?)
+        .fetch_optional(&mut **tx)
+        .await?
+        .map(|raw| store.unseal(&raw))
+        .transpose()?
+        .filter(|document| document["session_id"] == sid)
+        .unwrap_or(Value::Null);
+    let list = if document.is_null() {
+        webagent_chat::task_list::List::default()
+    } else {
+        serde_json::from_value(document["list"].clone())?
+    };
+    Ok((document, list))
+}
+
+/// What the task gate did with one call.
+pub(crate) enum TaskGate {
+    Pass,
+    /// It opened a section (this revision) and the call goes ahead.
+    Opened(u64),
+    /// The call is refused with this message.
+    Refused(String),
+}
+
+/// Whether stored user messages become task gate requests: on in the app. Runtime test
+/// fixtures switch it off because most tests count model calls exactly, and an unfiled
+/// request adds the end-of-turn reminder's call.
+pub(crate) static RECORD_MESSAGE_REQUESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
 impl Store {
+    /// [`Store::record_task_request`] for a user message as it is stored (see
+    /// [`RECORD_MESSAGE_REQUESTS`]).
+    pub(crate) async fn record_message_request(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        message_id: &str,
+        text: &str,
+    ) -> Result<()> {
+        if !RECORD_MESSAGE_REQUESTS.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.record_task_request(tx, sid, message_id, text).await
+    }
+
+    /// Count message `message_id` of session `sid` as the next user request, inside the
+    /// transaction that stores the message; a message already counted is left alone.
+    pub(crate) async fn record_task_request(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        message_id: &str,
+        text: &str,
+    ) -> Result<()> {
+        let mut requests = requests_in(self, tx, sid).await?;
+        if !requests.add(message_id, text, crate::now()) {
+            return Ok(());
+        }
+        let document = json!({"schema_version":1,"session_id":sid,"requests":requests});
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .bind(requests_key(sid)?)
+            .bind(self.encode_user_record(&document)?)
+            .execute(&mut **tx)
+            .await?;
+        Ok(())
+    }
+
+    /// Session `sid`'s counted user requests.
+    pub(crate) async fn task_requests(
+        &self,
+        sid: &str,
+    ) -> Result<webagent_chat::task_list::Requests> {
+        let mut tx = self.pool.begin().await?;
+        let requests = requests_in(self, &mut tx, sid).await?;
+        tx.commit().await?;
+        Ok(requests)
+    }
+
+    /// The task gate for tool call `pending_id` of run `rid` (see
+    /// [`webagent_chat::task_list::gate`]). Opening a section commits a revision attributed
+    /// to the gate, which the agent receives with its next model call; a retried call
+    /// returns its first answer through its receipt.
+    pub(crate) async fn task_list_gate(
+        &self,
+        sid: &str,
+        rid: &str,
+        pending_id: &str,
+        generation: &str,
+    ) -> Result<TaskGate> {
+        let receipt_key = format!("receipt:base:{sid}:{rid}:{pending_id}:gate_tasks");
+        let _guard = self.context_gate.write().await;
+        let mut tx = self.pool.begin().await?;
+        if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+            .bind(&receipt_key)
+            .fetch_optional(&mut *tx)
+            .await?
+        {
+            let receipt = self.unseal(&raw)?;
+            tx.commit().await?;
+            return Ok(TaskGate::Opened(receipt["revision"].as_u64().unwrap_or(0)));
+        }
+        let (_, list) = list_in(self, &mut tx, sid).await?;
+        let requests = requests_in(self, &mut tx, sid).await?;
+        let texts = webagent_chat::task_list::texts();
+        let write = match webagent_chat::task_list::gate(&list, &requests, &texts) {
+            webagent_chat::task_list::Gate::Pass => {
+                tx.commit().await?;
+                return Ok(TaskGate::Pass);
+            }
+            webagent_chat::task_list::Gate::Refuse(message) => {
+                tx.commit().await?;
+                return Ok(TaskGate::Refused(message));
+            }
+            webagent_chat::task_list::Gate::Open(write) => write,
+        };
+        self.base_run_fence(&mut tx, sid, rid, None, Some(generation))
+            .await?;
+        let (next, changes) = webagent_chat::task_list::apply(&list, write, crate::now())?;
+        let marks = webagent_chat::task_list::marks(&list, &next);
+        let output = self
+            .task_list_commit(
+                &mut tx,
+                sid,
+                list.revision,
+                json!({"gate":rid}),
+                &serde_json::to_value(&next)?,
+                &json!(changes),
+                &marks,
+            )
+            .await?;
+        let revision = output["revision"].as_u64().unwrap_or(0);
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
+            .bind(&receipt_key)
+            .bind(self.encode_user_record(&json!({"revision":revision}))?)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(TaskGate::Opened(revision))
+    }
+
     /// Session `sid`'s task list document at `revision` (the current one when `None`), read
     /// for run `rid` of that session; `None` before the first write or for an unknown revision.
     pub(crate) async fn task_list(
@@ -216,12 +387,30 @@ impl Store {
                 "The task list changed (now revision {current}); read it and write again"
             ));
         }
+        // A cited or set-aside label must name a counted request.
+        let before: webagent_chat::task_list::List = if stored.is_null() {
+            webagent_chat::task_list::List::default()
+        } else {
+            serde_json::from_value(stored["list"].clone())?
+        };
+        let after: webagent_chat::task_list::List = serde_json::from_value(list.clone())?;
+        let requests = requests_in(self, tx, sid).await?;
+        let unknown = webagent_chat::task_list::unknown_requests(&before, &after, &requests);
+        if !unknown.is_empty() {
+            return Err(anyhow!(
+                "No request {}: cite only the u-labels the task list names",
+                unknown.join(", ")
+            ));
+        }
         let mut waiting = stored["user_changes"]
             .as_array()
             .cloned()
             .unwrap_or_default();
+        // The user's changes, and a section the task gate opened, reach the agent once each.
         if by == "user" {
             waiting.push(json!({"revision":revision,"changes":changes}));
+        } else if by["gate"].is_string() {
+            waiting.push(json!({"revision":revision,"changes":changes,"by":"gate"}));
         }
         let skip = waiting.len().saturating_sub(MAX_USER_CHANGES);
         let waiting: Vec<Value> = waiting.into_iter().skip(skip).collect();
@@ -336,7 +525,12 @@ impl Store {
                 .filter_map(Value::as_str)
                 .collect::<Vec<_>>()
                 .join("\n");
-            let heading = texts["user_change_heading"].as_str().unwrap_or("");
+            let heading_key = if change["by"] == "gate" {
+                "gate_change_heading"
+            } else {
+                "user_change_heading"
+            };
+            let heading = texts[heading_key].as_str().unwrap_or("");
             updates.push((
                 revision,
                 format!(
@@ -351,8 +545,10 @@ impl Store {
         }
         let id = format!("session-tasks-{}", view["revision"].as_u64().unwrap_or(0));
         let snapshot = view["snapshot"].as_str().unwrap_or("").to_owned();
+        let requests = self.task_requests(sid).await?;
         let lines = [
             webagent_chat::task_list::step_line(&list, &texts),
+            webagent_chat::task_list::unfiled_line(&list, &requests, &texts),
             webagent_chat::task_list::unfiled_reminder(calls, filed, &texts),
         ];
         Ok((
@@ -362,25 +558,156 @@ impl Store {
         ))
     }
 
-    /// The end-of-turn reminder for session `sid` when its task list still has open steps,
-    /// or `None`.
+    /// The end-of-turn reminder for session `sid` when its task list still has open steps
+    /// or user requests are unfiled, or `None`.
     pub(crate) async fn task_list_end_reminder(&self, sid: &str) -> Result<Option<String>> {
         let list: webagent_chat::task_list::List = match self.get(&list_key(sid)?).await? {
             Some(document) if document["session_id"] == sid => {
                 serde_json::from_value(document["list"].clone())?
             }
-            _ => return Ok(None),
+            _ => webagent_chat::task_list::List::default(),
         };
-        Ok(webagent_chat::task_list::end_reminder(
-            &list,
-            &webagent_chat::task_list::texts(),
-        ))
+        let texts = webagent_chat::task_list::texts();
+        let requests = self.task_requests(sid).await?;
+        let lines: Vec<String> = [
+            webagent_chat::task_list::end_reminder(&list, &texts),
+            webagent_chat::task_list::end_unfiled(&list, &requests, &texts),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        Ok((!lines.is_empty()).then(|| lines.join("\n")))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Requests get labels with their messages; the gate opens a section once (a retried
+    /// call replays), passes while every request is filed, refuses a new unfiled one and
+    /// delivers the opened section to the agent once; a citation must name a counted request.
+    #[tokio::test]
+    async fn the_gate_opens_once_and_refuses_unfiled_requests() {
+        let (_root, app) = crate::runtime_tests::fixture_uninitialized().await;
+        let store = &app.store;
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active","created_at":1}),
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                "run:r",
+                &json!({"id":"r","session_id":"s","agent_id":"shared_default",
+                    "status":"running","generation":"g","lease_epoch":0,
+                    "pending":{"id":"call-1","state":"requested"}}),
+            )
+            .await
+            .unwrap();
+        let record = |message: &'static str, text: &'static str| async move {
+            let mut tx = store.pool.begin().await.unwrap();
+            store
+                .record_task_request(&mut tx, "s", message, text)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        };
+        record("user:a", "Fix the login redirect").await;
+        record("user:a", "Fix the login redirect").await;
+        assert_eq!(store.task_requests("s").await.unwrap().items.len(), 1);
+        // A model call before the gate fixes the snapshot at revision 0, as in a session.
+        let (_, lines, _) = store
+            .task_list_context("s", "basis", 0, false)
+            .await
+            .unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("Unfiled requests: u1")),
+            "{lines:?}"
+        );
+
+        let TaskGate::Opened(revision) =
+            store.task_list_gate("s", "r", "call-1", "g").await.unwrap()
+        else {
+            panic!("no open section opens one");
+        };
+        assert_eq!(revision, 1);
+        assert!(matches!(
+            store.task_list_gate("s", "r", "call-1", "g").await.unwrap(),
+            TaskGate::Opened(1)
+        ));
+        assert!(matches!(
+            store.task_list_gate("s", "r", "call-2", "g").await.unwrap(),
+            TaskGate::Pass
+        ));
+        let (_, lines, updates) = store
+            .task_list_context("s", "basis", 0, false)
+            .await
+            .unwrap();
+        assert!(
+            !lines.iter().any(|line| line.starts_with("Unfiled")),
+            "{lines:?}"
+        );
+        assert_eq!(updates.len(), 1);
+        assert!(
+            updates[0].1.contains("task gate opened"),
+            "{}",
+            updates[0].1
+        );
+
+        record("user:b", "Also check mobile").await;
+        let TaskGate::Refused(message) =
+            store.task_list_gate("s", "r", "call-3", "g").await.unwrap()
+        else {
+            panic!("an unfiled request is refused while a section is open");
+        };
+        assert!(message.contains("u2 \"Also check mobile\""), "{message}");
+        let (_, lines, _) = store
+            .task_list_context("s", "basis", 0, false)
+            .await
+            .unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("Unfiled requests: u2")),
+            "{lines:?}"
+        );
+        assert!(store
+            .task_list_end_reminder("s")
+            .await
+            .unwrap()
+            .is_some_and(|text| text.contains("u2")));
+
+        // Citing a request that was never counted is refused at commit.
+        let document = store.task_list_current("s").await.unwrap().unwrap();
+        let list: webagent_chat::task_list::List =
+            serde_json::from_value(document["list"].clone()).unwrap();
+        let write = |labels: serde_json::Value| -> webagent_chat::task_list::Write {
+            serde_json::from_value(json!({"section":{"id":"s1","requests":labels}})).unwrap()
+        };
+        let (bad, changes) =
+            webagent_chat::task_list::apply(&list, write(json!(["u9"])), 2).unwrap();
+        let marks = webagent_chat::task_list::marks(&list, &bad);
+        assert!(store
+            .task_list_user_write("s", "bad-cite", 1, &json!(bad), &json!(changes), &marks)
+            .await
+            .is_err());
+        let (good, changes) =
+            webagent_chat::task_list::apply(&list, write(json!(["u2"])), 2).unwrap();
+        let marks = webagent_chat::task_list::marks(&list, &good);
+        store
+            .task_list_user_write("s", "good-cite", 1, &json!(good), &json!(changes), &marks)
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.task_list_gate("s", "r", "call-4", "g").await.unwrap(),
+            TaskGate::Pass
+        ));
+    }
 
     #[tokio::test]
     async fn writes_are_revision_fenced_replayed_and_kept_per_revision() {

@@ -2,6 +2,7 @@
   "name": "delegate_to_agent",
   "description": "Hand off to an accessible saved agent in a new private conversation using a text summary.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "require_approval",
     "member": "require_approval",

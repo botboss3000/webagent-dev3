@@ -71,6 +71,9 @@ pub struct Step {
     pub started_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<u64>,
+    /// The user requests (`u7`) this step answers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requests: Vec<String>,
 }
 
 /// One piece of work: a user request or the agent's own investigation.
@@ -90,6 +93,9 @@ pub struct Section {
     /// Whether an approved plan created it; its progress then also updates the plan.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plan: bool,
+    /// The user requests (`u7`) this section answers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requests: Vec<String>,
 }
 
 /// A session's task list at one revision.
@@ -99,6 +105,17 @@ pub struct List {
     pub sections: Vec<Section>,
     /// The number the next new section gets.
     pub next_section: u32,
+    /// User requests the agent decided need no task, each with its reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_aside: Vec<SetAside>,
+}
+
+/// A user request set aside: it needs no task, for the stated reason.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetAside {
+    pub request: String,
+    pub reason: String,
 }
 
 /// The section part of a write: `id` names an existing section, otherwise a new one.
@@ -117,6 +134,9 @@ pub struct SectionWrite {
     pub status: Option<Status>,
     #[serde(default)]
     pub summary: Option<String>,
+    /// User requests (`u7`) this section answers, added to those it cites.
+    #[serde(default)]
+    pub requests: Option<Vec<String>>,
 }
 
 /// One step of a write: `id` names an existing step of the section, otherwise a new one.
@@ -133,15 +153,26 @@ pub struct StepWrite {
     pub outcome: Option<String>,
     #[serde(default)]
     pub evidence: Option<Vec<String>>,
+    /// User requests (`u7`) this step answers, added to those it cites.
+    #[serde(default)]
+    pub requests: Option<Vec<String>>,
 }
 
-/// One write: a section and the steps to add or change in it; steps left out are untouched.
+/// One write: a section and the steps to add or change in it (steps left out are
+/// untouched), and user requests to set aside or bring back. A write may only set aside
+/// or restore requests and leave out the section.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Write {
+    #[serde(default)]
     pub section: SectionWrite,
     #[serde(default)]
     pub steps: Vec<StepWrite>,
+    #[serde(default)]
+    pub set_aside: Vec<SetAside>,
+    /// Set-aside requests to make unfiled again (the user's undo in the Tasks panel).
+    #[serde(default)]
+    pub restore: Vec<String>,
     /// Set only by the server when an approved plan seeds the section.
     #[serde(skip)]
     pub plan: bool,
@@ -158,6 +189,35 @@ fn text(value: &str, min: usize, max: usize, what: &str) -> Result<String> {
         bail!("{what} needs {min}..{max} bytes without control characters");
     }
     Ok(value.to_owned())
+}
+
+/// A user request label: `u` and its number (`u7`).
+fn request_label(label: &str) -> Result<String> {
+    let digits = label.strip_prefix('u').unwrap_or("");
+    if digits.is_empty()
+        || digits.len() > 6
+        || digits.starts_with('0')
+        || !digits.bytes().all(|b| b.is_ascii_digit())
+    {
+        bail!("{label:?} is not a request label; use the u-labels the list names (u7)");
+    }
+    Ok(label.to_owned())
+}
+
+/// Add `labels` to `cited`, each once; the labels newly added.
+fn cite(cited: &mut Vec<String>, labels: Vec<String>) -> Result<Vec<String>> {
+    if labels.len() > MAX_EVIDENCE {
+        bail!("One write cites at most {MAX_EVIDENCE} requests per section or step");
+    }
+    let mut added = Vec::new();
+    for label in labels {
+        let label = request_label(&label)?;
+        if !cited.contains(&label) {
+            cited.push(label.clone());
+            added.push(label);
+        }
+    }
+    Ok(added)
 }
 
 fn evidence(ids: Vec<String>) -> Result<Vec<String>> {
@@ -178,6 +238,36 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
         .checked_add(1)
         .ok_or_else(|| anyhow!("Task list revision exhausted"))?;
     let mut changes = Vec::new();
+    for label in &write.restore {
+        let label = request_label(label)?;
+        let before = next.set_aside.len();
+        next.set_aside.retain(|aside| aside.request != label);
+        if next.set_aside.len() == before {
+            bail!("{label} is not set aside");
+        }
+        changes.push(format!("{label} restored"));
+    }
+    for aside in write.set_aside {
+        let request = request_label(&aside.request)?;
+        let reason = text(&aside.reason, 3, 200, "A set-aside reason")?;
+        next.set_aside.retain(|old| old.request != request);
+        changes.push(format!("{request} set aside: {reason}"));
+        next.set_aside.push(SetAside { request, reason });
+    }
+    let section_part = write.section.id.is_some()
+        || write.section.title.is_some()
+        || write.section.origin.is_some()
+        || write.section.notes.is_some()
+        || write.section.status.is_some()
+        || write.section.summary.is_some()
+        || write.section.requests.is_some()
+        || !write.steps.is_empty();
+    if !section_part {
+        if changes.is_empty() {
+            bail!("The write changes nothing");
+        }
+        return Ok((next, changes));
+    }
     let index = match write.section.id.as_deref() {
         Some(id) => next
             .sections
@@ -204,6 +294,7 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
                 steps: Vec::new(),
                 next_step: 0,
                 plan: write.plan,
+                requests: Vec::new(),
             };
             changes.push(format!("{} added: {}", section.id, section.title));
             next.sections.push(section);
@@ -228,8 +319,26 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
         section.notes = text(notes, 0, 1200, "Section notes")?;
         changes.push(format!("{} notes updated", section.id));
     }
+    let mut cited = Vec::new();
+    if let Some(labels) = write.section.requests {
+        let added = cite(&mut section.requests, labels)?;
+        if !added.is_empty() {
+            changes.push(format!("{} cites {}", section.id, added.join(", ")));
+        }
+        cited.extend(added);
+    }
     for step in write.steps {
-        changes.push(write_step(section, step, now)?);
+        let labels = step.requests.clone();
+        let (index, line) = write_step(section, step, now)?;
+        changes.push(line);
+        if let Some(labels) = labels {
+            let step = &mut section.steps[index];
+            let added = cite(&mut step.requests, labels)?;
+            if !added.is_empty() {
+                changes.push(format!("{} cites {}", step.id, added.join(", ")));
+            }
+            cited.extend(added);
+        }
     }
     if let Some(summary) = write.section.summary.as_deref() {
         section.summary = text(summary, 20, 1200, "A section summary")?;
@@ -244,6 +353,9 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
     } else if section.status == Status::Done && write.section.summary.is_some() {
         changes.push(format!("{} summary updated", section.id));
     }
+    // A cited request is no longer set aside.
+    next.set_aside
+        .retain(|aside| !cited.contains(&aside.request));
     if changes.is_empty() {
         bail!("The write changes nothing");
     }
@@ -274,7 +386,8 @@ fn set_section_status(section: &mut Section, status: Status) -> Result<()> {
     Ok(())
 }
 
-fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<String> {
+/// Apply one step write; the step's index and the change line.
+fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<(usize, String)> {
     if section.status != Status::Open {
         bail!(
             "{} is {}; reopen it before changing its steps",
@@ -305,6 +418,7 @@ fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<Strin
                 evidence: Vec::new(),
                 started_at: None,
                 finished_at: None,
+                requests: Vec::new(),
             });
             section.steps.len() - 1
         }
@@ -334,11 +448,12 @@ fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<Strin
         }
         step.status = status;
     }
-    Ok(if new {
+    let line = if new {
         format!("{} added: {}", step.id, step.label)
     } else {
         format!("{} {}", step.id, step.status.word())
-    })
+    };
+    Ok((index, line))
 }
 
 /// The write that seeds a user-requested section from an approved plan's checklist.
@@ -359,6 +474,7 @@ pub fn plan_section(title: &str, notes: &str, labels: &[String]) -> Write {
             })
             .collect(),
         plan: true,
+        ..Write::default()
     }
 }
 
@@ -447,6 +563,214 @@ pub fn texts() -> Value {
     })
     .or_else(|_| serde_json::from_str(PACKAGED_TEXTS).map_err(anyhow::Error::from))
     .unwrap_or_default()
+}
+
+/// User requests one session's labels record keeps; the oldest drop first.
+pub const MAX_REQUESTS: usize = 500;
+/// Characters of a request's text kept to name it.
+const REQUEST_PREVIEW: usize = 80;
+
+/// One counted user request: a message the task list must cite or set aside before a
+/// change is made (the task gate).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Request {
+    /// Its label, `u` and a number that is never reused in the session.
+    pub id: String,
+    /// The chat message (or run) it came from.
+    pub message: String,
+    /// Its first words, to name it.
+    pub text: String,
+    pub at: u64,
+}
+
+/// A session's counted user requests, oldest first.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Requests {
+    pub next: u32,
+    pub items: Vec<Request>,
+}
+
+impl Requests {
+    /// Count message `message` with text `text` as the next request; `false` when it is
+    /// already counted.
+    pub fn add(&mut self, message: &str, text: &str, at: u64) -> bool {
+        if self.items.iter().any(|item| item.message == message) {
+            return false;
+        }
+        self.next += 1;
+        let mut preview: String = text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(REQUEST_PREVIEW)
+            .collect();
+        if text.chars().count() > REQUEST_PREVIEW {
+            preview.push('…');
+        }
+        self.items.push(Request {
+            id: format!("u{}", self.next),
+            message: message.to_owned(),
+            text: preview,
+            at,
+        });
+        let skip = self.items.len().saturating_sub(MAX_REQUESTS);
+        self.items.drain(..skip);
+        true
+    }
+}
+
+/// Every request label the list cites, in sections or steps.
+fn cited(list: &List) -> std::collections::HashSet<&str> {
+    list.sections
+        .iter()
+        .flat_map(|section| {
+            section
+                .requests
+                .iter()
+                .chain(section.steps.iter().flat_map(|step| step.requests.iter()))
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+/// The requests neither cited by a section or step nor set aside, oldest first.
+#[must_use]
+pub fn unfiled<'a>(list: &List, requests: &'a Requests) -> Vec<&'a Request> {
+    let cited = cited(list);
+    requests
+        .items
+        .iter()
+        .filter(|item| {
+            !cited.contains(item.id.as_str())
+                && !list.set_aside.iter().any(|aside| aside.request == item.id)
+        })
+        .collect()
+}
+
+/// Labels a list cites or sets aside that `requests` does not know, so a write naming a
+/// request that was never counted is refused. Only labels new since `before` are checked.
+#[must_use]
+pub fn unknown_requests(before: &List, after: &List, requests: &Requests) -> Vec<String> {
+    let known = |label: &str| requests.items.iter().any(|item| item.id == label);
+    let old = cited(before);
+    let mut unknown: Vec<String> = cited(after)
+        .into_iter()
+        .chain(after.set_aside.iter().map(|aside| aside.request.as_str()))
+        .filter(|label| !old.contains(label) && !known(label))
+        .filter(|label| !before.set_aside.iter().any(|aside| aside.request == *label))
+        .map(str::to_owned)
+        .collect();
+    unknown.sort();
+    unknown.dedup();
+    unknown
+}
+
+/// `u7 "first words", u8 "..."` for the guidance and gate texts.
+fn named(requests: &[&Request]) -> String {
+    requests
+        .iter()
+        .map(|item| format!("{} \"{}\"", item.id, item.text))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Whether an open section has a step in progress.
+fn step_in_progress(list: &List) -> bool {
+    list.sections.iter().any(|section| {
+        section.status == Status::Open
+            && section
+                .steps
+                .iter()
+                .any(|step| step.status == Status::InProgress)
+    })
+}
+
+/// What the task gate does with a call that needs it.
+#[derive(Debug)]
+pub enum Gate {
+    /// Every request is cited or set aside and a step is in progress.
+    Pass,
+    /// No section is open: this write opens one for the unfiled requests with a
+    /// placeholder step in progress, and the call goes ahead.
+    Open(Write),
+    /// The call is refused with this message for the agent.
+    Refuse(String),
+}
+
+/// The task gate for one call that needs it (see [`Gate`]).
+#[must_use]
+pub fn gate(list: &List, requests: &Requests, texts: &Value) -> Gate {
+    let unfiled = unfiled(list, requests);
+    let in_progress = step_in_progress(list);
+    if unfiled.is_empty() && in_progress {
+        return Gate::Pass;
+    }
+    if !list
+        .sections
+        .iter()
+        .any(|section| section.status == Status::Open)
+    {
+        let title = unfiled
+            .first()
+            .map(|item| item.text.trim_end_matches('…').trim())
+            .filter(|title| title.len() >= 3)
+            .map_or_else(
+                || "Requested change".to_owned(),
+                |title| {
+                    // Section titles are at most 120 bytes; cut at a character boundary.
+                    let mut cut = String::new();
+                    for ch in title.chars() {
+                        if cut.len() + ch.len_utf8() > 120 {
+                            break;
+                        }
+                        cut.push(ch);
+                    }
+                    cut
+                },
+            );
+        return Gate::Open(Write {
+            section: SectionWrite {
+                title: Some(title),
+                origin: Some(Origin::User),
+                requests: (!unfiled.is_empty())
+                    .then(|| unfiled.iter().map(|item| item.id.clone()).collect()),
+                ..SectionWrite::default()
+            },
+            steps: vec![StepWrite {
+                label: Some(text_field(texts, "gate_placeholder_step")),
+                status: Some(Status::InProgress),
+                ..StepWrite::default()
+            }],
+            ..Write::default()
+        });
+    }
+    let mut problems = Vec::new();
+    if !unfiled.is_empty() {
+        problems.push(text_field(texts, "gate_unfiled").replace("{requests}", &named(&unfiled)));
+    }
+    if !in_progress {
+        problems.push(text_field(texts, "gate_no_step"));
+    }
+    Gate::Refuse(text_field(texts, "gate_refusal").replace("{problems}", &problems.join(" ")))
+}
+
+/// The end-of-turn line naming unfiled requests, or `None` when there are none.
+#[must_use]
+pub fn end_unfiled(list: &List, requests: &Requests, texts: &Value) -> Option<String> {
+    let unfiled = unfiled(list, requests);
+    let template = text_field(texts, "end_unfiled");
+    (!unfiled.is_empty() && !template.is_empty())
+        .then(|| template.replace("{requests}", &named(&unfiled)))
+}
+
+/// The per-step guidance line naming unfiled requests, or `None` when there are none.
+#[must_use]
+pub fn unfiled_line(list: &List, requests: &Requests, texts: &Value) -> Option<String> {
+    let unfiled = unfiled(list, requests);
+    let template = text_field(texts, "unfiled_requests");
+    (!unfiled.is_empty() && !template.is_empty())
+        .then(|| template.replace("{requests}", &named(&unfiled)))
 }
 
 fn text_field(texts: &Value, key: &str) -> String {
@@ -938,5 +1262,90 @@ mod tests {
         );
         assert_eq!(unfiled_reminder(2, false, &texts), None);
         assert_eq!(unfiled_reminder(4, true, &texts), None);
+    }
+
+    /// Requests get stable labels; the gate opens a section when none is open, refuses
+    /// while a request is unfiled or no step is in progress, and passes once each is cited
+    /// or set aside with a step in progress.
+    #[test]
+    fn requests_are_cited_or_set_aside_before_the_gate_passes() {
+        let texts = texts();
+        let mut requests = Requests::default();
+        assert!(requests.add("user:a", "Fix the   login\nredirect please", 1));
+        assert!(!requests.add("user:a", "again", 2));
+        assert!(requests.add("user:b", "Also check mobile", 3));
+        assert_eq!(requests.items[0].id, "u1");
+        assert_eq!(requests.items[0].text, "Fix the login redirect please");
+        assert_eq!(requests.items[1].id, "u2");
+
+        let empty = List::default();
+        let Gate::Open(opening) = gate(&empty, &requests, &texts) else {
+            panic!("no open section opens one");
+        };
+        let (opened, _) = apply(&empty, opening, 10).unwrap();
+        assert_eq!(opened.sections[0].requests, vec!["u1", "u2"]);
+        assert_eq!(opened.sections[0].origin, Origin::User);
+        assert_eq!(opened.sections[0].steps[0].status, Status::InProgress);
+        assert!(matches!(gate(&opened, &requests, &texts), Gate::Pass));
+
+        requests.add("user:c", "Now the CSS", 20);
+        let Gate::Refuse(message) = gate(&opened, &requests, &texts) else {
+            panic!("an unfiled request with a section open is refused");
+        };
+        assert!(message.contains("u3 \"Now the CSS\""), "{message}");
+        assert!(unfiled_line(&opened, &requests, &texts).is_some());
+
+        let (aside, changes) = apply(
+            &opened,
+            write(serde_json::json!({"set_aside":[{"request":"u3","reason":"question only"}]})),
+            21,
+        )
+        .unwrap();
+        assert_eq!(changes, vec!["u3 set aside: question only"]);
+        assert!(matches!(gate(&aside, &requests, &texts), Gate::Pass));
+        assert_eq!(unfiled_line(&aside, &requests, &texts), None);
+
+        let (restored, _) =
+            apply(&aside, write(serde_json::json!({"restore":["u3"]})), 22).unwrap();
+        assert!(matches!(
+            gate(&restored, &requests, &texts),
+            Gate::Refuse(_)
+        ));
+        let (cited, changes) = apply(
+            &restored,
+            write(serde_json::json!({"section":{"id":"s1"},
+                "steps":[{"label":"Restyle","requests":["u3"]}]})),
+            23,
+        )
+        .unwrap();
+        assert!(changes.contains(&"s1.2 cites u3".to_owned()), "{changes:?}");
+        assert!(matches!(gate(&cited, &requests, &texts), Gate::Pass));
+        assert!(unknown_requests(&restored, &cited, &requests).is_empty());
+
+        let (unknown, _) = apply(
+            &cited,
+            write(serde_json::json!({"section":{"id":"s1","requests":["u9"]}})),
+            24,
+        )
+        .unwrap();
+        assert_eq!(unknown_requests(&cited, &unknown, &requests), vec!["u9"]);
+        assert!(apply(
+            &cited,
+            write(serde_json::json!({"set_aside":[{"request":"x1","reason":"bad"}]})),
+            25
+        )
+        .is_err());
+
+        let (finished, _) = apply(
+            &cited,
+            write(serde_json::json!({"section":{"id":"s1"},
+                "steps":[{"id":"s1.1","status":"done"},{"id":"s1.2","status":"done"}]})),
+            26,
+        )
+        .unwrap();
+        let Gate::Refuse(message) = gate(&finished, &requests, &texts) else {
+            panic!("an open section with no step in progress is refused");
+        };
+        assert!(message.contains("No step is in progress"), "{message}");
     }
 }

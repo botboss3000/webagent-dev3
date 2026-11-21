@@ -2,6 +2,7 @@
   "name": "offer_choices",
   "description": "Show the visitor up to 8 reply buttons; a click sends that label as their next message.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "allow",
     "member": "allow",

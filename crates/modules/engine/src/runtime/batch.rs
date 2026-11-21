@@ -409,6 +409,18 @@ impl<
             if result.is_none() {
                 let mut view = run.clone();
                 view["pending"] = pending.clone();
+                // The task gate, as for a single call (see docs/tool-policy.md).
+                if let Some(message) =
+                    Self::task_gate(app, &view, &sid, id, &name, &visibility).await?
+                {
+                    result = Some(
+                        json!({"status":"rejected","error_kind":"task_required","output":message}),
+                    );
+                }
+            }
+            if result.is_none() {
+                let mut view = run.clone();
+                view["pending"] = pending.clone();
                 result = match app
                     .actions
                     .preflight(app.store.records(), &mut view, &name, &args, &visibility)

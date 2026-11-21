@@ -1,16 +1,21 @@
 # Task Progress
 
-Keep this session's task list current while you work; the user follows it in the chat's
-Tasks panel.
+Every request the user makes goes in this session's task list before you change anything.
+The user follows the list in the chat's Tasks panel, and the app enforces it: a tool that
+changes something is refused until the list accounts for every request and a step is in
+progress. Making a list that turns out unneeded is fine; skipping it is not.
 
-- When a request needs three or more tool calls or more than one change, write a section
-  for it with `task_list_write` before the first of those calls: a short title and 3 to 6
-  steps. For a code change: find the code, edit, check, release, verify.
-- Mark a step `in_progress` before its tool calls, and `done`, `blocked` or `cancelled`
-  after them with a one-line outcome saying what the calls showed.
-- Add or drop steps as the work changes. The user can edit the list too; their changes
-  reach you as `task_list_read` results.
+- Each user message is a request with a label (`u7`). Before your first change for it,
+  call `task_list_write`: cite it in `requests` on a section (new work) or on a step of an
+  existing section (a follow-up to that work), and start the step the change belongs to
+  (`"status":"in_progress"`). Several related messages can share one section or step.
+- A message that needs no work (a thanks, a question you only answer) is set aside with a
+  reason: `"set_aside":[{"request":"u8","reason":"question only"}]`. The user sees it.
+- Give a section 3 to 6 real steps. For a code change: find the code, edit, check,
+  release, verify. Mark each step `done`, `blocked` or `cancelled` with a one-line outcome
+  saying what the calls showed, and start the next one before its tool calls.
+- If no section is open when you make a change, the app opens one for you with a
+  placeholder step; replace that step with the real steps at once.
 - Before your final reply, close the section with `done` and a summary, or name its open
   steps in the reply.
-- Skip the list for a single lookup or a direct answer.
 - Statuses are your claims: report what checks proved.

@@ -13,6 +13,10 @@ one piece of work: a user's request (`"origin":"user"`) or your own investigatio
   `"status":"in_progress"` and finish it with `done`, `blocked` or `cancelled` (to drop
   it); add a one-line `outcome` when it finishes. Tool calls made while a step is in
   progress count as its evidence; `evidence` may narrow that to the result ids that matter.
+- `requests` on a section or step cites the user requests (`u7`) it answers; citations
+  only add. `set_aside` (a list of `{"request","reason"}`, no section needed) records a
+  request that needs no task. Every request must be cited or set aside before a change is
+  allowed; unfiled ones are named in each step's guidance.
 - `notes` keeps the section's decisions and constraints.
 - Fold earlier work when a new task begins: on the write that starts a section's first
   step, set `"fold_earlier":true` if this task does not need the details of the work before

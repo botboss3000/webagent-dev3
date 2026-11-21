@@ -2,6 +2,7 @@
   "name": "promote_spawn",
   "description": "Create a reusable caller-owned agent from this conversation's child task with an explicit prompt.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "require_approval",
     "member": "require_approval",

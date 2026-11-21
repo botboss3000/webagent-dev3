@@ -2,6 +2,7 @@
   "name": "start_session",
   "description": "Start a separate session in the user's list, by default a fork of this agent.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "allow",
     "member": "allow",

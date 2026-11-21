@@ -2,6 +2,7 @@
   "name": "request_human",
   "description": "Ask this agent's staff to take over the conversation.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "allow",
     "member": "allow",

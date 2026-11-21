@@ -38,6 +38,7 @@
     "additionalProperties": false
   },
   "effect": "write",
+  "task": "exempt",
   "retention": {
     "drop_input_fields": [
       "instructions"

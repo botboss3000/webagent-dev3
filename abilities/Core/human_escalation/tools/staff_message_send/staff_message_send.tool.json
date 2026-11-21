@@ -2,6 +2,7 @@
   "name": "staff_message_send",
   "description": "Leave a message for staff to follow up with the visitor's contact details and request.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "allow",
     "member": "allow",

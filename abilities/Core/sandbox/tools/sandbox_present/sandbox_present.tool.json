@@ -2,6 +2,7 @@
   "name": "sandbox_present",
   "description": "Place a saved UI element in this chat's Artifacts chip as a card with a title, a short description and the element.",
   "effect": "write",
+  "task": "exempt",
   "repeat_guard": {
     "risk": "low"
   },

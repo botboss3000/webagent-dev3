@@ -2,6 +2,7 @@
   "name": "watch_sessions",
   "description": "Watch an accessible session for a settled turn through the Automation service.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "allow",
     "member": "allow",

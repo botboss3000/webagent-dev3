@@ -154,6 +154,7 @@
     "additionalProperties": false
   },
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "allow"
   }

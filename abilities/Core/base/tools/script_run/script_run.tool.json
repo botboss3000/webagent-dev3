@@ -29,7 +29,10 @@
     ],
     "additionalProperties": false
   },
-  "effect": "read",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "none"
+  },
   "retention": {
     "output": "log",
     "tail_lines": 40

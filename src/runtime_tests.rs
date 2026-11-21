@@ -300,7 +300,25 @@ pub(crate) async fn fixture() -> (TempDir, App) {
         .await
         .unwrap();
     grant_fixture_levels(&app.store, "shared_default").await;
+    // Most runtime tests count model calls exactly; the task gate (and the end-of-turn
+    // reminder its placeholder step brings) is switched on only where a test covers it.
+    webagent_engine::runtime::run::TASK_GATE_DEFAULT
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    crate::store::RECORD_MESSAGE_REQUESTS.store(false, std::sync::atomic::Ordering::Relaxed);
     (root, app)
+}
+/// Switch the default agent's task gate (Task Progress setting `task_gate`).
+pub(crate) async fn set_task_gate(app: &App, on: bool) {
+    let mut settings = app.store.agent_abilities().await.unwrap();
+    let revision = settings["revision"].as_u64().unwrap();
+    if !settings["settings"].is_object() {
+        settings["settings"] = json!({});
+    }
+    settings["settings"]["task_progress"] = json!({"task_gate": on});
+    app.store
+        .save_agent_abilities(&settings, revision)
+        .await
+        .unwrap();
 }
 /// Unsaved capability levels grant nothing, so fixtures save the two executable
 /// adapters explicitly at every level, as an Operator would.
@@ -3482,6 +3500,108 @@ async fn prompt_slot_tool_in_auto_writes_once_without_approval() {
     assert_eq!(slot["revision"], 1);
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 2);
+    let output = requests[1]["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call_output" && !mode_entry(item))
+        .unwrap();
+    let result: Value = serde_json::from_str(output["output"].as_str().unwrap()).unwrap();
+    assert_eq!(result["status"], "success");
+    assert_eq!(result["output"]["slot"]["revision"], 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn task_gate_opens_a_section_for_the_first_change_and_reminds_at_turn_end() {
+    use axum::routing::post;
+
+    let (_root, mut app) = fixture().await;
+    set_task_gate(&app, true).await;
+    let args = json!({"action":"put","slot_name":"coding","content":"Use checked patches.","expected_revision":0});
+    let call = json!({"type":"function_call","call_id":"slot-call",
+        "name":"prompt_slot_write","arguments":args.to_string()});
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route(
+        "/responses",
+        post(move |Json(body): Json<Value>| {
+            let requests = captured.clone();
+            let call = call.clone();
+            async move {
+                let mut requests = requests.lock().await;
+                requests.push(body);
+                let output = if requests.len() == 1 {
+                    json!([call])
+                } else {
+                    json!([{"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":"Slot updated."}]}])
+                };
+                let event = json!({"type":"response.completed",
+                    "response":{"status":"completed","output":output}});
+                (
+                    [("content-type", "text/event-stream")],
+                    format!("data: {event}\n\n"),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid = conversation(&app).await;
+    session_mode_set(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(SessionModeBody {
+            mode: "auto".into(),
+            expected_revision: Some(
+                session_mode(&app, &sid).await.unwrap()["revision"]
+                    .as_u64()
+                    .unwrap(),
+            ),
+            confirm_write: true,
+        }),
+    )
+    .await
+    .unwrap();
+    activate_codebase(&app, &sid).await;
+    let id = queued(&app, &sid).await;
+    // Fixtures do not count messages as requests; count this one as the app would.
+    let mut tx = app.store.pool.begin().await.unwrap();
+    app.store
+        .record_task_request(&mut tx, &sid, &format!("user:{id}"), "hello")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut run = app.run(&id).await.unwrap();
+    run["loaded_abilities"] = json!(["codebase_admin"]);
+    app.save(&mut run).await.unwrap();
+    running(&app, &id, "slot-first").await;
+    execute_run(
+        app.clone(),
+        id.clone(),
+        "slot-first".into(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    // Auto crosses the policy's Ask threshold without a per-tool decision.
+    assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+    let slot = app.store.get_prompt_slot("coding").await.unwrap().unwrap();
+    assert_eq!(slot["content"], "Use checked patches.");
+    assert_eq!(slot["revision"], 1);
+    // The change ran: with no section open the gate opened one citing the user's message,
+    // and the turn's end reminder (its placeholder step is still in progress) added a call.
+    let document = app.store.task_list_current(&sid).await.unwrap().unwrap();
+    let section = &document["list"]["sections"][0];
+    assert_eq!(section["requests"], json!(["u1"]));
+    assert_eq!(section["steps"][0]["status"], "in_progress");
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 3);
     let output = requests[1]["input"]
         .as_array()
         .unwrap()

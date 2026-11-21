@@ -26,6 +26,15 @@ pub enum Effect {
     Write,
 }
 
+/// Whether a call needs the session task list to account for the user's requests first
+/// (the task gate); absent follows the effect.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Task {
+    Required,
+    Exempt,
+}
+
 /// How a repeat of an identical call in one run is treated; writes default to `High`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -119,6 +128,11 @@ pub struct ToolDefinition {
     /// repeat protection setting says.
     #[serde(default)]
     pub critical: bool,
+    /// The task gate: `required` calls run only once every user request is cited or set
+    /// aside in the session task list and a step is in progress. Absent: a core tool is
+    /// exempt, otherwise a write is required and a read exempt.
+    #[serde(default)]
+    pub task: Option<Task>,
 }
 
 /// Discovery hints: short example requests (embedded) and exact words (keyword evidence).
@@ -240,6 +254,14 @@ impl ToolDefinition {
 
     pub fn is_read(&self) -> bool {
         self.effect == Effect::Read
+    }
+
+    /// Whether the task gate applies to this tool (see [`ToolDefinition::task`]).
+    pub fn task_required(&self) -> bool {
+        match self.task {
+            Some(task) => task == Task::Required,
+            None => self.core != Some(true) && self.effect == Effect::Write,
+        }
     }
 
     /// The function schema the model sees.
@@ -574,6 +596,11 @@ pub fn get(name: &str) -> Option<&'static ToolDefinition> {
     definitions().get(name)
 }
 
+/// Whether the task gate applies to `name`; a tool without a definition is never gated.
+pub fn task_required(name: &str) -> bool {
+    get(name).is_some_and(ToolDefinition::task_required)
+}
+
 /// Whether `name`'s `<tool>.tool.json` sets `core: true`.
 pub fn is_core(name: &str) -> bool {
     get(name).is_some_and(|definition| definition.core == Some(true))
@@ -735,6 +762,31 @@ mod tests {
         write.as_object_mut().unwrap().remove("default_policy");
         let write = ToolDefinition::parse(&serde_json::to_vec(&write).unwrap(), "lookup").unwrap();
         assert_eq!(write.default_for(&rungs(&["operator"])), Permission::Ask);
+    }
+
+    #[test]
+    fn task_follows_the_effect_unless_set_or_core() {
+        let parse = |effect: &str, core: Option<bool>, task: Option<&str>| {
+            let mut tool = body("lookup");
+            tool["effect"] = json!(effect);
+            if let Some(core) = core {
+                tool["core"] = json!(core);
+            }
+            if let Some(task) = task {
+                tool["task"] = json!(task);
+            }
+            ToolDefinition::parse(&serde_json::to_vec(&tool).unwrap(), "lookup")
+                .unwrap()
+                .task_required()
+        };
+        assert!(parse("write", None, None));
+        assert!(!parse("read", None, None));
+        assert!(!parse("write", Some(true), None));
+        assert!(!parse("write", None, Some("exempt")));
+        assert!(parse("read", None, Some("required")));
+        let mut tool = body("lookup");
+        tool["task"] = json!("tracked");
+        assert!(ToolDefinition::parse(&serde_json::to_vec(&tool).unwrap(), "lookup").is_err());
     }
 
     #[test]

@@ -2,6 +2,7 @@
   "name": "manage_session",
   "description": "Rename, pin, archive or unarchive a session in scope.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "require_approval",
     "member": "require_approval",

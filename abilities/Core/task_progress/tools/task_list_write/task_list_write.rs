@@ -9,9 +9,13 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 pub(super) struct WriteArgs {
     expected_revision: u64,
+    #[serde(default)]
     section: rules::SectionWrite,
     #[serde(default)]
     steps: Vec<rules::StepWrite>,
+    /// User requests that need no task, each with its reason.
+    #[serde(default)]
+    set_aside: Vec<rules::SetAside>,
     /// On the write that starts a section's first step: fold all earlier work.
     #[serde(default)]
     fold_earlier: bool,
@@ -28,7 +32,8 @@ pub(super) async fn run(host: &dyn NativeHost, call: Call<'_>, args: &Value) -> 
     let write = rules::Write {
         section: request.section,
         steps: request.steps,
-        plan: false,
+        set_aside: request.set_aside,
+        ..rules::Write::default()
     };
     let fold = request.fold_earlier.then_some(focus);
     save(

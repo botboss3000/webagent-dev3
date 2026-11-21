@@ -177,6 +177,26 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
     ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
         store.task_list_end_reminder(sid)
     }
+    fn session_task_gate<'a>(
+        &'a self,
+        store: &'a Store,
+        sid: &'a str,
+        rid: &'a str,
+        pending_id: &'a str,
+        generation: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
+        async move {
+            Ok(
+                match store
+                    .task_list_gate(sid, rid, pending_id, generation)
+                    .await?
+                {
+                    crate::store::TaskGate::Refused(message) => Some(message),
+                    crate::store::TaskGate::Pass | crate::store::TaskGate::Opened(_) => None,
+                },
+            )
+        }
+    }
 }
 
 impl webagent_engine::runtime::ports::ModelDiagnostics<Store> for NativePolicy {

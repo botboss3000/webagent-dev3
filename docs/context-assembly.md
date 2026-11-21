@@ -360,8 +360,10 @@ providers and for bridge harnesses.
 | Agent writes | The agent's own `task_list_write` call and result in the history (new revision, change lines, `created`/`started`/`closed`) | Durable | Each write |
 | User edits | A server-added `task_list_read-<id>` exchange (`changed_by: the user`, the revision and its change lines) at the end of the history before the next call | Durable, delivered once each | Each panel edit |
 | Step line | Per-step guidance message: `Session tasks: s1 "Title", 2 open, active s1.2 "Label", next s1.3 "Label".` (each open section with unfinished steps) | One call, never saved | A step starts or finishes; it carries no revision |
+| Unfiled requests | Per-step guidance message, after the step line: `Unfiled requests: u7 "first words", ...` (requests neither cited by a section or step nor set aside) | One call, never saved | A user request arrives, or the agent cites or sets one aside; the task gate refuses changes while any are unfiled (docs/tool-policy.md) |
+| Gate section | A section the task gate opened reaches the history as a `task_list_read-<id>` row under `gate_change_heading` | Durable, delivered once | The gate opens a section because none was open |
 | Unfiled reminder | Per-step guidance message, after the step line | One call, never saved | `unfiled_after_calls` (3) tool calls since the user's last message with no `task_list_write` among them; its text carries the count, so it changes every call |
-| End reminder | One extra call: the history (ending with the draft reply) plus a user message naming the open steps | One call, never saved | The first final reply of a run while open sections have open or in-progress steps |
+| End reminder | One extra call: the history (ending with the draft reply) plus a user message naming the open steps and unfiled requests | One call, never saved | The first final reply of a run while open sections have open or in-progress steps, or requests are unfiled |
 
 The list belongs to the session: every participant's runs get the snapshot, step line and
 reminders, and the agent's tool calls write the session owner's list.

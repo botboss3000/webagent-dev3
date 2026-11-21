@@ -31,6 +31,7 @@ pub(crate) mod session;
 mod session_messaging;
 #[path = "../../crates/modules/chat/host/storage/task_list.rs"]
 mod task_list;
+pub(crate) use task_list::{TaskGate, RECORD_MESSAGE_REQUESTS};
 pub(crate) use webagent_notifications as notifications;
 #[path = "../../crates/modules/actions/host/storage.rs"]
 mod actions;
@@ -1611,6 +1612,9 @@ impl Store {
                 self.insert_chat(&mut tx, sid, run_id, "user", &json!(text))
                     .await?;
             }
+            // Every user request (a silent automation's trigger too) gets a task gate label.
+            self.record_message_request(&mut tx, sid, &format!("user:{run_id}"), text)
+                .await?;
             self.write_document(&mut tx,&format!("message_meta:{run_id}"),
                 &json!({"author_id":payload["author_id"].as_str().unwrap_or(self.current_user_id()),"context_eligible":kind=="message","queued":false})).await?;
             if kind == "message" {

@@ -2,6 +2,7 @@
   "name": "start_spawn",
   "description": "Start a sub agent: a child session shown as a tab that reports its final reply.",
   "effect": "write",
+  "task": "exempt",
   "default_policy": {
     "operator": "allow",
     "member": "allow",
