@@ -4,15 +4,19 @@ Runs as root (webagent-host-files.service, installed by the host helper's superv
 Only the app's uid may call it, and every file operation needs a live grant for the signed-in
 administrator. Grants are written only by the host helper after a Host Admin approval with
 the host approval passphrase; they last the time set at approval and Host Admin can revoke them.
-Each file operation runs in a child process as the operator account without its sudo and
-docker groups, so it can read and change only what that account can; new files are created
-ar:ar 600 (folders 700). The locked folders (app data, sockets, kernel views) stay refused
-on top of that (docs/security-spec.md FILES-1). Grants and the log stay with the root parent.
+Each file operation runs first in a child process as the operator account (with its usual
+groups, like a login), so it can read and change what that account can; new files are created
+ar:ar 600 (folders 700). When that is denied, the operation needs sudo, as in a terminal: it
+runs as root once the account's sudo password is confirmed (by running sudo as that account),
+then for the next 15 minutes without asking, or straight away while the account has
+passwordless sudo. The password is never stored or logged. The locked folders (app data,
+sockets, kernel views) stay refused either way (docs/security-spec.md FILES-1). Grants, the
+sudo windows and the log stay with the root parent.
 The checkout itself stays with the worker (/live-checkout). Every change is logged.
 
 Terminals (FILES-3) need their own grant (terminal_grant). Each runs a login shell on a
-pseudo-terminal as the operator account without its sudo and docker groups, so it has that
-account's file permissions only. They outlive a page reload and close when the grant ends,
+pseudo-terminal as the operator account with its usual groups, like a login on the computer
+(sudo asks for the password in the shell). They outlive a page reload and close when the grant ends,
 after 30 idle minutes, or on request; only their opening and closing are logged.
 """
 import base64
@@ -29,6 +33,7 @@ import signal
 import socket
 import stat
 import struct
+import subprocess
 import sys
 import termios
 import threading
@@ -42,7 +47,7 @@ DEFAULTS = {"state": "/var/lib/webagent-host", "app_uid": 1100,
             "files_socket": "/home/ar/webagent-dev3/runtime/files/files.sock",
             "files_checkout": "/home/ar/webagent-dev3/code",
             "files_locked": ["/home/ar/webagent-dev3/state", "/home/ar/webagent-dev3/runtime", "/proc", "/sys", "/dev"],
-            "operator_account": "ar", "terminal_drop_groups": ["sudo", "docker"], "terminal_idle_seconds": 1800,
+            "operator_account": "ar", "terminal_drop_groups": [], "sudo_window_seconds": 900, "terminal_idle_seconds": 1800,
             "terminal_max": 4}
 TERMINAL_BUFFER = 262144
 TERMINAL_WAIT = 20
@@ -54,6 +59,10 @@ MAX_REQUEST = 4 * 1024 * 1024
 
 class Refused(Exception):
     """Shown to the administrator as is."""
+
+
+class NeedsSudo(Exception):
+    """The operator account was denied; the File Manager asks for its sudo password."""
 
 
 class NeedsGrant(Exception):
@@ -153,6 +162,8 @@ class Files:
         self.terminals = {}
         self.terminals_lock = threading.Lock()
         self.pending_log = None
+        self.sudo_until = {}      # administrator -> end of their sudo window
+        self.sudo_failures = {}   # administrator -> times of recent wrong passwords
 
     # Grants and log ----------------------------------------------------------------------
     def granted(self, admin, name="file-grants.json"):
@@ -492,7 +503,37 @@ class Files:
             raise NeedsGrant("Host Admin must authorize browsing outside the checkout")
         if op not in ("tree", "read", "write", "create", "rename", "delete"):
             raise Refused("Unsupported File Manager action")
-        return self.as_operator(admin, op, message)
+        try:
+            return self.as_operator(admin, op, message)
+        except PermissionError:
+            if not self.sudo_allowed(admin, message.get("sudo_password")):
+                raise
+        result = self.file_op(admin, op, message)  # as root: the parent process
+        return {**result, "as_root": True} if isinstance(result, dict) else result
+
+    def sudo_allowed(self, admin, password):
+        """Whether a denied operation may run as root: a live sudo window, passwordless sudo, or
+        a correct sudo password for the operator account (checked by sudo itself)."""
+        now = self.clock()
+        if self.sudo_until.get(admin, 0) > now:
+            return True
+        account = self.profile["operator_account"]
+        run = lambda command, **extra: subprocess.run(command, capture_output=True, timeout=20, **extra).returncode == 0
+        if run(["runuser", "-u", account, "--", "sudo", "-n", "-v"]):
+            return True
+        if not isinstance(password, str) or not password:
+            raise NeedsSudo("This needs the sudo password for " + account)
+        failures = [t for t in self.sudo_failures.get(admin, []) if t > now - 900]
+        if len(failures) >= 5:
+            raise Refused("Too many wrong sudo passwords; try again in 15 minutes")
+        if len(password) > 1024 or not run(["runuser", "-u", account, "--", "sudo", "-S", "-k", "-v", "-p", ""],
+                                           input=(password + "\n").encode()):
+            self.sudo_failures[admin] = failures + [now]
+            raise NeedsSudo("Wrong sudo password for " + account + "; try again")
+        self.sudo_failures.pop(admin, None)
+        self.sudo_until[admin] = now + self.profile["sudo_window_seconds"]
+        self.log(admin, "sudo", "", reason="password confirmed")
+        return True
 
     def file_op(self, admin, op, message):
         if op == "tree":
@@ -556,7 +597,7 @@ class Files:
         if "refused" in reply:
             raise Refused(reply["refused"])
         if reply.get("errno") is not None:
-            raise OSError(reply["errno"], reply["error"])
+            raise OSError(reply["errno"], reply["error"])  # EACCES/EPERM become PermissionError
         raise Refused("File operation failed (" + str(reply.get("error")) + ")")
 
 
@@ -565,6 +606,8 @@ def reply_for(files, uid, message):
         return {"status": "success", "output": files.handle(uid, message)}
     except NeedsGrant as error:
         return {"status": "failed", "code": "authorization_required", "output": str(error)}
+    except NeedsSudo as error:
+        return {"status": "failed", "code": "sudo_required", "output": str(error)}
     except Refused as error:
         return {"status": "failed", "output": str(error)}
     except FileNotFoundError:

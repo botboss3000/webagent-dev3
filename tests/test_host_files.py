@@ -14,7 +14,7 @@ spec.loader.exec_module(files_module)
 APP, OTHER = 1100, 4242
 
 
-class FilesTests(unittest.TestCase):
+class FilesBase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
@@ -53,6 +53,8 @@ class FilesTests(unittest.TestCase):
         self.assertEqual("success", reply["status"], reply)
         return reply["output"]
 
+
+class FilesTests(FilesBase):
     def test_only_the_app_uid_is_served(self):
         self.grant()
         self.assertEqual("failed", self.call("tree", uid=OTHER, path=str(self.home))["status"])
@@ -127,8 +129,8 @@ class FilesTests(unittest.TestCase):
         private = self.home / "projects" / "private.txt"
         private.write_text("x")
         os.chmod(private, 0)
-        if os.geteuid() != 0:
-            self.assertIn("Permission denied", self.call("read", path=str(private))["output"])
+        if os.geteuid() != 0:  # denied as the account: the File Manager asks for its sudo password
+            self.assertEqual("sudo_required", self.call("read", path=str(private)).get("code"))
 
     def test_editor_limit_and_binary_files(self):
         self.grant()
@@ -138,6 +140,62 @@ class FilesTests(unittest.TestCase):
         small = self.home / "projects" / "small.bin"
         small.write_bytes(b"\xff\x00")
         self.assertEqual("base64", self.ok("read", path=str(small))["encoding"])
+
+
+class SudoTests(FilesBase):
+    """A denied operation asks for the sudo password, then runs as root (here: in this process)."""
+
+    def denied_then(self, sudo_ok=False, password_ok=False):
+        from unittest import mock
+        def as_operator(admin, op, message):
+            raise PermissionError(13, "Permission denied")
+        def run(command, **_):
+            ok = password_ok if "-S" in command else sudo_ok
+            return type("R", (), {"returncode": 0 if ok else 1})()
+        return [mock.patch.object(self.files, "as_operator", as_operator),
+                mock.patch.object(files_module.subprocess, "run", run)]
+
+    def test_denied_asks_then_wrong_then_right_password(self):
+        self.grant()
+        notes = str(self.home / "projects" / "notes.txt")
+        patches = self.denied_then()
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertEqual("sudo_required", self.call("read", path=notes).get("code"))
+        wrong = self.call("read", path=notes, sudo_password="nope")
+        self.assertEqual("sudo_required", wrong.get("code"))
+        self.assertIn("Wrong", wrong["output"])
+        patches[1].stop()
+        from unittest import mock
+        ok = type("R", (), {"returncode": 0})
+        fail = type("R", (), {"returncode": 1})
+        with mock.patch.object(files_module.subprocess, "run", lambda c, **_: ok() if "-S" in c else fail()):
+            self.assertTrue(self.ok("read", path=notes, sudo_password="right")["as_root"])
+        with mock.patch.object(files_module.subprocess, "run", lambda c, **_: fail()):
+            self.assertTrue(self.ok("read", path=notes)["as_root"])  # within the 15-minute window
+            self.now += 901
+            self.assertEqual("sudo_required", self.call("read", path=notes).get("code"))
+        patches[1].start()
+        log = [json.loads(line)["op"] for line in (self.state / "files-log.jsonl").read_text().splitlines()]
+        self.assertIn("sudo", log)
+
+    def test_passwordless_sudo_needs_no_prompt(self):
+        self.grant()
+        for patch in self.denied_then(sudo_ok=True):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertTrue(self.ok("read", path=str(self.home / "projects" / "notes.txt"))["as_root"])
+
+    def test_five_wrong_passwords_lock_for_fifteen_minutes(self):
+        self.grant()
+        for patch in self.denied_then():
+            patch.start()
+            self.addCleanup(patch.stop)
+        notes = str(self.home / "projects" / "notes.txt")
+        for _ in range(5):
+            self.call("read", path=notes, sudo_password="nope")
+        self.assertIn("Too many", self.call("read", path=notes, sudo_password="nope")["output"])
 
 
 class TerminalTests(unittest.TestCase):

@@ -228,10 +228,12 @@ class Helper:
                 + " h by default, at most " + str(round(self.profile["grant_max_seconds"] / 3600)) + " h)"
             if action == "terminal_grant":
                 return ("Let administrator " + args["admin"] + " open terminals in the File Manager " + limit + ": a shell as "
-                        + self.profile["operator_account"] + " without the sudo and docker groups. Revoke it here any time.")
+                        + self.profile["operator_account"] + ", like a login on this computer (sudo asks for its password). "
+                        "Revoke it here any time.")
             return ("Let administrator " + args["admin"] + " browse and change files outside the checkout through the "
                     "File Manager " + limit + ", with the file permissions of " + self.profile["operator_account"]
-                    + " (no sudo or docker group; app data and sockets stay locked). Revoke it here any time.")
+                    + "; anything needing root asks for its sudo password (app data and sockets stay locked). "
+                    "Revoke it here any time.")
         if action == "unit_restart":
             return "Restart systemd unit " + args["unit"] + "."
         if action == "container_restart":
