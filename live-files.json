@@ -48,6 +48,9 @@
     "config/ui/chat/controls/session-dropdown/*.json",
     "config/webapp/*.settings.json",
     "config/webapp/app-settings.json",
+    "docs/*.md",
+    "docs/*/*.json",
+    "docs/*/*.md",
     "src/plugin_packages/diagnostics/diagnostics.json"
   ]
 }

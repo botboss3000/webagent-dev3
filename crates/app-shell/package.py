@@ -27,9 +27,9 @@ TARGETS = {
 ANDROID_ABI = {"aarch64-linux-android": ("arm64-v8a", "aarch64"),
                "x86_64-linux-android": ("x86_64", "x86_64")}
 APP_FOLDERS = ["ui", "abilities", "config", "plugins/gates", "plugins/engine"]
-# Server-only parts: the build broker and host helper pages, and the Administrator ability
-# pack (a drop-in pack the core build does not include).
-APP_EXCLUDE = ["ui/main-panel/builds", "ui/main-panel/host-admin", "abilities/Administrator"]
+# Server-only parts: the build broker and host helper pages, the Administrator ability
+# pack (a drop-in pack the core build does not include) and the developer docs.
+APP_EXCLUDE = ["ui/main-panel/builds", "ui/main-panel/host-admin", "abilities/Administrator", "docs"]
 FEATURES = "linked-context,stable-abilities"
 
 

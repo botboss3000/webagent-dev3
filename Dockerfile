@@ -156,7 +156,8 @@ COPY v3/plugins/gates /opt/v3/plugins/gates
 RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 RUN chmod a+r /opt/v3/*.py
-COPY v3 /opt/v3/source-template
+# Developer docs are live checkout files and stay out of the image.
+COPY --exclude=docs v3 /opt/v3/source-template
 COPY v3/ui /opt/v3/ui
 ENV PATH=/opt/rust/bin:$PATH
 # The checkout is mounted at /code. Stored prompts, history and Files page rows still name
