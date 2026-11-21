@@ -8,10 +8,22 @@ use axum::Extension;
 
 /// The checkout's name on the File Manager page; every other absolute path is the host's.
 const CHECKOUT: &str = "/live-checkout";
-/// The page shows this refusal as a toast and stays where it is.
+/// The page shows these refusals as a toast with the passphrase prompt and stays where it is.
 #[cfg(unix)]
 const NEEDS_GRANT: &str =
     "Host Admin must authorize browsing outside the checkout. The request is waiting on the Host Admin page.";
+#[cfg(unix)]
+const NEEDS_TERMINAL_GRANT: &str =
+    "Host Admin must authorize terminal access. The request is waiting on the Host Admin page.";
+/// Terminal actions; they all run in the root host file service (security spec FILES-3).
+const TERMINAL: [&str; 6] = [
+    "terminal_open",
+    "terminal_read",
+    "terminal_send",
+    "terminal_resize",
+    "terminal_list",
+    "terminal_close",
+];
 
 pub(crate) async fn action(
     State(app): State<App>,
@@ -33,12 +45,17 @@ pub(crate) async fn action(
             | "git_settings"
     );
     if !git
+        && !TERMINAL.contains(&action)
         && !matches!(
             action,
             "tree" | "read" | "write" | "create" | "rename" | "delete"
         )
     {
         return Err(bad("Unsupported File Manager action"));
+    }
+    if TERMINAL.contains(&action) {
+        let admin = identity["_user_id"].as_str().unwrap_or_default();
+        return host_files(admin, action, &body).await;
     }
     if !git {
         let host = host_path(&body["path"]);
@@ -144,9 +161,32 @@ async fn host_files(admin: &str, action: &str, body: &Value) -> Api {
         "encoding",
         "expected_sha256",
         "kind",
+        "id",
+        "data",
+        "offset",
+        "wait",
+        "cols",
+        "rows",
+        "cwd",
     ] {
         if !body[key].is_null() {
             message[key] = body[key].clone();
+        }
+    }
+    // A terminal opened on a checkout folder starts in the checkout's host folder.
+    if let Some(cwd) = message["cwd"].as_str() {
+        if let Some(rest) = cwd.strip_prefix(CHECKOUT) {
+            if rest.is_empty() || rest.starts_with('/') {
+                let place = host_admin::call(
+                    "files/files.sock",
+                    "Host file service",
+                    &json!({"op": "locate"}),
+                )
+                .await?;
+                if let Some(checkout) = place["output"]["checkout"].as_str() {
+                    message["cwd"] = json!(format!("{checkout}{rest}"));
+                }
+            }
         }
     }
     let reply = host_admin::call("files/files.sock", "Host file service", &message).await?;
@@ -154,8 +194,21 @@ async fn host_files(admin: &str, action: &str, body: &Value) -> Api {
         return Ok(Json(reply["output"].clone()));
     }
     if reply["code"] == "authorization_required" {
-        host_admin::request_files_grant(admin).await?;
-        return Err(bad(NEEDS_GRANT));
+        let terminal = action.starts_with("terminal_");
+        host_admin::request_grant(
+            if terminal {
+                "terminal_grant"
+            } else {
+                "files_grant"
+            },
+            admin,
+        )
+        .await?;
+        return Err(bad(if terminal {
+            NEEDS_TERMINAL_GRANT
+        } else {
+            NEEDS_GRANT
+        }));
     }
     Err(bad(reply["output"]
         .as_str()

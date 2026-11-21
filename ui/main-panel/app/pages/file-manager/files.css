@@ -3368,3 +3368,29 @@ input.fg-remote-input-inline {
   font-size: 13px; line-height: 1.4;
 }
 .files-toast[hidden] { display: none; }
+
+/* Terminal tabs (xterm.js) and the approval prompt in the toast. */
+.files-terminal-host { flex: 1; min-height: 0; padding: 6px 4px 4px 8px; background: var(--files-bg); }
+.files-terminal-host .xterm { height: 100%; }
+.files-toast.files-toast-grant { display: grid; gap: 8px; width: min(480px, calc(100vw - 32px)); }
+.files-toast-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.files-toast-form input[type=password] { flex: 1 1 180px; min-width: 0; }
+.files-toast-form input {
+  padding: 6px 8px; border-radius: 6px; border: 1px solid var(--files-border-strong);
+  background: var(--files-bg); color: var(--files-text-strong); font: inherit;
+}
+.files-toast-hours { display: inline-flex; align-items: center; gap: 4px; color: var(--files-text-muted); }
+.files-toast-hours input { width: 64px; }
+.files-toast-form button {
+  padding: 6px 12px; border-radius: 6px; border: 1px solid var(--files-border-strong);
+  background: var(--files-bg-tab); color: var(--files-text-strong); font: inherit; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.files-toast-form button:active { border-color: var(--files-text-muted); }
+.files-toast-form .files-toast-approve { font-weight: 600; }
+.files-toast-status:empty { display: none; }
+.files-toast-status { color: var(--danger); }
+@media (max-width: 600px) {
+  .files-toast-form input[type=password] { flex-basis: 100%; }
+  .files-toast-form button { flex: 1; min-height: 40px; }
+}

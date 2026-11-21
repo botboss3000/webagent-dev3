@@ -46,16 +46,18 @@ pub(crate) async fn call(
     serde_json::from_slice(&reply).map_err(|_| bad(&format!("{service} reply unreadable")))
 }
 
-/// File a File Manager grant request for `admin` (one waiting request per administrator).
-pub(crate) async fn request_files_grant(admin: &str) -> Result<Value, crate::ApiError> {
+/// File a File Manager grant request (`files_grant` or `terminal_grant`) for `admin`; the helper
+/// keeps one waiting request per administrator and action.
+pub(crate) async fn request_grant(action: &str, admin: &str) -> Result<Value, crate::ApiError> {
     helper(
-        json!({"op": "request", "action": "files_grant", "args": {"admin": admin},
+        json!({"op": "request", "action": action, "args": {"admin": admin},
         "requester": {"user": admin}}),
     )
     .await
 }
 
-/// End one administrator's File Manager grant outside the checkout: `{"admin": "<name>"}`.
+/// End one administrator's File Manager grant: `{"admin": "<name>", "kind": "files" | "terminal"}`
+/// (files when omitted).
 /// Narrowing access needs no passphrase.
 pub(crate) async fn files_revoke(
     State(_app): State<App>,
@@ -66,9 +68,13 @@ pub(crate) async fn files_revoke(
     if admin.is_empty() || admin.len() > 80 {
         return Err(bad("Administrator required"));
     }
+    let kind = body["kind"].as_str().unwrap_or("files");
+    if !matches!(kind, "files" | "terminal") {
+        return Err(bad("Kind must be files or terminal"));
+    }
     let by = identity["_user_id"].as_str().unwrap_or_default();
     Ok(Json(
-        helper(json!({"op": "files_revoke", "admin": admin, "by": by})).await?,
+        helper(json!({"op": "files_revoke", "admin": admin, "by": by, "kind": kind})).await?,
     ))
 }
 
@@ -203,6 +209,10 @@ pub(crate) async fn decide(
             return Err(bad("Passphrase too long"));
         }
         message["passphrase"] = json!(passphrase);
+    }
+    // File Manager grants last the time the approver sets; the helper checks the range.
+    if let Some(seconds) = body["seconds"].as_i64() {
+        message["seconds"] = json!(seconds);
     }
     Ok(Json(helper(message).await?))
 }

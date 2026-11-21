@@ -23,6 +23,7 @@
 
 import { copyText, _refreshLucideIcons, openFloatingMenu, closeFloatingMenu,
   applyRubberBand, authHeaders, isAdmin, kvRead, kvWrite, kvDelete } from './files-shims.js';
+import { mountTerminal, showTerminal, disposeTerminal } from './files-terminal.js';
 import {
   streamCopy, streamPush, streamRelease, restartServerAndReload, _RELEASE_PHASE_LABELS,
   openGitPanel, startGitAutoRefresh, stopGitAutoRefresh, resetGitForRemount, loadCommitDetail, renderCommitDetail, setSelectedGitCommit,
@@ -90,10 +91,9 @@ const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b78
 const NEEDS_GRANT = 'Host Admin must authorize';
 let toastTimer = null;
 
-// A short notice at the bottom of the File Manager (role=status, so screen readers hear it).
-function showToast(message) {
+function toastBox() {
   const host = document.getElementById('file-manager');
-  if (!host) return;
+  if (!host) return null;
   let box = document.getElementById('files-toast');
   if (!box) {
     box = document.createElement('div');
@@ -102,10 +102,123 @@ function showToast(message) {
     box.setAttribute('role', 'status');
     host.appendChild(box);
   }
-  box.textContent = message;
-  box.hidden = false;
   clearTimeout(toastTimer);
+  box.replaceChildren();
+  box.hidden = false;
+  return box;
+}
+
+// A short notice at the bottom of the File Manager (role=status, so screen readers hear it).
+function showToast(message) {
+  const box = toastBox();
+  if (!box) return;
+  box.textContent = message;
   toastTimer = setTimeout(() => { box.hidden = true; }, 6000);
+}
+
+// What to retry once Host Admin access is approved from the toast, per grant action.
+const afterGrant = {};
+let grantToastShown = null;
+
+// The approval prompt in the toast: the same passphrase approval as Host Admin, with how long
+// it lasts (1 h by default, at most 24 h). Host Admin keeps the card and the Revoke button.
+async function showGrantToast(message, action) {
+  if (grantToastShown === action && document.getElementById('files-toast')?.hidden === false) return;
+  grantToastShown = action;
+  const box = toastBox();
+  if (!box) return;
+  box.classList.add('files-toast-grant');
+  const text = document.createElement('div');
+  text.className = 'files-toast-text';
+  text.textContent = message;
+  const form = document.createElement('form');
+  form.className = 'files-toast-form';
+  const pass = document.createElement('input');
+  pass.type = 'password';
+  pass.autocomplete = 'off';
+  pass.placeholder = 'Host approval passphrase';
+  pass.setAttribute('aria-label', 'Host approval passphrase');
+  const hoursLabel = document.createElement('label');
+  hoursLabel.className = 'files-toast-hours';
+  const hours = document.createElement('input');
+  hours.type = 'number';
+  hours.inputMode = 'decimal';
+  hours.min = '0.25';
+  hours.max = '24';
+  hours.step = '0.25';
+  hours.value = '1';
+  hours.setAttribute('aria-label', 'Hours of access');
+  hoursLabel.append(hours, document.createTextNode(' h'));
+  const approve = document.createElement('button');
+  approve.type = 'submit';
+  approve.className = 'files-toast-approve';
+  approve.textContent = 'Approve';
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'files-toast-dismiss';
+  dismiss.textContent = 'Later';
+  dismiss.onclick = () => { box.hidden = true; box.classList.remove('files-toast-grant'); grantToastShown = null; };
+  const status = document.createElement('div');
+  status.className = 'files-toast-status';
+  form.append(pass, hoursLabel, approve, dismiss);
+  box.append(text, form, status);
+  pass.focus();
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const value = Number(hours.value);
+    if (!(value >= 0.25 && value <= 24)) { status.textContent = 'Choose between 0.25 and 24 hours.'; return; }
+    approve.disabled = true;
+    status.textContent = '';
+    try {
+      const list = await fetch('/api/v3/admin/host/requests', {credentials: 'same-origin', cache: 'no-store'});
+      const page = list.ok ? await list.json() : {pending: []};
+      const request = (page.pending || []).filter((r) => r.action === action)
+        .sort((a, b) => b.created_at - a.created_at)[0];
+      if (!request) throw Error('No waiting request; try the action again.');
+      const reply = await fetch('/api/v3/admin/host/requests/' + encodeURIComponent(request.id) + '/decision', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json', ...authHeaders()},
+        body: JSON.stringify({decision: 'approve', passphrase: pass.value, seconds: Math.round(value * 3600)}),
+      });
+      const data = await reply.json().catch(() => ({}));
+      if (!reply.ok) throw Error(data.error || 'Approval failed');
+      box.classList.remove('files-toast-grant');
+      grantToastShown = null;
+      showToast('Approved for ' + value + ' h. Revoke it on the Host Admin page.');
+      const retry = afterGrant[action];
+      afterGrant[action] = null;
+      if (retry) retry();
+    } catch (e) {
+      approve.disabled = false;
+      pass.value = '';
+      status.textContent = e.message || 'Approval failed';
+    }
+  };
+}
+
+// One File Manager API call. A missing Host Admin grant shows the approval toast (unless quiet)
+// and throws an error marked needsGrant.
+async function postFileManager(payload, quiet = false) {
+  const response = await fetch(API_BASE, {
+    method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json', ...authHeaders()},
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data.error || data.detail || 'File Manager request failed (' + response.status + ')';
+    // Outside the checkout, and terminals: Host Admin must approve (with the host passphrase) first.
+    if (message.startsWith(NEEDS_GRANT)) {
+      if (!quiet) showGrantToast(message, /terminal/.test(message) ? 'terminal_grant' : 'files_grant');
+      throw Object.assign(Error(message), {needsGrant: true});
+    }
+    throw Error(message);
+  }
+  return data;
+}
+
+function terminalApi(action, body, quiet = true) {
+  return postFileManager({action, ...body}, quiet);
 }
 
 async function apiFetch(path, opts = {}) {
@@ -127,18 +240,7 @@ async function apiFetch(path, opts = {}) {
   if (action === 'tree' || action === 'read') payload.path = params.get('path') || '';
   if (action === 'tree') payload.show_hidden = params.get('show_hidden') === 'true';
   if (action === 'write') payload.expected_sha256 = fileDigests.get(payload.path) || '';
-  const response = await fetch(API_BASE, {
-    method: 'POST', credentials: 'same-origin',
-    headers: {'Content-Type': 'application/json', ...authHeaders()},
-    body: JSON.stringify(payload)
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = data.error || data.detail || 'File Manager request failed (' + response.status + ')';
-    // Outside the checkout: Host Admin must approve (with the host passphrase) first.
-    if (message.startsWith(NEEDS_GRANT)) { showToast(message); throw Object.assign(Error(message), {needsGrant: true}); }
-    throw Error(message);
-  }
+  const data = await postFileManager(payload);
   if (action === 'read' || action === 'write') fileDigests.set(data.path, data.sha256);
   if (action === 'create' && data.kind === 'file') fileDigests.set(data.path, EMPTY_SHA256);
   if (action === 'rename') {
@@ -1400,10 +1502,12 @@ async function setRoot(absPath) {
   if (!absPath || absPath === currentRoot) return;
   // Leaving the checkout: ask first, so a refusal (toast) keeps the current tree.
   if (absPath.startsWith('/') && absPath !== projectRoot && !absPath.startsWith(projectRoot + '/')) {
+    afterGrant.files_grant = () => setRoot(absPath);
     try { await apiFetch('/tree?path=' + encodeURIComponent(absPath)); } catch (e) {
       if (!e.needsGrant) showToast(e.message || 'Folder unavailable');
       return;
     }
+    afterGrant.files_grant = null;
   }
   currentRoot = absPath;
   // Keep expandedDirs intact — entries are keyed by absolute path, so
@@ -1433,7 +1537,7 @@ function renderTabs() {
     const iconWrap = document.createElement('span');
     iconWrap.className = 'files-tab-icon';
     const iconI = document.createElement('i');
-    iconI.setAttribute('data-lucide', fileIconName(tab.name));
+    iconI.setAttribute('data-lucide', tab.kind === 'terminal' ? 'terminal' : fileIconName(tab.name));
     iconI.className = 'lucide-icon';
     iconWrap.appendChild(iconI);
     el.appendChild(iconWrap);
@@ -1462,7 +1566,7 @@ function renderTabs() {
     });
     more.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); });
     more.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
-    el.appendChild(more);
+    if (tab.kind !== 'terminal') el.appendChild(more);
 
     const close = document.createElement('button');
     close.className = 'files-tab-close';
@@ -2033,6 +2137,7 @@ function renderEditorPanes() {
 // ── Per-tab pane mode ─────────────────────────────────────────────
 
 function paneModeForTab(tab) {
+  if (tab.kind === 'terminal') return 'terminal';
   if (isImageFile(tab.name)) return 'image';
   if (tab.binary)             return 'binary';
   if (isMarkdownFile(tab.name) && tab.preview) return 'markdown';
@@ -2064,6 +2169,10 @@ function buildPaneForTab(tab, mode) {
   pane.dataset.path = tab.path;
   pane.dataset.mode = mode;
 
+  if (mode === 'terminal') {
+    mountTerminal(pane, tab, terminalApi);
+    return pane;
+  }
   if (mode === 'image') {
     pane.classList.add('files-image-pane');
     const img = document.createElement('img');
@@ -2747,6 +2856,10 @@ function updateStatusBar(tab) {
   }
   info.classList.toggle('dirty', !!tab.dirty);
   info.innerHTML = '';
+  if (tab.kind === 'terminal') {
+    info.textContent = 'Terminal as the operator account · ' + (tab.cwd || '');
+    return;
+  }
   if (!tab.binary) {
     const lineNum = document.createElement('span');
     lineNum.className = 'files-cursor-line';
@@ -2821,6 +2934,7 @@ function activateTab(path) {
     });
   }
   updateStatusBar(tab);
+  if (tab.kind === 'terminal') showTerminal(tab);
   // Bring the activated tab into view if it's outside the visible window.
   const tabEl = document.querySelector('#files-tabs .files-tab[data-path="' + cssEscape(path) + '"]');
   if (tabEl && typeof tabEl.scrollIntoView === 'function') {
@@ -2835,6 +2949,10 @@ async function closeTab(path) {
   if (tab.closing) return;          // already in-flight; ignore repeat clicks
   if (tab.dirty) {
     if (!confirm('Discard unsaved changes to ' + tab.name + '?')) return;
+  }
+  if (tab.kind === 'terminal') {
+    disposeTerminal(tab);
+    terminalApi('terminal_close', {id: tab.terminalId}).catch(() => {});
   }
   const idx = openTabs.findIndex((t) => t.path === path);
   if (idx < 0) return;              // another close finished first
@@ -2969,11 +3087,11 @@ async function promptNew(kind) {
 // ── Persistence ───────────────────────────────────────────────────
 
 function persistTabs() {
-  const minimal = openTabs.map((t) => (
+  const minimal = openTabs.filter((t) => t.kind !== 'terminal').map((t) => (
     { path: t.path, name: t.name, wrap: !!t.wrap, preview: !!t.preview, foldLevel: t.foldLevel }
   ));
   kvWrite(KC_OPEN_TABS, LS_OPEN_TABS, minimal);
-  kvWrite(KC_ACTIVE_FILE, LS_ACTIVE_FILE, activeFilePath || '');
+  kvWrite(KC_ACTIVE_FILE, LS_ACTIVE_FILE, activeFilePath && !activeFilePath.startsWith('terminal:') ? activeFilePath : '');
 }
 
 function persistExpanded() {
@@ -3093,6 +3211,46 @@ function setExplorerSidebarMode(mode, { persist = true } = {}) {
 // _explInit; the git +/- badge poll (re)starts on every activation.
 let _explInit = false;
 
+// ── Terminals ─────────────────────────────────────────────────────
+
+function addTerminalTab(terminal, focus) {
+  const path = 'terminal:' + terminal.id;
+  if (openTabs.find((t) => t.path === path)) return;
+  const count = openTabs.filter((t) => t.kind === 'terminal').length + 1;
+  openTabs.push({kind: 'terminal', path, terminalId: terminal.id, cwd: terminal.cwd,
+                 name: 'Terminal ' + count, content: '', dirty: false, focus});
+  activeFilePath = path;
+  activeCommitKey = null;
+  renderTabs();
+  renderEditorPanes();
+}
+
+// The sidebar header's terminal button: a shell in the folder the tree shows.
+async function openTerminal() {
+  afterGrant.terminal_grant = openTerminal;
+  const content = document.getElementById('files-content');
+  try {
+    const terminal = await terminalApi('terminal_open', {
+      cwd: currentRoot || projectRoot,
+      cols: Math.max(20, Math.floor((content?.clientWidth || 800) / 8)),
+      rows: Math.max(5, Math.floor((content?.clientHeight || 400) / 17)),
+    }, false);
+    afterGrant.terminal_grant = null;
+    addTerminalTab(terminal, true);
+    updateStatusBar(openTabs.find((t) => t.path === activeFilePath));
+  } catch (e) {
+    if (!e.needsGrant) showToast(e.message || 'Terminal unavailable');
+  }
+}
+
+// Terminals outlive a reload: reattach the ones still open (silently without a grant).
+async function reattachTerminals() {
+  try {
+    const {terminals} = await terminalApi('terminal_list', {});
+    for (const terminal of terminals) addTerminalTab(terminal, false);
+  } catch (_) {}
+}
+
 export async function startView() {
   if (!_explInit) {
     _explInit = true;
@@ -3116,6 +3274,9 @@ export async function startView() {
 
     const newFolderBtn = document.getElementById('files-new-folder');
     if (newFolderBtn) newFolderBtn.addEventListener('click', () => promptNew('dir'));
+
+    const terminalBtn = document.getElementById('files-open-terminal');
+    if (terminalBtn) terminalBtn.addEventListener('click', openTerminal);
 
     const collapseBtn = document.getElementById('files-collapse-all');
     if (collapseBtn) {
@@ -3148,6 +3309,7 @@ export async function startView() {
     await loadRoot();
     applyProdViewClass();
     if (!openTabs.length) await restoreOpenTabs();
+    reattachTerminals();
   }
 
   syncExplorerSidebarPanels();

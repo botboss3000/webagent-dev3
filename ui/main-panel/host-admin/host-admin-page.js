@@ -89,10 +89,28 @@ export function start(mount) {
         passphrase.setAttribute('aria-label', 'Host approval passphrase');
         actions.append(passphrase);
       }
+      // File Manager grants last the time set here: 1 h by default, at most 24 h.
+      let hours = null;
+      if (request.action === 'files_grant' || request.action === 'terminal_grant') {
+        hours = el('input');
+        hours.type = 'number';
+        hours.inputMode = 'decimal';
+        hours.min = '0.25';
+        hours.max = '24';
+        hours.step = '0.25';
+        hours.value = '1';
+        hours.className = 'host-hours';
+        hours.setAttribute('aria-label', 'Hours of access');
+        const label = el('label', 'host-meta');
+        label.append(hours, document.createTextNode(' h'));
+        actions.append(label);
+      }
       for (const [button, decision] of [[approve, 'approve'], [deny, 'deny']]) {
         button.type = 'button';
         button.onclick = () => post('/api/v3/admin/host/requests/' + encodeURIComponent(request.id) + '/decision',
-          decision === 'approve' && passphrase ? {decision, passphrase: passphrase.value} : {decision}, button);
+          decision === 'approve' && passphrase
+            ? {decision, passphrase: passphrase.value, ...(hours ? {seconds: Math.round(Number(hours.value) * 3600)} : {})}
+            : {decision}, button);
       }
       actions.append(approve, deny);
       if (request.allow_key && request.undo !== 'none' && !request.boot_disk && !request.passphrase) {
@@ -177,23 +195,29 @@ export function start(mount) {
     return box;
   }
 
+  function hasGrants(page) {
+    return Object.keys(page.file_grants || {}).length + Object.keys(page.terminal_grants || {}).length > 0;
+  }
+
   // File Manager outside the checkout: live grants (revoke needs no passphrase) and the
   // newest changes the host file service made.
   function fileAccess(page) {
     const box = el('section', 'host-files');
-    if (Object.keys(page.file_grants || {}).length) box.classList.add('is-active');
+    if (hasGrants(page)) box.classList.add('is-active');
     box.append(el('h2', '', 'File Manager outside the checkout'));
-    const grants = Object.entries(page.file_grants || {});
+    const grants = [...Object.entries(page.file_grants || {}).map(([admin, until]) => ['files', admin, until]),
+      ...Object.entries(page.terminal_grants || {}).map(([admin, until]) => ['terminal', admin, until])];
     box.append(el('p', 'host-help', grants.length
-      ? 'Root-equivalent while active: these administrators can read and change any file except app data and sockets.'
-      : 'No administrator can browse outside the checkout. Going up from the checkout in the File Manager asks here.'));
+      ? 'File access is root-equivalent: any file except app data and sockets. Terminal access is a shell as the operator account without sudo or docker.'
+      : 'No administrator can browse outside the checkout or open a terminal. The File Manager asks here (or in its own prompt).'));
     const list = el('ul', 'host-list');
-    for (const [admin, until] of grants) {
+    for (const [kind, admin, until] of grants) {
       const item = el('li', 'host-item');
-      item.append(el('strong', '', admin), el('span', 'host-meta', 'Until ' + when(until)));
+      item.append(el('strong', '', admin + (kind === 'terminal' ? ' · terminal' : ' · files')),
+        el('span', 'host-meta', 'Until ' + when(until)));
       const revoke = el('button', '', 'Revoke');
       revoke.type = 'button';
-      revoke.onclick = () => post('/api/v3/admin/host/files/revoke', {admin}, revoke);
+      revoke.onclick = () => post('/api/v3/admin/host/files/revoke', {admin, kind}, revoke);
       const actions = el('div', 'host-actions');
       actions.append(revoke);
       item.append(actions);
@@ -218,7 +242,7 @@ export function start(mount) {
   function render(page, production) {
     const wrap = el('div', 'host-wrap');
     // A live File Manager approval is root-equivalent: pin it to the top so Revoke is one tap away.
-    const pinned = Object.keys(page.file_grants || {}).length > 0;
+    const pinned = hasGrants(page);
     if (pinned) wrap.append(fileAccess(page));
     wrap.append(el('h2', '', 'Waiting for approval' + (page.pending.length ? ' (' + page.pending.length + ')' : '')));
     wrap.append(el('p', 'host-help', 'Host actions from agents and SSH release keys wait here until you decide. An allow-all window approves one requester\'s ordinary actions until it ends; boot, disk and no-undo actions always ask.'));

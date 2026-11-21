@@ -31,3 +31,4 @@
 /* A live File Manager approval sits pinned at the top of the page, marked as root-equivalent. */
 .host-files.is-active{display:grid;gap:8px;padding:12px 14px;border:var(--border-width) solid var(--danger);border-radius:var(--r-lg);background:var(--bg-elev)}
 .host-files.is-active h2{margin:0}
+.host-hours{width:64px}

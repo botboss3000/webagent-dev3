@@ -13,7 +13,7 @@ import { mountAppModels } from './pages/models/page.js';
 import { mountAppActions } from './pages/actions/page.js';
 import { mountSettingsPage } from '../../shared/config-rows/settings-page.js';
 import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../../shared/page-tabs/page-tabs.js';
-import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './pages/files/page.js';
+import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './pages/file-manager/page.js';
 
 export async function start(mount) {
   const generation=(mount._appGeneration||0)+1;mount._appGeneration=generation;
@@ -90,7 +90,7 @@ export async function start(mount) {
         body:JSON.stringify({action:'tree',path:''})
       });
       if (!probe.ok) throw Error('V3 File Manager backend is not ready ('+probe.status+')');
-      const response=await fetch('/ui/main-panel/app/pages/files/files.html',{credentials:'same-origin'});
+      const response=await fetch('/ui/main-panel/app/pages/file-manager/files.html',{credentials:'same-origin'});
       if (!response.ok) throw Error('File Manager view unavailable');
       const markup=await response.text();
       if (!active() || selected!=='files') return;

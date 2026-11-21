@@ -1,5 +1,5 @@
 @import url("./pages/users/users.css");
-@import url("./pages/files/files.css");
+@import url("./pages/file-manager/files.css");
 /* App reuses the Agents directory and tab markup/design; only scope differs. */
 #tab-app{padding:12px;min-height:100%}
 #app-settings-page{padding:16px;color:var(--fg-1)}
