@@ -132,6 +132,7 @@ Each requirement has an ID for reference in commits and reviews.
 | TOOL-14 | Admin shell commands and terminals run as uid 1103 under Landlock + seccomp: writes only to the workspace, no Unix sockets, TCP only to 80/443/preview/ephemeral, scrubbed environment. | In force | `sandbox.py:25-112`, `worker/src/.../commands.rs:246-260` |
 | TOOL-15 | Workspace commands cannot reach internal addresses (loopback, Tailscale 100.64/10, link-local, metadata, Docker networks). | Partial | host fence `webagent-app-firewall.service` drops docker0 traffic to 10/8, 192.168/16, link-local, multicast (2026-11-20); Git remotes 443 only (`git/remote.rs`, commit `76b0fe6`). Tailscale 100.64/10 left open for SSH Control: Fable decides |
 | TOOL-16 | Every server-side request to a user-influenced URL uses the shared outbound check (https, no credentials, global IPs only, DNS pinned, no redirects). | In force | skill "Tool execution and outbound requests"; sweep: web fetch SSRF guarded |
+| TOOL-17 | The built-in `loadtest` model provider (capacity tests) answers on the server from the user message's script and never reaches the network. Only an administrator can create or key its connections; others reach it only through an administrator's agent, subject to their tier's allowed models. | In force | `7124ae5`: `models/src/api/selection.rs` save and `connection_key`; test `only_administrators_create_loadtest_connections` |
 
 ### 3.5 Agent browsers (BROWSER)
 
