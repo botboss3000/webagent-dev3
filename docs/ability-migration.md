@@ -72,7 +72,7 @@ migration does not deploy or activate new functionality.
 - `create_tools`: removed from v3 (2026-11-06).
 - `image_generation`: ability; pending. Adapt independently in a later functional wave.
 - `image_vision`: ability; pending. Adapt independently in a later functional wave.
-- `model_switcher`: ability; pending. Adapt independently in a later functional wave.
+- `model_switcher`: removed 2026-11-21; each chat mode chooses its text model.
 - `p2p`: ability; pending. Adapt independently in a later functional wave.
 - `ui_admin`: removed 2026-11-08; its UI guidance lives in `codebase_admin` (`ui_design` skill).
 - `user_files`: ability; pending. Adapt independently in a later functional wave.

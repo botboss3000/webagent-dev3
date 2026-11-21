@@ -137,7 +137,7 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
         // Recovery cannot invent a role for an old run that never pinned one.
         let Some(value) = run.get("selection_plan").filter(|v| !v.is_null()) else {
             return Err(anyhow!(
-                "Legacy run has no pinned role; start a new message after configuring Standard"
+                "Legacy run has no pinned role; start a new message after choosing a Text model"
             ));
         };
         let plan: model_selection::SelectionPlan = serde_json::from_value(value.clone())?;

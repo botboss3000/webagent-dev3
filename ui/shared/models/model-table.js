@@ -15,7 +15,7 @@ import { createEffortSlider, modelEfforts } from './effort-slider.js';
 
 /**
  * Shared LLM model-table component — the "Models" configurator + saved-models
- * list (Standard / Premium / Vision / Image capability columns + token usage) used in TWO places:
+ * list (Text / Vision / Image capability columns + token usage) used in TWO places:
  *
  *   • Admin → Agent Settings → Models   (ui/admin-tools/instances/app-config/agent-settings/agent-settings.js)
  *   • Agent card → Config tab → LLM     (ui/main-panel/agents/js/tab-config.js)
@@ -708,8 +708,8 @@ export function mountModelTable(host, opts = {}) {
   capFilters.className = 'ac-model-cap-filters';
   capFilters.setAttribute('aria-label', 'Filter models by capability');
   // The chips are CAPABILITIES — Text / Vision / Image / Voice / Video — never
-  // roster roles. A text model can serve several roles at once (Standard /
-  // Premium / System), so those role names are neither chips nor result badges
+  // roster roles. A text model can serve several roles at once (Text /
+  // System), so those role names are neither chips nor result badges
   // here. Selecting several chips narrows the catalog to models that have ALL.
   const MODEL_CAPABILITY_FILTERS = [
     { key: 'decision', label: 'Decision', matches: (m) => !!m.decision_capable },
@@ -897,7 +897,7 @@ export function mountModelTable(host, opts = {}) {
   function renderDetectedCaps(m) {
     if (!m) { capsEl.innerHTML = ''; return; }
     // Detected CAPABILITIES only — never roster roles. One text model can serve
-    // several roles, so no Standard/Premium/System badge belongs in this strip.
+    // several roles, so no Text/System badge belongs in this strip.
     const caps = [
       ['Decision', !!m.decision_capable],
       ['Text', m.text_capable !== false],
@@ -2191,7 +2191,7 @@ export function mountModelTable(host, opts = {}) {
     }
     // Capabilities are the five user-facing classes — Text / Vision / Image /
     // Voice / Video. They are NOT roster roles (one text model can serve several
-    // roles at once), so no Standard/Premium/System or "Text +" label belongs
+    // roles at once), so no Text/System or "Text +" label belongs
     // here. The on/off meaning stays: a supported capability is a bright value,
     // an unsupported one drops to the muted label tone.
     const capHtml = [
@@ -2628,7 +2628,7 @@ export function mountModelTable(host, opts = {}) {
   // default radio persist IN PLACE — no list rebuild — so editing a row never
   // collapses the table or disturbs the scroll position.
   function _buildSavedRow(p, readOnly, checked, cfgAnchor, rolesEditable) {
-    const isRoleAssigned = ['standard', 'premium', 'image_in', 'image_out', 'system', 'voice', 'dictation'].some(role => hasRole(p, role));
+    const isRoleAssigned = ['standard', 'image_in', 'image_out', 'system', 'voice', 'dictation'].some(role => hasRole(p, role));
     const rowWrap = document.createElement('div'); rowWrap.className = 'ac-row ac-saved-injected' + (readOnly ? ' ac-saved-inherited' : ' ac-saved-own') + (isRoleAssigned ? ' ac-saved-role' : '');
     rowWrap.dataset.mtUid = p._uid;
     rowWrap.dataset.id = String(p._uid);  // for makeRowsReorderable's rowIdList()
@@ -2664,8 +2664,7 @@ export function mountModelTable(host, opts = {}) {
     const flagsCell = document.createElement('span');
     flagsCell.className = 'ac-saved-flags';
     [
-      ['S', 'Standard', 'standard'],
-      ['P', 'Premium', 'premium'],
+      ['T', 'Text', 'standard'],
       ['D', 'Decision', 'decision'],
       ['V', 'Vision', 'image_in'],
       ['I', 'Image', 'image_out'],
@@ -2693,7 +2692,7 @@ export function mountModelTable(host, opts = {}) {
     });
 
     // Roles more-button — opens a floating popover with the roster-role toggles
-    // (Standard · Premium · Vision · Image · System · Voice · Dictation). The account-level
+    // (Text · Vision · Image · System · Voice · Dictation). The account-level
     // "Default for new agents" choice is NOT a roster role: it lives in the
     // expanded detail below Display name (see loadSavedDetail), so this popover
     // stays roles-only.
@@ -2703,8 +2702,7 @@ export function mountModelTable(host, opts = {}) {
     if (!catalogOnly) {
     // Build a badge string showing assigned roles
     const roleLabels = [];
-    if (hasRole(p, 'standard')) roleLabels.push('Standard');
-    if (hasRole(p, 'premium')) roleLabels.push('Premium');
+    if (hasRole(p, 'standard')) roleLabels.push('Text');
     if (hasRole(p, 'decision')) roleLabels.push('Decision');
     if (hasRole(p, 'image_in')) roleLabels.push('Vision');
     if (hasRole(p, 'image_out')) roleLabels.push('Image');
@@ -2763,10 +2761,9 @@ export function mountModelTable(host, opts = {}) {
     // toggles stay locked (the lock hint explains why).
     const locked = readOnly && !rolesEditable;
     const lockHint = ' (app default — read-only)';
-    _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'standard'), 'Standard', 'The primary chat / brain model',
+    _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'standard'), 'Text',
+      'The agent\'s chat model; a chat mode can choose its own in Identity → Chat modes',
       (v, cb) => persistRole('standard', v, cb), locked, lockHint);
-    _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'premium'), 'Premium', 'A premium model for harder tasks',
-      (v, cb) => persistRole('premium', v, cb), locked, lockHint);
     _buildRoleToggle(rolesSection, !!p.image_capable, hasRole(p, 'image_in'), 'Vision', 'Use to read attached images',
       (v, cb) => persistRole('image_in', v, cb), locked, lockHint);
     _buildRoleToggle(rolesSection, !!p.image_out_capable, hasRole(p, 'image_out'), 'Image', 'Use to generate images',
@@ -3052,7 +3049,7 @@ export function mountModelTable(host, opts = {}) {
     if (subscription && !matchingSubscriptionRow()?.credential_configured) return setModelStatus('Connect ChatGPT before adding a model.');
     let savedRow = null;
     const capText = S.selCaps.text !== false, capImage = !!S.selCaps.image, capImageOut = !!S.selCaps.imageOut, capVoice = !!S.selCaps.voice;
-    // The first agent-roster model claims Standard so the app has an explicit chat
+    // The first agent-roster model claims Text so the app has an explicit chat
     // model. Catalog-only mounts have no roles, and subscription entries already
     // carry a server-reserved ID before they can be added.
     const becomesStandard = !catalogOnly && !subscription && capText && !S.providers.length;
@@ -3079,7 +3076,7 @@ export function mountModelTable(host, opts = {}) {
       try {
         await saveRoster();
         // Role assignments may only reference persistent IDs. Save the new row
-        // first, let the adapter merge the server UUID, then persist Standard.
+        // first, let the adapter merge the server UUID, then persist Text.
         if (becomesStandard) {
           if (!newP.entry_id) throw new Error('The server did not assign a model entry ID');
           S.roleAssignments.standard = String(newP.entry_id);

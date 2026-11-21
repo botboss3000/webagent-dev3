@@ -68,7 +68,7 @@ Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and g
 | Core/decision | Native TypeSafe System One adapter and filtered directory scorer | ready in source; Rust resolves the assigned Decision role and scores up to 32 discovered files per page, including recursive basename-filtered matches | Agent needs a permitted TypeSafe Decision model and V3 API key; file_list must be Auto, and bounded source excerpts additionally require file_read Auto | 2 declared / 3 skills |
 | Core/image_generation | plugin image_generation.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | provider image credential/endpoint | 1 declared / 0 skills |
 | Core/image_vision | plugin image_vision.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | vision provider credential/endpoint | 1 declared / 0 skills |
-| Core/model_switcher | plugin model_switcher.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority; 1 declared settings | 5 declared / 0 skills |
+| Core/model_switcher | removed 2026-11-21 | chat modes choose the text model | — | — |
 | Core/p2p | plugin p2p.py; app/p2p/ | pending; no registered V3 adapter/configuration path | peer identity/keys and sync transport | 4 declared / 0 skills |
 | Core/ui_admin | removed 2026-11-08 | superseded by Administrator/codebase_admin (file tools; ui_controls skill) | — | — |
 | Core/user_files | plugin user_files.py; app/user_workspace.py | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority | 4 declared / 0 skills |
@@ -135,7 +135,7 @@ First ports with the smallest authority footprint: get_time/get_date with bounde
 
 Session memory has a tested-source foundation but differs from V2 long-term recall/automatic note saving. Implement a clearly versioned narrow session-note tool contract before claiming full memory parity. Manual compaction requires a durable loop checkpoint request at a safe transaction boundary, not direct mutation while tool output is incomplete. Task progress needs its own fenced revisioned state and provenance before exposing checkpoint writes.
 
-Agent management can reuse existing directory/membership authority for listing and scoped configuration, but session creation/watch, agent deletion, templates, and skill mutation need individual V3 contracts. Keep model_switcher/model controls explicitly outside this work's implementation scope until a separately authorized workflow specification.
+Agent management can reuse existing directory/membership authority for listing and scoped configuration, but session creation/watch, agent deletion, templates, and skill mutation need individual V3 contracts.
 
 ### 3. Integral orchestration, automation, and services
 

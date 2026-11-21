@@ -83,6 +83,7 @@ mod tests {
                 owner_id: "owner".into(),
                 entry_ids: vec!["a".into(), "b".into(), "c".into()],
                 roles: BTreeMap::from([(ModelRole::Standard, RoleAssignment::new("a"))]),
+                mode_models: Default::default(),
                 aliases: BTreeMap::from([("a".into(), vec!["c".into(), "b".into()])]),
                 revision: 1,
             },
@@ -120,7 +121,7 @@ mod tests {
             .get_mut("agent-a")
             .unwrap()
             .roles
-            .insert(ModelRole::Premium, RoleAssignment::new("a"));
+            .insert(ModelRole::System, RoleAssignment::new("a"));
         assert!(prepared(&store)
             .await
             .save_model_catalog(&invalid, 2)

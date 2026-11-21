@@ -136,7 +136,6 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         native::decision::TOOLS,
         native::directory_decision::TOOLS,
         native::user_files::TOOLS,
-        native::model_switcher::TOOLS,
         core_agent_management::TOOLS,
         native::image_vision::TOOLS,
         core_image_generation::TOOLS,
@@ -344,7 +343,6 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(native::schemas(native::decision::TOOLS));
         schemas.extend(native::schemas(native::directory_decision::TOOLS));
         schemas.extend(native::schemas(native::user_files::TOOLS));
-        schemas.extend(native::schemas(native::model_switcher::TOOLS));
         schemas.extend(core_agent_management::schemas());
         schemas.extend(native::schemas(native::image_vision::TOOLS));
         schemas.extend(core_image_generation::schemas());

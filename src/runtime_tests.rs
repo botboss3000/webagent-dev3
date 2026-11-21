@@ -273,6 +273,7 @@ async fn default_subscription_roster(store: &Store, catalog: &mut model_selectio
             owner_id: "admin".into(),
             entry_ids: vec![id.clone()],
             roles: BTreeMap::from([(ModelRole::Standard, RoleAssignment::new(id))]),
+            mode_models: Default::default(),
             aliases: BTreeMap::new(),
             revision: 1,
         },
@@ -5499,6 +5500,7 @@ pub(crate) async fn selection_fixture(app: &App) -> model_selection::Catalog {
                     (ModelRole::Standard, RoleAssignment::new(primary)),
                     (ModelRole::System, RoleAssignment::new("one")),
                 ]),
+                mode_models: Default::default(),
                 aliases: aliases
                     .into_iter()
                     .map(|(id, alias)| (id.to_owned(), vec![alias.to_owned()]))
@@ -5706,7 +5708,7 @@ async fn model_roles_standard_is_required_even_with_legacy_default_and_other_rol
         .await
         .unwrap_err();
         assert_eq!(error.0, StatusCode::CONFLICT);
-        assert!(error.1.contains("Standard"));
+        assert!(error.1.contains("Text model required"));
         assert!(app.store.active_runs().await.unwrap().is_empty());
     }
 }

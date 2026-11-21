@@ -124,6 +124,21 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   // Saved mode edits can rename or remove modes, so the choices are rebuilt from the saved list.
   const fill = () => { select.replaceChildren(...choices().map(([id,label])=>{ const option=document.createElement('option'); option.value=id; option.textContent=label; return option; })); defaultRow.setValue(agent.default_execution_mode); };
   modeBody.append(notice);
+  // Each saved mode may use its own text model from the agent's roster; a mode
+  // without one uses the agent's Text model (Models page). Saved in the roster.
+  const catalogPath='/models/catalog?agent_id='+encodeURIComponent(agentId);
+  let models=null;
+  try { models=await request(catalogPath); } catch { models=null; }
+  const roster=()=>models?.catalog?.agent_models?.[agentId];
+  const textModels=()=>(roster()?.entry_ids||[]).map(id=>models.catalog.entries[id])
+    .filter(entry=>entry&&entry.capabilities.includes('text')).map(entry=>[entry.id,entry.display_name||entry.upstream_model]);
+  const saveModeModel=async(modeId,entryId)=>{
+    const next=structuredClone((await request(catalogPath)).catalog);
+    const own=next.agent_models[agentId];
+    own.mode_models={...(own.mode_models||{})};
+    if(entryId)own.mode_models[modeId]=entryId;else delete own.mode_models[modeId];
+    models=await request(catalogPath,'PUT',next);
+  };
   const editor=document.createElement('div'); editor.style.cssText='display:flex;flex-direction:column;gap:8px;padding:10px 0';modeBody.append(editor);
   const renderModes=()=>{
     editor.replaceChildren();
@@ -148,11 +163,20 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
         row.control.addEventListener('input',()=>{mode[key]=row.getValue();save.disabled=false;status.textContent='Unsaved changes';updateSummary();});
         rows.push(row);
       }
+      if(!mode._new&&roster()){
+        const picker=createSelectRow(list,{title:'Model',hint:'The text model chats use in this mode. Unset uses the agent\u2019s Text model.',
+          options:[['','Agent\u2019s Text model'],...textModels()],value:roster().mode_models?.[mode.id]||'',
+          disabled:!agent.can_manage||!models.can_manage,onSave:value=>saveModeModel(mode.id,value)});
+        picker.control.dataset.modeField='model';
+      }
       if(!mode.builtin&&agent.can_manage){const remove=document.createElement('button');remove.type='button';remove.className='ac-btn ac-btn-ghost';remove.textContent='Remove mode';remove.addEventListener('click',()=>{mode._deleted=true;rows.forEach(row=>row.setDisabled(true));save.disabled=false;remove.disabled=true;updateSummary();});fields.append(remove);}
       if(agent.can_manage){fields.append(save,status);save.addEventListener('click',async()=>{
         save.disabled=true;status.textContent='Saving…';
         const payload=modes.filter(m=>!m._deleted).map(({_deleted,_new,permission_policy,...m})=>m);
-        try {await persist({execution_modes:payload});modes=structuredClone(agent.execution_modes);fill();renderModes();notice.textContent='Mode configurations saved';}
+        const removed=modes.filter(m=>m._deleted&&roster()?.mode_models?.[m.id]).map(m=>m.id);
+        try {await persist({execution_modes:payload});
+          // A removed mode's model choice goes with it.
+          for(const id of removed)await saveModeModel(id,'');modes=structuredClone(agent.execution_modes);fill();renderModes();notice.textContent='Mode configurations saved';}
         catch(error){status.textContent='Save failed: '+error.message;save.disabled=false;}
       });}
       editor.append(card);
@@ -166,4 +190,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   renderChatCustomization(stage, request, {agentId, canManage: agent.can_manage});
 
   register.present();
+  // `identitySection=<id>` in the address opens that page directly (the Models page links Chat modes).
+  const section = new URLSearchParams(location.search).get('identitySection');
+  if (section && HINTS[section]) register.open(section);
 }

@@ -38,8 +38,6 @@ pub mod knowledge_files;
 pub mod main_notes;
 #[path = "../../../../../abilities/Core/base/tools/set_execution_mode/set_execution_mode.rs"]
 pub mod mode;
-#[path = "../../../../../abilities/Core/model_switcher/tools/shared/model_switcher.rs"]
-pub mod model_switcher;
 #[path = "../../../../../abilities/Core/agent_management/tools/shared/orchestration.rs"]
 pub mod orchestration;
 #[path = "../../../../../abilities/Core/base/tools/read_own_prompt/read_own_prompt.rs"]
@@ -521,7 +519,6 @@ pub fn argument_types(
         image_vision::ARGUMENT_TYPES,
         knowledge_files::ARGUMENT_TYPES,
         mode::ARGUMENT_TYPES,
-        model_switcher::ARGUMENT_TYPES,
         orchestration::ARGUMENT_TYPES,
         prompt::ARGUMENT_TYPES,
         recall::ARGUMENT_TYPES,

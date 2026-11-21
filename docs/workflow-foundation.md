@@ -23,8 +23,9 @@ then rotate account access generation and stop affected work. Initial owner
 creation advances the access revision but preserves sign-in generation; it grants
 new ownership and must allow the same authenticated creator to configure models.
 
-Each agent's roster lists its models, its role appointments and, per model, an
-ordered list of aliases: other roster models a call falls back to under the
+Each agent's roster lists its models, its role appointments (the Standard role
+is shown as Text), an optional text model per execution mode (`mode_models`,
+falling back to Text) and, per model, an ordered list of aliases: other roster models a call falls back to under the
 model backup policy (`config/chat/model-backup.json`, with a per-agent
 overlay). An explicit empty role map stays empty. User-owned run documents pin
 the chat plan and independent System plan and failover cursor. Role changes
@@ -279,7 +280,7 @@ The installed package owns diagnostics.json and logs.db (including SQLite WAL si
 
 The live prompt files own session naming: `prompts/session_naming/prompt.md` and
 `prompts/session_naming.json` (under crates/modules/configuration) hold prompt,
-model_role (system, standard or premium), attempts_per_job (1–10),
+model_role (system or standard), attempts_per_job (1–10),
 retry_delay_ms (0–60000), request_timeout_seconds (1–300),
 recovery_retry_delay_seconds (1–86400), and max_job_attempts (1–20).
 The shipped defaults are System, 3 calls per job, 400 ms between calls,

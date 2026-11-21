@@ -37,46 +37,6 @@
   display: flex;
   flex-direction: column;
 }
-/* Premium model bubble — fire-like glow when the agent switches to a
-   high-effort model (set by the two-phase protocol). A warm ember pulse
-   that's distinct from the cool accent glow of the thinking indicator,
-   so the user sees a live visual cue the moment premium kicks in. */
-.chat-bubble.agent.premium {
-  animation: premiumGlow 2s ease-in-out infinite;
-  border-color: rgba(var(--brand-rgb), 0.45);
-}
-@keyframes premiumGlow {
-  0%, 100% {
-    box-shadow:
-      0 0 0 1px rgba(var(--brand-rgb), 0.25),
-      0 0 8px -2px rgba(var(--brand-rgb), 0.2),
-      0 0 16px -4px rgba(var(--brand-rgb), 0.08);
-  }
-  50% {
-    box-shadow:
-      0 0 0 1px rgba(var(--brand-rgb), 0.45),
-      0 0 14px -1px rgba(var(--brand-rgb), 0.35),
-      0 0 28px -4px rgba(var(--brand-rgb), 0.18);
-  }
-}
-/* In light mode the glow is punchier — deeper shadows, more saturated. */
-body.light-mode .chat-bubble.agent.premium {
-  animation: premiumGlowLight 2s ease-in-out infinite;
-}
-@keyframes premiumGlowLight {
-  0%, 100% {
-    box-shadow:
-      0 0 0 1px rgba(var(--brand-rgb), 0.35),
-      0 0 10px -2px rgba(var(--brand-rgb), 0.25),
-      0 0 22px -6px rgba(var(--brand-rgb), 0.12);
-  }
-  50% {
-    box-shadow:
-      0 0 0 1px rgba(var(--brand-rgb), 0.55),
-      0 0 18px -1px rgba(var(--brand-rgb), 0.4),
-      0 0 36px -6px rgba(var(--brand-rgb), 0.22);
-  }
-}
 .turn-gutter-btn[data-speaking="true"] { color: var(--brand); }
 /* Floating pause/resume control for read-aloud: a circular button that floats
    in the ~20% right band of the viewport, OUTSIDE the bubble (the bubble

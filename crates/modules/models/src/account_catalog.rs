@@ -286,7 +286,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             roster.efforts.remove(id);
             // A role whose model is deleted is cleared until the owner appoints another.
             roster.roles.retain(|_, role| role.entry_id != id);
-            roster.prune_aliases();
+            roster.prune_references();
             if *roster != before {
                 roster.revision = roster
                     .revision
@@ -608,6 +608,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                     .into(),
                 entry_ids: vec![],
                 roles: BTreeMap::new(),
+                mode_models: Default::default(),
                 aliases: BTreeMap::new(),
                 revision: 0,
             }),

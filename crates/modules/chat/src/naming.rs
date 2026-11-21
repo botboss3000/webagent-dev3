@@ -32,10 +32,7 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.prompt.trim().is_empty()
             || self.prompt.len() > 8192
-            || !matches!(
-                self.model_role,
-                ModelRole::System | ModelRole::Standard | ModelRole::Premium
-            )
+            || !matches!(self.model_role, ModelRole::System | ModelRole::Standard)
             || !(1..=10).contains(&self.attempts_per_job)
             || self.retry_delay_ms > 60_000
             || !(1..=300).contains(&self.request_timeout_seconds)

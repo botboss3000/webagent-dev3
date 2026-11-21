@@ -81,7 +81,7 @@ fn bounded_model_authorization_failure_stage(error: &anyhow::Error) -> &'static 
     }
     const KNOWN: &[(&str, &str)] = &[
         (
-            "Legacy run has no pinned role; start a new message after configuring Standard",
+            "Legacy run has no pinned role; start a new message after choosing a Text model",
             "plan_missing",
         ),
         ("Invalid pinned model plan identity", "plan_identity"),
@@ -110,12 +110,8 @@ fn bounded_model_authorization_failure_stage(error: &anyhow::Error) -> &'static 
         ),
         ("Agent model roster required", "candidate_grant"),
         ("Invalid agent model roster", "candidate_grant"),
-        (
-            "Invalid or duplicate role backup candidates",
-            "candidate_grant",
-        ),
-        ("Standard model required", "model_grant"),
-        ("Premium model required", "model_grant"),
+        ("Invalid model aliases", "candidate_grant"),
+        ("Text model required", "model_grant"),
         ("Image In model required", "model_grant"),
         ("Image Out model required", "model_grant"),
         ("System model required", "model_grant"),

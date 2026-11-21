@@ -98,6 +98,15 @@ impl Catalog {
                 }
             }
             roster.validate_aliases()?;
+            for (mode, id) in &roster.mode_models {
+                let text = self
+                    .entries
+                    .get(id)
+                    .is_some_and(|entry| ModelRole::Standard.supported_by(entry));
+                if !valid_id(mode) || !roster.entry_ids.contains(id) || !text {
+                    bail!("Invalid execution mode model");
+                }
+            }
         }
         Ok(())
     }
@@ -113,6 +122,18 @@ impl Catalog {
             .get(&role)
             .ok_or_else(|| anyhow::anyhow!("{} model required", role.label()))?;
         self.resolve_roster(roster, role, &appointment.entry_id, None)
+    }
+
+    /// The text model for a chat in execution mode `mode`: the mode's own model when the
+    /// roster names one, else the Standard (Text) appointment.
+    pub fn resolve_mode(&self, agent_id: &str, mode: Option<&str>) -> Result<SelectionPlan> {
+        let roster = self.agent_models.get(agent_id);
+        match mode.and_then(|mode| roster?.mode_models.get(mode)) {
+            Some(entry_id) => {
+                self.resolve_roster(roster.unwrap(), ModelRole::Standard, entry_id, None)
+            }
+            None => self.resolve_role(agent_id, ModelRole::Standard),
+        }
     }
 
     /// Custom chat uses an explicit roster entry, with that entry's aliases, and never changes Standard.
@@ -234,7 +255,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         // Removing a model from a roster also removes it from that roster's aliases.
         let mut catalog = catalog.clone();
         for roster in catalog.agent_models.values_mut() {
-            roster.prune_aliases();
+            roster.prune_references();
         }
         let catalog = &catalog;
         catalog.validate()?;
@@ -391,9 +412,9 @@ pub struct ModelEntry {
 #[serde(rename_all = "snake_case")]
 // Capabilities describe support; explicit semantic appointments select workflows.
 pub enum ModelRole {
+    /// The agent's default text model, shown as "Text"; an execution mode may name its own.
     #[default]
     Standard,
-    Premium,
     ImageIn,
     ImageOut,
     System,
@@ -406,8 +427,7 @@ pub enum ModelRole {
 impl ModelRole {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Standard => "Standard",
-            Self::Premium => "Premium",
+            Self::Standard => "Text",
             Self::ImageIn => "Image In",
             Self::ImageOut => "Image Out",
             Self::System => "System",
@@ -418,7 +438,7 @@ impl ModelRole {
     }
     pub fn supported_by(self, entry: &ModelEntry) -> bool {
         entry.capabilities.contains(match self {
-            Self::Standard | Self::Premium | Self::System => "text",
+            Self::Standard | Self::System => "text",
             Self::ImageIn => "image_in",
             Self::ImageOut => "image_out",
             Self::Voice => "voice",
@@ -451,12 +471,31 @@ pub struct AgentModels {
     pub agent_id: String,
     pub owner_id: String,
     pub entry_ids: Vec<String>,
+    #[serde(deserialize_with = "roles_without_retired")]
     pub roles: BTreeMap<ModelRole, RoleAssignment>,
+    /// Text model per execution mode id (ask, plan, auto, or a custom mode); a mode without
+    /// one uses the Standard (Text) appointment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mode_models: BTreeMap<String, String>,
     /// Ordered backups per roster entry: a call on that entry moves to the next alias when the
     /// backup policy allows. Every alias is another entry of this roster.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub aliases: BTreeMap<String, Vec<String>>,
     pub revision: u64,
+}
+/// Saved rosters may still appoint the retired Premium role; it is dropped on load.
+fn roles_without_retired<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<ModelRole, RoleAssignment>, D::Error> {
+    let raw = BTreeMap::<String, RoleAssignment>::deserialize(deserializer)?;
+    raw.into_iter()
+        .filter(|(role, _)| role != "premium")
+        .map(|(role, appointment)| {
+            serde_json::from_value(serde_json::Value::String(role))
+                .map(|role| (role, appointment))
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
 }
 impl AgentModels {
     fn validate_aliases(&self) -> Result<()> {
@@ -475,13 +514,14 @@ impl AgentModels {
         }
         Ok(())
     }
-    /// Drop aliases (and alias lists) naming entries no longer in the roster.
-    pub fn prune_aliases(&mut self) {
+    /// Drop aliases, alias lists and mode models naming entries no longer in the roster.
+    pub fn prune_references(&mut self) {
         let roster = &self.entry_ids;
         self.aliases.retain(|id, aliases| {
             aliases.retain(|alias| alias != id && roster.contains(alias));
             roster.contains(id) && !aliases.is_empty()
         });
+        self.mode_models.retain(|_, id| roster.contains(id));
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -732,6 +772,7 @@ mod tests {
             owner_id: "owner".into(),
             entry_ids: vec!["a".into(), "b".into(), "c".into()],
             roles: BTreeMap::from([(ModelRole::Standard, role("a"))]),
+            mode_models: Default::default(),
             aliases: BTreeMap::from([("a".into(), vec!["c".into(), "b".into()])]),
             revision: 1,
         };
@@ -813,10 +854,10 @@ mod tests {
         let mut c = catalog_fixture();
         let roster = c.agent_models.get_mut("agent-a").unwrap();
         roster.entry_ids.retain(|id| id != "c");
-        roster.prune_aliases();
+        roster.prune_references();
         assert_eq!(roster.aliases["a"], vec!["b"]);
         roster.entry_ids.retain(|id| id != "b");
-        roster.prune_aliases();
+        roster.prune_references();
         assert!(roster.aliases.is_empty());
     }
     #[test]
@@ -882,6 +923,41 @@ mod tests {
         assert!(c.resolve_role("agent-a", ModelRole::Decision).is_err());
     }
     #[test]
+    fn modes_use_their_own_text_model_or_fall_back_to_text() {
+        let mut c = catalog_fixture();
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.mode_models.insert("plan".into(), "b".into());
+        c.validate().unwrap();
+        assert_eq!(
+            ids(&c.resolve_mode("agent-a", Some("plan")).unwrap()),
+            vec!["b"]
+        );
+        assert_eq!(
+            ids(&c.resolve_mode("agent-a", Some("ask")).unwrap()),
+            vec!["a", "c", "b"]
+        );
+        assert_eq!(
+            ids(&c.resolve_mode("agent-a", None).unwrap()),
+            vec!["a", "c", "b"]
+        );
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.mode_models.insert("auto".into(), "outside".into());
+        assert!(c.validate().is_err());
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.entry_ids.retain(|id| id != "b");
+        roster.prune_references();
+        assert!(!roster.mode_models.contains_key("plan"));
+    }
+    #[test]
+    fn a_saved_premium_role_is_dropped_on_load() {
+        let c = catalog_fixture();
+        let mut saved = serde_json::to_value(&c).unwrap();
+        saved["agent_models"]["agent-a"]["roles"]["premium"] = json!({"entry_id":"b"});
+        let loaded: Catalog = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded, c);
+        assert_eq!(ModelRole::Standard.label(), "Text");
+    }
+    #[test]
     fn roles_and_custom_selections_stay_explicit_and_pinned() {
         let mut catalog = catalog_fixture();
         let standard = catalog.resolve("agent-a").unwrap();
@@ -889,7 +965,6 @@ mod tests {
         let roster = catalog.agent_models.get_mut("agent-a").unwrap();
         roster.roles.insert(ModelRole::System, role("b"));
         roster.aliases.insert("b".into(), vec!["a".into()]);
-        roster.roles.insert(ModelRole::Premium, role("a"));
         let system = catalog.resolve_role("agent-a", ModelRole::System).unwrap();
         assert_eq!(system.role, ModelRole::System);
         assert_eq!(ids(&system), vec!["b", "a"]);
@@ -897,13 +972,6 @@ mod tests {
         assert_eq!(custom.custom_entry_id.as_deref(), Some("c"));
         assert_eq!(custom.candidates.len(), 1);
         assert_eq!(catalog.resolve("agent-a").unwrap(), standard);
-        assert_eq!(
-            catalog
-                .resolve_role("agent-a", ModelRole::Premium)
-                .unwrap()
-                .candidates,
-            standard.candidates
-        );
         let roster = catalog.agent_models.get_mut("agent-a").unwrap();
         roster.roles.get_mut(&ModelRole::System).unwrap().entry_id = "c".into();
         assert_eq!(system.candidates[0].entry_id, "b");

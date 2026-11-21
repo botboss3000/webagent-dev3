@@ -538,13 +538,20 @@ async fn prepare_message_inner(
             .and_then(|saved| saved.get("entry_id"))
             .filter(|entry| !entry.is_null())
     });
+    // Without a composer pick, the chat's execution mode chooses the text model. A session
+    // created by this same admission (a direct message, a delegation) has no readable mode
+    // yet: it starts on the Text model and the first model call moves it to its mode's model.
+    let mode = match app.engine().session_mode(&id).await {
+        Ok(mode) => mode["execution_mode"].clone(),
+        Err(_) => Value::Null,
+    };
     let mut plan = Some(
         match selected {
             Some(Value::String(entry)) => catalog.resolve_custom(&agent_id, entry),
             Some(_) => return Err(bad("Invalid custom model entry")),
-            None => catalog.resolve_role(&agent_id, model_selection::ModelRole::Standard),
+            None => catalog.resolve_mode(&agent_id, mode.as_str()),
         }
-        .map_err(|_| conflict("Standard model required, or selected model is unavailable"))?,
+        .map_err(|_| conflict("Text model required, or selected model is unavailable"))?,
     );
     // Pin System separately now; compaction cannot borrow Standard or a later assignment.
     let mut system_plan = if catalog.agent_models.get(&agent_id).is_some_and(|models| {
@@ -616,6 +623,7 @@ async fn prepare_message_inner(
     run["system_selection_plan"] = json!(system_plan);
     // Role changes on the Models page after this revision apply at the next model call.
     run["model_catalog_revision"] = json!(catalog.revision);
+    run["chat_model_mode"] = mode;
     run["system_failover_state"] = json!(model_selection::FailoverState::default());
     run["attachments"] = json!(prepared.metadata.clone());
     run["chat_model_revision"] = json!(saved_model

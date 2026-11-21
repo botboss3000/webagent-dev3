@@ -235,15 +235,6 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::native::model_switcher::owns(&name) {
-                tools::native::model_switcher::execute(
-                    &tools::native_host::Host(&app),
-                    native_call,
-                    &name,
-                    &args,
-                    cancel,
-                )
-                .await
             } else if tools::native::user_files::owns(&name) {
                 tools::native::user_files::execute(
                     &tools::native_host::Host(&app),
@@ -565,11 +556,7 @@ impl
     ) -> impl std::future::Future<Output = Result<bool>> + Send + 'a {
         async move {
             let app = self.host.app(view);
-            let changed = crate::apply_chat_model_preference(&app, run).await?;
-            Ok(
-                tools::native::model_switcher::apply(&tools::native_host::Host(&app), run).await?
-                    || changed,
-            )
+            crate::apply_chat_model_preference(&app, run).await
         }
     }
     fn messaging_preflight<'a>(

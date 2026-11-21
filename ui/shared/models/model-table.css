@@ -486,7 +486,7 @@
 }
 
 /* ── Roles more-button + floating popover ─────────────────────────────────
-   Replaces the old inline role columns (Default/Premium/Vision/Image) with a
+   Shows the model's roles (Text, Vision, Image, System, ...) behind a
    single ⋮ button. The popover mirrors the session-dropdown menu style.      */
 .ac-saved-roles-cell {
   justify-content: flex-end;

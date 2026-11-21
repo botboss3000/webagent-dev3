@@ -9,10 +9,9 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
         .await?
         .unwrap_or(json!({"entry_id":null,"revision":0}));
     let mut models = Vec::new();
-    let mut options = vec![(
-        None,
-        catalog.resolve_role(&agent, model_selection::ModelRole::Standard),
-    )];
+    // The default option is the text model of the chat's current mode.
+    let mode = session_mode(app, sid).await?["execution_mode"].clone();
+    let mut options = vec![(None, catalog.resolve_mode(&agent, mode.as_str()))];
     if let Some(roster) = catalog.agent_models.get(&agent) {
         for id in &roster.entry_ids {
             options.push((Some(id.as_str()), catalog.resolve_custom(&agent, id)));
@@ -191,6 +190,9 @@ pub(crate) async fn apply_chat_model_preference(app: &App, run: &mut Value) -> R
     let catalog = app.store.model_catalog().await?;
     let composer_changed = revision != run["chat_model_revision"].as_u64().unwrap_or(0);
     let roles_changed = catalog.revision != run["model_catalog_revision"].as_u64().unwrap_or(0);
+    // A mode change picks that mode's text model at the next call, unless the chat chose one.
+    let mode = session_mode(app, sid).await?["execution_mode"].clone();
+    let mode_changed = mode != run["chat_model_mode"];
     let agent = run["agent_id"]
         .as_str()
         .ok_or_else(|| anyhow!("Agent missing"))?
@@ -204,21 +206,22 @@ pub(crate) async fn apply_chat_model_preference(app: &App, run: &mut Value) -> R
             changed = true;
         }
     }
-    if !composer_changed && !roles_changed {
+    if !composer_changed && !roles_changed && !mode_changed {
         return Ok(changed);
     }
     run["model_catalog_revision"] = json!(catalog.revision);
+    run["chat_model_mode"] = mode.clone();
     if roles_changed {
         changed |= refresh_system_plan(app, &catalog, &agent, run).await?;
     }
     // A chat's own model choice outranks its agent's Standard role.
     let follows_role = saved["entry_id"].is_null();
-    if !composer_changed && !(roles_changed && follows_role) {
+    if !composer_changed && !((roles_changed || mode_changed) && follows_role) {
         return Ok(changed);
     }
     let mut plan = match saved["entry_id"].as_str() {
         Some(entry) => catalog.resolve_custom(&agent, entry)?,
-        None => catalog.resolve_role(&agent, model_selection::ModelRole::Standard)?,
+        None => catalog.resolve_mode(&agent, mode.as_str())?,
     };
     app.pin_model_plan(&mut plan).await?;
     if !composer_changed && json!(plan) == run["selection_plan"] {

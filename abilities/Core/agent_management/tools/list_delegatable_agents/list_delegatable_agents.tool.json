@@ -1,6 +1,6 @@
 {
   "name": "list_delegatable_agents",
-  "description": "List accessible private agents you can delegate to with start_session or delegate_to_agent; reports whether a Standard model is assigned.",
+  "description": "List accessible private agents you can delegate to with start_session or delegate_to_agent; reports whether a Text model is assigned.",
   "effect": "read",
   "retention": {
     "output": "disposable"

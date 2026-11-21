@@ -12,7 +12,13 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   const pendingCss=document.createElement('link');pendingCss.rel='stylesheet';pendingCss.href='/ui/shared/models/pending.css';
   const group=document.createElement('div');group.className='v3-reference-models';
   const analyticsHost=document.createElement('div');analyticsHost.className='agent-model-analytics-host';
-  const tableHost=document.createElement('div');tableHost.style.marginTop='8px';group.append(analyticsHost,tableHost);host.append(css,pendingCss,group);
+  const tableHost=document.createElement('div');tableHost.style.marginTop='8px';
+  // Chat modes may each use their own text model; the agent's Text role is the fallback.
+  const modesLink=document.createElement('p');modesLink.className='ac-hint';modesLink.style.margin='8px 0 0';
+  const modesAnchor=document.createElement('a');modesAnchor.textContent='Choose a model per chat mode';
+  modesAnchor.href='/app?tab=agents&agent='+encodeURIComponent(agentId)+'&agentView=identity&identitySection=chat-modes';
+  modesLink.append(modesAnchor,' (Ask, Plan, Auto…). Modes without one use the model marked Text here.');
+  group.append(analyticsHost,modesLink,tableHost);host.append(css,pendingCss,group);
   // Clearing and resetting usage only records markers, so the latest one can be undone.
   const usageCleared=title=>{table.reload();showNotification({key:'usage-reset',title,message:'Earlier usage is hidden from the graph and the model table.',actions:[{label:'Undo',kind:'approve',run:async()=>{
     await request('/usage/models/undo?'+new URLSearchParams({agent_id:agentId}),'POST');await Promise.all([table.reload(),analytics.reload()]);

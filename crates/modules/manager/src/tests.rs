@@ -827,6 +827,7 @@ mod independent_runtime_io {
                     owner_id: OWNER.into(),
                     entry_ids: vec!["fixture-model".into()],
                     revision: 1,
+                    mode_models: Default::default(),
                     aliases: BTreeMap::new(),
                     roles: BTreeMap::from([
                         (ModelRole::Standard, RoleAssignment::new("fixture-model")),

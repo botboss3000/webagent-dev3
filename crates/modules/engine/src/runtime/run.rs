@@ -3536,23 +3536,19 @@ impl<
                     workflow::Decision::Pass,
                 )?;
                 app.save(&mut run).await?;
-                // Effort precedence: this run's model-switcher choice, then the conversation's
-                // choice for the chosen entry, then the agent's default for the candidate in use.
+                // Effort precedence: the conversation's choice for the chosen entry, then the
+                // agent's default for the candidate in use.
                 // Levels the provider file no longer lists fall back to the provider default.
                 let index = run["failover_state"]["candidate_index"]
                     .as_u64()
                     .unwrap_or(0) as usize;
                 let candidate = &run["selection_plan"]["candidates"][index];
-                let requested = run["core_model_effort"]
-                    .as_str()
-                    .or_else(|| {
-                        if index == 0 {
-                            run["chat_effort"].as_str()
-                        } else {
-                            None
-                        }
-                    })
-                    .or_else(|| candidate["default_effort"].as_str());
+                let requested = (if index == 0 {
+                    run["chat_effort"].as_str()
+                } else {
+                    None
+                })
+                .or_else(|| candidate["default_effort"].as_str());
                 let core_effort = webagent_models::providers::supported(
                     selection.provider,
                     &selection.model,
