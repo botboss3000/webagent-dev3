@@ -14,7 +14,9 @@
         "bigger chat text",
         "font size 18",
         "messages are hard to read",
-        "smaller text in the chat"
+        "smaller text in the chat",
+        "make the message text bigger",
+        "larger letters in the conversation"
       ],
       "areas": [
         "chat",
@@ -230,7 +232,9 @@
       ],
       "examples": [
         "change the message box hint to 'Ask me anything'",
-        "placeholder text should say Type here"
+        "placeholder text should say Type here",
+        "the text box should say Ask away",
+        "hint in the input bar"
       ],
       "areas": [
         "chat",
@@ -409,7 +413,7 @@
     },
     {
       "id": "chat.content_max_width",
-      "description": "Widest the conversation column may grow, as a CSS length or percentage such as 1000px.",
+      "description": "Widest the messages may run inside the chat, as a CSS length or percentage such as 1000px; the chat panel itself is sized separately.",
       "type": "string",
       "pointer": "/chat_{surface}/content_max_width",
       "inherit_pointer": "/chat_common/content_max_width",
@@ -426,9 +430,9 @@
         "agent"
       ],
       "examples": [
-        "make the conversation column wider",
-        "messages column max 800px",
-        "narrower message area"
+        "limit how wide messages get",
+        "messages no wider than 800px",
+        "narrower lines of text in the conversation"
       ],
       "areas": [
         "chat",
@@ -878,7 +882,7 @@
     },
     {
       "id": "chat.gutter_presentation.font_size_px",
-      "description": "Text size, in pixels, of the labels under each message.",
+      "description": "Size, in pixels, of the small action labels (time, copy, retry) under each message.",
       "type": "integer",
       "pointer": "/chat_{surface}/gutter_presentation/font_size_px",
       "inherit_pointer": "/chat_common/gutter_presentation/font_size_px",
@@ -895,9 +899,9 @@
         "agent"
       ],
       "examples": [
-        "bigger text under the messages",
-        "message footer text 13px",
-        "smaller gutter labels"
+        "bigger action labels under messages",
+        "message toolbar labels 13px",
+        "smaller timestamp labels"
       ],
       "areas": [
         "chat",
@@ -1211,7 +1215,7 @@
       ],
       "examples": [
         "call the agent Ava above its messages",
-        "agent heading should say Assistant",
+        "label replies as Helper",
         "rename the reply label"
       ],
       "areas": [
@@ -1351,7 +1355,7 @@
     },
     {
       "id": "chat.messages.greeting",
-      "description": "Greeting shown to someone starting a chat.",
+      "description": "Greeting the chat shows to someone who has not written yet.",
       "type": "string",
       "pointer": "/chat_{surface}/messages/greeting",
       "inherit_pointer": "/chat_common/messages/greeting",
@@ -1808,7 +1812,7 @@
     },
     {
       "id": "chat.user_turn_anchor.enabled",
-      "description": "Scroll your new message to the top so the reply appears under it.",
+      "description": "After you send a message, scroll so it sits at the top with the reply appearing below it.",
       "type": "boolean",
       "pointer": "/chat_{surface}/user_turn_anchor/enabled",
       "inherit_pointer": "/chat_common/user_turn_anchor/enabled",
@@ -1825,9 +1829,9 @@
         "agent"
       ],
       "examples": [
-        "stop scrolling my message to the top",
-        "anchor my message when I send",
-        "don't jump when I send a message"
+        "stop scrolling my sent message to the top",
+        "keep my sent message at the top",
+        "don't jump when I send"
       ],
       "areas": [
         "chat",
@@ -1838,7 +1842,7 @@
     },
     {
       "id": "chat.user_turn_anchor.snap_enabled",
-      "description": "Snap gently to your last message while scrolling near it.",
+      "description": "While you scroll back near your latest sent message, settle gently onto it.",
       "type": "boolean",
       "pointer": "/chat_{surface}/user_turn_anchor/snap_enabled",
       "inherit_pointer": "/chat_common/user_turn_anchor/snap_enabled",
@@ -1856,8 +1860,8 @@
       ],
       "examples": [
         "turn off scroll snapping",
-        "snap to my message when scrolling",
-        "no snapping in the transcript"
+        "no snapping to my last message",
+        "snap onto my sent message"
       ],
       "areas": [
         "chat",
@@ -1868,7 +1872,7 @@
     },
     {
       "id": "chat.idle_footer.margin_bottom",
-      "description": "Gap below the message box while it is empty, as a CSS length such as 24px.",
+      "description": "Space below the input bar while nothing is typed, as a CSS length such as 24px.",
       "type": "string",
       "pointer": "/chat_{surface}/idle_footer/margin_bottom",
       "inherit_pointer": "/chat_common/idle_footer/margin_bottom",
@@ -1885,9 +1889,9 @@
         "agent"
       ],
       "examples": [
-        "raise the empty message box",
-        "idle footer bottom margin 40px",
-        "move the input closer to the bottom"
+        "raise the input bar when idle",
+        "more space under the composer",
+        "idle input bar 40px from the bottom"
       ],
       "areas": [
         "chat",
@@ -1899,7 +1903,7 @@
     },
     {
       "id": "chat.idle_footer.chat_pill.pill_width",
-      "description": "Width of the message box while it is empty, as a CSS length such as 500px.",
+      "description": "Width of the input bar while nothing is typed, as a CSS length such as 500px.",
       "type": "string",
       "pointer": "/chat_{surface}/idle_footer/chat_pill/pill_width",
       "inherit_pointer": "/chat_common/idle_footer/chat_pill/pill_width",
@@ -1916,7 +1920,7 @@
         "agent"
       ],
       "examples": [
-        "wider message box",
+        "wider input bar",
         "input pill width 600px",
         "narrower composer when idle"
       ],
@@ -1930,7 +1934,7 @@
     },
     {
       "id": "chat.idle_footer.chat_pill.pill_radius",
-      "description": "Corner roundness of the message box while it is empty, as a CSS length such as 41px.",
+      "description": "Corner roundness of the input bar while nothing is typed, as a CSS length such as 41px.",
       "type": "string",
       "pointer": "/chat_{surface}/idle_footer/chat_pill/pill_radius",
       "inherit_pointer": "/chat_common/idle_footer/chat_pill/pill_radius",
@@ -1947,7 +1951,7 @@
         "agent"
       ],
       "examples": [
-        "square corners on the message box",
+        "square corners on the input bar",
         "rounder input pill",
         "pill radius 12px"
       ],
@@ -1961,7 +1965,7 @@
     },
     {
       "id": "chat.active_footer.margin_bottom",
-      "description": "Gap below the message box while you type, as a CSS length such as 0px.",
+      "description": "Space below the input bar while you type, as a CSS length such as 0px.",
       "type": "string",
       "pointer": "/chat_{surface}/active_footer/margin_bottom",
       "inherit_pointer": "/chat_common/active_footer/margin_bottom",
@@ -1978,7 +1982,7 @@
         "agent"
       ],
       "examples": [
-        "raise the message box while typing",
+        "raise the input bar while typing",
         "active footer margin 12px",
         "input at the very bottom while typing"
       ],
