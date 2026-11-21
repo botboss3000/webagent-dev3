@@ -792,6 +792,8 @@ pub(crate) fn ability_problems(
 }
 
 async fn run_process() -> Result<()> {
+    // Before any database opens: every account's database needs several open files.
+    let open_files = webagent_platform::process::raise_open_file_limit();
     if std::env::args().any(|argument| argument == "--boot-plan") {
         #[cfg(feature = "linked-context")]
         {
@@ -933,6 +935,8 @@ async fn run_process() -> Result<()> {
         );
         return Ok(());
     }
+    // Logged only for the services: `--validate-assets` prints its JSON result on stdout.
+    tracing::info!(open_files = ?open_files, "Open-file limit");
     let root = webagent_configuration::paths::state();
     let role = std::env::var("V3_PROCESS_ROLE").unwrap_or_else(|_| "api".into());
     if role == "health" {

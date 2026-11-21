@@ -187,6 +187,42 @@ pub fn link_or_copy(original: &std::path::Path, link: &std::path::Path) -> std::
     }
 }
 
+pub mod process {
+    /// Raise this process's soft open-file limit to its hard limit and return the new soft
+    /// limit. Each user's database holds files for every pooled connection (database, WAL and
+    /// shared memory), so a server with hundreds of accounts needs far more than the 1024
+    /// that containers start with; past it, opens fail with "unable to open database file".
+    /// Returns `None` where the limit cannot be read or changed (and on non-Unix systems).
+    #[cfg(unix)]
+    pub fn raise_open_file_limit() -> Option<u64> {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit and setrlimit only read and write the struct passed to them.
+        unsafe {
+            if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                return None;
+            }
+            if limit.rlim_cur < limit.rlim_max {
+                let raised = libc::rlimit {
+                    rlim_cur: limit.rlim_max,
+                    rlim_max: limit.rlim_max,
+                };
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &raised) == 0 {
+                    limit.rlim_cur = limit.rlim_max;
+                }
+            }
+        }
+        Some(limit.rlim_cur as u64)
+    }
+
+    #[cfg(not(unix))]
+    pub fn raise_open_file_limit() -> Option<u64> {
+        None
+    }
+}
+
 pub mod ffi {
     #[cfg(unix)]
     pub use std::os::unix::ffi::OsStrExt;
@@ -286,6 +322,23 @@ pub mod signal {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn open_file_limit_is_raised_to_the_hard_limit() {
+        let raised = super::process::raise_open_file_limit().expect("limit readable");
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit only writes the struct passed to it.
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+            0
+        );
+        assert_eq!(raised, limit.rlim_cur as u64);
+        assert_eq!(limit.rlim_cur, limit.rlim_max);
+    }
+
     #[test]
     fn link_or_copy_names_the_file_once() {
         let dir = std::env::temp_dir().join(format!("platform-link-{}", std::process::id()));
