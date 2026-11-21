@@ -7,8 +7,8 @@
   },
   "default_policy": {
     "operator": "allow",
-    "member": "allow",
-    "visitor": "allow"
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",
