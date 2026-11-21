@@ -181,6 +181,7 @@ export function start(mount) {
   // newest changes the host file service made.
   function fileAccess(page) {
     const box = el('section', 'host-files');
+    if (Object.keys(page.file_grants || {}).length) box.classList.add('is-active');
     box.append(el('h2', '', 'File Manager outside the checkout'));
     const grants = Object.entries(page.file_grants || {});
     box.append(el('p', 'host-help', grants.length
@@ -216,6 +217,9 @@ export function start(mount) {
 
   function render(page, production) {
     const wrap = el('div', 'host-wrap');
+    // A live File Manager approval is root-equivalent: pin it to the top so Revoke is one tap away.
+    const pinned = Object.keys(page.file_grants || {}).length > 0;
+    if (pinned) wrap.append(fileAccess(page));
     wrap.append(el('h2', '', 'Waiting for approval' + (page.pending.length ? ' (' + page.pending.length + ')' : '')));
     wrap.append(el('p', 'host-help', 'Host actions from agents and SSH release keys wait here until you decide. An allow-all window approves one requester\'s ordinary actions until it ends; boot, disk and no-undo actions always ask.'));
     wrap.append(allowAll(page.windows || {}));
@@ -223,7 +227,7 @@ export function start(mount) {
     for (const request of page.pending) pending.append(card(request, true));
     wrap.append(page.pending.length ? pending : el('p', 'host-empty', 'Nothing is waiting.'));
     wrap.append(releases(production));
-    wrap.append(fileAccess(page));
+    if (!pinned) wrap.append(fileAccess(page));
     wrap.append(el('h2', '', 'Recent'));
     const recent = el('ul', 'host-list');
     for (const request of page.recent) recent.append(card(request, false));
