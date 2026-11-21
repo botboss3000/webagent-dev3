@@ -200,7 +200,7 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
                 .platform_sources
                 .get(&candidate.entry_id)
                 .ok_or_else(|| anyhow!("Platform provenance removed"))?;
-            if live.roster_id != pin.roster_id || live.entry.id != pin.entry.id {
+            if live.entry.id != pin.entry.id {
                 return Err(anyhow!("Platform provenance changed"));
             }
             self.store
@@ -222,7 +222,7 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
             if let Some(previous) = &candidate.platform {
                 let source = account_catalog::Source {
                     origin: account_catalog::Origin::Platform,
-                    entry_id: account_catalog::platform_id(&previous.roster_id, &previous.entry.id),
+                    entry_id: account_catalog::platform_id(&previous.entry.id),
                 };
                 let pin = self.store.pin_platform_source(actor, &source).await?;
                 if pin.entry.transport != candidate.transport {

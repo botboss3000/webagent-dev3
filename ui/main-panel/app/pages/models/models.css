@@ -1,4 +1,4 @@
-/* Reference scope toolbar; v3 keeps app publication separate from agent assignment. */
+/* App catalog publication toolbar; v3 keeps app publication separate from agent assignment. */
 .model-scope-toolbar {
   display: flex;
   align-items: end;
@@ -10,15 +10,6 @@
   border-radius: var(--radius-lg, 12px);
   background: color-mix(in srgb, var(--bg-2) 78%, transparent);
 }
-.model-scope-field {
-  display: grid;
-  gap: 5px;
-  min-width: min(290px, 100%);
-  color: var(--fg-2);
-  font-size: 12px;
-  font-weight: 650;
-}
-.model-scope-field .ac-input { width: 100%; }
 .model-scope-status {
   align-self: center;
   padding: 5px 9px;
@@ -40,16 +31,14 @@
   line-height: 1.4;
 }
 @media (max-width: 620px) {
-  .model-scope-field { flex: 1 0 100%; }
   .model-scope-toolbar .ac-btn { flex: 1 1 auto; }
 }
 #app-models-page .model-lifecycle-result pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:24rem; overflow:auto; }
 #app-models-page .model-lifecycle-result { border:1px solid var(--border); padding:12px; margin-top:12px; }
 #app-models-page .model-scope-toolbar { flex-wrap:wrap; }
-#app-models-page .model-scope-field { min-width:0; }
 #app-models-page #ac-model-host { min-width:0; overflow-x:auto; }
 #app-models-page .ac-kv-hidden { display:none; }
-@media (max-width:600px) { #app-models-page .model-scope-field { flex:1 1 100%; } #app-models-page .model-scope-toolbar { align-items:stretch; } }
+@media (max-width:600px) { #app-models-page .model-scope-toolbar { align-items:stretch; } }
 
 .model-scope-actions { position: relative; }
 .model-scope-actions > summary { list-style: none; cursor: pointer; }

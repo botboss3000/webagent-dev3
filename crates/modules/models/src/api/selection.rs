@@ -65,10 +65,7 @@ pub async fn response<C: RuntimeStorage>(
                     &caller.user_id,
                     &crate::account_catalog::Source {
                         origin: crate::account_catalog::Origin::Platform,
-                        entry_id: crate::account_catalog::platform_id(
-                            &pin.roster_id,
-                            &pin.entry.id,
-                        ),
+                        entry_id: crate::account_catalog::platform_id(&pin.entry.id),
                     },
                 )
                 .await
@@ -358,10 +355,7 @@ pub async fn save<C: RuntimeStorage>(
                         &caller.user_id,
                         &crate::account_catalog::Source {
                             origin: crate::account_catalog::Origin::Platform,
-                            entry_id: crate::account_catalog::platform_id(
-                                &pin.roster_id,
-                                &pin.entry.id,
-                            ),
+                            entry_id: crate::account_catalog::platform_id(&pin.entry.id),
                         },
                     )
                     .await

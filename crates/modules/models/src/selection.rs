@@ -34,8 +34,7 @@ impl Catalog {
         }
         for (id, pin) in &self.platform_sources {
             if !self.entries.contains_key(id)
-                || !id.starts_with("platform:")
-                || !webagent_access::valid_id(&pin.roster_id)
+                || id != &crate::account_catalog::platform_id(&pin.entry.id)
             {
                 bail!("Invalid platform provenance");
             }

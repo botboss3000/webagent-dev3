@@ -536,8 +536,6 @@ mod tests {
         let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
         let revision = tier.revision;
         tier.model_policy = Some(crate::access::ModelPolicy {
-            roster_id: None,
-            allowed_entry_ids: Default::default(),
             allow_byo: false,
             max_byo_entries: 0,
         });

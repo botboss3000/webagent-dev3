@@ -90,14 +90,14 @@ impl Store {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn no_policy_never_exposes_platform_and_forged_preferences_fail() {
+    async fn unsaved_catalog_exposes_nothing_and_forged_preferences_fail() {
         let (_root, app) = crate::runtime_tests::fixture().await;
         let choices = app.store.account_model_choices("admin").await.unwrap();
         assert_eq!(choices["available_platform_models"], json!([]));
         let mut preferences = Preferences::default();
         preferences
             .selected_platform_ids
-            .insert("platform:base:forged".into());
+            .insert("platform:forged".into());
         assert!(app
             .store
             .save_account_model_preferences("admin", &preferences)
@@ -206,7 +206,7 @@ mod source_tests {
         .is_err());
     }
     #[tokio::test]
-    async fn platform_resolution_requires_bound_publication_and_rechecks_retirement() {
+    async fn platform_resolution_requires_publication_and_rechecks_removal() {
         use crate::platform_catalog::{Entry, Mutation};
         let (_root, app) = crate::runtime_tests::fixture().await;
         let user = app
@@ -228,10 +228,8 @@ mod source_tests {
         };
         app.store
             .mutate_platform_roster(
-                "team",
                 0,
                 Mutation::Draft {
-                    name: "Team".into(),
                     entries: BTreeMap::from([("model".into(), entry)]),
                 },
                 "admin",
@@ -240,44 +238,15 @@ mod source_tests {
             .unwrap();
         let source = Source {
             origin: Origin::Platform,
-            entry_id: platform_id("team", "model"),
+            entry_id: platform_id("model"),
         };
         assert!(app
             .store
             .resolve_account_model_source(user, &source)
             .await
             .is_err());
-        let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
-        let revision = tier.revision;
-        tier.model_policy = Some(crate::access::ModelPolicy {
-            roster_id: Some("team".into()),
-            allowed_entry_ids: BTreeSet::from(["model".into()]),
-            allow_byo: false,
-            max_byo_entries: 0,
-        });
-        let mut ceiling = app
-            .store
-            .entitlement_tier("administrator")
-            .await
-            .unwrap()
-            .unwrap();
-        let ceiling_revision = ceiling.revision;
-        ceiling.model_policy = tier.model_policy.clone();
         app.store
-            .save_entitlement_tier(ceiling, ceiling_revision)
-            .await
-            .unwrap();
-        app.store
-            .save_entitlement_tier(tier, revision)
-            .await
-            .unwrap();
-        assert!(app
-            .store
-            .resolve_account_model_source(user, &source)
-            .await
-            .is_err());
-        app.store
-            .mutate_platform_roster("team", 1, Mutation::Publish { rollback: None }, "admin")
+            .mutate_platform_roster(1, Mutation::Publish { rollback: None }, "admin")
             .await
             .unwrap();
         match app
@@ -287,18 +256,27 @@ mod source_tests {
             .unwrap()
         {
             ResolvedSource::Platform {
-                roster_id,
                 publication_revision,
                 entry,
             } => {
-                assert_eq!(roster_id, "team");
                 assert_eq!(publication_revision, 2);
                 assert_eq!(entry.display_name, "Published");
             }
             _ => panic!("Platform source changed origin"),
         }
+        // Removing a model from the published catalog withdraws it from every account.
         app.store
-            .mutate_platform_roster("team", 2, Mutation::Retire, "admin")
+            .mutate_platform_roster(
+                2,
+                Mutation::Draft {
+                    entries: BTreeMap::new(),
+                },
+                "admin",
+            )
+            .await
+            .unwrap();
+        app.store
+            .mutate_platform_roster(3, Mutation::Publish { rollback: None }, "admin")
             .await
             .unwrap();
         assert!(app
@@ -432,10 +410,8 @@ mod platform_pin_tests {
         };
         app.store
             .mutate_platform_roster(
-                "team",
                 0,
                 Mutation::Draft {
-                    name: "Team".into(),
                     entries: BTreeMap::from([("model".into(), entry)]),
                 },
                 "admin",
@@ -444,38 +420,14 @@ mod platform_pin_tests {
             .unwrap();
         let source = Source {
             origin: Origin::Platform,
-            entry_id: platform_id("team", "model"),
+            entry_id: platform_id("model"),
         };
-        let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
-        let revision = tier.revision;
-        tier.model_policy = Some(crate::access::ModelPolicy {
-            roster_id: Some("team".into()),
-            allowed_entry_ids: BTreeSet::from(["model".into()]),
-            allow_byo: false,
-            max_byo_entries: 0,
-        });
-        let mut ceiling = app
-            .store
-            .entitlement_tier("administrator")
-            .await
-            .unwrap()
-            .unwrap();
-        let ceiling_revision = ceiling.revision;
-        ceiling.model_policy = tier.model_policy.clone();
         app.store
-            .save_entitlement_tier(ceiling, ceiling_revision)
+            .platform_credential_set("model", 1, Some("fixture-first-key"), "admin")
             .await
             .unwrap();
         app.store
-            .save_entitlement_tier(tier, revision)
-            .await
-            .unwrap();
-        app.store
-            .platform_credential_set("team", "model", 1, Some("fixture-first-key"), "admin")
-            .await
-            .unwrap();
-        app.store
-            .mutate_platform_roster("team", 2, Mutation::Publish { rollback: None }, "admin")
+            .mutate_platform_roster(2, Mutation::Publish { rollback: None }, "admin")
             .await
             .unwrap();
         let pin = app.store.pin_platform_source(user, &source).await.unwrap();
@@ -490,7 +442,7 @@ mod platform_pin_tests {
             "fixture-first-key"
         );
         app.store
-            .platform_credential_set("team", "model", 3, Some("fixture-second-key"), "admin")
+            .platform_credential_set("model", 3, Some("fixture-second-key"), "admin")
             .await
             .unwrap();
         assert!(app
@@ -522,8 +474,19 @@ mod platform_pin_tests {
             )
             .await
             .unwrap();
+        // Removing a model from the published catalog withdraws it from every account.
         app.store
-            .mutate_platform_roster("team", 4, Mutation::Retire, "admin")
+            .mutate_platform_roster(
+                4,
+                Mutation::Draft {
+                    entries: BTreeMap::new(),
+                },
+                "admin",
+            )
+            .await
+            .unwrap();
+        app.store
+            .mutate_platform_roster(5, Mutation::Publish { rollback: None }, "admin")
             .await
             .unwrap();
         assert!(app

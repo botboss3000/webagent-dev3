@@ -22,24 +22,14 @@ pub struct Snapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Roster {
-    pub id: String,
-    pub name: String,
     pub revision: u64,
     pub draft: BTreeMap<String, Entry>,
     pub published_revision: Option<u64>,
     pub history: Vec<Snapshot>,
-    pub retired: bool,
 }
 impl Roster {
     pub fn validate(&self) -> Result<()> {
-        if !webagent_access::valid_id(&self.id)
-            || self.name.trim().is_empty()
-            || self.name.len() > 200
-            || self.revision == 0
-            || self.draft.len() > 256
-            || self.history.len() > 256
-            || (self.id == "base" && self.retired)
-        {
+        if self.revision == 0 || self.draft.len() > 256 || self.history.len() > 256 {
             bail!("Invalid platform roster");
         }
         for entries in std::iter::once(&self.draft).chain(self.history.iter().map(|s| &s.entries)) {
@@ -71,9 +61,6 @@ impl Roster {
         Ok(())
     }
     pub fn published(&self) -> Option<&Snapshot> {
-        if self.retired {
-            return None;
-        }
         self.published_revision
             .and_then(|r| self.history.iter().find(|s| s.revision == r))
     }
@@ -82,7 +69,7 @@ impl Roster {
         if self.revision != expected {
             bail!("Platform roster revision changed");
         }
-        if self.retired || self.history.len() >= 256 {
+        if self.history.len() >= 256 {
             bail!("Platform roster cannot publish");
         }
         self.validate()?;
@@ -115,13 +102,10 @@ mod tests {
     use super::*;
     fn roster() -> Roster {
         Roster {
-            id: "base".into(),
-            name: "Base".into(),
             revision: 1,
             draft: BTreeMap::new(),
             published_revision: None,
             history: vec![],
-            retired: false,
         }
     }
     #[test]
@@ -133,14 +117,12 @@ mod tests {
         assert!(r.publish(1, None).is_err());
     }
     #[test]
-    fn rollback_creates_new_revision_and_base_cannot_retire() {
+    fn rollback_creates_new_revision() {
         let mut r = roster();
         r.publish(1, None).unwrap();
         r.publish(2, Some(2)).unwrap();
         assert_eq!(r.published_revision, Some(3));
         assert_eq!(r.history.len(), 2);
-        r.retired = true;
-        assert!(r.validate().is_err());
     }
     #[test]
     fn typesafe_decision_only_entry_validates_and_uses_api_key() {
@@ -168,32 +150,13 @@ mod tests {
     }
 }
 
-// Application-owned encrypted documents, separate from private agent connections.
-const PREFIX: &str = "platform_catalog:v1:";
+// The one app-wide catalog: an application-owned encrypted document, separate from private agent connections.
+const KEY: &str = "platform_catalog:v1";
 impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
-    pub async fn platform_rosters(&self) -> Result<Vec<Roster>> {
+    pub async fn platform_roster(&self) -> Result<Option<Roster>> {
         use sqlx::Row;
-        let rows = sqlx::query("SELECT value FROM docs WHERE substr(key,1,?)=? ORDER BY key")
-            .bind(PREFIX.len() as i64)
-            .bind(PREFIX)
-            .fetch_all(self.app_pool)
-            .await?;
-        let mut result = Vec::new();
-        for row in rows {
-            let roster: Roster =
-                serde_json::from_value(self.unseal(&row.get::<Vec<u8>, _>("value"))?)?;
-            roster.validate()?;
-            result.push(roster);
-        }
-        Ok(result)
-    }
-    pub async fn platform_roster(&self, id: &str) -> Result<Option<Roster>> {
-        use sqlx::Row;
-        if !webagent_access::valid_id(id) {
-            bail!("Invalid platform roster identity");
-        }
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(format!("{PREFIX}{id}"))
+            .bind(KEY)
             .fetch_optional(self.app_pool)
             .await?;
         let Some(row) = row else {
@@ -201,60 +164,48 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         };
         let roster: Roster = serde_json::from_value(self.unseal(&row.get::<Vec<u8>, _>("value"))?)?;
         roster.validate()?;
-        if roster.id != id {
-            bail!("Platform roster identity mismatch");
-        }
         Ok(Some(roster))
     }
     /// Typed lifecycle operations only: clients cannot replace publication history.
     pub async fn mutate_platform_roster(
         &self,
-        id: &str,
         expected: u64,
         operation: Mutation,
         actor: &str,
     ) -> Result<Roster> {
         use sqlx::Row;
-        if !webagent_access::valid_id(id) || !webagent_access::valid_id(actor) {
-            bail!("Invalid platform roster identity");
+        if !webagent_access::valid_id(actor) {
+            bail!("Invalid platform catalog actor");
         }
-        let key = format!("{PREFIX}{id}");
         let mut tx = self.app_pool.begin().await?;
         // Take SQLite's write reservation even for first creation.
         sqlx::query("UPDATE docs SET value=value WHERE key=?")
-            .bind(&key)
+            .bind(KEY)
             .execute(&mut *tx)
             .await?;
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
+            .bind(KEY)
             .fetch_optional(&mut *tx)
             .await?;
         let mut roster: Roster = match row {
             Some(row) => serde_json::from_value(self.unseal(&row.get::<Vec<u8>, _>("value"))?)?,
             None => {
                 if expected != 0 {
-                    bail!("Platform roster revision changed");
+                    bail!("Platform catalog revision changed");
                 }
                 Roster {
-                    id: id.into(),
-                    name: id.into(),
                     revision: 0,
                     draft: BTreeMap::new(),
                     published_revision: None,
                     history: vec![],
-                    retired: false,
                 }
             }
         };
-        if roster.id != id || roster.revision != expected {
-            bail!("Platform roster revision changed");
+        if roster.revision != expected {
+            bail!("Platform catalog revision changed");
         }
         let kind = match operation {
-            Mutation::Draft { name, entries } => {
-                if roster.retired {
-                    bail!("Platform roster retired");
-                }
-                roster.name = name;
+            Mutation::Draft { entries } => {
                 roster.draft = entries;
                 roster.revision = expected
                     .checked_add(1)
@@ -265,25 +216,13 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                 roster.publish(expected, rollback)?;
                 "platform_catalog_publish"
             }
-            Mutation::Retire => {
-                if id == "base" || expected == 0 {
-                    bail!("Platform roster cannot retire");
-                }
-                roster.retired = true;
-                roster.revision = expected
-                    .checked_add(1)
-                    .ok_or_else(|| anyhow::anyhow!("Revision exhausted"))?;
-                "platform_catalog_retire"
-            }
         };
         roster.validate()?;
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(&key).bind(self.seal(&serde_json::to_value(&roster)?)?).execute(&mut *tx).await?;
+            .bind(KEY).bind(self.seal(&serde_json::to_value(&roster)?)?).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES('',?,?)")
             .bind(kind)
-            .bind(self.seal(
-                &serde_json::json!({"actor":actor,"roster_id":id,"revision":roster.revision}),
-            )?)
+            .bind(self.seal(&serde_json::json!({"actor":actor,"revision":roster.revision}))?)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -291,14 +230,8 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
     }
 }
 pub enum Mutation {
-    Draft {
-        name: String,
-        entries: BTreeMap<String, Entry>,
-    },
-    Publish {
-        rollback: Option<u64>,
-    },
-    Retire,
+    Draft { entries: BTreeMap<String, Entry> },
+    Publish { rollback: Option<u64> },
 }
 #[cfg(test)]
 mod persistence_tests {
@@ -315,18 +248,16 @@ struct Credential {
 }
 impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
     /// The caller must authorize installation administration. Rotation advances the
-    /// roster fence and mints a generation; clearing retains a tombstone generation.
+    /// catalog fence and mints a generation; clearing retains a tombstone generation.
     pub async fn platform_credential_set(
         &self,
-        roster_id: &str,
         entry_id: &str,
         expected: u64,
         api_key: Option<&str>,
         actor: &str,
     ) -> Result<String> {
         use sqlx::Row;
-        if !webagent_access::valid_id(roster_id)
-            || !webagent_access::valid_id(entry_id)
+        if !webagent_access::valid_id(entry_id)
             || !webagent_access::valid_id(actor)
             || api_key.is_some_and(|key| {
                 key.is_empty() || key.len() > 4096 || !key.bytes().all(|b| b.is_ascii_graphic())
@@ -335,21 +266,20 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             bail!("Invalid platform credential input");
         }
         let mut tx = self.app_pool.begin().await?;
-        let key = format!("{PREFIX}{roster_id}");
         sqlx::query("UPDATE docs SET value=value WHERE key=?")
-            .bind(&key)
+            .bind(KEY)
             .execute(&mut *tx)
             .await?;
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
+            .bind(KEY)
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Catalog not found"))?;
         let mut roster: Roster =
             serde_json::from_value(self.unseal(&row.get::<Vec<u8>, _>("value"))?)?;
         roster.validate()?;
-        if roster.id != roster_id || roster.revision != expected || roster.retired {
-            bail!("Catalog revision changed or retired");
+        if roster.revision != expected {
+            bail!("Catalog revision changed");
         }
         let entry = roster
             .draft
@@ -365,7 +295,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             transport: entry.transport.clone(),
             api_key: api_key.map(str::to_owned),
         };
-        let credential_key = format!("platform_credential:v1:{roster_id}:{entry_id}");
+        let credential_key = format!("platform_credential:v1:{entry_id}");
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(credential_key).bind(self.seal(&serde_json::to_value(credential)?)?).execute(&mut *tx).await?;
         roster.revision = expected
@@ -373,28 +303,24 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             .ok_or_else(|| anyhow::anyhow!("Revision exhausted"))?;
         sqlx::query("UPDATE docs SET value=? WHERE key=?")
             .bind(self.seal(&serde_json::to_value(&roster)?)?)
-            .bind(key)
+            .bind(KEY)
             .execute(&mut *tx)
             .await?;
         sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES('','platform_credential_changed',?)")
-            .bind(self.seal(&serde_json::json!({"actor":actor,"roster_id":roster_id,"entry_id":entry_id,
+            .bind(self.seal(&serde_json::json!({"actor":actor,"entry_id":entry_id,
                 "revision":roster.revision,"configured":api_key.is_some()}))?).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(generation)
     }
     /// Internal admission metadata only. The generation invalidates accepted plans
     /// on rotation; neither this result nor publication history includes the key.
-    pub async fn platform_credential_generation(
-        &self,
-        roster_id: &str,
-        entry: &Entry,
-    ) -> Result<String> {
+    pub async fn platform_credential_generation(&self, entry: &Entry) -> Result<String> {
         use sqlx::Row;
-        if !webagent_access::valid_id(roster_id) || !webagent_access::valid_id(&entry.id) {
+        if !webagent_access::valid_id(&entry.id) {
             bail!("Invalid credential identity");
         }
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(format!("platform_credential:v1:{roster_id}:{}", entry.id))
+            .bind(format!("platform_credential:v1:{}", entry.id))
             .fetch_optional(self.app_pool)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Platform credential unavailable"))?;
@@ -409,16 +335,15 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
     /// secret. Return the provider's internal token shape, not a browser response.
     pub async fn platform_tokens_pinned(
         &self,
-        roster_id: &str,
         entry: &Entry,
         generation: &str,
     ) -> Result<serde_json::Value> {
         use sqlx::Row;
-        if !webagent_access::valid_id(roster_id) || !webagent_access::valid_id(&entry.id) {
+        if !webagent_access::valid_id(&entry.id) {
             bail!("Invalid credential identity");
         }
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(format!("platform_credential:v1:{roster_id}:{}", entry.id))
+            .bind(format!("platform_credential:v1:{}", entry.id))
             .fetch_optional(self.app_pool)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Platform credential unavailable"))?;
@@ -433,17 +358,13 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         Ok(serde_json::json!({"api_key":key}))
     }
     /// Safe status only. A metadata transport edit cannot reuse an incompatible key.
-    pub async fn platform_credential_configured(
-        &self,
-        roster_id: &str,
-        entry: &Entry,
-    ) -> Result<bool> {
+    pub async fn platform_credential_configured(&self, entry: &Entry) -> Result<bool> {
         use sqlx::Row;
-        if !webagent_access::valid_id(roster_id) || !webagent_access::valid_id(&entry.id) {
+        if !webagent_access::valid_id(&entry.id) {
             bail!("Invalid credential identity");
         }
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(format!("platform_credential:v1:{roster_id}:{}", entry.id))
+            .bind(format!("platform_credential:v1:{}", entry.id))
             .fetch_optional(self.app_pool)
             .await?;
         let Some(row) = row else { return Ok(false) };

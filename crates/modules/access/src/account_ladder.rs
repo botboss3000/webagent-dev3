@@ -68,27 +68,12 @@ pub fn effective(policy: &Value, id: &str) -> Result<Tier> {
         }
         result.max_sessions = result.max_sessions.min(tier.max_sessions);
         result.max_active_runs = result.max_active_runs.min(tier.max_active_runs);
-        if tier.model_policy.is_none() {
-            if let Some(model) = &mut result.model_policy {
-                model.roster_id = None;
-                model.allowed_entry_ids.clear();
-            }
-        }
         if let Some(ceiling) = &tier.model_policy {
             if let Some(model) = &mut result.model_policy {
                 model.allow_byo &= ceiling.allow_byo;
                 model.max_byo_entries = model.max_byo_entries.min(ceiling.max_byo_entries);
-                if model.roster_id != ceiling.roster_id {
-                    model.allowed_entry_ids.clear();
-                } else {
-                    model
-                        .allowed_entry_ids
-                        .retain(|entry| ceiling.allowed_entry_ids.contains(entry));
-                }
             } else {
                 result.model_policy = Some(crate::ModelPolicy {
-                    roster_id: None,
-                    allowed_entry_ids: Default::default(),
                     allow_byo: ceiling.allow_byo,
                     max_byo_entries: ceiling.max_byo_entries,
                 });
@@ -102,23 +87,20 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn platform_grants_require_both_child_and_ancestor() {
+    fn byo_limits_of_an_upper_account_level_cap_lower_levels() {
         let parent = json!({"id":"administrator","revision":1,"allowed_models":["*"],"max_sessions":8,"max_active_runs":2,
-            "model_policy":{"roster_id":"platform","allowed_entry_ids":["entry"],"allow_byo":false,"max_byo_entries":0}});
+            "model_policy":{"allow_byo":false,"max_byo_entries":2}});
         let mut child = parent.clone();
         child["id"] = json!("free");
         child["model_policy"] = Value::Null;
         let mut policy = json!({"tiers":{"administrator":parent,"free":child},"tier_order":["administrator","free"]});
-        let resolved = effective(&policy, "free").unwrap();
-        let model = resolved.model_policy.unwrap();
-        assert!(model.roster_id.is_none());
-        assert!(model.allowed_entry_ids.is_empty());
+        let model = effective(&policy, "free").unwrap().model_policy.unwrap();
         assert!(!model.allow_byo);
-        policy["tiers"]["free"]["model_policy"] =
-            policy["tiers"]["administrator"]["model_policy"].clone();
-        policy["tiers"]["administrator"]["model_policy"] = Value::Null;
-        let resolved = effective(&policy, "free").unwrap();
-        assert!(resolved.model_policy.unwrap().allowed_entry_ids.is_empty());
+        assert_eq!(model.max_byo_entries, 2);
+        policy["tiers"]["free"]["model_policy"] = json!({"allow_byo":true,"max_byo_entries":5});
+        let model = effective(&policy, "free").unwrap().model_policy.unwrap();
+        assert!(!model.allow_byo);
+        assert_eq!(model.max_byo_entries, 2);
     }
     #[test]
     fn upper_account_ceiling_limits_models_and_quotas() {

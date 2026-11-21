@@ -10,7 +10,7 @@ const unavailable=async()=>new Response(JSON.stringify({error:MISSING}),{status:
 export async function mountAppModels(host) {
   let providers={};
   const controller=new AbortController();let disposed=false,table,analytics,observer;
-  let scopeGeneration=0,roster,staged=[],dirty=false,busy=false,ready=false;
+  let loadGeneration=0,roster,staged=[],dirty=false,busy=false,ready=false;
   const signal=controller.signal;
   const live=()=>!disposed;
   async function request(path,method='GET',body) {
@@ -34,25 +34,14 @@ export async function mountAppModels(host) {
     const link=document.createElement('link');link.rel='stylesheet';link.href=href;host.prepend(link);
   }
   const q=selector=>host.querySelector(selector);
-  const scope=q('#ac-model-scope'),status=q('#ac-model-scope-status'),result=q('#ac-model-lifecycle-result');
+  const status=q('#ac-model-scope-status'),result=q('#ac-model-lifecycle-result');
   const save=q('#ac-model-save-draft'),publish=q('#ac-model-publish');
-  const create=document.createElement('button');create.type='button';create.className='ac-btn';create.textContent='New catalog';
-  q('.model-scope-toolbar').append(create);
-  q('#ac-model-scope-hint').textContent='Base is administrator-only. Publish exposes metadata only; tier bindings and agent adoption are separate explicit actions.';
-  create.onclick=()=>action(async()=>{
-    if(dirty&&!confirm('Discard unsaved draft changes?'))return;
-    const name=prompt('Name for the new app catalog');if(!name?.trim())return;
-    const id='catalog_'+crypto.randomUUID().replaceAll('-','');
-    await request('/admin/models/rosters/'+id,'PUT',{expected_revision:0,name:name.trim(),entries:{}});
-    const option=document.createElement('option');option.value=id;option.textContent=name.trim();scope.append(option);scope.value=id;await load();
-  });
-  const path=()=>'/admin/models/rosters/'+encodeURIComponent(scope.value);
+  const path='/admin/models/catalog';
   function update() {
     if(!live())return;
-    status.textContent=(roster?.retired?'Retired — ':'')+'Draft '+(roster?.revision||0)+(dirty?' · unsaved changes':'')+' · Published '+(roster?.published_revision??'none');
-    save.disabled=!ready||busy||!!roster?.retired;publish.disabled=busy||dirty||!roster?.revision||!!roster?.retired;
-    scope.disabled=busy;create.disabled=!ready||busy;
-    for(const button of host.querySelectorAll('[data-model-lifecycle]'))button.disabled=busy||!roster?.revision||(button.dataset.modelLifecycle==='retire'&&(scope.value==='base'||roster?.retired));
+    status.textContent='Draft '+(roster?.revision||0)+(dirty?' · unsaved changes':'')+' · Published '+(roster?.published_revision??'none');
+    save.disabled=!ready||busy;publish.disabled=busy||dirty||!roster?.revision;
+    for(const button of host.querySelectorAll('[data-model-lifecycle]'))button.disabled=busy||!roster?.revision;
   }
   function display(data) {result.hidden=false;result.replaceChildren();const pre=document.createElement('pre');pre.textContent=JSON.stringify(data,null,2);result.append(pre);}
   function error(e) {if(live()&&e.name!=='AbortError'){ready=false;update();status.textContent=e.message;display({error:e.message});}}
@@ -67,7 +56,7 @@ export async function mountAppModels(host) {
       return providers;
     },
     saveRoster:async({providers:next})=>{
-      if(busy||roster?.retired||!live())throw Error('Catalog is not editable');
+      if(busy||!live())throw Error('Catalog is not editable');
       for(const row of next){
         if(!providers[row.provider])throw Error('Unsupported platform provider');
         if(!row.entry_id&&providers[row.provider].validated===false)throw Error(providers[row.provider].name+' is not yet validated');
@@ -100,15 +89,11 @@ export async function mountAppModels(host) {
       await request('/admin/usage/models/undo','POST');await Promise.all([table?.reload(),analytics.reload()]);
     }}]});}});
   async function load() {
-    const generation=++scopeGeneration;table?.destroy();table=null;dirty=false;
+    const generation=++loadGeneration;table?.destroy();table=null;dirty=false;
     status.textContent='Loading…';result.hidden=true;
-    const {rosters}=await request('/admin/models/rosters');ready=true;
-    if(!live()||generation!==scopeGeneration)return;
-    const selected=scope.value||'base';scope.replaceChildren();
-    const all=[{id:'base',name:'Base — Admin only'},...rosters.filter(r=>r.id!=='base')];
-    for(const r of all){const option=document.createElement('option');option.value=r.id;option.textContent=r.name;scope.append(option);}
-    scope.value=selected;if(!scope.value)scope.value='base';
-    roster=rosters.find(r=>r.id===scope.value)||{id:'base',name:'Base — Admin only',revision:0,draft:{},published_revision:null,retired:false};
+    const data=await request(path);ready=true;
+    if(!live()||generation!==loadGeneration)return;
+    roster=data.roster||{revision:0,draft:{},published_revision:null};
     staged=rows(roster.draft);update();
     table=mountModelTable(q('#ac-model-host'),{adapter,catalogOnly:true,manualModelEntry:true,usageScope:'global',fetchFn:unavailable,
       onRoster:r=>analytics?.setModelLabels(r),onModelFocus:m=>analytics?.setModelFocus(m),advancedExtra:body=>body.append(extras)});
@@ -118,28 +103,26 @@ export async function mountAppModels(host) {
   save.onclick=()=>action(async()=>{
     const entries=Object.fromEntries(staged.map(row=>[row.entry_id,{id:row.entry_id,display_name:row.display_name||row.model,upstream_model:row.model,transport:row.provider,
       capabilities:[...(row.decision_capable?['decision']:[]),...(row.text_capable?['text']:[]),...(row.image_capable?['image_in']:[]),...(row.image_out_capable?['image_out']:[]),...(row.voice_capable?['voice']:[]),...(row.video_capable?['video']:[])]}]));
-    roster=(await request(path(),'PUT',{expected_revision:roster.revision,name:roster.name,entries})).roster;
+    roster=(await request(path,'PUT',{expected_revision:roster.revision,entries})).roster;
     // Metadata first; every key write uses the newly returned fence. Keys never enter history.
     for(const row of staged)if(row.api_key){
-      const saved=await request(path()+'/entries/'+encodeURIComponent(row.entry_id)+'/credential','PUT',{expected_revision:roster.revision,api_key:row.api_key});
+      const saved=await request(path+'/entries/'+encodeURIComponent(row.entry_id)+'/credential','PUT',{expected_revision:roster.revision,api_key:row.api_key});
       roster.revision=saved.revision;row.api_key='';
     }
     dirty=false;display({saved:true,revision:roster.revision,published_revision:roster.published_revision});await table.reload();
   });
-  publish.onclick=()=>action(async()=>{roster=(await request(path()+'/publish','POST',{expected_revision:roster.revision})).roster;display({published_revision:roster.published_revision});});
+  publish.onclick=()=>action(async()=>{roster=(await request(path+'/publish','POST',{expected_revision:roster.revision})).roster;display({published_revision:roster.published_revision});});
   for(const button of host.querySelectorAll('[data-model-lifecycle]'))button.onclick=()=>action(async()=>{
     const operation=button.dataset.modelLifecycle;
-    if(operation==='retire'&&!confirm('Retire this catalog? Further dispatch will be denied.'))return;
-    const data=await request(path()+'/'+operation,operation==='history'?'GET':'POST',operation==='retire'?{expected_revision:roster.revision}:undefined);
+    const data=await request(path+'/'+operation,operation==='history'?'GET':'POST');
     if(data.roster)roster=data.roster;display(data);
     if(operation==='history')for(const snapshot of data.history||[]) {
       const button=document.createElement('button');button.className='ac-btn';button.textContent='Rollback to revision '+snapshot.revision;
-      button.onclick=()=>action(async()=>{if(!confirm('Publish this historical metadata as a new revision? Credentials will not be restored.'))return;roster=(await request(path()+'/rollback','POST',{expected_revision:roster.revision,revision:snapshot.revision})).roster;display({published_revision:roster.published_revision});});result.append(button);
+      button.onclick=()=>action(async()=>{if(!confirm('Publish this historical metadata as a new revision? Credentials will not be restored.'))return;roster=(await request(path+'/rollback','POST',{expected_revision:roster.revision,revision:snapshot.revision})).roster;display({published_revision:roster.published_revision});});result.append(button);
     }
   });
-  scope.onchange=()=>{if(dirty&&!confirm('Discard unsaved draft changes?')){scope.value=roster.id;return;}load().catch(error);};
   observer=new MutationObserver(markPending);observer.observe(q('#ac-model-host'),{subtree:true,childList:true});
-  const dispose=()=>{if(disposed)return;disposed=true;++scopeGeneration;controller.abort();observer?.disconnect();table?.destroy();analytics?.destroy?.();staged=[];host.replaceChildren();};
+  const dispose=()=>{if(disposed)return;disposed=true;++loadGeneration;controller.abort();observer?.disconnect();table?.destroy();analytics?.destroy?.();staged=[];host.replaceChildren();};
   update();try{await load();}catch(e){error(e);}
   return dispose;
 }

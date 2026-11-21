@@ -18,13 +18,7 @@
            LLM to agents") are NOT part of the table: on mount the component
            RELOCATES #ac-model-adv-extras into its Advanced (sliders) panel, so
            their ids stay live for app-settings.js + _initSuggestionsCheckbox. -->
-      <div class="model-scope-toolbar" aria-label="Model catalog scope and publication">
-        <label class="model-scope-field" for="ac-model-scope">
-          <span>Configuring</span>
-          <select id="ac-model-scope" class="ac-input" aria-describedby="ac-model-scope-hint">
-            <option value="base" data-roster-id="roster-admin">Base — Admin only</option>
-          </select>
-        </label>
+      <div class="model-scope-toolbar" aria-label="Model catalog publication">
         <span id="ac-model-scope-status" class="model-scope-status is-loading" role="status">Loading…</span>
         <button id="ac-model-save-draft" type="button" class="ac-btn">Save draft</button>
         <button id="ac-model-publish" type="button" class="ac-btn ac-btn-primary" disabled>Publish</button>
@@ -34,10 +28,9 @@
             <button type="button" class="ac-btn" data-model-lifecycle="validate">Validate draft</button>
             <button type="button" class="ac-btn" data-model-lifecycle="preview">Preview impact</button>
             <button type="button" class="ac-btn" data-model-lifecycle="history">History</button>
-            <button type="button" class="ac-btn is-danger" data-model-lifecycle="retire">Retire roster</button>
           </div>
         </details>
-        <span id="ac-model-scope-hint" class="model-scope-hint">Base is the global model catalog for administrators. User tiers remain unchanged.</span>
+        <span id="ac-model-scope-hint" class="model-scope-hint">One catalog for the whole app: once published, its models are available to every user.</span>
       </div>
       <!-- MODEL-ANALYTICS BOUNDARY: a standalone sibling before the shared
            model table; never nest it in #ac-model-host or a table row. -->

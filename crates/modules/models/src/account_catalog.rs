@@ -31,8 +31,8 @@ impl Preferences {
         Ok(())
     }
 }
-pub fn platform_id(roster: &str, entry: &str) -> String {
-    format!("platform:{roster}:{entry}")
+pub fn platform_id(entry: &str) -> String {
+    format!("platform:{entry}")
 }
 pub fn byo_id(entry: &str) -> String {
     format!("byo:{entry}")
@@ -56,7 +56,6 @@ pub enum Origin {
 #[derive(Clone, Debug)]
 pub enum ResolvedSource {
     Platform {
-        roster_id: String,
         publication_revision: u64,
         entry: crate::platform_catalog::Entry,
     },
@@ -66,7 +65,8 @@ pub enum ResolvedSource {
     },
 }
 impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
-    async fn catalog_principal(&self, user: &str) -> Result<(Principal, Tier)> {
+    /// The live tier of an active account.
+    async fn catalog_tier(&self, user: &str) -> Result<Tier> {
         let account = self
             .access()
             .account_by_id(user)
@@ -81,7 +81,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             .entitlement_tier(&principal.tier_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Tier unavailable"))?;
-        Ok((principal, tier))
+        Ok(tier)
     }
     /// Rehydrate an account choice from live authority. This is not an adoption
     /// grant: the caller must additionally check management authority and persist
@@ -91,46 +91,27 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         user: &str,
         source: &Source,
     ) -> Result<ResolvedSource> {
-        let (principal, tier) = self.catalog_principal(user).await?;
+        let tier = self.catalog_tier(user).await?;
         match source.origin {
+            // Every active account may use every published app catalog model.
             Origin::Platform => {
-                let mut parts = source.entry_id.split(':');
-                let prefix = parts.next();
-                let roster_id = parts.next();
-                let entry_id = parts.next();
-                let (Some(roster_id), Some(entry_id)) = (roster_id, entry_id) else {
-                    bail!("Invalid platform source");
-                };
-                if prefix != Some("platform")
-                    || parts.next().is_some()
-                    || !webagent_access::valid_id(roster_id)
-                    || !webagent_access::valid_id(entry_id)
-                {
-                    bail!("Invalid platform source");
-                }
-                let policy = tier
-                    .model_policy
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Platform access not granted"))?;
-                if policy.roster_id.as_deref() != Some(roster_id)
-                    || !policy.allowed_entry_ids.contains(entry_id)
-                    || (roster_id == "base" && !principal.administrator())
-                {
-                    bail!("Platform source not entitled");
-                }
+                let entry_id = source
+                    .entry_id
+                    .strip_prefix("platform:")
+                    .filter(|id| webagent_access::valid_id(id))
+                    .ok_or_else(|| anyhow::anyhow!("Invalid platform source"))?;
                 let roster = self
-                    .platform_roster(roster_id)
+                    .platform_roster()
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("Platform source unavailable"))?;
                 let publication = roster
                     .published()
-                    .ok_or_else(|| anyhow::anyhow!("Platform source unpublished or retired"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Platform catalog unpublished"))?;
                 let entry = publication
                     .entries
                     .get(entry_id)
                     .ok_or_else(|| anyhow::anyhow!("Platform entry unavailable"))?;
                 Ok(ResolvedSource::Platform {
-                    roster_id: roster_id.into(),
                     publication_revision: publication.revision,
                     entry: entry.clone(),
                 })
@@ -176,27 +157,20 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
     }
     /// Safe public metadata only; drafts and shared agent credentials cannot enter the BYO lane.
     pub async fn account_model_choices(&self, user: &str) -> Result<Value> {
-        let (principal, tier) = self.catalog_principal(user).await?;
+        let tier = self.catalog_tier(user).await?;
         let preferences = self.account_model_preferences(user).await?;
         let mut platform = Vec::new();
-        if let Some(policy) = &tier.model_policy {
-            if let Some(id) = &policy.roster_id {
-                if id != "base" || principal.administrator() {
-                    if let Some(roster) = self.platform_roster(id).await? {
-                        if let Some(snapshot) = roster.published() {
-                            for entry in snapshot
-                                .entries
-                                .values()
-                                .filter(|e| policy.allowed_entry_ids.contains(&e.id))
-                            {
-                                platform.push(json!({"id":platform_id(id,&entry.id),"origin":"platform",
-                                    "display_name":entry.display_name,"transport":entry.transport,"capabilities":entry.capabilities,
-                                    "publication_revision":snapshot.revision,
-                                    "configured":self.platform_credential_configured(id,entry).await?}));
-                            }
-                        }
-                    }
-                }
+        if let Some(snapshot) = self
+            .platform_roster()
+            .await?
+            .as_ref()
+            .and_then(|r| r.published())
+        {
+            for entry in snapshot.entries.values() {
+                platform.push(json!({"id":platform_id(&entry.id),"origin":"platform",
+                    "display_name":entry.display_name,"transport":entry.transport,"capabilities":entry.capabilities,
+                    "publication_revision":snapshot.revision,
+                    "configured":self.platform_credential_configured(entry).await?}));
             }
         }
         let catalog = self.model_catalog().await?;
@@ -433,7 +407,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                     if let Some(pin) = catalog.platform_sources.get(id) {
                         let source = Source {
                             origin: Origin::Platform,
-                            entry_id: platform_id(&pin.roster_id, &pin.entry.id),
+                            entry_id: platform_id(&pin.entry.id),
                         };
                         if self
                             .resolve_account_model_source(user, &source)
@@ -512,7 +486,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         input: &Adoption,
         initial_standard: bool,
     ) -> Result<Value> {
-        use crate::model_selection::{AgentModels, Catalog};
+        use crate::model_selection::AgentModels;
         use sqlx::Row;
         if input.client_request_id.is_empty()
             || input.client_request_id.len() > 128
@@ -538,10 +512,8 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         };
         let (source, source_connection) = match resolved {
             ResolvedSource::Byo { entry, connection } => (entry, connection),
-            ResolvedSource::Platform {
-                roster_id, entry, ..
-            } => {
-                let id = platform_id(&roster_id, &entry.id);
+            ResolvedSource::Platform { entry, .. } => {
+                let id = platform_id(&entry.id);
                 (
                     crate::model_selection::ModelEntry {
                         id: id.clone(),
@@ -557,7 +529,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                         id: id.clone(),
                         owner_id: "platform_catalog".into(),
                         transport: entry.transport,
-                        credential_ref: format!("platform_key:{roster_id}:{}", entry.id),
+                        credential_ref: format!("platform_key:{}", entry.id),
                         allowed_agents: BTreeSet::new(),
                         revision: 1,
                         revoked: false,
@@ -739,7 +711,6 @@ mod adoption_tests {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlatformPin {
-    pub roster_id: String,
     pub publication_revision: u64,
     pub entry: crate::platform_catalog::Entry,
     pub credential_generation: String,
@@ -747,18 +718,14 @@ pub struct PlatformPin {
 impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
     pub async fn pin_platform_source(&self, user: &str, source: &Source) -> Result<PlatformPin> {
         let ResolvedSource::Platform {
-            roster_id,
             publication_revision,
             entry,
         } = self.resolve_account_model_source(user, source).await?
         else {
             bail!("Platform source required");
         };
-        let credential_generation = self
-            .platform_credential_generation(&roster_id, &entry)
-            .await?;
+        let credential_generation = self.platform_credential_generation(&entry).await?;
         Ok(PlatformPin {
-            roster_id,
             publication_revision,
             entry,
             credential_generation,
@@ -778,7 +745,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         }
         let source = Source {
             origin: Origin::Platform,
-            entry_id: platform_id(&pin.roster_id, &pin.entry.id),
+            entry_id: platform_id(&pin.entry.id),
         };
         let ResolvedSource::Platform { entry, .. } =
             self.resolve_account_model_source(user, &source).await?
@@ -789,7 +756,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             bail!("Platform transport changed");
         }
         // Rename or publication alone cannot reroute the accepted upstream model.
-        self.platform_tokens_pinned(&pin.roster_id, &pin.entry, &pin.credential_generation)
+        self.platform_tokens_pinned(&pin.entry, &pin.credential_generation)
             .await
     }
 }

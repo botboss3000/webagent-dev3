@@ -8652,10 +8652,8 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
     };
     app.store
         .mutate_platform_roster(
-            "team",
             0,
             Mutation::Draft {
-                name: "Team".into(),
                 entries: BTreeMap::from([("model".into(), entry)]),
             },
             "admin",
@@ -8663,34 +8661,13 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
         .await
         .unwrap();
     app.store
-        .platform_credential_set("team", "model", 1, Some("platform-fixture-key"), "admin")
+        .platform_credential_set("model", 1, Some("platform-fixture-key"), "admin")
         .await
         .unwrap();
     app.store
-        .mutate_platform_roster("team", 2, Mutation::Publish { rollback: None }, "admin")
+        .mutate_platform_roster(2, Mutation::Publish { rollback: None }, "admin")
         .await
         .unwrap();
-    let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
-    let rev = tier.revision;
-    tier.model_policy = Some(access::ModelPolicy {
-        roster_id: Some("team".into()),
-        allowed_entry_ids: BTreeSet::from(["model".into()]),
-        allow_byo: false,
-        max_byo_entries: 0,
-    });
-    let mut ceiling = app
-        .store
-        .entitlement_tier("administrator")
-        .await
-        .unwrap()
-        .unwrap();
-    let upper_revision = ceiling.revision;
-    ceiling.model_policy = tier.model_policy.clone();
-    app.store
-        .save_entitlement_tier(ceiling, upper_revision)
-        .await
-        .unwrap();
-    app.store.save_entitlement_tier(tier, rev).await.unwrap();
     let before = app.store.model_catalog().await.unwrap();
     let adopted = app
         .store
@@ -8702,7 +8679,7 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
                 expected_roster_revision: before.agent_models["shared_default"].revision,
                 source: Source {
                     origin: Origin::Platform,
-                    entry_id: platform_id("team", "model"),
+                    entry_id: platform_id("model"),
                 },
                 alias: "My catalog alias".into(),
             },
@@ -8720,7 +8697,7 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
         .await
         .unwrap()
         .selected_platform_ids
-        .contains(&platform_id("team", "model")));
+        .contains(&platform_id("model")));
     let id = adopted["entry_id"].as_str().unwrap();
     assert_ne!(
         id,
@@ -8761,7 +8738,7 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
         .unwrap()
         .contains("platform-fixture-key"));
     app.store
-        .platform_credential_set("team", "model", 3, Some("rotated-fixture-key"), "admin")
+        .platform_credential_set("model", 3, Some("rotated-fixture-key"), "admin")
         .await
         .unwrap();
     assert!(caller.tokens_for(&selection, &run).await.is_err());

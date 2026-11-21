@@ -63,7 +63,7 @@ mod tests {
             Extension(identity),
             Json(DefaultUpdate {
                 expected_revision: 1,
-                default_entry_id: Some("platform:base:forged".into())
+                default_entry_id: Some("platform:forged".into())
             })
         )
         .await

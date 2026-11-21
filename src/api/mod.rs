@@ -248,7 +248,7 @@ pub(super) fn router(app: App) -> Router {
             phase3_api::router().merge(crate::agents_api::admin_router()),
         )
         .nest("/admin/services", service_admin::router())
-        .nest("/admin/models/rosters", model_catalog::router())
+        .nest("/admin/models/catalog", model_catalog::router())
         .route(
             "/admin/usage/models/analytics",
             get(model_usage::admin_analytics).delete(model_usage::admin_clear),

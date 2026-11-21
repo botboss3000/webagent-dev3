@@ -93,9 +93,8 @@ impl Permission {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A tier's limits on account-owned (bring-your-own) models; the app catalog is open to every tier.
 pub struct ModelPolicy {
-    pub roster_id: Option<String>,
-    pub allowed_entry_ids: std::collections::BTreeSet<String>,
     pub allow_byo: bool,
     pub max_byo_entries: u32,
 }
@@ -179,12 +178,7 @@ pub struct Tier {
 impl Tier {
     pub fn validate(&self) -> Result<()> {
         if let Some(policy) = &self.model_policy {
-            if policy.roster_id.as_ref().is_some_and(|id| !valid_id(id))
-                || policy.allowed_entry_ids.len() > 256
-                || policy.allowed_entry_ids.iter().any(|id| !valid_id(id))
-                || policy.max_byo_entries > 256
-                || (policy.roster_id.is_none() && !policy.allowed_entry_ids.is_empty())
-            {
+            if policy.max_byo_entries > 256 {
                 bail!("Invalid model policy");
             }
         }
@@ -615,8 +609,6 @@ mod tests {
         assert!(tier.allows_byo_model("deepseek-chat"));
         assert!(tier.allows_byo_growth(0, 1));
         tier.model_policy = Some(ModelPolicy {
-            roster_id: None,
-            allowed_entry_ids: Default::default(),
             allow_byo: false,
             max_byo_entries: 0,
         });
@@ -682,48 +674,6 @@ pub fn validate_self_administration(
         anyhow::bail!("You cannot restrict or demote your own administrator account");
     }
     Ok(())
-}
-
-impl ModelPolicy {
-    /// The base catalog is installation administration, never a tier roster grant.
-    pub fn tier_roster_id(&self) -> Result<Option<&str>> {
-        if self.roster_id.as_deref() == Some("base") {
-            bail!("Base catalog is administrator-only");
-        }
-        Ok(self.roster_id.as_deref())
-    }
-    /// Models supplies its existing published snapshot; Access owns grant membership.
-    pub fn validate_published_entries(&self, contains: impl Fn(&str) -> bool) -> Result<()> {
-        if self.allowed_entry_ids.iter().any(|id| !contains(id)) {
-            bail!("Catalog entry not published");
-        }
-        Ok(())
-    }
-}
-#[cfg(test)]
-mod catalog_authority_tests {
-    use super::*;
-    #[test]
-    fn tier_grants_require_non_base_published_entry_identity() {
-        let mut policy:ModelPolicy=serde_json::from_value(serde_json::json!({"roster_id":"base","allowed_entry_ids":[],"allow_byo":false,"max_byo_entries":0})).unwrap();
-        assert_eq!(
-            policy.tier_roster_id().unwrap_err().to_string(),
-            "Base catalog is administrator-only"
-        );
-        policy.roster_id = Some("team".into());
-        policy.allowed_entry_ids = ["published".into()].into_iter().collect();
-        assert_eq!(policy.tier_roster_id().unwrap(), Some("team"));
-        assert!(policy
-            .validate_published_entries(|id| id == "published")
-            .is_ok());
-        assert_eq!(
-            policy
-                .validate_published_entries(|_| false)
-                .unwrap_err()
-                .to_string(),
-            "Catalog entry not published"
-        );
-    }
 }
 
 #[cfg(test)]

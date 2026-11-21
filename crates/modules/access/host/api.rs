@@ -4,7 +4,7 @@
 use crate::account_management;
 use crate::State;
 use crate::{
-    access::{AccountStatus, Principal, Relationship, Role, Tier},
+    access::{AccountStatus, Relationship, Tier},
     Api, ApiError, App,
 };
 use axum::{
@@ -467,24 +467,6 @@ async fn change_tier(
         return Err(invalid("Tier ID does not match route"));
     }
     let _guard = app.gate.lock().await;
-    if let Some(policy) = &body.tier.model_policy {
-        if let Some(roster_id) = policy
-            .tier_roster_id()
-            .map_err(|_| invalid("Base catalog is administrator-only"))?
-        {
-            let roster = app
-                .store
-                .platform_roster(roster_id)
-                .await?
-                .ok_or_else(|| invalid("Published catalog required"))?;
-            let snapshot = roster
-                .published()
-                .ok_or_else(|| invalid("Published catalog required"))?;
-            policy
-                .validate_published_entries(|id| snapshot.entries.contains_key(id))
-                .map_err(|_| invalid("Catalog entry not published"))?;
-        }
-    }
     let tier = app
         .store
         .save_entitlement_tier(body.tier, body.expected_revision)
