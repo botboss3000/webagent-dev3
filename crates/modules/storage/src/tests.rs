@@ -323,13 +323,14 @@ async fn user_plane_registry_keeps_active_and_admin_handles() {
         .await
         .unwrap();
     let mut states = std::collections::HashMap::new();
-    for i in 0..64 {
+    for i in 0..pool::MAX_USER_PLANES {
         states.insert(format!("u{i}"), pool::UserPlane::new(pool.clone()));
     }
     states.insert("admin".into(), pool::UserPlane::new(pool.clone()));
     let active = states["u7"].clone();
     pool::retain_active_users(&mut states);
-    assert_eq!(states.len(), 2);
+    // Only idle entries go, and only down to three quarters of the limit.
+    assert_eq!(states.len(), pool::MAX_USER_PLANES * 3 / 4);
     assert!(states.contains_key("admin") && states.contains_key("u7"));
     drop(active);
     let mut few = std::collections::HashMap::from([("u1".to_string(), pool::UserPlane::new(pool))]);

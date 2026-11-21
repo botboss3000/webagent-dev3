@@ -223,12 +223,49 @@ impl UserPlane {
     }
 }
 
-/// INACTIVE-USER-HANDLES: keep at most 64 idle registry entries. The gate's
-/// sole owner is the registry only when no Store clone can still use this
-/// user. Never evict active gates or close their pools; that would split
-/// context invalidation synchronization.
+/// Registered user databases kept before idle ones are dropped. An idle entry holds no
+/// connection (pools keep none idle), so keeping many is cheap; dropping one makes the next
+/// visit reopen it, rerun its schema statements and recheck its migration markers.
+pub const MAX_USER_PLANES: usize = 4096;
+
+/// INACTIVE-USER-HANDLES: past [`MAX_USER_PLANES`] entries, drop idle ones until three
+/// quarters remain, not every idle one at once (that made every scheduler pass reopen the
+/// databases of accounts it had just visited). The gate's sole owner is the registry only
+/// when no Store clone can still use this user. Never evict active gates or close their
+/// pools; that would split context invalidation synchronization.
 pub fn retain_active_users(states: &mut HashMap<String, UserPlane>) {
-    if states.len() >= 64 {
-        states.retain(|id, state| id == "admin" || Arc::strong_count(&state.context_gate) > 1);
+    if states.len() < MAX_USER_PLANES {
+        return;
+    }
+    let excess = states.len() - MAX_USER_PLANES * 3 / 4;
+    let idle: Vec<String> = states
+        .iter()
+        .filter(|(id, state)| *id != "admin" && Arc::strong_count(&state.context_gate) == 1)
+        .map(|(id, _)| id.clone())
+        .take(excess)
+        .collect();
+    for id in idle {
+        states.remove(&id);
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    fn planes(count: usize) -> HashMap<String, UserPlane> {
+        (0..count)
+            .map(|i| {
+                let pool = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+                (format!("user-{i}"), UserPlane::new(pool))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn registry_keeps_idle_users_below_the_limit() {
+        let mut states = planes(1000);
+        retain_active_users(&mut states);
+        assert_eq!(states.len(), 1000);
     }
 }
