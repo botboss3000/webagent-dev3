@@ -259,7 +259,8 @@ const reviewTimer=setInterval(async()=>{
 // An unused tab stops costing the server: its event stream and activity polling close, and
 // the next input or showing the tab reopens the conversation, catching up on anything missed.
 const pausedBar=document.createElement('button');pausedBar.type='button';pausedBar.className='chat-idle-paused';pausedBar.hidden=true;pausedBar.textContent='Paused while idle. Tap to resume';
-$('composer').before(pausedBar);
+// The footer (#chat-input-area) is the visible composer; #composer itself has no box.
+$('chat-input-area').prepend(pausedBar);
 let pausedSession='';
 const idlePause=watchIdlePause({getConfig:currentChatProfile,
   onPause(){pausedSession=session;client.disconnect();activity.disconnect();pausedBar.hidden=false;},
