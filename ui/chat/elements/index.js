@@ -150,13 +150,13 @@ function paint() {
       nodes.set(id,entry);
     }
     const node=entry.element,group=displayed(summary,publicState.runs||[]);
-    entry.update(group,{error,active:progressActive && summary===lastGroup});shown.set(node,group);
+    entry.update(group,{error:summary===lastGroup?error:'',active:progressActive && summary===lastGroup});shown.set(node,group);
     const anchor=tails.get(summary.boundary_item_id) || boundary;
     if(anchor.nextSibling!==node) container.insertBefore(node,anchor.nextSibling);
     tails.set(summary.boundary_item_id,node);
   }
   for(const [id,entry] of nodes) if(!keep.has(id)) {entry.dispose();nodes.delete(id);}
-  cluster(shown,progressActive);
+  cluster(shown,progressActive,nodes.get(lastGroup?.id)?.element);
   if(ellipsis && container.lastElementChild!==ellipsis.element)container.append(ellipsis.element);
   app._reLandAnchor?.();
   // Newly drawn messages (window scroll, live replies) fetch their summaries right away.
@@ -164,7 +164,7 @@ function paint() {
 }
 // Folds each unbroken run of activity groups and background notice rows (until the agent's next
 // visible message) under one summary; members stay in place and show when it is expanded.
-function cluster(shown,active) {
+function cluster(shown,active,lastNode) {
   const used=new Set();let span=[];
   const build=members=>{
     const key=members[0].dataset.publicId||members[0].dataset.activityGroupId;used.add(key);
@@ -193,7 +193,7 @@ function cluster(shown,active) {
     const reported=kinds['sub-agent']||0;delete kinds['sub-agent'];
     counts.subagents=counts.subagents||reported;
     paintActivityHead(element.firstElementChild,{...(groups.at(-1)||{state:'completed'}),counts,cache},
-      {error,extra:Object.entries(kinds).map(([kind,count])=>count+' '+kind+(count===1?'':'s'))});
+      {error:members.includes(lastNode)?error:'',extra:Object.entries(kinds).map(([kind,count])=>count+' '+kind+(count===1?'':'s'))});
     element.setAttribute('aria-label','Activity group');
     element.classList.toggle('v2-activity-group-glimmer',active && members.some(node=>node.classList.contains('v2-activity-group-glimmer')));
     // Merge every member's rows, or its build and background notice lines, in document order.

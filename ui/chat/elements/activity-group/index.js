@@ -51,7 +51,7 @@ export function paintActivityHead(summary,group,{error='',extra=[]}={}) {
     ,state=activityLabel({...group,counts:{}},{error});
   const status=summary.querySelector('.tc-head-status'),label=summary.querySelector('.tc-head-label');
   // Write only changed text and tone, so an idle repaint leaves the header untouched.
-  const statusText=state?(text?' · ':'')+state:'',tone=error || group.state==='failed'?'danger':'';
+  const statusText=state?(text?' · ':'')+state:'',tone=group.state==='failed'?'danger':'';
   if(label.textContent!==text)label.textContent=text;
   if(status.textContent!==statusText)status.textContent=statusText;
   if(status.dataset.tone!==tone)status.dataset.tone=tone;
