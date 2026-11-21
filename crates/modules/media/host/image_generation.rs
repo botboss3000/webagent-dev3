@@ -1,4 +1,4 @@
-//! Image Out requests retain a durable started receipt before a potentially billable request.
+//! Image requests retain a durable started receipt before a potentially billable request.
 //! Receipt and attachment rules live in `webagent_media::image`; this root-bound adapter supplies
 //! authority checks, the media lane, the provider request and attachment publication.
 use anyhow::{anyhow, Result};
@@ -79,8 +79,7 @@ pub async fn execute(
         ));
     }
     // Nothing has been submitted yet, so these failures are definite errors.
-    let lane = match api::media_lane::lane_run(app, sid, model_selection::ModelRole::ImageOut).await
-    {
+    let lane = match api::media_lane::lane_run(app, sid, model_selection::ModelRole::Image).await {
         Ok(lane) => lane,
         Err(error) => return Ok(image::not_sent(&error.1.to_string())),
     };
@@ -90,7 +89,7 @@ pub async fn execute(
     };
     if !webagent_models::transport::image_transport(selection.provider) {
         return Ok(image::not_sent(
-            "Assigned Image Out transport does not support image generation",
+            "Assigned Image transport does not support image generation",
         ));
     }
     let gate = app.gate.lock().await;
@@ -224,7 +223,7 @@ async fn publish(
     let result = json!({
         "attachment": api::uploads::metadata(&file),
         "url": format!("/api/v3/sessions/{sid}/attachments/{id}/content"),
-        "role": "Image Out",
+        "role": "Image",
     });
     app.store
         .put(

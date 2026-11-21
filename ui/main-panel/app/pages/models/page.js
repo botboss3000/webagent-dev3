@@ -46,7 +46,7 @@ export async function mountAppModels(host) {
   function display(data) {result.hidden=false;result.replaceChildren();const pre=document.createElement('pre');pre.textContent=JSON.stringify(data,null,2);result.append(pre);}
   function error(e) {if(live()&&e.name!=='AbortError'){ready=false;update();status.textContent=e.message;display({error:e.message});}}
   function rows(entries) {return Object.values(entries).map(e=>({entry_id:e.id,provider:e.transport,model:e.upstream_model,display_name:e.display_name,
-    api_key:'',decision_capable:e.capabilities.includes('decision'),text_capable:e.capabilities.includes('text'),image_capable:e.capabilities.includes('image_in'),image_out_capable:e.capabilities.includes('image_out'),voice_capable:e.capabilities.includes('voice'),video_capable:e.capabilities.includes('video'),catalog_origin:'platform'}));}
+    api_key:'',decision_capable:e.capabilities.includes('decision'),text_capable:e.capabilities.includes('text'),vision_capable:e.capabilities.includes('vision'),image_capable:e.capabilities.includes('image'),voice_capable:e.capabilities.includes('voice'),video_capable:e.capabilities.includes('video'),catalog_origin:'platform'}));}
   const adapter={
     loadConfig:async()=>({provider:'deepseek',roster:structuredClone(staged),role_assignments:{}}),
     // Provider files on the server name the platform providers; the subscription is per-account only.
@@ -100,7 +100,7 @@ export async function mountAppModels(host) {
   async function action(work) {if(busy)return;busy=true;update();try{await work();}catch(e){error(e);}finally{busy=false;update();}}
   save.onclick=()=>action(async()=>{
     const entries=Object.fromEntries(staged.map(row=>[row.entry_id,{id:row.entry_id,display_name:row.display_name||row.model,upstream_model:row.model,transport:row.provider,
-      capabilities:[...(row.decision_capable?['decision']:[]),...(row.text_capable?['text']:[]),...(row.image_capable?['image_in']:[]),...(row.image_out_capable?['image_out']:[]),...(row.voice_capable?['voice']:[]),...(row.video_capable?['video']:[])]}]));
+      capabilities:[...(row.decision_capable?['decision']:[]),...(row.text_capable?['text']:[]),...(row.vision_capable?['vision']:[]),...(row.image_capable?['image']:[]),...(row.voice_capable?['voice']:[]),...(row.video_capable?['video']:[])]}]));
     roster=(await request(path,'PUT',{expected_revision:roster.revision,entries})).roster;
     // Metadata first; every key write uses the newly returned fence. Keys never enter history.
     for(const row of staged)if(row.api_key){

@@ -78,7 +78,7 @@ pub fn image_output(provider: ProviderId, value: &Value) -> Result<GeneratedImag
                 None,
             )
         }
-        _ => bail!("Assigned Image Out transport does not support image generation"),
+        _ => bail!("Assigned Image transport does not support image generation"),
     }
 }
 impl Provider {
@@ -92,7 +92,7 @@ impl Provider {
     ) -> Result<GeneratedImage> {
         if prompt.trim().is_empty() || prompt.len() > 16384 || !image_transport(selection.provider)
         {
-            bail!("Invalid image request or unsupported assigned Image Out transport");
+            bail!("Invalid image request or unsupported assigned Image transport");
         }
         let value = if selection.provider == ProviderId::OpenaiSubscription {
             let request = call::SubscriptionRequest {

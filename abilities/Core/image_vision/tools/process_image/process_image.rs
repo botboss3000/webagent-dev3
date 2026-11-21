@@ -1,4 +1,4 @@
-//! Vision reads only current-conversation images through the agent's assigned Image In role.
+//! Vision reads only current-conversation images through the agent's assigned Vision role.
 use crate::{Call, NativeHost};
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
@@ -54,7 +54,7 @@ pub async fn execute(
     let data = record["data"]
         .as_str()
         .ok_or_else(|| anyhow!("Image bytes unavailable"))?;
-    let lane = host.media_lane(call.sid, ModelRole::ImageIn).await?;
+    let lane = host.media_lane(call.sid, ModelRole::Vision).await?;
     let input = vec![json!({"role":"user","content":[
         {"type":"input_text","text":q.question},
         {"type":"input_image","image_url":format!("data:{media_type};base64,{data}")}]})];
@@ -66,6 +66,6 @@ pub async fn execute(
     host.authorize(call, "process_image", args, &cancel).await?;
     Ok(
         json!({"status":"success","output":{"attachment_id":q.attachment_id,
-        "description":answer,"role":"Image In","source":"untrusted_model_observation"}}),
+        "description":answer,"role":"Vision","source":"untrusted_model_observation"}}),
     )
 }

@@ -3556,7 +3556,7 @@ impl<
                 );
                 // Image-capable candidates see sent images directly; others keep the durable text.
                 let mut projected_input = projected_input;
-                if candidate["image_in"] == true {
+                if candidate["vision"] == true {
                     let mut records = std::collections::HashMap::new();
                     for id in super::images::wanted(&projected_input)
                         .into_iter()

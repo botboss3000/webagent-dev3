@@ -55,7 +55,7 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
         models.push(json!({"entry_id":id,"label":if id.is_none(){format!("Mode default · {display}")}else{display.to_owned()},
             "model":first.upstream_model,"connected":connected,"roles":roles,
             "efforts":efforts.levels,"default_effort":default_effort,"provider_default_effort":efforts.default,
-            "image_in":first.image_in}));
+            "vision":first.vision}));
     }
     let config = crate::agents_api::modes_config(&app.store, &agent).await?;
     let modes: Vec<Value> = config["execution_modes"]

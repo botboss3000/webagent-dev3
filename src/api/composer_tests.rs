@@ -218,14 +218,14 @@ async fn voice_composer_audio_stays_ephemeral_and_describes_uploads_in_place() {
         .get_mut("one")
         .unwrap()
         .capabilities
-        .extend(["image_in".into()]);
+        .extend(["vision".into()]);
     catalog
         .agent_models
         .get_mut("shared_default")
         .unwrap()
         .roles
         .insert(
-            model_selection::ModelRole::ImageIn,
+            model_selection::ModelRole::Vision,
             model_selection::RoleAssignment::new("one"),
         );
     app.store

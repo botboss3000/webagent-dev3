@@ -1482,7 +1482,7 @@ async fn send_now_replaces_the_model_call_and_continues_the_run() {
 }
 
 #[tokio::test]
-async fn image_capable_candidates_receive_sent_images_and_others_keep_text() {
+async fn vision_capable_candidates_receive_sent_images_and_others_keep_text() {
     use axum::routing::post;
     let (_root, mut app) = fixture().await;
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
@@ -1501,7 +1501,7 @@ async fn image_capable_candidates_receive_sent_images_and_others_keep_text() {
         axum::serve(listener, mock).await.unwrap();
     });
     app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
-    for (sees, generation) in [(true, "image-in"), (false, "text-only")] {
+    for (sees, generation) in [(true, "vision"), (false, "text-only")] {
         let sid = conversation(&app).await;
         let aid = uuid();
         crate::api::upload(
@@ -1521,11 +1521,11 @@ async fn image_capable_candidates_receive_sent_images_and_others_keep_text() {
         .await
         .unwrap();
         let id = sent["run_id"].as_str().unwrap().to_owned();
-        // Hydrate as the scheduler would, and mark the candidate as the plan would for an image_in entry.
+        // Hydrate as the scheduler would, and mark the candidate as the plan would for a vision entry.
         let mut run = app.run(&id).await.unwrap();
         run["input"] = json!(app.store.context(&sid).await.unwrap());
         run["context_hydration_pending"] = json!(false);
-        run["selection_plan"]["candidates"][0]["image_in"] = json!(sees);
+        run["selection_plan"]["candidates"][0]["vision"] = json!(sees);
         app.store.put(&key("run", &id), &run).await.unwrap();
         running(&app, &id, generation).await;
         execute_run(
@@ -2983,15 +2983,15 @@ async fn image_generation_stays_off_without_an_image_out_model() {
         .entry_id
         .clone();
     let mut image = catalog.entries[&standard].clone();
-    image.id = "image-out".into();
-    image.capabilities.insert("image_out".into());
+    image.id = "image".into();
+    image.capabilities.insert("image".into());
     image.revision = 1;
     catalog.entries.insert(image.id.clone(), image);
     let roster = catalog.agent_models.get_mut("shared_default").unwrap();
-    roster.entry_ids.push("image-out".into());
+    roster.entry_ids.push("image".into());
     roster.roles.insert(
-        model_selection::ModelRole::ImageOut,
-        model_selection::RoleAssignment::new("image-out"),
+        model_selection::ModelRole::Image,
+        model_selection::RoleAssignment::new("image"),
     );
     app.store
         .save_model_catalog(&catalog, catalog.revision)

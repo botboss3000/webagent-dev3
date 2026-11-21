@@ -546,7 +546,7 @@ pub(crate) async fn upload_describe(
     if !record["text"].as_str().unwrap_or("").is_empty() {
         return Ok(Json(metadata(&record)));
     }
-    let run = match media_lane::lane_run(&app, &sid, model_selection::ModelRole::ImageIn).await {
+    let run = match media_lane::lane_run(&app, &sid, model_selection::ModelRole::Vision).await {
         Ok(run) => run,
         Err(_) => {
             let run =
@@ -558,10 +558,10 @@ pub(crate) async fn upload_describe(
             if !catalog
                 .entries
                 .get(entry)
-                .is_some_and(|e| e.capabilities.contains("image_in"))
+                .is_some_and(|e| e.capabilities.contains("vision"))
             {
                 return Err(conflict(
-                    "Assign an Image In model to describe attached images",
+                    "Assign a Vision model to describe attached images",
                 ));
             }
             run

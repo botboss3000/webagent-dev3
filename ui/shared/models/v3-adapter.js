@@ -10,8 +10,8 @@ export function catalogCapabilityFlags(capabilities=[],transport) {
   return {
     decision_capable:caps.has('decision'),
     text_capable:caps.has('text'),
-    image_capable:caps.has('image_in') || legacySubscription,
-    image_out_capable:caps.has('image_out'),
+    vision_capable:caps.has('vision') || legacySubscription,
+    image_capable:caps.has('image'),
     voice_capable:caps.has('voice'),
     video_capable:caps.has('video'),
   };
@@ -45,7 +45,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
   }
   // A provider file's models stand in until a key or connection returns the live list.
   const previewModels=async provider=>((await presets())[provider]?.models||[]).map(m=>({id:m.id,name:m.name||m.id,
-    text_capable:true,image_capable:(m.input||[]).includes('image'),...(m.context?{context:m.context}:{}),...(m.max_output?{max_output:m.max_output}:{})}));
+    text_capable:true,vision_capable:(m.input||[]).includes('image'),...(m.context?{context:m.context}:{}),...(m.max_output?{max_output:m.max_output}:{})}));
   async function accountChoices(){account=await request('/models/me/catalog');return account;}
   async function adopt(source,alias){
     const saved=await request('/models/agents/'+encodeURIComponent(agentId)+'/adoptions','POST',{
@@ -103,13 +103,13 @@ export function createModelAdapter(request, agentId, onAssignment) {
           if(!connection||connection.owner_id!==data.caller_id||connection.transport!==p.provider||!connection.allowed_agents.includes(agentId)||connection.revoked)throw Error('Subscription connection is unavailable');
         }
         next.connections[connectionId]??={id:connectionId,owner_id:data.caller_id,transport:p.provider,credential_ref:'provider_credential:'+crypto.randomUUID(),allowed_agents:[agentId],revision:1,revoked:false};
-        e=next.entries[id]={id,owner_id:data.caller_id,connection_id:connectionId,upstream_model:p.model,display_name:p.display_name||p.model,capabilities:[['decision',!!p.decision_capable],['text',p.text_capable!==false],['image_in',p.image_capable],['image_out',p.image_out_capable],['voice',p.voice_capable],['video',p.video_capable]].filter(([,enabled])=>enabled).map(([name])=>name),allowed_agents:[agentId],revision:1};
+        e=next.entries[id]={id,owner_id:data.caller_id,connection_id:connectionId,upstream_model:p.model,display_name:p.display_name||p.model,capabilities:[['decision',!!p.decision_capable],['text',p.text_capable!==false],['vision',p.vision_capable],['image',p.image_capable],['voice',p.voice_capable],['video',p.video_capable]].filter(([,enabled])=>enabled).map(([name])=>name),allowed_agents:[agentId],revision:1};
         // Hydrate reference row identity only after the catalog write succeeds below.
       }else if(data.adoptions?.[e.id]||next.platform_sources?.[e.id]){
         if(p.api_key)throw Error('Adopted credentials cannot be replaced through the roster');
       }else if(e.owner_id===data.caller_id){
         e.display_name=p.display_name||e.upstream_model;
-        e.capabilities=[['decision',!!p.decision_capable],['text',p.text_capable!==false],['image_in',p.image_capable],['image_out',p.image_out_capable],['voice',p.voice_capable],['video',p.video_capable]].filter(([,enabled])=>enabled).map(([name])=>name);
+        e.capabilities=[['decision',!!p.decision_capable],['text',p.text_capable!==false],['vision',p.vision_capable],['image',p.image_capable],['voice',p.voice_capable],['video',p.video_capable]].filter(([,enabled])=>enabled).map(([name])=>name);
       }else if(p.display_name!==e.display_name)throw Error('Only the model owner can rename this connection');
       rowIds.push(e.id);
       if(p.default_effort)efforts[e.id]=p.default_effort;

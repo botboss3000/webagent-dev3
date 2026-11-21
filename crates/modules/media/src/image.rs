@@ -1,4 +1,4 @@
-//! Image Out receipt rules for the `generate_image` tool. A durable started receipt is written
+//! Image receipt rules for the `generate_image` tool. A durable started receipt is written
 //! before a potentially billable request; its key also fixes the attachment identity so recovery
 //! publishes the same attachment without another request.
 use serde_json::{json, Value};

@@ -104,7 +104,7 @@ pub trait AgentPolicy<S>: Clone + Send + Sync + 'static {
         store: &'a S,
         agent: &'a str,
     ) -> impl Future<Output = Result<Value>> + Send + 'a;
-    /// Role keys (for example `image_out`) the agent's model roster cannot resolve now.
+    /// Role keys (for example `image`) the agent's model roster cannot resolve now.
     fn unresolved_model_roles<'a>(
         &'a self,
         store: &'a S,

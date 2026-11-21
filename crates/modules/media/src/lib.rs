@@ -1,7 +1,7 @@
 //! Media: application voice and image workflows. Owns dictation PCM sequencing, speech
 //! formatting, the voice service (dictation recognizer and reply speaker), the dictation cleanup
 //! prompt and its live settings,
-//! the agent voice output catalog/setting and the Image Out receipt rules. Chat owns
+//! the agent voice output catalog/setting and the Image receipt rules. Chat owns
 //! voice/media preferences, Agents stores each agent's voice output setting and Models owns role
 //! selections and provider wire formats; no `media.json` exists.
 //! Root-bound adapters (App/Store, HTTP routes, model calls, the `generate_image` tool) live in

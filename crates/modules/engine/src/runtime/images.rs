@@ -310,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn image_capable_calls_get_sent_images_newest_first_within_bounds() {
+    fn vision_capable_calls_get_sent_images_newest_first_within_bounds() {
         let a = json!([{"id":"a","name":"a.png","media_type":"image/png","sha256":"ha","text":"a red circle"}]);
         let b = json!([{"id":"b","name":"b.png","media_type":"image/png","sha256":"hb","text":"described"},
             {"id":"t","name":"n.txt","media_type":"text/plain","sha256":"ht","text":"notes"}]);

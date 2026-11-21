@@ -41,7 +41,7 @@ impl Roster {
                     || e.display_name.len()>200 || !valid_model(&e.upstream_model)
                     // A bridge link answers only its owner's chats, so it cannot be published to others.
                     || e.transport.provider_id().is_bridge()
-                    || e.capabilities.iter().any(|c|!matches!(c.as_str(),"text"|"decision"|"image_in"|"image_out"|"voice"|"video"))
+                    || e.capabilities.iter().any(|c|!matches!(c.as_str(),"text"|"decision"|"vision"|"image"|"voice"|"video"))
                 {
                     bail!("Invalid platform model metadata");
                 }

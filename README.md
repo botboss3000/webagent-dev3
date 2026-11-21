@@ -531,8 +531,8 @@ atomically to the run; public history and events retain downloadable metadata.
 Paste, drop, staged previews, removal and upload retry use this same path.
 Text and structured text are decoded as untrusted source material; the context
 excerpt is bounded while the read-attachment tool can page the complete text.
-Images use an explicitly appointed Image In model, or an image-capable Standard
-model when Image In is absent. PDFs, audio and video retain v2 metadata-only
+Images use an explicitly appointed Vision model, or an image-capable Standard
+model when Vision is absent. PDFs, audio and video retain v2 metadata-only
 handling; PDF extraction is not provided. SVG and active documents are downloads.
 Session memory can be saved explicitly after a completed run with
 `POST /api/v3/sessions/{id}/memories` and
@@ -578,8 +578,8 @@ assigns existing accounts. Browser writes require CSRF. Connection authorization
 and API-key writes require connection ownership; credential references are minted
 by the server and secrets are never returned.
 
-Six roles are explicit entry-ID appointments: Standard, Premium, Image In,
-Image Out, System and Voice. Standard serves chat; System serves compaction.
+Six roles are explicit entry-ID appointments: Standard, Premium, Vision,
+Image, System and Voice. Standard serves chat; System serves compaction.
 The other four workflows are not implemented. Capabilities validate appointments
 but never choose a role. Each role has an ordered backup chain. Chat can supply
 `model_entry_id` for a permitted roster entry without editing Standard.

@@ -16,7 +16,7 @@ export function textForSpeech(value,maxChars=1800){
 }
 /** Purpose: Mount per-session attachment staging and dictation. Files are staged as selected; snapshot refuses submission while any upload is pending, failed, or incomplete. Reset and destroy invalidate session-bound async work and release local media resources. panel.js mounts this module, opens/disconnects/destroys it, and brackets sends with snapshot/committed while reading count/uploading. */
 /** Whether uploads need a description: false only when the selected model reads images itself. */
-export function describesUploads(controls){return !controls?.models?.find(m=>m.entry_id===(controls.model?.entry_id??null))?.image_in;}
+export function describesUploads(controls){return !controls?.models?.find(m=>m.entry_id===(controls.model?.entry_id??null))?.vision;}
 export function mountComposerMedia({root,client,ensureSession,note,changed,refresh,guard,getState}){
  // An image-capable selected model receives images directly, so no description is requested.
  let describeImages=true;

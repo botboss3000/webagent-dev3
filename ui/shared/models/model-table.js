@@ -36,7 +36,7 @@ import { createEffortSlider, modelEfforts } from './effort-slider.js';
  * Contract — mountModelTable(host, opts) → { reload(), destroy(), getState() }
  *   opts.adapter (required):
  *     loadConfig()              → { provider, base_url, api_key,
- *                                   text_capable, image_capable, image_out_capable,
+ *                                   text_capable, vision_capable, image_capable,
  *                                   voice_capable, video_capable, providers:[...] }   (the saved roster)
  *     saveRoster({providers})   → persist the saved-models list
  *     saveSingle?(single)       → optional configurator draft persistence
@@ -256,8 +256,8 @@ function guardCapToggle(cb, { writeFlag, save, afterChange }) {
 export const CAPABILITY_FLAGS = [
   ['D', 'Decision', 'Decision — structured decisions', 'decision_capable', 'decision', false],
   ['T', 'Text', 'Text — chat', 'text_capable', 'text', true],
-  ['V', 'Vision', 'Vision — read images', 'image_capable', 'vision', false],
-  ['I', 'Image', 'Image — generate images', 'image_out_capable', 'image_out', false],
+  ['V', 'Vision', 'Vision — read images', 'vision_capable', 'vision', false],
+  ['I', 'Image', 'Image — generate images', 'image_capable', 'image', false],
   ['🎤', 'Voice', 'Voice — live voice input', 'voice_capable', 'voice', false],
 ];
 
@@ -350,7 +350,7 @@ export function mountModelTable(host, opts = {}) {
     allModels: [],
     selectedModel: '',
     selectedCapFilters: new Set(), // empty shows every catalog model; keys are capabilities (Text/Vision/Image/Voice/Video), never roster roles
-    selCaps: { text: false, image: false, imageOut: false },
+    selCaps: { text: false, vision: false, image: false },
     focusedModel: '',           // MODEL-ROW-FOCUS: model id of the open row a sibling chart is following ('' = none)
     providers: [],              // the saved roster (each gets a _uid)
     roleAssignments: {},        // semantic role -> stable roster entry_id (sole role authority)
@@ -714,8 +714,8 @@ export function mountModelTable(host, opts = {}) {
   const MODEL_CAPABILITY_FILTERS = [
     { key: 'decision', label: 'Decision', matches: (m) => !!m.decision_capable },
     { key: 'text',   label: 'Text',   matches: (m) => m.text_capable !== false },
-    { key: 'vision', label: 'Vision', matches: (m) => !!m.image_capable },
-    { key: 'image',  label: 'Image',  matches: (m) => !!m.image_out_capable },
+    { key: 'vision', label: 'Vision', matches: (m) => !!m.vision_capable },
+    { key: 'image',  label: 'Image',  matches: (m) => !!m.image_capable },
     { key: 'voice',  label: 'Voice',  matches: (m) => !!m.voice_capable },
     { key: 'video',  label: 'Video',  matches: (m) => !!m.video_capable },
   ];
@@ -901,8 +901,8 @@ export function mountModelTable(host, opts = {}) {
     const caps = [
       ['Decision', !!m.decision_capable],
       ['Text', m.text_capable !== false],
-      ['Vision', !!m.image_capable],
-      ['Image', !!m.image_out_capable],
+      ['Vision', !!m.vision_capable],
+      ['Image', !!m.image_capable],
       ['Voice', !!m.voice_capable],
       ['Video', !!m.video_capable],
     ];
@@ -1008,8 +1008,8 @@ export function mountModelTable(host, opts = {}) {
       const capBadges = [
         ['Decision', !!m.decision_capable],
         ['Text', m.text_capable !== false],
-        ['Vision', !!m.image_capable],
-        ['Image', !!m.image_out_capable],
+        ['Vision', !!m.vision_capable],
+        ['Image', !!m.image_capable],
         ['Voice', !!m.voice_capable],
         ['Video', !!m.video_capable],
       ].filter(([, capable]) => capable)
@@ -1054,7 +1054,7 @@ export function mountModelTable(host, opts = {}) {
           S.selectedModel = S.selectedModel === m.id ? '' : m.id;
           displayNameInput.value = '';
           updateAddEffort();
-          S.selCaps = { text: m.text_capable !== false, image: !!m.image_capable, imageOut: !!m.image_out_capable, voice: !!m.voice_capable, video: !!m.video_capable };
+          S.selCaps = { text: m.text_capable !== false, vision: !!m.vision_capable, image: !!m.image_capable, voice: !!m.voice_capable, video: !!m.video_capable };
           setModelStatus('');
           renderModelDropdown(modelSearch.value.toLowerCase());
           if (S.selectedModel) displayNameInput.focus();
@@ -1073,7 +1073,7 @@ export function mountModelTable(host, opts = {}) {
       } else {
         item.addEventListener('click', () => {
           S.selectedModel = m.id; modelSearch.value = isPlatformCatalogModel ? visibleModelName : (m.name || visibleModelName);
-          S.selCaps = { text: m.text_capable !== false, image: !!m.image_capable, imageOut: !!m.image_out_capable, voice: !!m.voice_capable, video: !!m.video_capable };
+          S.selCaps = { text: m.text_capable !== false, vision: !!m.vision_capable, image: !!m.image_capable, voice: !!m.voice_capable, video: !!m.video_capable };
           renderDetectedCaps(m);
           setModelStatus(`Selected: ${visibleModelName}`, true);
           autosaveSingle(modelCheck);
@@ -1531,7 +1531,7 @@ export function mountModelTable(host, opts = {}) {
         : isSubscriptionProvider() ? 'No models available for this ChatGPT account.' : 'No models available.');
       if (S.selectedModel) {
         const sel = S.allModels.find(m => m.id === S.selectedModel);
-        if (sel) { S.selCaps = { text: sel.text_capable !== false, image: !!sel.image_capable, imageOut: !!sel.image_out_capable, voice: !!sel.voice_capable, video: !!sel.video_capable }; renderDetectedCaps(sel); }
+        if (sel) { S.selCaps = { text: sel.text_capable !== false, vision: !!sel.vision_capable, image: !!sel.image_capable, voice: !!sel.voice_capable, video: !!sel.video_capable }; renderDetectedCaps(sel); }
       }
       renderModelDropdown(modelSearch.value.toLowerCase());
     } catch (error) {
@@ -1563,8 +1563,8 @@ export function mountModelTable(host, opts = {}) {
       api_key: keyInput.value.trim(),
       model: S.selectedModel || '',
       providers: S.providerConfigs,
-      text_capable: S.selCaps.text, image_capable: S.selCaps.image,
-      image_out_capable: S.selCaps.imageOut,
+      text_capable: S.selCaps.text, vision_capable: S.selCaps.vision,
+      image_capable: S.selCaps.image,
       voice_capable: S.selCaps.voice,
     };
     if (!single.api_key && !isSubscriptionProvider()) return; // nothing persistable yet
@@ -2197,8 +2197,8 @@ export function mountModelTable(host, opts = {}) {
     const capHtml = [
       ['Decision', !!p.decision_capable],
       ['Text', p.text_capable !== false],
-      ['Vision', !!p.image_capable],
-      ['Image', !!p.image_out_capable],
+      ['Vision', !!p.vision_capable],
+      ['Image', !!p.image_capable],
       ['Voice', !!p.voice_capable],
       ['Video', !!p.video_capable],
     ].map(([name, on]) => metaValue(name, on ? '' : ' is-off')).join('<span class="ac-model-meta-sep"> · </span>');
@@ -2628,7 +2628,7 @@ export function mountModelTable(host, opts = {}) {
   // default radio persist IN PLACE — no list rebuild — so editing a row never
   // collapses the table or disturbs the scroll position.
   function _buildSavedRow(p, readOnly, checked, cfgAnchor, rolesEditable) {
-    const isRoleAssigned = ['standard', 'image_in', 'image_out', 'system', 'voice', 'dictation'].some(role => hasRole(p, role));
+    const isRoleAssigned = ['standard', 'vision', 'image', 'system', 'voice', 'dictation'].some(role => hasRole(p, role));
     const rowWrap = document.createElement('div'); rowWrap.className = 'ac-row ac-saved-injected' + (readOnly ? ' ac-saved-inherited' : ' ac-saved-own') + (isRoleAssigned ? ' ac-saved-role' : '');
     rowWrap.dataset.mtUid = p._uid;
     rowWrap.dataset.id = String(p._uid);  // for makeRowsReorderable's rowIdList()
@@ -2666,8 +2666,8 @@ export function mountModelTable(host, opts = {}) {
     [
       ['T', 'Text', 'standard'],
       ['D', 'Decision', 'decision'],
-      ['V', 'Vision', 'image_in'],
-      ['I', 'Image', 'image_out'],
+      ['V', 'Vision', 'vision'],
+      ['I', 'Image', 'image'],
       ['⚙', 'System', 'system'],
       ['🎤', 'Voice', 'voice'],
       ['✎', 'Dictation', 'dictation'],
@@ -2704,8 +2704,8 @@ export function mountModelTable(host, opts = {}) {
     const roleLabels = [];
     if (hasRole(p, 'standard')) roleLabels.push('Text');
     if (hasRole(p, 'decision')) roleLabels.push('Decision');
-    if (hasRole(p, 'image_in')) roleLabels.push('Vision');
-    if (hasRole(p, 'image_out')) roleLabels.push('Image');
+    if (hasRole(p, 'vision')) roleLabels.push('Vision');
+    if (hasRole(p, 'image')) roleLabels.push('Image');
     if (hasRole(p, 'system')) roleLabels.push('System');
     if (hasRole(p, 'voice')) roleLabels.push('Voice');
     if (hasRole(p, 'dictation')) roleLabels.push('Dictation');
@@ -2764,10 +2764,10 @@ export function mountModelTable(host, opts = {}) {
     _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'standard'), 'Text',
       'The agent\'s chat model; a chat mode can choose its own in Identity → Chat modes',
       (v, cb) => persistRole('standard', v, cb), locked, lockHint);
-    _buildRoleToggle(rolesSection, !!p.image_capable, hasRole(p, 'image_in'), 'Vision', 'Use to read attached images',
-      (v, cb) => persistRole('image_in', v, cb), locked, lockHint);
-    _buildRoleToggle(rolesSection, !!p.image_out_capable, hasRole(p, 'image_out'), 'Image', 'Use to generate images',
-      (v, cb) => persistRole('image_out', v, cb), locked, lockHint);
+    _buildRoleToggle(rolesSection, !!p.vision_capable, hasRole(p, 'vision'), 'Vision', 'Use to read attached images',
+      (v, cb) => persistRole('vision', v, cb), locked, lockHint);
+    _buildRoleToggle(rolesSection, !!p.image_capable, hasRole(p, 'image'), 'Image', 'Use to generate images',
+      (v, cb) => persistRole('image', v, cb), locked, lockHint);
     _buildRoleToggle(rolesSection, p.text_capable !== false, hasRole(p, 'system'), 'System', 'App misc. LLM tasks (session naming, context mgmt, dictation cleanup)',
       (v, cb) => persistRole('system', v, cb), locked, lockHint);
     const liveVoiceCapable = !!p.voice_capable && !String(p.model || '').toLowerCase().endsWith(':batch');
@@ -3048,7 +3048,7 @@ export function mountModelTable(host, opts = {}) {
     if (!free && !S.selectedModel) return setModelStatus('Please select a model');
     if (subscription && !matchingSubscriptionRow()?.credential_configured) return setModelStatus('Connect ChatGPT before adding a model.');
     let savedRow = null;
-    const capText = S.selCaps.text !== false, capImage = !!S.selCaps.image, capImageOut = !!S.selCaps.imageOut, capVoice = !!S.selCaps.voice;
+    const capText = S.selCaps.text !== false, capVision = !!S.selCaps.vision, capImage = !!S.selCaps.image, capVoice = !!S.selCaps.voice;
     // The first agent-roster model claims Text so the app has an explicit chat
     // model. Catalog-only mounts have no roles, and subscription entries already
     // carry a server-reserved ID before they can be added.
@@ -3067,7 +3067,7 @@ export function mountModelTable(host, opts = {}) {
       const subscriptionConnection = subscription ? matchingSubscriptionRow() : null;
       // Persisted IDs are owned by the server. `_uid` is the only client-side row
       // identity; adapters hydrate `entry_id` into this same object after save.
-      const newP = { entry_id: platformCatalog ? S.selectedModel : (subscription && pendingSubscriptionRow?.entry_id ? pendingSubscriptionRow.entry_id : ''), connection_id: subscriptionConnection?.connection_id || '', catalog_source_id: platformCatalog ? S.selectedModel : '', display_name: requestedName, provider, auth_mode: subscription ? 'chatgpt' : 'api_key', base_url: platformCatalog ? '' : (subscription ? 'codex://chatgpt' : baseUrl), api_key: platformCatalog ? '' : apiKey, model: free ? 'openrouter/free' : S.selectedModel, catalog_origin: platformCatalog && provider === 'webagent_catalog' ? 'platform' : 'byo', catalog_name: platformCatalog ? (chosen.catalog_name || chosen.display_name || '') : '', routing_mode: free ? 'openrouter_free' : '', text_capable: free || capText, image_capable: free ? false : capImage, image_out_capable: free ? false : capImageOut, voice_capable: free ? false : capVoice, high_effort_capable: false, credential_scope: subscription ? subscriptionScope : '', credential_configured: subscription ? !!subscriptionConnection?.credential_configured : true, credential_email: subscription ? (subscriptionConnection?.credential_email || '') : '', credential_plan_type: subscription ? (subscriptionConnection?.credential_plan_type || '') : '', _uid: ++S.uid };
+      const newP = { entry_id: platformCatalog ? S.selectedModel : (subscription && pendingSubscriptionRow?.entry_id ? pendingSubscriptionRow.entry_id : ''), connection_id: subscriptionConnection?.connection_id || '', catalog_source_id: platformCatalog ? S.selectedModel : '', display_name: requestedName, provider, auth_mode: subscription ? 'chatgpt' : 'api_key', base_url: platformCatalog ? '' : (subscription ? 'codex://chatgpt' : baseUrl), api_key: platformCatalog ? '' : apiKey, model: free ? 'openrouter/free' : S.selectedModel, catalog_origin: platformCatalog && provider === 'webagent_catalog' ? 'platform' : 'byo', catalog_name: platformCatalog ? (chosen.catalog_name || chosen.display_name || '') : '', routing_mode: free ? 'openrouter_free' : '', text_capable: free || capText, vision_capable: free ? false : capVision, image_capable: free ? false : capImage, voice_capable: free ? false : capVoice, high_effort_capable: false, credential_scope: subscription ? subscriptionScope : '', credential_configured: subscription ? !!subscriptionConnection?.credential_configured : true, credential_email: subscription ? (subscriptionConnection?.credential_email || '') : '', credential_plan_type: subscription ? (subscriptionConnection?.credential_plan_type || '') : '', _uid: ++S.uid };
       newP.video_capable = free ? false : !!chosen.video_capable;
       newP.decision_capable = !!chosen.decision_capable;
       if (pendingEffort) newP.default_effort = pendingEffort;
@@ -3152,7 +3152,7 @@ export function mountModelTable(host, opts = {}) {
   });
   modelSearch.addEventListener('input', () => {
     if (opts.manualModelEntry && !listProvider() && !inlineCatalogAdd) {
-      S.selectedModel = modelSearch.value.trim(); S.selCaps = {text:true,image:false,imageOut:false,voice:false}; renderDetectedCaps(null);
+      S.selectedModel = modelSearch.value.trim(); S.selCaps = {text:true,vision:false,image:false,voice:false}; renderDetectedCaps(null);
     } else if (inlineCatalogAdd) {
       S.selectedModel = '';
       displayNameInput.value = '';
@@ -3293,8 +3293,8 @@ export function mountModelTable(host, opts = {}) {
       keyInput.value = cfg.api_key || '';
       S.selectedModel = inlineCatalogAdd ? '' : (cfg.model || '');
       modelSearch.value = inlineCatalogAdd ? '' : S.selectedModel;
-      S.selCaps = { text: cfg.text_capable !== false, image: !!cfg.image_capable, imageOut: !!cfg.image_out_capable, voice: !!cfg.voice_capable };
-      renderDetectedCaps(S.selectedModel ? { text_capable: S.selCaps.text, image_capable: S.selCaps.image, image_out_capable: S.selCaps.imageOut, voice_capable: S.selCaps.voice } : null);
+      S.selCaps = { text: cfg.text_capable !== false, vision: !!cfg.vision_capable, image: !!cfg.image_capable, voice: !!cfg.voice_capable };
+      renderDetectedCaps(S.selectedModel ? { text_capable: S.selCaps.text, vision_capable: S.selCaps.vision, image_capable: S.selCaps.image, voice_capable: S.selCaps.voice } : null);
       setModelStatus(S.selectedModel ? `Selected: ${S.selectedModel}` : '', true);
 
       const norm = (p) => ({
@@ -3315,8 +3315,8 @@ export function mountModelTable(host, opts = {}) {
         // account roster write lane (the adapter retains it for display only).
         catalog_entry_source: p.catalog_entry_source || '',
         provider: p.provider || 'openrouter', auth_mode: p.auth_mode || (p.provider === 'openai_subscription' ? 'chatgpt' : 'api_key'), base_url: p.base_url || '', api_key: p.api_key || '', model: p.model || '',
-        decision_capable: !!p.decision_capable, text_capable: p.text_capable !== false, image_capable: !!p.image_capable,
-        image_out_capable: !!p.image_out_capable,
+        decision_capable: !!p.decision_capable, text_capable: p.text_capable !== false, vision_capable: !!p.vision_capable,
+        image_capable: !!p.image_capable,
         high_effort_capable: !!p.high_effort_capable, voice_capable: !!p.voice_capable, video_capable: !!p.video_capable,
         routing_mode: p.routing_mode || '',
         credential_scope: p.credential_scope || (p.provider === 'openai_subscription' ? subscriptionScope : ''),

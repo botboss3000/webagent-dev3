@@ -180,7 +180,7 @@ impl Provider {
             }
             required(tokens, "api_key")?;
             return Ok(
-                json!({"models":[{"id":"jev-latest","name":"Jev","display_name":"Jev","text_capable":false,"decision_capable":true,"image_capable":false,"image_out_capable":false,"voice_capable":false,"video_capable":false}],"provider_acceptance_verified":false}),
+                json!({"models":[{"id":"jev-latest","name":"Jev","display_name":"Jev","text_capable":false,"decision_capable":true,"vision_capable":false,"image_capable":false,"voice_capable":false,"video_capable":false}],"provider_acceptance_verified":false}),
             );
         }
         // The bridge has no listing endpoint: its models are the provider file's.
@@ -191,7 +191,7 @@ impl Provider {
             let models: Vec<Value> = file.models.iter().map(|m| {
                 let name = m.name.clone().unwrap_or_else(|| m.id.clone());
                 json!({"id":m.id,"name":name,"display_name":name,"text_capable":true,"decision_capable":false,
-                    "image_capable":m.input.iter().any(|i| i == "image"),"image_out_capable":false,"voice_capable":false,"video_capable":false})
+                    "vision_capable":m.input.iter().any(|i| i == "image"),"image_capable":false,"voice_capable":false,"video_capable":false})
             }).collect();
             return Ok(json!({"models":models,"provider_acceptance_verified":false}));
         }

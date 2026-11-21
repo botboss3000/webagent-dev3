@@ -26,7 +26,7 @@ test('DeepSeek preview lists the provider file models and modalities without a k
   assert.equal(result.preview, true);
   assert.match(result.preview_message, /DeepSeek/);
   assert.deepEqual(result.models.map(model => model.id), ['deepseek-flash','deepseek-v4-pro']);
-  assert.deepEqual(result.models.map(model => model.image_capable), [true,false]);
+  assert.deepEqual(result.models.map(model => model.vision_capable), [true,false]);
   for (const model of result.models) {
     assert.equal(model.text_capable, true);
     assert.equal(model.context, 1048576);

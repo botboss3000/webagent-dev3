@@ -229,8 +229,8 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
                     return Err(anyhow!("Adopted platform transport changed"));
                 }
                 let capability = match plan.role {
-                    model_selection::ModelRole::ImageIn => "image_in",
-                    model_selection::ModelRole::ImageOut => "image_out",
+                    model_selection::ModelRole::Vision => "vision",
+                    model_selection::ModelRole::Image => "image",
                     model_selection::ModelRole::Voice => "voice",
                     model_selection::ModelRole::Decision => "decision",
                     model_selection::ModelRole::Dictation => "transcription",

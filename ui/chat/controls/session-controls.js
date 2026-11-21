@@ -2,7 +2,7 @@
 // V2 cycle/picker presentation with session-scoped, revision-fenced Rust writes.
 import {createEffortSlider} from '../../shared/models/effort-slider.js';
 // Compact role markers on picker rows (V2 footer picker).
-const ROLE_ICONS={standard:['T','Text'],image_in:['👁','Vision'],image_out:['🖼','Image generation'],
+const ROLE_ICONS={standard:['T','Text'],vision:['👁','Vision'],image:['🖼','Image generation'],
   system:['⚙','System'],voice:['🎤','Voice'],decision:['D','Decision']};
 /** Purpose: Mount execution-mode and model controls for the current conversation. The optional onState callback receives refreshed control data so panel.js can gate composer features. The panel drives open/updateRuns/disconnect/destroy; this module reads client.controls and writes client.mode/client.model. */
 export function mountSessionControls({root,client,guard,note,issues,ensureSession,notifications,onState=()=>{},canWrite=()=>true}) {

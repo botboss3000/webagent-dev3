@@ -180,7 +180,7 @@ impl Catalog {
                 credential_ref: connection.credential_ref.clone(),
                 transport: connection.transport.clone(),
                 upstream_model: entry.upstream_model.clone(),
-                image_in: entry.capabilities.contains("image_in"),
+                vision: entry.capabilities.contains("vision"),
             });
         }
         Ok(SelectionPlan {
@@ -415,8 +415,8 @@ pub enum ModelRole {
     /// The agent's default text model, shown as "Text"; an execution mode may name its own.
     #[default]
     Standard,
-    ImageIn,
-    ImageOut,
+    Vision,
+    Image,
     System,
     Voice,
     Decision,
@@ -428,8 +428,8 @@ impl ModelRole {
     pub fn label(self) -> &'static str {
         match self {
             Self::Standard => "Text",
-            Self::ImageIn => "Image In",
-            Self::ImageOut => "Image Out",
+            Self::Vision => "Vision",
+            Self::Image => "Image",
             Self::System => "System",
             Self::Voice => "Voice",
             Self::Decision => "Decision",
@@ -439,8 +439,8 @@ impl ModelRole {
     pub fn supported_by(self, entry: &ModelEntry) -> bool {
         entry.capabilities.contains(match self {
             Self::Standard | Self::System => "text",
-            Self::ImageIn => "image_in",
-            Self::ImageOut => "image_out",
+            Self::Vision => "vision",
+            Self::Image => "image",
             Self::Voice => "voice",
             Self::Decision => "decision",
             Self::Dictation => "transcription",
@@ -559,7 +559,7 @@ pub struct Candidate {
     pub upstream_model: String,
     /// The entry accepts image input, so sent images may go to it directly.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub image_in: bool,
+    pub vision: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -990,7 +990,7 @@ mod tests {
     #[test]
     fn every_role_checks_capability_roster_and_both_explicit_grants() {
         let mut catalog = catalog_fixture();
-        for model_role in [ModelRole::ImageIn, ModelRole::ImageOut, ModelRole::Voice] {
+        for model_role in [ModelRole::Vision, ModelRole::Image, ModelRole::Voice] {
             catalog
                 .agent_models
                 .get_mut("agent-a")
@@ -999,19 +999,19 @@ mod tests {
                 .insert(model_role, role("a"));
             assert!(catalog.resolve_role("agent-a", model_role).is_err());
         }
-        assert!(!catalog.resolve("agent-a").unwrap().candidates[0].image_in);
+        assert!(!catalog.resolve("agent-a").unwrap().candidates[0].vision);
         assert!(
             serde_json::to_value(&catalog.resolve("agent-a").unwrap().candidates[0])
                 .unwrap()
-                .get("image_in")
+                .get("vision")
                 .is_none()
         );
         catalog.entries.get_mut("a").unwrap().capabilities.extend([
-            "image_in".into(),
-            "image_out".into(),
+            "vision".into(),
+            "image".into(),
             "voice".into(),
         ]);
-        for model_role in [ModelRole::ImageIn, ModelRole::ImageOut, ModelRole::Voice] {
+        for model_role in [ModelRole::Vision, ModelRole::Image, ModelRole::Voice] {
             // Aliases without the role's capability are left out of the plan.
             assert_eq!(
                 ids(&catalog.resolve_role("agent-a", model_role).unwrap()),
@@ -1019,7 +1019,7 @@ mod tests {
             );
         }
         // The plan pins whether each candidate reads images, so the loop can send them directly.
-        assert!(catalog.resolve("agent-a").unwrap().candidates[0].image_in);
+        assert!(catalog.resolve("agent-a").unwrap().candidates[0].vision);
         catalog.entries.get_mut("a").unwrap().allowed_agents.clear();
         assert!(catalog.resolve_role("agent-a", ModelRole::Voice).is_err());
         catalog
