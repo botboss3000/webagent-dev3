@@ -111,7 +111,7 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
     const selected=state.models.find(item=>item.entry_id===state.model.entry_id);
     effort.set({levels:selected?.efforts||[],value:state.model.effort||null,defaultEffort:selected?.default_effort||'',disabled:busy||!canWrite()});
     picker.append(effort.element);
-    if(!state.models.length){const text=document.createElement('p');text.className='csp-empty';text.textContent='No permitted chat models. Configure this conversation’s agent on Primary Models.';list.append(text);}
+    if(!state.models.length){const text=document.createElement('p');text.className='csp-empty';text.textContent='No permitted chat models. Add one on this agent’s Models page.';list.append(text);}
     const rect=model.getBoundingClientRect();
     picker.style.bottom=Math.max(8,innerHeight-rect.top+6)+'px';
     picker.style.right=Math.max(8,innerWidth-rect.right)+'px';

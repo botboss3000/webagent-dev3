@@ -15,6 +15,6 @@ pub(super) async fn run(host: &dyn NativeHost, sid: &str, q: &Args) -> Result<Va
     if !started.is_object() {
         return Err(anyhow!("Authorization setup unavailable"));
     }
-    let output = json!({"authorization_started":true,"user_action_required":true,"setup_url":format!("/app?tab=agents&agent={}&agentView=model",host.session_agent_id(sid).await?)});
+    let output = json!({"authorization_started":true,"user_action_required":true,"setup_url":format!("/app?tab=agents&agent={}&agentView=agent-models",host.session_agent_id(sid).await?)});
     Ok(json!({"status":"success","output":output}))
 }

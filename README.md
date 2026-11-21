@@ -60,7 +60,7 @@ Open `/app?tab=agents&agent=shared_default` to use the v2 Agents layout and conf
 The default agent uses `gpt-6-luna` until you save another model. Choose a model supported by your account; a catalog name alone does not establish entitlement.
 Agent model settings store an explicit provider ID. The supported IDs are
 `openai_subscription` and `deepseek`; unsupported IDs are rejected. DeepSeek requires
-an explicit model connection and its own encrypted API key, saved on Primary Models.
+an explicit model connection and its own encrypted API key, saved on the agent’s Models page.
 Choose `deepseek-chat` or `deepseek-reasoner` (or enter a supported upstream model ID).
 The adapter calls the fixed `https://api.deepseek.com/chat/completions` endpoint,
 streams text, and translates tool calls/results. API usage is billed by DeepSeek;

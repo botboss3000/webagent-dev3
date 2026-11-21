@@ -2135,7 +2135,7 @@ async fn app_pages_outside_the_rules_are_refused_and_close_the_browser() {
     );
     for path in [
         "/app?tab=agents&agent=shared_default&agentView=abilities",
-        "/app?tab=agents&agent=shared_default&agentView=model",
+        "/app?tab=agents&agent=shared_default&agentView=agent-models",
         "/app?tab=agents&agent=shared_default&agentView=config",
         "/app?tab=agents&agent=shared_default",
         "/app?tab=app&appView=settings",

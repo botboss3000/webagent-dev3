@@ -14,7 +14,7 @@ export function renderCompaction(host, agent, persist, request) {
   fallback.textContent = 'Context-limit fallback: when the System model writes the summaries and the history since the last summary would outgrow its input budget, compaction starts earlier at that budget. Your saved trigger stays unchanged. Each System summary chunk must fit that budget; if even the required instructions and minimum summary request cannot fit, the run pauses with a budget error.';
   const estimate = document.createElement('p');
   estimate.className = 'ac-hint';
-  estimate.textContent = 'Token sizing is estimated, so actual provider counts can differ. Set per-model input and output budgets on Primary Models.';
+  estimate.textContent = 'Token sizing is estimated, so actual provider counts can differ. Set per-model input and output budgets on the Models page.';
   const scope = document.createElement('p');
   scope.className = 'ac-hint';
   scope.textContent = 'The trigger counts instructions, tool definitions, history and the verbatim tail together. Only eligible older history is summarized. For example, at a 150,000-token trigger, 50,000 tokens of instructions, tools and retained recent history leave about 100,000 tokens eligible for compaction.';

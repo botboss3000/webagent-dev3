@@ -73,7 +73,7 @@ async function mountAgents(){
   const detail=document.createElement('div');
   detail.className='agent-card active agent-card-tabs-only';
   detail.innerHTML=`<div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="Agent configuration pages"></div></div>
-    <div class="agent-detail-panel"><div class="agent-detail-content"><div class="agent-detail-body" id="model-page">
+    <div class="agent-detail-panel"><div class="agent-detail-content"><div class="agent-detail-body" id="agent-models-page">
     <h2>Model</h2><div class="ac-model-table">
       <div class="ac-ability-row ac-model-cfg-row ac-row-static"><span class="ac-ability-label"><span class="ac-ability-name">Provider</span><span class="ac-ability-desc">Use a ChatGPT subscription for this agent.</span></span><span class="ac-model-cfg-control">ChatGPT Subscription</span></div>
       <div class="ac-ability-row ac-model-cfg-row ac-row-static"><span class="ac-ability-label"><span class="ac-ability-name">Connection</span></span><span class="ac-model-cfg-control"><span id="connection" class="ac-hint"></span><button id="connect" type="button" class="ac-btn ac-btn-primary ac-btn-sm">Click to Issue verification code</button><button id="disconnect" type="button" class="ac-btn ac-btn-sm">Disconnect</button><span id="device" class="ac-subscription-auth"></span></span></div>
@@ -97,8 +97,8 @@ async function mountAgents(){
     if(!body)throw Error('Agent page panel unavailable: '+page.id);
     body.setAttribute('role','tabpanel');body.setAttribute('aria-labelledby',tab.id);
   }
-  const selectionHost=document.createElement('div');selectionHost.id='selection-model-table';detail.querySelector('#model-page h2').after(selectionHost);
-  detail.querySelector('#model-page h2').textContent=agentPages.find(page=>page.id==='model').title;
+  const selectionHost=document.createElement('div');selectionHost.id='selection-model-table';detail.querySelector('#agent-models-page h2').after(selectionHost);
+  detail.querySelector('#agent-models-page h2').textContent=agentPages.find(page=>page.id==='agent-models').title;
   const panel=detail.querySelector('.agent-detail-panel');
   panel.remove();
   const region=document.createElement('div');
@@ -422,7 +422,7 @@ async function showCreateAgent(routeMode='push'){
   const host=$(createDescriptor.panelId);
   if(!host.firstChild)renderCreateAgent(host,api,{onCreated:async created=>{
     await loadAgentRoster();
-    const next=new URL(location.href);next.searchParams.set('agentView',created.assignment_required?'model':'identity');history.replaceState({},'',next);
+    const next=new URL(location.href);next.searchParams.set('agentView',created.assignment_required?'agent-models':'identity');history.replaceState({},'',next);
     await selectAgent(created.id);
   }});
 }
@@ -640,7 +640,7 @@ async function boot(){
   }
   void pageReady.then(()=>{
     if(activeMainPage!=='agents'||sessionsScope||createScope||!$('config-page'))return;
-    void showAgentView(new URL(location.href).searchParams.get('agentView')||(me.is_admin?'config':'model'),'replace').catch(error=>note(error.message));
+    void showAgentView(new URL(location.href).searchParams.get('agentView')||(me.is_admin?'config':'agent-models'),'replace').catch(error=>note(error.message));
   });
 }
 // Rebuilds the model table for the current agent, discarding a stale in-flight run.
@@ -656,7 +656,7 @@ async function mountAgentModels(){
   selectionTable?.destroy();
   selectionTable=null;
   $('selection-model-table').replaceChildren();
-  $('model-page').querySelector('.ac-model-table').hidden=true;
+  $('agent-models-page').querySelector('.ac-model-table').hidden=true;
   const mountModels=()=>mountSelectionTable($('selection-model-table'),{
     request:api,agentId,
     onAgent:async id=>{
@@ -664,11 +664,11 @@ async function mountAgentModels(){
       const route=new URL(location.href);
       route.searchParams.set('agent',id);
       if(route.href!==location.href)history.pushState({},'',route);
-      await showAgentView(route.searchParams.get('agentView')||'model','replace');
+      await showAgentView(route.searchParams.get('agentView')||'agent-models','replace');
     },
     onAssignment:async(id,assignment)=>{
       explicitAssignment=!!assignment?.roles?.standard;
-      $('model-page').querySelector('.ac-model-table').hidden=true;
+      $('agent-models-page').querySelector('.ac-model-table').hidden=true;
           renderAgentCards();
     }
   });
@@ -819,7 +819,7 @@ function showMainPage(id,routeMode='push'){
   // A lazily loaded agents page still opens on its default agent view, as a boot-time load does.
   if(id==='agents'&&accountMe)void ready.then(()=>{
     if(sessionsScope||createScope||!$('config-page'))return;
-    return showAgentView(new URL(location.href).searchParams.get('agentView')||(accountMe.is_admin?'config':'model'),'replace');
+    return showAgentView(new URL(location.href).searchParams.get('agentView')||(accountMe.is_admin?'config':'agent-models'),'replace');
   }).catch(error=>note(error.message));
   if(id==='account')void ready.then(()=>loadAccountControls(),()=>{});
   const route=new URL(location.href);

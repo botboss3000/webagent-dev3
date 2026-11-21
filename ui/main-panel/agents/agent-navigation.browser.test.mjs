@@ -18,7 +18,7 @@ const $=id=>document.getElementById(id);
 let agentArchive=null,agentId='one',sessionsScope=true,createScope=false,sessionsPage=null,sessionsGeneration=0,selectionTable=null,agentSelectionQueue=Promise.resolve();
 const agentRoster=[{id:'one',name:'One',can_manage:true},{id:'two',name:'Two',can_manage:true}];
 const configPage={id:'config',panelId:'config-page'},sessionsDescriptor={id:'sessions',title:'Sessions',panelId:'sessions-section'},createDescriptor={id:'create',title:'New agent',panelId:'create-agent-page'};
-const agentPages=['model','identity','abilities','members','artifacts'].map(id=>({id,panelId:id+'-page',operator:id!=='artifacts'})),agentTabOrder=['config','model','identity','abilities','members'];
+const agentPages=['agent-models','identity','abilities','members','artifacts'].map(id=>({id,panelId:id+'-page',operator:id!=='artifacts'})),agentTabOrder=['config','agent-models','identity','abilities','members'];
 const accountMe={is_admin:false},activeMainPage='agents',api=async()=>({}),chat={sessionId:'keep'};
 let explicitAssignment=false;
 const holdTabScroll=()=>()=>{};
@@ -41,9 +41,9 @@ const mountSessionsPage=async host=>{
  return {destroy(){fixture.sessionsDestroyed++;footer.remove();}};
 };
 `;
-const html=`<!doctype html><main id="tab-agents"><div id="agents-grid"><div class="agents-squares"></div><div id="agents-detail-region" hidden><div class="agent-row"></div><div class="agent-card-tabs"></div><div id="config-page">Config</div><div id="model-page"><div class="ac-model-table"></div><div id="selection-model-table"></div><div id="settings"></div></div><div id="identity-page"></div><div id="abilities-page"></div><div id="members-page"></div><div id="artifacts-page"></div></div><div id="sessions-region"><section id="sessions-section"></section></div><div id="create-region" hidden><section id="create-agent-page"></section></div></div></main><textarea id="draft">Unsaved draft</textarea><script type="module" src="/navigation.js"></script>`;
+const html=`<!doctype html><main id="tab-agents"><div id="agents-grid"><div class="agents-squares"></div><div id="agents-detail-region" hidden><div class="agent-row"></div><div class="agent-card-tabs"></div><div id="config-page">Config</div><div id="agent-models-page"><div class="ac-model-table"></div><div id="selection-model-table"></div><div id="settings"></div></div><div id="identity-page"></div><div id="abilities-page"></div><div id="members-page"></div><div id="artifacts-page"></div></div><div id="sessions-region"><section id="sessions-section"></section></div><div id="create-region" hidden><section id="create-agent-page"></section></div></div></main><textarea id="draft">Unsaved draft</textarea><script type="module" src="/navigation.js"></script>`;
 const module=setup+shell+`
-for(const id of ['config','model','identity','abilities','members','artifacts']){
+for(const id of ['config','agent-models','identity','abilities','members','artifacts']){
  const tab=document.createElement('button');tab.id='agent-tab-'+id;tab.textContent=id;tab.onclick=guard(()=>showAgentView(id));document.querySelector('.agent-card-tabs').append(tab);
 }
 await showSessions('replace');`;
@@ -66,11 +66,11 @@ try{
  assert.equal(new URL(page.url()).searchParams.get('agentView'),'config');
  assert.equal(new URL(page.url()).searchParams.get('session_id'),'keep');
  await page.waitForFunction(()=>fixture.mounts.length===1);
- await page.locator('#agent-tab-model').click();
+ await page.locator('#agent-tab-agent-models').click();
  assert.equal(await page.locator('#selection-model-table').innerText(),'Models one');
  await page.getByRole('button',{name:'Configure Two',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('#selection-model-table').textContent==='Models two');
- assert.equal(new URL(page.url()).searchParams.get('agentView'),'model');
+ assert.equal(new URL(page.url()).searchParams.get('agentView'),'agent-models');
  await page.locator('#agent-tab-identity').click();
  await page.waitForFunction(()=>document.querySelector('#identity-page').textContent==='Identity two');
  await page.getByRole('button',{name:'Sessions',exact:true}).click();
@@ -110,7 +110,7 @@ try{
  await page.evaluate(()=>fixture.create());
  await page.waitForFunction(()=>document.querySelector('#selection-model-table').textContent==='Models three');
  const created=new URL(page.url()).searchParams;
- assert.equal(created.get('agent'),'three');assert.equal(created.get('agentView'),'model');assert.equal(created.has('agentScope'),false);
+ assert.equal(created.get('agent'),'three');assert.equal(created.get('agentView'),'agent-models');assert.equal(created.has('agentScope'),false);
  assert.equal(await page.locator('#create-region').isVisible(),false);
  assert.equal(await page.getByRole('button',{name:'Configure Three',exact:true}).getAttribute('aria-pressed'),'true');
  await page.evaluate(()=>fixture.guest());

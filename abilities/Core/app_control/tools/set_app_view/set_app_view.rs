@@ -26,7 +26,7 @@ pub fn destination(view: &str) -> Option<&'static str> {
         "chat" => "chat",
         "files" => "app:files",
         "agents" => "agents:config",
-        "models" => "agents:model",
+        "models" => "agents:agent-models",
         "abilities" => "agents:abilities",
         "settings" => "app:settings",
         "automations" => "automation",
@@ -62,7 +62,7 @@ pub async fn enqueue(
         "chat"
             | "app:files"
             | "agents:config"
-            | "agents:model"
+            | "agents:agent-models"
             | "agents:abilities"
             | "app:settings"
             | "automation"

@@ -1,14 +1,14 @@
 import { mountControlFeedback } from '../../chat/widget/window.js';
 import { requestTouchVibration } from '../vibrate/vibrate.js';
 
-// Owns Agents cards, tabs, Config, Identity, Primary Models, Abilities and Sessions actions plus their body portals.
+// Owns Agents cards, tabs, Config, Identity, Models, Abilities and Sessions actions plus their body portals.
 export const AGENT_ACTIONS = [
   'button', '[role="button"]', '[role="menuitem"]', '[role="switch"]', '[role="checkbox"]', '[role="radio"]', 'summary', 'a[href]',
   'input[type="checkbox"]', 'input[type="radio"]', 'label:has(input[type="checkbox"]), label:has(input[type="radio"])',
   '.ac-group-head', '.conn-card-header-clickable', '.prompt-item', '.ac-tri',
   '.ac-model-item', '.ac-model-search-chevron', '.ac-saved-name-click', '.ac-model-meta-editable',
   '.ac-tip-gallery img', '.ac-tip-lightbox',
-  '#model-page .v3-pending-feature > .ac-ability-row',
+  '#agent-models-page .v3-pending-feature > .ac-ability-row',
   '#sessions-table tbody tr[data-session-id]', 'th.col-sortable[data-sort-key]', '.session-row-id[tabindex="0"]'
 ].join(', ');
 const PORTALS = '#files-floating-menu, .ac-model-dropdown, .ac-directive-overlay, .ac-tip-pop, .ac-tip-lightbox, .session-row-actions[data-source="sessions-page"]';

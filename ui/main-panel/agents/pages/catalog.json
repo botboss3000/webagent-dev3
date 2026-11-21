@@ -25,12 +25,12 @@
       "type": "agent_configuration"
     },
     {
-      "id": "model",
+      "id": "agent-models",
       "operator": true,
-      "title": "Primary Models",
-      "description": "Choose the primary model and manage its provider connection.",
+      "title": "Models",
+      "description": "Choose this agent's models and manage their provider connections.",
       "order": 10,
-      "panelId": "model-page",
+      "panelId": "agent-models-page",
       "icon": "cpu",
       "type": "agent_configuration"
     },
