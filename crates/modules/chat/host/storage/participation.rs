@@ -422,6 +422,8 @@ impl Store {
             session["queue_revision"] = json!(session["queue_revision"].as_u64().unwrap_or(0) + 1);
             self.write_document(&mut tx, &format!("session:{sid}"), &session)
                 .await?;
+            self.write_document(&mut tx, &format!("{QUEUED}{sid}"), &json!({}))
+                .await?;
         } else if eligible {
             self.activate_message(&mut tx, sid, kind, message, retained, &current)
                 .await?;
@@ -480,27 +482,74 @@ impl Store {
         }
         Ok(())
     }
-    pub(crate) async fn drain_message_queues(&self) -> Result<()> {
-        for session in self.list("session:").await? {
-            let Some(sid) = session["id"].as_str() else {
-                continue;
-            };
-            if !session["message_queue"]
-                .as_array()
-                .is_some_and(|q| !q.is_empty())
-            {
-                continue;
+    /// Sessions holding queued messages. The scheduler drains every busy account on each
+    /// pass, so it reads only sessions with a [`QUEUED`] marker instead of decoding them all;
+    /// the first pass for an account in this process reads every session once and marks the
+    /// ones whose queue predates markers.
+    async fn queued_sessions(&self) -> Result<Vec<String>> {
+        static SCANNED: std::sync::Mutex<
+            Option<std::collections::HashSet<(std::path::PathBuf, String)>>,
+        > = std::sync::Mutex::new(None);
+        let account = (self.root.clone(), self.user_id.clone());
+        let scanned = SCANNED
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Default::default)
+            .contains(&account);
+        if !scanned {
+            for session in self.list("session:").await? {
+                if let Some(sid) = session["id"].as_str() {
+                    if session["message_queue"]
+                        .as_array()
+                        .is_some_and(|q| !q.is_empty())
+                    {
+                        self.put(&format!("{QUEUED}{sid}"), &json!({})).await?;
+                    }
+                }
             }
+            SCANNED
+                .lock()
+                .unwrap()
+                .get_or_insert_with(Default::default)
+                .insert(account);
+        }
+        Ok(sqlx::query_scalar(
+            "SELECT substr(key, length(?) + 1) FROM docs WHERE key > ? AND key < ? ORDER BY key",
+        )
+        .bind(QUEUED)
+        .bind(QUEUED)
+        .bind(QUEUED_END)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub(crate) async fn drain_message_queues(&self) -> Result<()> {
+        for sid in self.queued_sessions().await? {
+            let sid = sid.as_str();
             let mut tx = self.pool.begin().await?;
             sqlx::query("UPDATE docs SET key=key WHERE key=?")
                 .bind(format!("session:{sid}"))
                 .execute(&mut *tx)
                 .await?;
-            let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+            let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
                 .bind(format!("session:{sid}"))
-                .fetch_one(&mut *tx)
+                .fetch_optional(&mut *tx)
                 .await?;
+            let Some(raw) = raw else {
+                // The session was deleted with its queue.
+                self.unmark_queue(&mut tx, sid).await?;
+                tx.commit().await?;
+                continue;
+            };
             let mut latest = self.unseal(&raw)?;
+            if !latest["message_queue"]
+                .as_array()
+                .is_some_and(|q| !q.is_empty())
+            {
+                self.unmark_queue(&mut tx, sid).await?;
+                tx.commit().await?;
+                continue;
+            }
             let current = state(&latest);
             if current["active"] != true {
                 continue;
@@ -532,6 +581,9 @@ impl Store {
                 continue;
             }
             let item = queue.remove(0);
+            if queue.is_empty() {
+                self.unmark_queue(&mut tx, sid).await?;
+            }
             if item["generation"].as_u64().unwrap_or(0)
                 == current["generation"].as_u64().unwrap_or(0)
             {
@@ -566,7 +618,24 @@ impl Store {
         }
         Ok(())
     }
+
+    async fn unmark_queue(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM docs WHERE key=?")
+            .bind(format!("{QUEUED}{sid}"))
+            .execute(&mut **tx)
+            .await?;
+        Ok(())
+    }
 }
+
+/// Marker key prefix for a session with queued messages; the value is empty.
+const QUEUED: &str = "message_queued:";
+/// The first key after every [`QUEUED`] key (`;` follows `:`).
+const QUEUED_END: &str = "message_queued;";
 
 #[cfg(test)]
 mod tests {
@@ -767,6 +836,50 @@ mod tests {
             store.get("run:first").await.unwrap().unwrap()["status"],
             "cancelled"
         );
+    }
+    #[tokio::test]
+    async fn queue_marker_lists_the_session_until_its_queue_drains() {
+        let (_root, store) = fixture().await;
+        let (docs, message) = envelope("first", "alice");
+        store
+            .admit_shared_message(docs, "s", "message", &message)
+            .await
+            .unwrap();
+        let (docs, message) = envelope("second", "bob");
+        store
+            .admit_shared_message(docs, "s", "message", &message)
+            .await
+            .unwrap();
+        assert!(store.get("message_queued:s").await.unwrap().is_some());
+        // A marker whose session is gone is dropped instead of failing the pass.
+        store.put("message_queued:gone", &json!({})).await.unwrap();
+        // The first run is still going, so the queued message waits.
+        store.drain_message_queues().await.unwrap();
+        assert!(store.get("run:second").await.unwrap().is_none());
+        assert!(store.get("message_queued:s").await.unwrap().is_some());
+        assert!(store.get("message_queued:gone").await.unwrap().is_none());
+        sqlx::query("UPDATE run_index SET status='completed' WHERE id='first'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        store.drain_message_queues().await.unwrap();
+        assert!(store.get("run:second").await.unwrap().is_some());
+        assert!(store.get("message_queued:s").await.unwrap().is_none());
+    }
+    #[tokio::test]
+    async fn first_pass_marks_a_queue_written_before_markers() {
+        let (_root, store) = fixture().await;
+        let mut session = store.get("session:s").await.unwrap().unwrap();
+        session["message_queue"] =
+            json!([{"docs":[],"message":{},"kind":"message","generation":99}]);
+        store.put("session:s", &session).await.unwrap();
+        store.drain_message_queues().await.unwrap();
+        // The stale item was dropped and the queue emptied, so no marker is left behind.
+        assert_eq!(
+            store.get("session:s").await.unwrap().unwrap()["message_queue"],
+            json!([])
+        );
+        assert!(store.get("message_queued:s").await.unwrap().is_none());
     }
     #[tokio::test]
     async fn preparation_generation_fences_mode_flips_before_admission() {

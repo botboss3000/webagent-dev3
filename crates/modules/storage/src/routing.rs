@@ -48,6 +48,8 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("user_agent_page_preferences:")
         || key.starts_with("user_app_page_preferences:")
         || key.starts_with("message_meta:")
+        // Marks a session holding queued messages, beside the session it points to.
+        || key.starts_with("message_queued:")
         || key.starts_with("shared_help:")
         || key.starts_with("receipt:shared_help:")
         || key.starts_with("receipt:participation:")
