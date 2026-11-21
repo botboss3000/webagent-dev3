@@ -50,6 +50,13 @@ INSTALLER_SECONDS = 3 * 3600
 BUILD_SCRIPT = ("set -e; cargo build --locked --profile stable --features stable-abilities; "
                 "cargo test --locked --profile stable --features stable-abilities --no-run")
 SIDEKICK_WAIT = 30 * 60
+# A stage running past this (or 1.5x its longest earlier published run, when longer) raises one
+# "slow" event; the requesting chat and `buildctl production watch` report it.
+SLOW = {"build": 45 * 60, "installers": 60 * 60, "upload": 20 * 60}
+SLOW_DEFAULT = 10 * 60
+# Events the requesting chat is told about (the app delivers them as background notices).
+ALERTS = {"slow", "fallback", "installers_failed"}
+ENDINGS = {"published", "failed", "interrupted", "denied"}
 # The installers phase: every platform, then the outputs and a manifest into /output.
 INSTALLER_SCRIPT = r"""set -e
 for platform in linux windows android; do python3 crates/app-shell/package.py "$platform"; done
@@ -137,13 +144,14 @@ class Production:
         self.release, self.runner = release, runner
         self.root = Path(state) / "production"
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.lock = threading.Lock()
+        # Re-entrant: the release thread and its slow-stage watch both change a record and save it.
+        self.lock = threading.RLock()
         # A release that was running when the broker stopped did not finish.
         for record in self.records():
             if record["status"] in {"approved", "running"}:
                 record.update(status="interrupted", finished_at=time.time(),
                               error="the build service stopped during this release; request it again")
-                self.save(record)
+                self.event(record, "interrupted", record["error"])
 
     # --- records -------------------------------------------------------------------------
     def path(self, release_id):
@@ -151,9 +159,16 @@ class Production:
         return self.root / f"{release_id}.json"
 
     def save(self, record):
-        temporary = self.path(record["id"]).with_suffix(".tmp")
-        temporary.write_text(json.dumps(record, indent=1))
-        os.replace(temporary, self.path(record["id"]))
+        with self.lock:
+            temporary = self.path(record["id"]).with_suffix(".tmp")
+            temporary.write_text(json.dumps(record, indent=1))
+            os.replace(temporary, self.path(record["id"]))
+
+    def event(self, record, kind, text):
+        """Append one event and save: what the requesting chat and `watch` are told."""
+        with self.lock:
+            record.setdefault("events", []).append({"at": time.time(), "kind": kind, "text": text[:500]})
+            self.save(record)
 
     def load(self, release_id):
         path = self.path(release_id)
@@ -179,7 +194,7 @@ class Production:
         return {k: record.get(k) for k in ("id", "status", "version", "bump", "notes", "commit",
                                             "requested_by", "requested_at", "decided_by", "decided_at",
                                             "stage", "stages", "error", "finished_at", "pushed_commit",
-                                            "installers")}
+                                            "installers", "requester", "events")}
 
     # --- entry ---------------------------------------------------------------------------
     def handle(self, name, trusted, args):
@@ -228,7 +243,10 @@ class Production:
             record = {"id": str(uuid.uuid4()), "status": "awaiting_approval", "bump": kind,
                       "version": bump(self.published(), kind), "notes": notes, "commit": commit,
                       "requested_by": trusted.get("session_name") or trusted["user_id"],
-                      "requested_at": time.time(), "stages": {}}
+                      "requested_at": time.time(), "stages": {}, "events": []}
+            # The chat that asked hears about the decision, alerts and the outcome.
+            if trusted.get("local_caller") is not True:
+                record["requester"] = {"user": trusted["user_id"], "session": trusted["session_id"]}
             self.save(record)
         return {**self.summary(record),
                 "next": "waiting for an administrator's approval on the Host Admin page"}
@@ -242,7 +260,11 @@ class Production:
                 raise ValueError("this release is not waiting for a decision")
             record.update(decided_by=trusted["user_id"], decided_at=time.time(),
                           status="approved" if args["decision"] == "approve" else "denied")
-            self.save(record)
+            if record["status"] == "denied":
+                record["finished_at"] = record["decided_at"]
+            self.event(record, record["status"], f"{record['status'].capitalize()} by {trusted['user_id']}"
+                       + (" on the Host Admin page." if record["status"] == "approved" else
+                          "; ask the user before requesting it again."))
         if record["status"] == "approved":
             threading.Thread(target=self.run, args=(record["id"],), daemon=True,
                              name="production-release").start()
@@ -257,14 +279,38 @@ class Production:
         return result.stdout
 
     def stage(self, record, name, work):
-        record["stage"] = name
-        record["stages"][name] = {"started_at": time.time()}
-        self.save(record)
+        with self.lock:
+            record["stage"] = name
+            record["stages"][name] = {"started_at": time.time()}
+            self.save(record)
         result = work()
-        record["stages"][name]["finished_at"] = time.time()
-        if isinstance(result, dict):
-            record["stages"][name].update(result)
-        self.save(record)
+        with self.lock:
+            record["stages"][name]["finished_at"] = time.time()
+            if isinstance(result, dict):
+                record["stages"][name].update(result)
+            self.save(record)
+
+    def slow_limit(self, name):
+        runs = [r["stages"][name]["finished_at"] - r["stages"][name]["started_at"] for r in self.records()
+                if r["status"] == "published" and r.get("stages", {}).get(name, {}).get("finished_at")]
+        return max(SLOW.get(name, SLOW_DEFAULT), 1.5 * max(runs, default=0))
+
+    def watch_stages(self, record):
+        """Once a minute while the release runs: one "slow" event per stage that passes its limit."""
+        warned = set()
+        while record["status"] == "running":
+            time.sleep(60)
+            with self.lock:
+                name = record.get("stage")
+                stage = record["stages"].get(name) if name else None
+                if record["status"] != "running" or not stage or stage.get("finished_at") or name in warned:
+                    continue
+                elapsed = time.time() - stage["started_at"]
+                limit = self.slow_limit(name)
+                if elapsed > limit:
+                    warned.add(name)
+                    self.event(record, "slow", f"Stage {name} has run {elapsed / 60:.0f} min, past its usual "
+                               f"{limit / 60:.0f} min; see {name}.log in the release folder if it stays stuck.")
 
     def run(self, release_id):
         """Export and check, build the stable app and its tests and then the installers in one
@@ -274,6 +320,7 @@ class Production:
         record = self.load(release_id)
         record["status"] = "running"
         self.save(record)
+        threading.Thread(target=self.watch_stages, args=(record,), daemon=True, name="production-watch").start()
         folder = self.root / release_id
         tree = folder / "tree"
         try:
@@ -288,8 +335,12 @@ class Production:
                         self.stage(record, "installers", lambda: self.remote_installers(session, folder, record))
                     except Exception as error:
                         record["installers"] = {"error": str(error)[:500]}
+                        self.event(record, "installers_failed", "Installers failed: " + str(error)[:300]
+                                   + ". The source release still goes ahead.")
                     result = "passed"
                 else:
+                    self.event(record, "fallback", f"Building on the main server instead of the sidekick: {reason}. "
+                               "No installers will be built.")
                     self.stage(record, "build", lambda: {**self.build(tree, folder), "where": "server", "why": reason})
                     record["installers"] = {"error": "not built: " + reason}
             finally:
@@ -299,7 +350,8 @@ class Production:
             self.stage(record, "dev_tag", lambda: self.tag(record))
         except Exception as error:  # Recorded for the Host Admin page and the agent.
             record.update(status="failed", finished_at=time.time(), error=str(error)[:500])
-            self.save(record)
+            self.event(record, "failed", f"Failed at stage {record.get('stage')}: {record['error']}"
+                       + (" Nothing was published." if "push" not in record["stages"] else ""))
             return
         output = folder / "installers"
         if output.is_dir() and any(p.name != "manifest.json" for p in output.iterdir()):
@@ -307,8 +359,12 @@ class Production:
                 self.stage(record, "upload", lambda: self.upload(output, record))
             except Exception as error:
                 record["installers"] = {**(record.get("installers") or {}), "error": str(error)[:500]}
+                self.event(record, "installers_failed", "Installer upload failed: " + str(error)[:300])
         record.update(status="published", finished_at=time.time(), stage=None)
-        self.save(record)
+        installers = record.get("installers") or {}
+        self.event(record, "published", f"Published v{record['version']}: https://github.com/botboss3000/webagent/releases/tag/"
+                   f"v{record['version']}. Installers: {', '.join(installers.get('files') or []) or 'none'}"
+                   + "".join(f". {note}" for note in (installers.get("error"), installers.get("apk")) if note) + ".")
 
     def export(self, commit, tree, version):
         if tree.exists():
@@ -392,7 +448,10 @@ class Production:
             message = f"Release v{record['version']}\n\n{record['notes']}".strip() + "\n"
             self.git(*author, "commit", "-q", "--allow-empty", "-m", message, cwd=repo)
             self.git(*author, "tag", "-a", f"v{record['version']}", "-m", f"Release v{record['version']}", cwd=repo)
-            self.git("push", "-q", "origin", "main", f"v{record['version']}", cwd=repo, env=env)
+            # The tag goes in its own push: a push that also creates the workflow file did not start
+            # the macOS release workflow for v0.1.0.
+            self.git("push", "-q", "origin", "main", cwd=repo, env=env)
+            self.git("push", "-q", "origin", f"v{record['version']}", cwd=repo, env=env)
             del fetched
         record["pushed_commit"] = self.git("rev-parse", "HEAD", cwd=repo).strip()
         return {"repository": REPOSITORY, "tag": f"v{record['version']}"}

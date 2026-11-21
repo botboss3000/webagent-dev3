@@ -612,6 +612,40 @@ def make_patch(task_id, folder, request=call, run=subprocess.run):
     return {"task_id": task_id, "patch": str(path), "files": names, "credential_guard": "passed"}
 
 
+def production_stages(record):
+    """The release's stages as a Markdown table (time per stage, where it ran)."""
+    import time
+    rows=["| Stage | Time | Where |","|---|---|---|"]
+    for name,stage in (record.get("stages")or{}).items():
+        end=stage.get("finished_at")or(record.get("finished_at")if record["status"]!="running"else None)or time.time()
+        rows.append("| %s%s | %.1fm | %s |"%(name," ✅"if stage.get("finished_at")else" ⏳"if record["status"]=="running"else" ❌",(end-stage["started_at"])/60,stage.get("where","")))
+    return "\n".join(rows)
+
+
+def production_watch(release_id):
+    """Follow one production release: print each new stage and event; exit 0 when published,
+    1 when it failed, was denied or interrupted, 4 on an alert (relaunch to keep following)."""
+    import time
+    seen_events=None;seen_stage=None
+    while True:
+        record=call("v3_production",{"action":"status","release_id":release_id})
+        events=record.get("events")or[]
+        if seen_events is None:seen_events=len(events)  # report what is new from now on
+        for event in events[seen_events:]:
+            print("EVENT %s: %s"%(event["kind"],event["text"]),flush=True)
+        new=events[seen_events:];seen_events=len(events)
+        if record.get("stage")!=seen_stage and record["status"]=="running":
+            seen_stage=record.get("stage");print("stage %s (v%s)"%(seen_stage,record["version"]),flush=True)
+        if record["status"]in("published","failed","denied","interrupted"):
+            print("%s v%s%s"%(record["status"],record["version"],": "+record["error"]if record.get("error")else""))
+            print(production_stages(record))
+            if record.get("installers"):print("installers: "+json.dumps(record["installers"],sort_keys=True))
+            return 0 if record["status"]=="published" else 1
+        if any(e["kind"]in("slow","fallback","installers_failed")for e in new):
+            print(production_stages(record));return 4
+        time.sleep(15)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Coordinate V3 development builds with WebAgent")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -702,8 +736,9 @@ def main():
     sidekick=commands.add_parser("sidekick",help="broker sidekick: status, or switch it on/off live (no restart)")
     sidekick.add_argument("action",choices=("status","on","off"))
     sidekick.add_argument("--reason",default="")
-    prod=commands.add_parser("production",help="production releases: request one (approved on the Host Admin page), list, status")
-    prod.add_argument("action",choices=("request","list","status"))
+    prod=commands.add_parser("production",help="production releases: request one (approved on the Host Admin page), list, status, "
+        "or watch one (exits 0 published, 1 failed/denied/interrupted, 4 on an alert: slow stage, sidekick fallback, installers failed)")
+    prod.add_argument("action",choices=("request","list","status","watch"))
     prod.add_argument("release_id",nargs="?")
     prod.add_argument("--bump",choices=("patch","minor","major"),default="patch")
     prod.add_argument("--notes",default="")
@@ -772,9 +807,10 @@ def main():
     if args.command=="production":
         body={"action":args.action}
         if args.action=="request":body.update(bump=args.bump,**({"notes":args.notes}if args.notes else{}))
-        if args.action=="status":
-            if not args.release_id:raise SystemExit("status needs a release id")
+        if args.action in ("status","watch"):
+            if not args.release_id:raise SystemExit(args.action+" needs a release id")
             body["release_id"]=args.release_id
+        if args.action=="watch":return production_watch(args.release_id)
         print(json.dumps(call("v3_production",body),indent=1,sort_keys=True));return 0
     if args.command=="sidekick":
         print(json.dumps(call("build_service_sidekick",{"action":args.action,**({"reason":args.reason}if args.reason else{})}),sort_keys=True));return 0

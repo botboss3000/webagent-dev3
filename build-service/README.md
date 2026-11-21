@@ -732,6 +732,18 @@ nothing; an installer failure is recorded on the published release. Records and 
 `<state_root>/production/<id>.json` and `<state_root>/production/<id>/` (`build.log`,
 `installers.log`).
 
+**Following a release.** Each release keeps a list of events: approved, denied, slow (a stage
+past its limit: build 45 min, installers 60 min, upload 20 min, others 10 min, or 1.5× its
+longest earlier published run when that is longer), fallback (built on the main server instead of
+the sidekick), installers_failed, published (with the release link and installer files), failed
+(the stage and error, and whether anything was published) and interrupted. The app delivers each
+one to the chat that requested the release as a background notice; releases the operator
+requests have no requesting chat. Operators follow one with `buildctl production watch <id>`
+(local: `tools/broker-monitor.py --production <id>`): it prints new stages and events and exits
+0 when published, 1 when failed, denied or interrupted, and 4 on an alert (relaunch to go on
+following). The Host Admin page shows every release's stage table. The tag is pushed on its
+own, after `main`, so the production repository's macOS workflow starts on it.
+
 **Where it builds, and limits.** The installation JSON's `scheduler` may set:
 
     "production": {"sidekick": true, "server_cpus": 4, "server_memory_bytes": 10737418240}

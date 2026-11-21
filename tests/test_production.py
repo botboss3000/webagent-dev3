@@ -236,5 +236,97 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.production.load(again["id"])["status"], "published")
 
 
+class EventTests(unittest.TestCase):
+    """What the requesting chat and `buildctl production watch` are told."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.production = production.Production(None, self.temp.name, "/checkout", "rust:pinned", None,
+                                                runner=FakeGit(FILES))
+        for name in ("export", "guard", "push", "tag"):
+            setattr(self.production, name, lambda *a, **k: None)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def kinds(self, release_id):
+        return [e["kind"] for e in self.production.load(release_id)["events"]]
+
+    def test_agent_requests_name_their_chat_and_the_operator_none(self):
+        made = self.production.handle("build_work", {**AGENT, "session_id": "chat-1"}, {"action": "production_request"})
+        self.assertEqual(made["requester"], {"user": "admin", "session": "chat-1"})
+        denied = self.production.handle("v3_production_decide", ADMIN, {"release_id": made["id"], "decision": "deny"})
+        self.assertEqual(self.kinds(made["id"]), ["denied"])
+        self.assertIsNotNone(denied["finished_at"])
+        local = self.production.handle("v3_production", LOCAL, {"action": "request"})
+        self.assertIsNone(local["requester"])
+
+    def test_fallback_then_published_events(self):
+        made = self.production.handle("v3_production", LOCAL, {"action": "request"})
+        self.production.sidekick_open = lambda *a: (None, "the sidekick is switched off")
+        self.production.build = lambda *a: {"profile": "stable"}
+        self.production.run(made["id"])
+        self.assertEqual(self.kinds(made["id"]), ["fallback", "published"])
+        last = self.production.load(made["id"])["events"][-1]["text"]
+        self.assertIn("releases/tag/v0.1.0", last)
+        self.assertIn("not built: the sidekick is switched off", last)
+
+    def test_a_build_failure_says_nothing_was_published(self):
+        made = self.production.handle("v3_production", LOCAL, {"action": "request"})
+        self.production.sidekick_open = lambda *a: ({"job": made["id"]}, None)
+        self.production.sidekick_end = lambda *a: None
+
+        def build(*a):
+            raise RuntimeError("stable build of the exported tree failed on the sidekick; see build.log")
+        self.production.remote_build = build
+        self.production.run(made["id"])
+        event = self.production.load(made["id"])["events"][-1]
+        self.assertEqual(event["kind"], "failed")
+        self.assertIn("stage build", event["text"])
+        self.assertIn("Nothing was published", event["text"])
+
+    def test_installer_failure_is_an_alert_and_the_release_still_publishes(self):
+        made = self.production.handle("v3_production", LOCAL, {"action": "request"})
+        self.production.sidekick_open = lambda *a: ({"job": made["id"]}, None)
+        self.production.sidekick_end = lambda *a: None
+        self.production.remote_build = lambda *a: {"where": "sidekick"}
+
+        def installers(*a):
+            raise RuntimeError("installer builds failed on the sidekick; see installers.log")
+        self.production.remote_installers = installers
+        self.production.run(made["id"])
+        self.assertEqual(self.kinds(made["id"]), ["installers_failed", "published"])
+
+    def test_slow_limits_use_defaults_or_earlier_runs(self):
+        self.assertEqual(self.production.slow_limit("build"), production.SLOW["build"])
+        self.assertEqual(self.production.slow_limit("export"), production.SLOW_DEFAULT)
+        record = {"id": "11111111-1111-1111-1111-111111111111", "status": "published", "requested_at": 1,
+                  "stages": {"build": {"started_at": 0, "finished_at": 3600}}}
+        self.production.save(record)
+        self.assertEqual(self.production.slow_limit("build"), 5400)
+
+    def test_the_tag_is_pushed_on_its_own(self):
+        pushes = []
+        original = self.production.git
+
+        def git(*argv, **kwargs):
+            if argv and argv[0] == "push":
+                pushes.append(argv)
+            return "" if argv and argv[0] in {"push", "fetch", "init", "remote", "checkout", "add", "commit", "tag"} \
+                else original(*argv, **kwargs)
+        self.production.git = git
+        root = Path(self.temp.name)
+        production.TOKEN, saved = root / "token", production.TOKEN
+        try:
+            (root / "token").write_text("t")
+            tree = root / "tree"
+            tree.mkdir()
+            (tree / "README.md").write_text("x")
+            del self.production.push  # use the real method
+            self.production.push(tree, {"version": "0.1.0", "notes": ""})
+        finally:
+            production.TOKEN = saved
+        self.assertEqual(pushes, [("push", "-q", "origin", "main"), ("push", "-q", "origin", "v0.1.0")])
+
+
 if __name__ == "__main__":
     unittest.main()
