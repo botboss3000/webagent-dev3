@@ -1222,6 +1222,7 @@ async fn serve_api(app: App, close_pools: bool, stop: CancellationToken) -> Resu
     tokio::spawn(api::storage_cleanup::service(app.clone()));
     #[cfg(unix)]
     tokio::spawn(api::host_admin::watch(app.clone()));
+    tokio::spawn(api::host_admin::production_watch(app.clone()));
     let shutdown = app.clone();
     axum::serve(
         listener,

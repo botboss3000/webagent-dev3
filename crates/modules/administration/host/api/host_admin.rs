@@ -146,6 +146,111 @@ pub(crate) async fn watch(app: App) {
     }
 }
 
+/// Deliver production release events (build-service/production.py: approved, denied, slow,
+/// fallback, installers_failed, published, failed, interrupted) to the chat that requested the
+/// release, as background notices like host-request outcomes; polls the broker every 15 s.
+/// Events already recorded when this process starts count as delivered.
+pub(crate) async fn production_watch(app: App) {
+    let mut known: Option<std::collections::HashSet<String>> = None;
+    loop {
+        if app.stop.is_cancelled() {
+            break;
+        }
+        if let Ok(page) = production_list(&app).await {
+            let releases = page["releases"].as_array().cloned().unwrap_or_default();
+            // Owned values: the loop awaits between notices, so nothing borrowed may cross it.
+            let mut events: Vec<(String, Value, Value)> = Vec::new();
+            for release in &releases {
+                let id = release["id"].as_str().unwrap_or_default();
+                for (n, event) in release["events"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    events.push((
+                        format!("production:{id}:{n}"),
+                        release.clone(),
+                        event.clone(),
+                    ));
+                }
+            }
+            match known.as_mut() {
+                None => known = Some(events.into_iter().map(|(key, _, _)| key).collect()),
+                Some(seen) => {
+                    for (key, release, event) in events {
+                        if seen.contains(&key) {
+                            continue;
+                        }
+                        match production_notice(&app, &key, &release, &event).await {
+                            Ok(()) => {
+                                seen.insert(key);
+                            }
+                            Err(_) => tracing::error!("Production release notice deferred"),
+                        }
+                    }
+                }
+            }
+        }
+        tokio::select! {
+            () = app.stop.cancelled() => break,
+            () = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
+        }
+    }
+}
+
+/// The broker's production release list, read with the Builds page's administrator identity.
+async fn production_list(app: &App) -> anyhow::Result<Value> {
+    if !webagent_administration::tools::installed() {
+        anyhow::bail!("Administrator pack not installed");
+    }
+    let Some(user) = app.store.scan_user_ids().await?.into_iter().next() else {
+        anyhow::bail!("no users");
+    };
+    let mut caller = app.clone();
+    caller.store = app.store.for_user(&user).await?;
+    webagent_administration_host::dashboard::production(&crate::tools::administrator::Host(&caller))
+        .await
+        .map_err(|error| anyhow::anyhow!(error.1))
+}
+
+/// One production release event as a background notice to the requesting chat (none for
+/// releases the operator requested).
+async fn production_notice(
+    app: &App,
+    event_key: &str,
+    release: &Value,
+    event: &Value,
+) -> anyhow::Result<()> {
+    let (Some(user), Some(sid)) = (
+        release["requester"]["user"].as_str(),
+        release["requester"]["session"].as_str(),
+    ) else {
+        return Ok(());
+    };
+    let key = format!("background_notice:{sid}:{event_key}");
+    let store = app.store.for_user(user).await?;
+    if store.get(&key).await?.is_some() {
+        return Ok(());
+    }
+    let kind = event["kind"].as_str().unwrap_or("event");
+    let status = match kind {
+        "published" => "done",
+        "failed" | "interrupted" | "denied" => "failed",
+        _ => "running",
+    };
+    store
+        .put(
+            &key,
+            &json!({"source":"tool","title":format!("Production release v{} {kind}", release["version"].as_str().unwrap_or("?")),
+            "status":status,"task_id":release["id"],"reply":event["text"],"key":key,"event_key":event_key,
+            "session_id":sid,"created_at":crate::now()}),
+        )
+        .await?;
+    crate::wake::notify(app).await;
+    Ok(())
+}
+
 /// Wake the chat that filed `request` with a background notice of its outcome, the same
 /// delivery that reports a finished build or background tool call.
 async fn wake(app: &App, request: &Value) -> anyhow::Result<()> {

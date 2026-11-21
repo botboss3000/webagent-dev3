@@ -7,6 +7,12 @@ name: Release macOS
 on:
   push:
     tags: ["v*"]
+  # Run it by hand from the Actions tab for a release tag whose push did not start it.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
 
 permissions:
   contents: write
@@ -17,6 +23,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: Rust toolchain (the server image's pinned version)
         run: |
           rustup toolchain install 1.99.1 --profile minimal --target aarch64-apple-darwin
@@ -38,7 +46,7 @@ jobs:
       - name: Add the .dmg to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "WebAgent $TAG" --notes "Release $TAG"
           gh release upload "$TAG" crates/app-shell/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg --clobber
