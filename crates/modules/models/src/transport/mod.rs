@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 pub mod call;
 mod deepseek;
+mod loadtest;
 pub use call::CallDraft;
 mod capabilities;
 mod images;
@@ -50,6 +51,7 @@ pub fn projection_id(provider: ProviderId) -> webagent_provider_contracts::Provi
         ProviderId::ClaudeBridge => P::ClaudeBridge,
         ProviderId::OpencodeBridge => P::OpencodeBridge,
         ProviderId::MuseBridge => P::MuseBridge,
+        ProviderId::Loadtest => P::Loadtest,
     }
 }
 /// Sanitized transport error; no provider payload, token or user input escapes.

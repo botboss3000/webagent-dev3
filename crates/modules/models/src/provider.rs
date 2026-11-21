@@ -25,6 +25,9 @@ pub enum ProviderId {
     OpencodeBridge,
     /// A linked Muse harness answers each call; no network endpoint.
     MuseBridge,
+    /// Capacity tests: the server itself answers from the user message's script (`TOOL` and
+    /// `REPLY` lines). No network, no cost; only an administrator can create its connections.
+    Loadtest,
 }
 
 impl ProviderId {
@@ -32,7 +35,7 @@ impl ProviderId {
     pub fn is_bridge(self) -> bool {
         matches!(
             self,
-            Self::ClaudeBridge | Self::OpencodeBridge | Self::MuseBridge
+            Self::ClaudeBridge | Self::OpencodeBridge | Self::MuseBridge | Self::Loadtest
         )
     }
     /// Bridges whose harness can fork a chat's session, so a summary reuses its cached prefix.
@@ -47,7 +50,8 @@ impl ProviderId {
             | Self::Typesafe
             | Self::ClaudeBridge
             | Self::OpencodeBridge
-            | Self::MuseBridge => None,
+            | Self::MuseBridge
+            | Self::Loadtest => None,
             Self::Deepseek => Some("https://api.deepseek.com/chat/completions"),
             Self::OpenaiApi => Some("https://api.openai.com/v1/chat/completions"),
             Self::Openrouter => Some("https://openrouter.ai/api/v1/chat/completions"),

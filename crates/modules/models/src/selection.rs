@@ -461,6 +461,7 @@ pub enum Transport {
     ClaudeBridge,
     OpencodeBridge,
     MuseBridge,
+    Loadtest,
 }
 
 impl Transport {
@@ -488,6 +489,7 @@ impl Transport {
             Self::ClaudeBridge => crate::provider::ProviderId::ClaudeBridge,
             Self::OpencodeBridge => crate::provider::ProviderId::OpencodeBridge,
             Self::MuseBridge => crate::provider::ProviderId::MuseBridge,
+            Self::Loadtest => crate::provider::ProviderId::Loadtest,
         }
     }
 }

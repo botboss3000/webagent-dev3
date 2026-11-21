@@ -184,6 +184,7 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
             .clone();
         // A bridge link runs on its owner's own account, so it answers only the owner's chats.
         if candidate.transport.provider_id().is_bridge()
+            && candidate.transport.provider_id() != provider::ProviderId::Loadtest
             && catalog
                 .connections
                 .get(&candidate.connection_id)

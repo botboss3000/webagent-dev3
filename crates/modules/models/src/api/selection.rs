@@ -261,6 +261,15 @@ pub async fn save<C: RuntimeStorage>(
             }
         };
     }
+    // The test model answers on the server for anyone its agent serves: administrators only.
+    if !caller.administrator()
+        && input.connections.iter().any(|(id, c)| {
+            c.transport.provider_id() == crate::provider::ProviderId::Loadtest
+                && old.connections.get(id) != Some(c)
+        })
+    {
+        return Err(denied());
+    }
     merge!(connections);
     merge!(entries);
     for (id, connection) in &mut next.connections {
@@ -708,6 +717,9 @@ pub async fn connection_key<C: RuntimeStorage>(
     }
     // A bridge model joins its provider's shared link; the browser's value is not used.
     let provider = connection.transport.provider_id();
+    if provider == crate::provider::ProviderId::Loadtest && !caller.administrator() {
+        return Err(denied());
+    }
     let api_key = if provider.is_bridge() {
         bridge_provider_secret(&app, &caller.user_id, provider).await?
     } else {

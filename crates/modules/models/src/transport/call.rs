@@ -421,6 +421,20 @@ impl Provider {
                 fork,
                 link,
             } => {
+                if provider == ProviderId::Loadtest {
+                    let (message, wait) = super::loadtest::reply(&body);
+                    tokio::select! {
+                        () = cancel.cancelled() => return Err(typed_failure(
+                            crate::model_selection::FailureKind::Cancelled,
+                            false,
+                            "Provider request cancelled",
+                        )),
+                        () = tokio::time::sleep(wait) => {}
+                    }
+                    let size = serde_json::to_vec(&body).map_or(0, |bytes| bytes.len());
+                    return super::deepseek::bridge_result(&json!({"message":message,
+                        "usage":{"input_tokens":size / 4,"output_tokens":5}}));
+                }
                 let queue = self.bridge.as_ref().ok_or_else(|| {
                     typed_failure(
                         crate::model_selection::FailureKind::ModelUnavailable,

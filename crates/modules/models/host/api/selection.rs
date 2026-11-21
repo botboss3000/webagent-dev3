@@ -530,6 +530,63 @@ mod tests {
         .is_err());
     }
     #[tokio::test]
+    async fn only_administrators_create_loadtest_connections() {
+        let (_root, app) = fixture().await;
+        let catalog = selection_fixture(&app).await;
+        let user = tenant_user(&app, "loadtest-tenant").await;
+        let identity = json!({"_user_id":user});
+        let Json(created) = create_agent(
+            State(app.clone()),
+            Extension(identity.clone()),
+            Json(NewAgent {
+                client_request_id: "loadtest-tenant-agent".into(),
+                name: "Tenant".into(),
+                description: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let agent = created["id"].as_str().unwrap();
+        let attempt = |transport| {
+            let (app, identity, catalog, user) =
+                (app.clone(), identity.clone(), catalog.clone(), user.clone());
+            async move {
+                let view = read(
+                    State(app.clone()),
+                    Extension(identity.clone()),
+                    agent_query(agent),
+                )
+                .await
+                .unwrap()
+                .0;
+                let mut input: Catalog = serde_json::from_value(view["catalog"].clone()).unwrap();
+                let mut connection = catalog.connections["one"].clone();
+                connection.id = "tenant-connection".into();
+                connection.owner_id = user;
+                connection.revision = 1;
+                connection.allowed_agents = Default::default();
+                connection.transport = transport;
+                input.connections.insert(connection.id.clone(), connection);
+                save(
+                    State(app),
+                    Extension(identity),
+                    agent_query(agent),
+                    Json(input),
+                )
+                .await
+            }
+        };
+        let before = app.store.model_catalog().await.unwrap();
+        assert!(attempt(crate::model_selection::Transport::Loadtest)
+            .await
+            .is_err());
+        assert_eq!(app.store.model_catalog().await.unwrap(), before);
+        // The same connection with an ordinary provider is accepted: the refusal is the rule's.
+        attempt(crate::model_selection::Transport::Deepseek)
+            .await
+            .unwrap();
+    }
+    #[tokio::test]
     async fn byo_disabled_blocks_credential_writes_without_mutating_catalog() {
         let (_root, app) = fixture().await;
         let catalog = selection_fixture(&app).await;

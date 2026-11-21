@@ -1,0 +1,15 @@
+{
+  "provider": "loadtest",
+  "name": "Load Test (server-scripted)",
+  "base_url": "bridge://loadtest",
+  "validated": true,
+  "models": [
+    {
+      "id": "loadtest-echo",
+      "name": "Load test echo",
+      "input": ["text"],
+      "context": 256000,
+      "characters_per_token": 4
+    }
+  ]
+}
