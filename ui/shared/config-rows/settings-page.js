@@ -40,7 +40,11 @@ const capital = text => text.charAt(0).toUpperCase() + text.slice(1);
 export function settingTitle(setting, withParams = true) {
   const parts = setting.id.split('.');
   let last = parts.at(-1).replace(UNIT_SUFFIX, '');
-  if (GENERIC.has(last) && parts.length > 2) last = parts.at(-2) + ' ' + (SPELLED[last] || last);
+  if (GENERIC.has(last) && parts.length > 2) {
+    // "glimmer.agent.enabled" → "Glimmer agent enabled": agent/user alone don't say what.
+    const owner = ['agent', 'user'].includes(parts.at(-2)) && parts.length > 3 ? parts.at(-3) + ' ' : '';
+    last = owner + parts.at(-2) + ' ' + (SPELLED[last] || last);
+  }
   const params = withParams ? Object.values(setting.params || {}).map(words).join(', ') : '';
   return capital(words(last)) + (params ? ' (' + params + ')' : '');
 }
@@ -74,7 +78,8 @@ export function createSettingRow(list, setting, {onSave, agents = [], title = se
     case 'length':
       return createLengthRow(list, {title, hint, value, min: setting.min, max: setting.max, onSave});
     case 'string':
-      return createTextRow(list, {title, hint, value: value ?? '', maxLength: setting.max_length,
+      // The field sits under the title so long titles stay readable on phones.
+      return createTextRow(list, {title, hint, value: value ?? '', maxLength: setting.max_length, stacked: true,
         onSave: next => {
           if (!next.trim()) return Promise.reject(Error('Enter some text'));
           return onSave(next);
