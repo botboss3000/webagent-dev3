@@ -95,14 +95,14 @@
    pointer during drag and springs back on release. */
   /* After an idle→active transition, block clicks on newly-appeared
      buttons for a brief window so the user's finger can't hit them. */
-  #chat-input-row.spring-back {
+  #chat-input-row.grab-spring {
     transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   /* Slower overshoot for click-triggered toggles */
-  #chat-input-row.spring-back-click {
+  #chat-input-row.grab-spring-click {
     transition: transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
-  .chat-footer-handle.spring-back-click {
+  .chat-footer-handle.grab-spring-click {
     transition: transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
 .chat-footer-handle-line {
@@ -128,7 +128,7 @@
     }
 }
 /* Spring-back transition — applied after drag release */
-.chat-footer-handle.spring-back {
+.chat-footer-handle.grab-spring {
     transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
 

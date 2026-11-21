@@ -8,14 +8,12 @@ import { createGrabHandle } from '../grab-handle/grab-handle.js';
 
 const STYLE_ID = 'rte-styles';
 const CSS = `
-.rte{position:relative;display:flex;flex-direction:column;min-width:0;width:100%;border:var(--border-width) solid var(--border);border-radius:10px;overflow:hidden;background:color-mix(in srgb, var(--fg-1) 3%, transparent);transition:border-color .18s ease}
+.rte{position:relative;display:flex;flex-direction:column;min-width:0;width:100%;border:var(--border-width) solid var(--border);border-radius:10px;background:color-mix(in srgb, var(--fg-1) 3%, transparent);transition:border-color .18s ease}
 .rte:focus-within{border-color:var(--accent)}
 .rte-bar{display:flex;align-items:center;gap:2px;padding:4px;border-bottom:var(--border-width) solid var(--border);overflow-x:auto;scrollbar-width:none}
 .rte-bar::-webkit-scrollbar{display:none}
 .rte:not([data-bar-open]) .rte-bar{display:none}
-.rte>.grab-handle{position:absolute;top:-3px;left:calc(50% - 24px);z-index:1}
-.rte[data-bar-open] .rte-bar{padding-top:14px}
-.rte:not([data-bar-open]):not([data-readonly]) .rte-doc{padding-top:16px}
+.rte[data-bar-open] .rte-bar{padding-top:8px}
 .rte[data-readonly]>.grab-handle{display:none}
 .rte-btn{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;padding:0 6px;border:0;border-radius:7px;background:transparent;color:var(--fg-3);font:inherit;font-size:13px;font-weight:600;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background-color .15s ease,color .15s ease}
 .rte-btn:hover{background:color-mix(in srgb, var(--fg-1) 6%, transparent);color:var(--fg-1)}
@@ -133,8 +131,9 @@ export function createRichTextEditor({ value = '', label = 'Editor', placeholder
     bar.append(button);
   }
   const handle = createGrabHandle({
+    panel: frame,
+    edge: 'top',
     label: 'Show or hide formatting',
-    opens: 'down',
     onToggle: open => frame.toggleAttribute('data-bar-open', open),
   });
   const count = maxLength ? document.createElement('span') : null;

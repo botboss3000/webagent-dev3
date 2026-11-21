@@ -85,9 +85,9 @@
     position: absolute;
     bottom: -14px;
     left: 50%;
-    /* --handle-drag-y is set inline by JS during drag; spring-back
+    /* --grab-drag-y is set inline by JS during drag; grab-spring
        transition animates it back to 0 on release */
-    transform: translateX(-50%) translateY(calc(var(--handle-drag-y, 0px)));
+    transform: translateX(-50%) translateY(calc(var(--grab-drag-y, 0px)));
     width: 48px;
     height: 20px;
     margin: 0;
@@ -112,7 +112,7 @@
 /* Pill-level drag offset — the pill edge itself moves during drag so the
      rubber-band is visible on the pill's bottom border, not just the handle. */
   #chat-input-row {
-    transform: translateY(calc(var(--pill-drag-y, 0px)));
+    transform: translateY(calc(var(--grab-panel-y, 0px)));
     position: relative;
     z-index: 2;
     /* Smooth transition for idle ↔ active footer pill changes */
