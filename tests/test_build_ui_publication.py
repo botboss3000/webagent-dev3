@@ -268,6 +268,26 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         self.assertTrue(result["effects_reconciled"]);self.assertEqual(self.runner.current_asset_id(),before)
         self.assertFalse((self.runner.assets/"releases"/job).exists())
 
+    def test_discard_binds_restarted_consumers_by_container_identity(self):
+        before=self.runner.current_asset_id()
+        self.change("ui-restart-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        with patch.object(fixtures.host.release,"install_prepared_assets",side_effect=RuntimeError("install outcome unknown")):
+            job=self.finish("ui-restart-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"uncertain",row.get("reason"))
+        loop=self.runner.containers[fixtures.host.TARGETS[1]]
+        loop.setdefault("State",{})["Pid"]=loop.get("State",{}).get("Pid",0)+4242
+        result=self.recovery("ui-restart-task",job,"discard_prepared_release")
+        self.assertTrue(result["effects_reconciled"]);self.assertEqual(self.runner.current_asset_id(),before)
+
+    def test_discard_refuses_a_replaced_consumer(self):
+        self.change("ui-replaced-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        with patch.object(fixtures.host.release,"install_prepared_assets",side_effect=RuntimeError("install outcome unknown")):
+            job=self.finish("ui-replaced-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"uncertain",row.get("reason"))
+        self.runner.containers[fixtures.host.TARGETS[1]]["Id"]+="-replaced"
+        with self.assertRaisesRegex(ValueError,"Runtime binding changed"):
+            self.recovery("ui-replaced-task",job,"discard_prepared_release")
+
     def test_validation_retries_only_when_captured_runtime_changed(self):
         self.change("ui-runtime-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
         original=self.runner.validate_ui;first=True

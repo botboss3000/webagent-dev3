@@ -547,9 +547,12 @@ class UIPublication:
         backend=restore or unhealthy or args["action"]=="restore_backend_predecessor"
         bind_recovery=args["action"]=="recover_backend_api_bind"
         def runtime_bound():
-            # Unhealthy consumers may be crash-looping, so only their identities bind them.
+            # Unhealthy consumers may be crash-looping, so only their identities bind them. A
+            # discard binds the same way: it already proves the active pointer and checkout are
+            # unchanged, a restart of the same container publishes nothing, and a replaced
+            # container (new id or image) is still refused.
             current=self.runtime()
-            if not(unhealthy or unhealthy_host):return current==bound
+            if not(unhealthy or unhealthy_host or discard):return current==bound
             identity=lambda value:{role:{k:v for k,v in item.items()if k!="pid"}for role,item in value.items()}
             return identity(current)==identity(bound)
         if backend and not restore:bound=self.backend_predecessor_binding(job,folder,bound,previous,require_healthy=not unhealthy)
