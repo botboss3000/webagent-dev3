@@ -52,7 +52,7 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
             .filter(|(_, assignment)| assignment.entry_id == first.entry_id)
             .map(|(role, _)| role)
             .collect();
-        models.push(json!({"entry_id":id,"label":if id.is_none(){format!("Standard · {display}")}else{display.to_owned()},
+        models.push(json!({"entry_id":id,"label":if id.is_none(){format!("Mode default · {display}")}else{display.to_owned()},
             "model":first.upstream_model,"connected":connected,"roles":roles,
             "efforts":efforts.levels,"default_effort":default_effort,"provider_default_effort":efforts.default,
             "image_in":first.image_in}));

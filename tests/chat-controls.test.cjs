@@ -28,7 +28,7 @@ async function fixture(issues){
   document.body=body;document.createElement=tag=>new Element(tag);
   const state={agent_id:'agent-a',mode:{mode:'read_only',execution_mode:'ask',revision:0},
     execution_modes:[{id:'ask',label:'Ask',description:'Read',permission_policy:'read_only'},{id:'plan',label:'Plan',description:'Plan',permission_policy:'read_only'},{id:'auto',label:'Auto',description:'Write',permission_policy:'write'}],
-    model:{entry_id:null,revision:0},models:[{entry_id:null,label:'Standard · A',model:'model-a',connected:true},{entry_id:'b',label:'B',model:'model-b',connected:true}]};
+    model:{entry_id:null,revision:0},models:[{entry_id:null,label:'Mode default · A',model:'model-a',connected:true},{entry_id:'b',label:'B',model:'model-b',connected:true}]};
   const calls=[],errors=[];
   const client={
     controls:async id=>{calls.push(['read',id]);return structuredClone(state);},
@@ -90,7 +90,7 @@ test('write failure reloads authoritative state and restores usable controls',as
   f.client.model=async()=>{throw Error('Conversation model changed; reload the picker');};
   await f.nodes.get('chat-model-changer').emit('keydown',{key:'ArrowRight'});await tick();
   assert.equal(f.errors.length,1);assert.equal(f.nodes.get('chat-model-changer').disabled,false);
-  assert.equal(f.nodes.get('chat-model-changer').name.textContent,'Standard · A');
+  assert.equal(f.nodes.get('chat-model-changer').name.textContent,'Mode default · A');
   f.controls.destroy();
 });
 
