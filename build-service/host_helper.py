@@ -551,6 +551,10 @@ class Helper:
         boot_disk = spec["boot_disk"] or self.check(action, args)
         now = self.clock()
         if action == "files_grant":
+            # Only the File Manager files these (app channel, no chat session): an agent's
+            # host_admin call never asks for root-equivalent file access (FILES-2).
+            if channel != "app" or requester.get("session") or requester.get("user") != args.get("admin"):
+                raise PermissionError("files_grant is requested only by the File Manager for its own administrator")
             # One waiting grant per administrator: each further click finds the same request.
             with self.lock:
                 for path in sorted((self.state / "requests").glob("*.json")):

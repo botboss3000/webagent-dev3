@@ -126,7 +126,12 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(("pending", True), (record["state"], record["passphrase"]))  # allow-all never covers it
         self.assertEqual(record["id"], ask()["id"])  # a second click finds the same request
         with self.assertRaises(ValueError):
-            self.helper.handle(APP, {"op": "request", "action": "files_grant", "args": {"admin": "a/b"}, "requester": {}})
+            self.helper.handle(APP, {"op": "request", "action": "files_grant", "args": {"admin": "a/b"}, "requester": {"user": "a/b"}})
+        for requester in ({"user": "alex", "session": "chat-1"}, {"user": "someone"}):  # agents and other admins
+            with self.assertRaises(PermissionError):
+                self.helper.handle(APP, {"op": "request", "action": "files_grant", "args": {"admin": "alex"}, "requester": requester})
+        with self.assertRaises(PermissionError):
+            self.helper.handle(OPERATOR, {"op": "request", "action": "files_grant", "args": {"admin": "alex"}, "requester": {"user": "alex"}})
         with self.assertRaisesRegex(PermissionError, "no host approval passphrase"):
             self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
         self.helper.set_passphrase("correct horse battery")
