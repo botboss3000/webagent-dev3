@@ -104,7 +104,20 @@ impl<'a, C: RecordCodec> DirectoryRepository<'a, C> {
         Self { app_pool, codec }
     }
 
+    /// Create the directory tables once per database file in this process: every directory
+    /// read calls this, several times per request and per open conversation stream check.
     pub async fn schema(&self) -> Result<()> {
+        use std::collections::HashSet;
+        use std::path::PathBuf;
+        use std::sync::{Mutex, OnceLock};
+        static READY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+        let file = self.app_pool.connect_options().get_filename().to_owned();
+        // In-memory databases (tests) can share one name, so they are never remembered.
+        let remember = !file.as_os_str().is_empty() && file.as_os_str() != ":memory:";
+        let ready = READY.get_or_init(Default::default);
+        if remember && ready.lock().unwrap().contains(&file) {
+            return Ok(());
+        }
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS shared_sessions(session_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,agent_id TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS shared_participants(session_id TEXT NOT NULL,user_id TEXT NOT NULL,joined_at INTEGER NOT NULL,PRIMARY KEY(session_id,user_id));
@@ -113,6 +126,9 @@ impl<'a, C: RecordCodec> DirectoryRepository<'a, C> {
         )
         .execute(self.app_pool)
         .await?;
+        if remember {
+            ready.lock().unwrap().insert(file);
+        }
         Ok(())
     }
 
