@@ -110,10 +110,12 @@ pub(super) fn normalized(raw: &Value) -> Outcome<String> {
     if host.contains(':') {
         host = format!("[{host}]");
     }
-    let authority = match port {
-        Some(port) if port != 443 => format!("{host}:{port}"),
-        _ => host,
-    };
+    // Only the standard HTTPS port: a granted remote must not be able to aim Git at another
+    // service on an internal host (security spec TOOL-15).
+    if port.is_some_and(|port| port != 443) {
+        return Err(rejected("Repository must use the standard HTTPS port"));
+    }
+    let authority = host;
     if value
         .path
         .split('/')
@@ -756,5 +758,24 @@ pub(super) async fn commit_and_push(
         Err(_) => Err(Failure::Uncertain(format!(
             "Commit created ({committed}); reconcile remote before retry"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use serde_json::json;
+    #[test]
+    fn repositories_use_the_standard_https_port_only() {
+        let ok = |url: &str| super::normalized(&json!(url)).ok();
+        assert_eq!(
+            ok("https://git.example.com/team/repo.git").as_deref(),
+            Some("https://git.example.com/team/repo.git")
+        );
+        assert_eq!(
+            ok("https://git.example.com:443/team/repo").as_deref(),
+            Some("https://git.example.com/team/repo")
+        );
+        assert!(ok("https://git.example.com:8443/team/repo").is_none());
+        assert!(ok("https://10.0.0.1:8080/team/repo").is_none());
     }
 }
