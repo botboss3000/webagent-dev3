@@ -196,14 +196,6 @@ body.light-mode .ac-ability-desc {
   transform: rotate(90deg);
 }
 
-/* ── Inline roster-role prompt directives (Agent Config model table) */
-.ac-directives-section-title {
-  margin: 0 0 7px; color: var(--fg-2); font-size: 12px; font-weight: 700;
-  letter-spacing: .02em;
-}
-.ac-directive-row > .ac-ability-row { align-items: flex-start; }
-.ac-directive-hint { margin: 0; }
-
 /* ── "More" (⋯) column — mirrors the LEFT chevron column geometry */
 body.light-mode .ac-list,
 body.light-mode .ac-abilities-compact {

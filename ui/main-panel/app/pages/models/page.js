@@ -68,8 +68,6 @@ export async function mountAppModels(host) {
     },
     fetchModels:async({provider,api_key})=>request('/models/discovery','POST',{provider,api_key}),
     fetchModelInfo:async()=>({}),fetchModelUsage:async args=>request('/admin/usage/models/totals?'+usageQuery(args)).catch(()=>null),
-    loadDirectives:async()=>({custom:{}}),
-    saveDirectives:async()=>{throw Error(MISSING+': role directives');},
     saveDefaultEntryId:async()=>{throw Error('Defaults belong to user accounts, not app publication');},
     subscriptionRequest:unavailable,
     listCredentials:async()=>{throw Error(MISSING+': named credential library');}

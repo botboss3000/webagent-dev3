@@ -183,8 +183,6 @@ export function createModelAdapter(request, agentId, onAssignment) {
         ...(m.characters_per_token?{characters_per_token:m.characters_per_token}:{})}:{};
     },
     fetchModelUsage:async args=>request('/usage/models/totals?'+usageQuery(args,{agent_id:agentId})).catch(()=>null),
-    loadDirectives:async()=>({standard:'',premium:'',system:'',image_in:'',image_out:'',voice:'',custom:{}}),
-    saveDirectives:async()=>reject('role prompt injections'),
     saveDefaultEntryId:async(id)=>{
       const choices=await accountChoices();let sourceId=id;
       if(id&&catalog.entries[id])sourceId=data.adoptions?.[id]?.source_id||(catalog.platform_sources?.[id]?id:'byo:'+id);

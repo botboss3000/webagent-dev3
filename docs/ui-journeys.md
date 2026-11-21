@@ -88,8 +88,8 @@ from this agent, and existing per-role backup candidates are retained.
 
 Pending UI remains present with `NEED BACKEND CONTRACT`: entitled catalog,
 discovery/provider presets, custom transports/base URLs, usage/analytics/reset,
-metadata/reference pricing, account defaults, named credential libraries,
-and role prompt injections. Discovery is not simulated; supported providers
+metadata/reference pricing, account defaults and named credential libraries.
+Discovery is not simulated; supported providers
 allow manually entered upstream model IDs. Each agent model's Aliases line
 (dropdown, +, up/down, remove) edits that model's ordered backups. Named credential library
 operations remain pending. Selecting ChatGPT Subscription issues the
@@ -107,7 +107,7 @@ reloaded, opened the original roles menu, assigned System, reloaded again and
 asserted Standard and System were displayed on the first saved row. The original
 inline rename editor had saved `Actual reference port verified`, also retained
 after reload. Expanded details showed adjacent pending markers for pricing,
-account defaults and aliases; directives were individually labelled. Resource
+account defaults and aliases. Resource
 entries showed zero /api/v1 or /admin/settings requests. A final screenshot was
 captured at 18:14:46 UTC. Default-agent credentials and provider workloads were
 not changed or executed.

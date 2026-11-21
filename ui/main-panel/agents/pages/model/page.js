@@ -18,7 +18,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
     await request('/usage/models/undo?'+new URLSearchParams({agent_id:agentId}),'POST');await Promise.all([table.reload(),analytics.reload()]);
   }}]});};
   const analytics=initModelAnalytics(analyticsHost,{fetchFn:usageFetch('/usage/models'),apiPath:p=>p,scope:'user',agentId,description:'Compare the daily usage of every model used with this agent.',onHistoryCleared:model=>usageCleared('Usage history cleared for '+model)});
-  const table=mountModelTable(tableHost,{adapter:bridge.adapter,agentLocalRoster:true,userCatalog:true,inlineCatalogAdd:true,subscriptionScope:'agent',directivePresentation:'inline',directivesEditable:false,manualModelEntry:true,
+  const table=mountModelTable(tableHost,{adapter:bridge.adapter,agentLocalRoster:true,userCatalog:true,inlineCatalogAdd:true,subscriptionScope:'agent',manualModelEntry:true,
     fetchFn:bridge.blockedFetch,onRoster:p=>analytics?.setModelLabels(p),onModelFocus:m=>analytics?.setModelFocus(m),onModelChange:()=>{analytics?.reload();},
     advancedExtra:body=>{
       const row=document.createElement('div');row.className='ac-row';row.dataset.ownUsage='';row.innerHTML='<div class="ac-ability-row"><span class="ac-ability-label"><span class="ac-ability-name">Reset Usage Counters</span><span class="ac-ability-desc">Clear your own usage with this agent: the tokens and cost in the table and graph above. Other users\' usage is unchanged.</span></span></div><div class="ac-ability-body"><select class="ac-input"><option value="all">All (input + output + cost)</option><option value="input">Input Tokens only</option><option value="output">Output Tokens only</option><option value="cost">Cost only</option></select> <button type="button" class="ac-btn ac-btn-ghost" style="color:var(--danger)">Reset</button> <span class="ac-ability-desc" role="status"></span></div>';
@@ -38,7 +38,6 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   function markPending(el){if(el)el.classList.add('v3-pending-feature');}
   function pending(){
     if(stopped)return;
-    for(const el of group.querySelectorAll('.ac-directives-section-title,.ac-directive-hint'))markPending(el);
     for(const el of group.querySelectorAll('.ac-model-meta-editable')){
       if(el.closest('.ac-model-meta-nameline'))continue;
       const line=el.closest('.ac-model-meta-line');markPending(line);el.setAttribute('aria-disabled','true');el.tabIndex=-1;el.style.pointerEvents='none';
@@ -48,7 +47,6 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
       const unported=row.querySelector('.ac-ability-name')?.textContent==='Connection';
       for(const btn of row.querySelectorAll('button'))if(['Load','Save'].includes(btn.textContent)){btn.hidden=unported;btn.style.display=unported?'none':'';}
     }
-    for(const row of group.querySelectorAll('.ac-directive-row'))markPending(row.querySelector('.ac-ability-name')||row);
     if(!bridge.state()?.can_manage){for(const el of tableHost.querySelectorAll('.ac-model-meta-editable,.ac-saved-drag-handle')){el.style.pointerEvents='none';el.tabIndex=-1;el.setAttribute('aria-disabled','true');}}
     // Resetting your own usage needs no roster authority.
     if(!bridge.state()?.can_manage){for(const el of tableHost.querySelectorAll('input,select,textarea,button'))if(!el.closest('[data-own-usage]'))el.disabled=true;}

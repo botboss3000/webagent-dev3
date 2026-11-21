@@ -71,5 +71,7 @@
 .ac-model-alias-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .ac-model-alias-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ac-model-alias-btn { min-width: 32px; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; }
+/* A move that can't happen (top row up, bottom row down) or + with nothing chosen. */
+.ac-model-alias-btn:disabled { opacity: .35; cursor: not-allowed; border-style: dashed; }
 .ac-model-alias-add-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ac-model-alias-select { flex: 1; min-width: 0; max-width: 320px; }

@@ -7,6 +7,6 @@ export const APP_ACTIONS = [PAGE_ACTIONS,
   '.ac-model-item', '.ac-model-search-chevron', '.ac-saved-name-click', '.ac-model-meta-editable',
   '.ac-tip-gallery img', '.ac-tip-lightbox'
 ].join(', ');
-export const APP_PORTALS = '#files-floating-menu, .ac-model-dropdown, .ac-directive-overlay, .ac-tip-pop, .ac-tip-lightbox';
+export const APP_PORTALS = '#files-floating-menu, .ac-model-dropdown, .ac-tip-pop, .ac-tip-lightbox';
 
 discoverPageControlFeedback('#tab-app', {actions: APP_ACTIONS, portals: APP_PORTALS});

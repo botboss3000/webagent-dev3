@@ -719,32 +719,3 @@ body.light-mode .ac-model-catalog-control .ac-model-search-field {
 }
 body.light-mode .ac-model-catalog-control:focus-within { border-color: var(--brand); }
 
-/* ── Inline roster-role prompt directives (Agent Config model table) ──────────
-   Agent Config places these below the model-table card in the existing Model
-   topic. The explanatory heading and copy remain frameless, like the list. */
-.ac-directives-section { margin-top: 18px; }
-.ac-directives-list--plain { display: flex; flex-direction: column; }
-/* Prompt lines are intentionally unframed: no enclosing card and no row dividers. */
-.ac-directives-list--plain > * + * { border-top: 0; }
-.ac-directives-section--plain .ac-directives-section-title {
-  margin-bottom: 4px; color: var(--fg-1); font-size: 14px; letter-spacing: 0;
-}
-.ac-directives-section-description {
-  margin: 0 0 12px; color: var(--fg-2); font-size: 12px; line-height: 1.45;
-}
-.ac-directive-symbol { display: inline-block; min-width: 18px; margin-right: 5px; color: var(--fg-2); }
-.ac-directive-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ac-directive-body { display: none; gap: 10px; }
-.ac-row.expanded > .ac-directive-body { display: flex; flex-direction: column; }
-.ac-directive-textarea {
-  box-sizing: border-box; width: 100%; min-height: 150px; resize: vertical;
-  font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5;
-}
-.ac-directive-textarea[readonly] { opacity: .85; }
-.ac-directive-actions { display: flex; align-items: center; gap: 10px; }
-.ac-directive-error { flex: 1; min-width: 0; color: var(--danger); font-size: 12px; }
-.ac-directive-save { margin-left: auto; }
-@media (max-width: 560px) {
-  .ac-directive-body { padding-left: 14px; padding-right: 14px; }
-  .ac-directive-textarea { min-height: 130px; }
-}

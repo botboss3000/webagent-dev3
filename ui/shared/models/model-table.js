@@ -56,16 +56,6 @@ import { createEffortSlider, modelEfforts } from './effort-slider.js';
  *                                is open, so a sibling chart can show that one
  *                                model's series instead of the whole group
  *                                (MODEL-ROW-FOCUS)
- *   opts.loadDirectives?()     — optional: resolve the admin's roster-role prompt
- *                                directives → {standard:'', premium:'', ...} (grep
- *                                ROLE-DIRECTIVE-INJECT). Absent (or a rejected
- *                                promise) hides the "Prompt injections" strip.
- *   opts.saveDirectives?(dict) — optional: persist the full directives dict (admin
- *                                only). Absent ⇒ the editor opens read-only.
- *   opts.directivesEditable?   — bool: whether the directive editor may save.
- *   opts.directivePresentation? — 'popup' (default) or 'inline'. The Agent Config
- *                                mount uses frameless inline rows below its model table;
- *                                sister mounts retain popup chips.
  */
 
 // Unified save-status indicator (spinner → green ✓ / orange ⚠ + popup, centered
@@ -337,11 +327,6 @@ export function mountModelTable(host, opts = {}) {
   // 'user' (default) shows only the current user's usage for each model; 'global'
   // (admin Agent Settings) sums every agent, user, and background task app-wide.
   const usageScope = opts.usageScope || 'user';
-  // Roster-role prompt directives (grep ROLE-DIRECTIVE-INJECT): editable only
-  // when the mount both allows it AND provides a save adapter (admin mounts).
-  const directivesEditable = !!(opts.directivesEditable && adapter.saveDirectives);
-  // Keep popup chips as the shared default; Agent Config opts into inline rows.
-  const directivePresentation = opts.directivePresentation === 'inline' ? 'inline' : 'popup';
   // App-level "Model Catalog" mounts (admin Settings) treat the saved list as a
   // catalog of provider-derived capabilities only. Role assignment is disabled:
   // rows render read-only capability badges instead of a role popover, because
@@ -370,7 +355,6 @@ export function mountModelTable(host, opts = {}) {
     providers: [],              // the saved roster (each gets a _uid)
     roleAssignments: {},        // semantic role -> stable roster entry_id (sole role authority)
     defaultEntryId: '',         // user-catalog default for newly created agents only
-    directives: null,           // per-agent roster-role prompt directives (null = unavailable)
     uid: 0,
   };
   // Sole role authority: `roleAssignments` (semantic role -> roster entry_id).
@@ -424,7 +408,6 @@ export function mountModelTable(host, opts = {}) {
   let pendingSubscriptionRow = null;
   const subscriptionCountdowns = new WeakMap();
   const subscriptionCountdownHandles = new Set();
-  let _directiveModalCleanup = null;  // closes an open directive editor on destroy
   const docListeners = [];
   let closeRolesPopover = null;       // closes the one open More popover, if any
 
@@ -888,31 +871,6 @@ export function mountModelTable(host, opts = {}) {
   }
   root.appendChild(table);
 
-  // Agent Config can render roster prompt editors as a distinct section below
-  // the model table. Other mounts retain the compact in-table strip/modal.
-  const directivesSection = document.createElement('section');
-  directivesSection.className = 'ac-directives-section';
-  directivesSection.hidden = true;
-  const directivesTitle = document.createElement('div');
-  directivesTitle.className = 'ac-directives-section-title';
-  directivesTitle.textContent = directivePresentation === 'inline'
-    ? 'Model Prompt Injections'
-    : 'Prompt injections';
-  directivesTitle.title = 'Admin-authored prompt text injected per roster role (grep ROLE-DIRECTIVE-INJECT)';
-  // Inline Agent Config rows remain plain content below the model card; the
-  // heading explains their purpose without introducing a framed surface.
-  directivesTitle.hidden = false;
-  const directivesDescription = document.createElement('p');
-  directivesDescription.className = 'ac-directives-section-description';
-  directivesDescription.textContent = 'These instructions are added to the system prompt when a session uses the corresponding model role.';
-  directivesDescription.hidden = directivePresentation !== 'inline';
-  const directivesList = document.createElement('div');
-  directivesList.className = directivePresentation === 'inline'
-    ? 'ac-directives-list ac-directives-list--plain'
-    : 'ac-list ac-directives-list';
-  if (directivePresentation === 'inline') directivesSection.classList.add('ac-directives-section--plain');
-  directivesSection.append(directivesTitle, directivesDescription, directivesList);
-
   // Status line lives INSIDE the table (as a footer row of the .ac-list) so it
   // reads as part of the model table and hides together with it while loading —
   // never floats as orphan text above/below a not-yet-visible table.
@@ -921,9 +879,6 @@ export function mountModelTable(host, opts = {}) {
   table.appendChild(statusEl);
 
   host.appendChild(root);
-  // Inline Agent Config directives are a plain host-level sibling below the
-  // model-table card, within the existing Model topic.
-  host.appendChild(directivesSection);
 
   if (window.lucide && advRow.querySelector('[data-lucide]:not(.lucide)')) {
     try { window.lucide.createIcons({ nodes: Array.from(advRow.querySelectorAll('[data-lucide]:not(.lucide)')) }); } catch {}
@@ -2668,49 +2623,6 @@ export function mountModelTable(host, opts = {}) {
   // role toggles and space for future per-model controls. Order: Drag · Model · Role icons · Usage · More
   const SAVED_GRID = '20px minmax(0, 1fr) 38px 20px';
 
-  // ── Roster-role prompt directives (grep ROLE-DIRECTIVE-INJECT) ────────────
-  // Per-agent prompt injections, shown/edited from the "Prompt injections"
-  // strip under the saved list. Fixed roster roles have their own key; EACH
-  // custom roster slot ('custom:<position>') carries its own directive too
-  // (see _customDirectiveSlots). Keys mirror MODEL_DIRECTIVE_KEYS in
-  // app/admin/settings.py.
-  const DIRECTIVE_ROLES = {
-    standard:  { symbol: 'S',  label: 'Standard', hint: 'Injected into the system prompt when the session runs on the Standard (default) brain.' },
-    premium:   { symbol: 'P',  label: 'Premium',  hint: 'Injected when the session runs on the Premium brain. An agent-authored "Model Upgrade Directive" slot wins over this text when set.' },
-    image_in:  { symbol: '👁', label: 'Vision',   hint: 'Injected into the system prompt when the session runs on the Vision brain (reads attached images).' },
-    image_out: { symbol: '🖼', label: 'Image',    hint: 'Prepended to every generated-image prompt (Image role).' },
-    system:    { symbol: '⚙', label: 'System',   hint: 'Prepended to app misc-LLM task prompts (session naming, context management).' },
-    voice:     { symbol: '🎤', label: 'Voice',    hint: 'Reserved — LLM voice transcription is audio→text, so there is no prompt-injection point yet.' },
-  };
-
-  /** Custom roster slots in footer-picker order, mirroring _assign_slots in
-   *  app/admin/settings.py (own rows first, then inherited app-roster rows;
-   *  first matching role wins). Each custom
-   *  slot gets its own directive key 'custom:<position>' — Custom 1, Custom 2,
-   *  ... — so the admin can inject per-custom-model prompts. */
-  function _customDirectiveSlots() {
-    const union = [...(S.providers || [])];
-    const seen = new Set();
-    const rows = [];
-    union.forEach(p => {
-      const key = `${p.entry_id || ''}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      rows.push(p);
-    });
-    const keyOf = (p) => `${p.entry_id || ''}`;
-    const roles = { standard: null, premium: null, image_in: null, image_out: null };
-    rows.forEach(p => {
-      if (hasRole(p, 'standard')) roles.standard = p;
-      if (hasRole(p, 'premium')) roles.premium = p;
-      if (hasRole(p, 'image_in')) roles.image_in = p;
-      if (hasRole(p, 'image_out')) roles.image_out = p;
-    });
-    const roleKeys = new Set(Object.values(roles).filter(Boolean).map(keyOf));
-    return rows.filter(p => !roleKeys.has(keyOf(p)))
-      .map((p, i) => ({ slot_ref: `custom:${i + 1}`, label: `Custom ${i + 1}`, model: p.model || '' }));
-  }
-
   // Build + insert ONE saved-model row (just before the configurator anchor) and
   // kick off its usage fetch. Capability toggles and the
   // default radio persist IN PLACE — no list rebuild — so editing a row never
@@ -2957,258 +2869,6 @@ export function mountModelTable(host, opts = {}) {
     table.insertBefore(head, cfgAnchor);
   }
 
-  // ── Roster-role prompt directives (grep ROLE-DIRECTIVE-INJECT) ──────────
-  // Admin-authored prompt injections per roster role, edited from the "Prompt
-  // injections" strip under the saved list. Writes are admin-only (the mount
-  // decides via `directivesEditable` + the presence of `adapter.saveDirectives`);
-  // non-admin mounts show the strip read-only (or hidden when the read fails).
-  function _directivePreview(key) {
-    let v = '';
-    if (S.directives) {
-      v = key.startsWith('custom:')
-        ? ((S.directives.custom || {})[key] || '')
-        : (S.directives[key] || '');
-    }
-    return v ? (v.length > 42 ? v.slice(0, 42) + '…' : v) : '';
-  }
-
-  function _directiveMeta(key) {
-    const isCustom = key.startsWith('custom:');
-    const role = isCustom ? null : DIRECTIVE_ROLES[key];
-    const slot = isCustom ? (_customDirectiveSlots().find(s => s.slot_ref === key) || null) : null;
-    if (!role && !isCustom) return null;
-    return {
-      isCustom,
-      symbol: role ? role.symbol : '★',
-      label: role ? role.label : (slot ? slot.label : key),
-      hint: role
-        ? role.hint
-        : (slot
-          ? `Injected into the system prompt when the session runs on ${slot.label} (${slot.model}).`
-          : 'Injected into the system prompt when the session runs on this custom roster model.'),
-    };
-  }
-
-  function _directiveValue(key) {
-    return key.startsWith('custom:')
-      ? ((S.directives && S.directives.custom) ? (S.directives.custom[key] || '') : '')
-      : ((S.directives && S.directives[key]) || '');
-  }
-
-  function _buildInlineDirectiveRow(key, destination) {
-    const meta = _directiveMeta(key);
-    if (!meta) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'ac-row ac-saved-injected ac-directive-row';
-    const head = document.createElement('div');
-    head.className = 'ac-ability-row';
-    head.tabIndex = 0;
-    head.setAttribute('role', 'button');
-    head.setAttribute('aria-expanded', 'false');
-    head.title = `${meta.label} — click to ${directivesEditable ? 'edit' : 'view'} the prompt injection`;
-    const label = document.createElement('span');
-    label.className = 'ac-ability-label';
-    const preview = document.createElement('span');
-    preview.className = 'ac-ability-desc ac-directive-preview';
-    preview.textContent = _directivePreview(key);
-    label.innerHTML = `<span class="ac-ability-name"><span class="ac-directive-symbol">${esc(meta.symbol)}</span>${esc(meta.label)} prompt</span>`;
-    label.appendChild(preview);
-    const chevron = document.createElement('span');
-    chevron.className = 'ac-row-chevron';
-    chevron.setAttribute('aria-hidden', 'true');
-    chevron.innerHTML = ROW_CHEVRON_SVG;   // grep CHEVRON-CONSISTENCY — shared with both fields
-    head.appendChild(label); head.appendChild(chevron);
-
-    const body = document.createElement('div');
-    body.className = 'ac-ability-body ac-directive-body';
-    const hint = document.createElement('p');
-    hint.className = 'ac-hint ac-directive-hint';
-    hint.textContent = meta.hint;
-    const ta = document.createElement('textarea');
-    ta.className = 'ac-input ac-directive-textarea';
-    ta.value = _directiveValue(key);
-    ta.placeholder = 'No injection set — this role runs with its own prompt.';
-    ta.spellcheck = false;
-    ta.readOnly = !directivesEditable;
-    body.appendChild(hint); body.appendChild(ta);
-    if (directivesEditable) {
-      const foot = document.createElement('div');
-      foot.className = 'ac-directive-actions';
-      const err = document.createElement('span');
-      err.className = 'ac-directive-error';
-      const save = document.createElement('button');
-      save.type = 'button'; save.className = 'ac-btn ac-directive-save'; save.textContent = 'Save';
-      save.addEventListener('click', async (event) => {
-        event.stopPropagation();
-        const next = { ...(S.directives || {}), custom: { ...((S.directives && S.directives.custom) || {}) } };
-        if (meta.isCustom) next.custom[key] = ta.value;
-        else next[key] = ta.value;
-        _markSaving(save); err.textContent = '';
-        try {
-          await adapter.saveDirectives(next);
-          S.directives = next;
-          preview.textContent = _directivePreview(key);
-          _flashSaveCheck(save, true);
-        } catch (error) {
-          const message = (error && error.message) || 'Save failed';
-          _flashSaveCheck(save, false, message); err.textContent = message;
-        }
-      });
-      foot.appendChild(err); foot.appendChild(save); body.appendChild(foot);
-    }
-    const toggle = () => {
-      const open = wrap.classList.toggle('expanded');
-      head.setAttribute('aria-expanded', String(open));
-      if (open && directivesEditable) ta.focus();
-    };
-    head.addEventListener('click', toggle);
-    head.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); }
-    });
-    wrap.appendChild(head); wrap.appendChild(body);
-    destination.appendChild(wrap);
-  }
-
-  function _buildDirectiveStrip(cfgAnchor) {
-    if (directivePresentation === 'inline') {
-      directivesList.replaceChildren();
-      Object.keys(DIRECTIVE_ROLES).forEach(key => _buildInlineDirectiveRow(key, directivesList));
-      _customDirectiveSlots().forEach(slot => _buildInlineDirectiveRow(slot.slot_ref, directivesList));
-      directivesSection.hidden = directivesList.childElementCount === 0;
-      return;
-    }
-    const strip = document.createElement('div');
-    strip.className = 'ac-saved-injected ac-directives-strip';
-    strip.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:7px 14px;border-bottom:var(--border-width) solid var(--border);';
-    const lab = document.createElement('span');
-    lab.className = 'ac-saved-th';
-    lab.textContent = 'Prompt injections';
-    lab.title = 'Admin-authored prompt text injected per roster role (grep ROLE-DIRECTIVE-INJECT)';
-    lab.style.cssText = 'font-size:11px;letter-spacing:0.4px;color:var(--fg-3);margin-right:4px;white-space:nowrap;';
-    strip.appendChild(lab);
-    for (const [key, role] of Object.entries(DIRECTIVE_ROLES)) {
-      const chip = document.createElement('button');
-      chip.type = 'button'; chip.className = 'ac-directive-chip';
-      chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;max-width:230px;padding:2px 9px;border:var(--border-width) solid var(--border);border-radius:999px;background:var(--bg-tint);color:var(--fg-2);font-size:11px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-      chip.title = `${role.label} — click to ${directivesEditable ? 'edit' : 'view'} the prompt injection`;
-      chip.innerHTML = `<span style="font-weight:700;">${role.symbol}</span><span style="opacity:.85;">${role.label}</span><span style="opacity:.55;overflow:hidden;text-overflow:ellipsis;">${esc(_directivePreview(key))}</span>`;
-      chip.addEventListener('click', () => openDirectiveEditor(key)); strip.appendChild(chip);
-    }
-    _customDirectiveSlots().forEach(slot => {
-      const chip = document.createElement('button');
-      chip.type = 'button'; chip.className = 'ac-directive-chip';
-      chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;max-width:230px;padding:2px 9px;border:var(--border-width) solid var(--border);border-radius:999px;background:var(--bg-tint);color:var(--fg-2);font-size:11px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-      chip.title = `${slot.label} (${slot.model}) — click to ${directivesEditable ? 'edit' : 'view'} the prompt injection`;
-      chip.innerHTML = `<span style="font-weight:700;">★</span><span style="opacity:.85;">${slot.label}</span><span style="opacity:.55;overflow:hidden;text-overflow:ellipsis;">${esc(_directivePreview(slot.slot_ref))}</span>`;
-      chip.addEventListener('click', () => openDirectiveEditor(slot.slot_ref)); strip.appendChild(chip);
-    });
-    table.insertBefore(strip, cfgAnchor);
-  }
-
-  /** Open the directive editor for one roster slot — a fixed role key
-   *  ('standard', 'premium', ...) or a custom slot ref ('custom:1', ...). */
-  function openDirectiveEditor(key) {
-    const isCustom = key.startsWith('custom:');
-    const role = isCustom ? null : DIRECTIVE_ROLES[key];
-    if (!role && !isCustom) return;
-    const customSlot = isCustom
-      ? (_customDirectiveSlots().find(s => s.slot_ref === key) || null)
-      : null;
-    const symbol = role ? role.symbol : '★';
-    const label = role ? role.label : (customSlot ? customSlot.label : key);
-    const hint = role
-      ? role.hint
-      : (customSlot
-          ? `Injected into the system prompt when the session runs on ${customSlot.label} (${customSlot.model}).`
-          : 'Injected into the system prompt when the session runs on this custom roster model.');
-    const editable = directivesEditable;
-    const ov = document.createElement('div');
-    ov.className = 'ac-directive-overlay';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
-    const panel = document.createElement('div');
-    panel.className = 'ac-directive-modal';
-    panel.style.cssText = 'width:min(660px,92vw);max-height:82vh;display:flex;flex-direction:column;background:var(--bg-elev);border:var(--border-width) solid var(--border);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:hidden;';
-    const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:var(--border-width) solid var(--border);';
-    head.innerHTML = `<span style="font-weight:700;">${symbol} ${esc(label)}</span><span style="color:var(--fg-3);font-size:12px;">prompt injection</span>`;
-    const closeX = document.createElement('button');
-    closeX.type = 'button';
-    closeX.textContent = '✕';
-    closeX.title = 'Close';
-    closeX.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--fg-3);font-size:14px;cursor:pointer;padding:4px;';
-    head.appendChild(closeX);
-    const body = document.createElement('div');
-    body.style.cssText = 'padding:14px 16px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;';
-    const hintEl = document.createElement('div');
-    hintEl.style.cssText = 'font-size:12px;color:var(--fg-3);line-height:1.45;';
-    hintEl.textContent = hint;
-    body.appendChild(hintEl);
-    const ta = document.createElement('textarea');
-    ta.value = isCustom
-      ? ((S.directives && S.directives.custom) ? (S.directives.custom[key] || '') : '')
-      : ((S.directives && S.directives[key]) || '');
-    ta.placeholder = 'No injection set — this role runs with its own prompt.';
-    ta.spellcheck = false;
-    ta.style.cssText = 'width:100%;min-height:150px;resize:vertical;background:var(--bg-0);color:var(--fg-1);border:var(--border-width) solid var(--border);border-radius:8px;padding:10px;font-family:var(--font-mono, monospace);font-size:12px;line-height:1.5;';
-    ta.readOnly = !editable;
-    if (!editable) ta.style.opacity = '.85';
-    body.appendChild(ta);
-    const foot = document.createElement('div');
-    foot.style.cssText = 'display:flex;align-items:center;gap:10px;padding:12px 16px;border-top:var(--border-width) solid var(--border);';
-    const err = document.createElement('span');
-    err.style.cssText = 'font-size:12px;color:var(--danger);flex:1;';
-    foot.appendChild(err);
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'ac-btn ac-btn-ghost';
-    cancel.textContent = 'Close';
-    foot.appendChild(cancel);
-    let saveBtn = null;
-    if (editable) {
-      saveBtn = document.createElement('button');
-      saveBtn.type = 'button';
-      saveBtn.className = 'ac-btn';
-      saveBtn.textContent = 'Save';
-      saveBtn.style.cssText = 'background:var(--accent);color:var(--bg-0);border:none;border-radius:8px;padding:6px 16px;font-weight:600;cursor:pointer;';
-      foot.insertBefore(saveBtn, cancel);
-    }
-    panel.appendChild(head); panel.appendChild(body); panel.appendChild(foot);
-    ov.appendChild(panel);
-    document.body.appendChild(ov);
-    if (editable) ta.focus();
-
-    const close = () => {
-      document.removeEventListener('keydown', onKey);
-      if (_directiveModalCleanup === close) _directiveModalCleanup = null;
-      ov.remove();
-    };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
-    _directiveModalCleanup = close;
-    closeX.addEventListener('click', close);
-    cancel.addEventListener('click', close);
-    ov.addEventListener('pointerdown', (e) => { if (e.target === ov) close(); });
-    if (saveBtn) {
-      saveBtn.addEventListener('click', async () => {
-        const next = { ...(S.directives || {}), custom: { ...((S.directives && S.directives.custom) || {}) } };
-        if (isCustom) next.custom[key] = ta.value;
-        else next[key] = ta.value;
-        _markSaving(saveBtn);
-        err.textContent = '';
-        try {
-          await adapter.saveDirectives(next);
-          S.directives = next;
-          _flashSaveCheck(saveBtn, true);
-          renderSaved();
-          setTimeout(close, 350);
-        } catch (e2) {
-          _flashSaveCheck(saveBtn, false, (e2 && e2.message) || 'Save failed');
-          err.textContent = (e2 && e2.message) || 'Save failed';
-        }
-      });
-    }
-  }
-
   // Full (re)build of the saved list. Initial loads render immediately; role,
   // add, and remove changes can opt into keyed layout animation.
   // MODEL-ROW-FOCUS: the usage chart above the table follows whichever saved row the
@@ -3318,10 +2978,6 @@ export function mountModelTable(host, opts = {}) {
     // the chart narrowed to a model whose row no longer reads as open.
     _releaseModelFocus();
     table.querySelectorAll('.ac-saved-injected, .ac-model-catalog-empty').forEach(n => n.remove());
-    if (directivePresentation === 'inline') {
-      directivesList.replaceChildren();
-      directivesSection.hidden = true;
-    }
     // Every rendered row belongs to this mount's persisted roster.
     // The provider array is the single user-visible order. Roles remain row
     // metadata and are deliberately not used to sort or group models.
@@ -3344,7 +3000,6 @@ export function mountModelTable(host, opts = {}) {
     }
     const cfgAnchor = table.querySelector('.ac-model-cfg-row');
     _buildSavedHead(cfgAnchor);
-    if (S.directives) _buildDirectiveStrip(cfgAnchor);
     rows.forEach(({ p, readOnly, rolesEditable }) => _buildSavedRow(p, readOnly, false, cfgAnchor, rolesEditable));
     // keep the advanced/+ row pinned last
     table.appendChild(advRow);
@@ -3597,17 +3252,11 @@ export function mountModelTable(host, opts = {}) {
     // instead of just the Advanced/+ buttons during the async fetch.
     if (skelRoot) skelRoot.style.display = '';
     try {
-      const [presets, cfg, directives] = await Promise.all([
+      const [presets, cfg] = await Promise.all([
         Promise.resolve(fetchPresets()).catch(() => ({})),
         Promise.resolve(adapter.loadConfig()).catch((e) => { console.warn('DEBUG-TAG: model-table: load failed', e); return {}; }),
-        Promise.resolve(adapter.loadDirectives ? adapter.loadDirectives() : null).catch(() => null),
       ]);
       if (subscriptionDestroyed) return;
-      // Per-agent roster-role prompt directives — null hides the strip entirely
-      // (mounts without a directives read).
-      const d = (directives && typeof directives === 'object') ? directives : null;
-      if (d) d.custom = (d.custom && typeof d.custom === 'object') ? d.custom : {};
-      S.directives = d;
       // Hide skeleton before rendering real data so there's no overlap flash
       if (skelRoot) skelRoot.style.display = 'none';
       S.presets = presets || {};
@@ -3720,7 +3369,6 @@ export function mountModelTable(host, opts = {}) {
       const pending = dropdownRafs.get(dd);
       if (pending) { cancelAnimationFrame(pending); dropdownRafs.delete(dd); }
     });
-    if (_directiveModalCleanup) { try { _directiveModalCleanup(); } catch (_) {} _directiveModalCleanup = null; }
     closeRolesPopover?.();
     docListeners.forEach(([t, fn]) => document.removeEventListener(t, fn));
     document.removeEventListener('scroll', repositionDropdowns, true);
