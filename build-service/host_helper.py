@@ -36,7 +36,22 @@ DEFAULTS = {"host_id": socket.gethostname(), "socket": "/home/ar/webagent-dev3/r
             "helper_unit": "webagent-host-helper.service", "helper_dir": "/usr/local/lib/webagent-host",
             "unit_dir": "/etc/systemd/system", "health_seconds": 120,
             # broker_install drains after approval, then waits this long for running jobs to end.
-            "drain_seconds": 3600}
+            "drain_seconds": 3600,
+            # files_grant: how long an administrator may use the host file service (host_files.py).
+            "files_grant_seconds": 86400, "files_unit": "webagent-host-files.service"}
+FILES_UNIT = """[Unit]
+Description=WebAgent root host file service (File Manager outside the checkout)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I {path}
+Restart=on-failure
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+"""
 # Undo classes: exact, best_effort or none. "read" actions change nothing and need no approval.
 # Allow-all windows never cover "none" or boot/disk actions (step 3 adds the edit actions).
 ACTIONS = {
@@ -51,6 +66,10 @@ ACTIONS = {
     # keeps the last-known-good copy, health-tests the result and reverts it on failure.
     "broker_install": {"read": False, "undo": "exact", "boot_disk": False},
     "supervisor_update": {"read": False, "undo": "exact", "boot_disk": False},
+    # Lets one administrator use the File Manager outside the checkout until it expires or is
+    # revoked. It is root-equivalent while live, so it always needs the host approval
+    # passphrase and no allow-all window covers it.
+    "files_grant": {"read": False, "undo": "exact", "boot_disk": False, "passphrase": True},
 }
 SUPERVISED = ("broker_install", "supervisor_update")
 MAX_FILE = 1024 * 1024
@@ -73,6 +92,7 @@ class Helper:
         (self.state / "requests").mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.state / "snapshots").mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock = threading.Lock()
+        self.grants_lock = threading.Lock()
         self.app_uid = profile["app_uid"]
         self.operator_uid = pwd.getpwnam(profile["operator_account"]).pw_uid
 
@@ -121,7 +141,8 @@ class Helper:
     def check(self, action, args):
         """Validate arguments against the profile; returns whether the action is a boot/disk change."""
         expected = {"file_write": {"path", "content"}, "host_revert": {"request_id"}, "unit_restart": {"unit"},
-                    "container_restart": {"container"}, "broker_install": {"task_id", "tree_hash"}}.get(action, set())
+                    "container_restart": {"container"}, "broker_install": {"task_id", "tree_hash"},
+                    "files_grant": {"admin"}}.get(action, set())
         optional = {"allow_stale_tree"} if action == "broker_install" else set()
         if not expected <= set(args) <= expected | optional:
             raise ValueError(action + " takes " + (", ".join(sorted(expected)) or "no arguments"))
@@ -152,6 +173,10 @@ class Helper:
                 raise ValueError("allow_stale_tree is true or false")
             if not (self.tree_root(tree) / "v3/build-service").is_dir():
                 raise ValueError("no task tree with that hash")
+        if action == "files_grant":
+            admin = args["admin"]
+            if not isinstance(admin, str) or not 0 < len(admin) <= 80 or not all(c.isalnum() or c in "._@-" for c in admin):
+                raise ValueError("files_grant needs the administrator's account name")
         if action == "unit_restart" and args["unit"] not in self.profile["units"]:
             raise PermissionError("unit is not listed in the host profile")
         if action == "container_restart" and args["container"] not in self.profile["containers"]:
@@ -184,8 +209,20 @@ class Helper:
             old, new = self.helper_path(), Path(self.build_config()["service_dir"]) / "host_helper.py"
             diff = "".join(difflib.unified_diff(old.read_text().splitlines(True), new.read_text().splitlines(True),
                                                 str(old) + " (running)", str(new) + " (installed broker release)"))
-            return ("Replace the host helper with the installed broker release's copy and restart it; the previous copy "
-                    "is restored if the helper does not answer.\n\n" + (diff[:20000] or "No change: the helper is already current."))
+            files = Path(self.build_config()["service_dir"]) / "host_files.py"
+            running = self.files_path()
+            files_diff = "".join(difflib.unified_diff(running.read_text().splitlines(True) if running.exists() else [],
+                                                      files.read_text().splitlines(True) if files.exists() else [],
+                                                      str(running) + " (running)", str(files) + " (installed broker release)"))
+            return ("Replace the host helper (and the host file service) with the installed broker release's copies and "
+                    "restart them; the previous helper is restored if it does not answer.\n\n"
+                    + (diff[:20000] or "No change: the helper is already current.")
+                    + ("\n\n" + files_diff[:20000] if files_diff else ""))
+        if action == "files_grant":
+            hours = round(self.profile["files_grant_seconds"] / 3600)
+            return ("Let administrator " + args["admin"] + " browse and change files anywhere on this computer through "
+                    "the File Manager for " + str(hours) + " h (read and write, except app data and sockets). "
+                    "Root-equivalent while active: a compromised app could act as root. Revoke it here any time.")
         if action == "unit_restart":
             return "Restart systemd unit " + args["unit"] + "."
         if action == "container_restart":
@@ -243,6 +280,12 @@ class Helper:
             return self.install_broker(args, request_id, run)
         if action == "supervisor_update":
             return self.update_helper(request_id)
+        if action == "files_grant":
+            with self.grants_lock:
+                grants = self.file_grants()
+                grants[args["admin"]] = self.clock() + self.profile["files_grant_seconds"]
+                self.save_file_grants(grants)
+            return {"admin": args["admin"], "until": grants[args["admin"]]}
         if action == "host_revert":
             target = self.load(args["request_id"])
             folder = self.state / "snapshots" / target["id"]
@@ -397,14 +440,40 @@ class Helper:
         except OSError:
             return False
 
+    def files_path(self):
+        return Path(self.profile["helper_dir"]) / "host_files.py"
+
+    def files_unit_path(self):
+        return Path(self.profile["unit_dir"]) / self.profile["files_unit"]
+
+    def update_files_service(self, folder):
+        """Install or refresh host_files.py and its unit from the installed broker release; False if current."""
+        source = Path(self.build_config()["service_dir"]) / "host_files.py"
+        if not source.exists():
+            return False
+        new, target, unit = source.read_bytes(), self.files_path(), self.files_unit_path()
+        unit_text = FILES_UNIT.format(path=target).encode()
+        if target.exists() and target.read_bytes() == new and unit.exists() and unit.read_bytes() == unit_text:
+            return False
+        if target.exists():
+            (folder / "host_files.py").write_bytes(target.read_bytes())
+        self.write(target, new, 0o644)
+        self.write(unit, unit_text, 0o644)
+        self.runner(["systemctl", "daemon-reload"], timeout=60)
+        self.runner(["systemctl", "enable", self.profile["files_unit"]], timeout=60)
+        self.runner(["systemctl", "restart", self.profile["files_unit"]], timeout=60)
+        return True
+
     def update_helper(self, request_id):
         target = self.helper_path()
         new = (Path(self.build_config()["service_dir"]) / "host_helper.py").read_bytes()
         old = target.read_bytes()
-        if new == old:
-            return {"changed": False}
         folder = self.state / "snapshots" / request_id
-        folder.mkdir(parents=True, mode=0o700)
+        folder.mkdir(parents=True, mode=0o700, exist_ok=True)
+        # The file service ships beside the helper; a failed file service never blocks the helper update.
+        files = self.update_files_service(folder)
+        if new == old:
+            return {"changed": False, "files_service": files}
         (folder / "host_helper.py").write_bytes(old)
         self.write(target, new, 0o644)
         unit = self.profile["helper_unit"]
@@ -413,7 +482,8 @@ class Helper:
         while self.clock() < deadline:
             time.sleep(2)
             if self.helper_answers():
-                return {"changed": True, "sha256": hashlib.sha256(new).hexdigest(), "previous": str(folder / "host_helper.py")}
+                return {"changed": True, "files_service": files, "sha256": hashlib.sha256(new).hexdigest(),
+                        "previous": str(folder / "host_helper.py")}
         self.write(target, old, 0o644)
         self.runner(["systemctl", "restart", unit], timeout=60)
         raise RuntimeError("the new helper did not answer within 30 seconds; previous copy restored")
@@ -430,7 +500,7 @@ class Helper:
             return
         thread = threading.Thread(target=self.settle, args=(record,), daemon=True)
         thread.start()
-        if record["action"] in ("noop", "host_status"):
+        if record["action"] in ("noop", "host_status", "files_grant"):
             thread.join()
             record.update(self.load(record["id"]))
 
@@ -460,11 +530,14 @@ class Helper:
                 records = [self.load(p.stem) for p in sorted((self.state / "requests").glob("*.json"))]
             pending = [r for r in records if r["state"] == "pending"]
             recent = sorted((r for r in records if r["state"] != "pending"), key=lambda r: -r.get("decided_at", 0))[:50]
-            return {"pending": pending, "recent": recent, "windows": self.windows()}
+            return {"pending": pending, "recent": recent, "windows": self.windows(),
+                    "file_grants": self.file_grants(), "file_log": self.file_log(50)}
         if op == "decide" and app:
             return self.decide(message)
         if op == "allow" and app:
             return self.allow(message)
+        if op == "files_revoke" and app:
+            return self.files_revoke(message)
         raise PermissionError("operation not allowed for this caller")
 
     def request(self, message, channel):
@@ -477,8 +550,16 @@ class Helper:
         spec = ACTIONS[action]
         boot_disk = spec["boot_disk"] or self.check(action, args)
         now = self.clock()
+        if action == "files_grant":
+            # One waiting grant per administrator: each further click finds the same request.
+            with self.lock:
+                for path in sorted((self.state / "requests").glob("*.json")):
+                    waiting = self.load(path.stem)
+                    if waiting["state"] == "pending" and waiting["action"] == action and waiting["args"] == args:
+                        return waiting
         record = {"id": secrets.token_hex(16), "action": action, "args": args, "preview": self.preview(action, args),
-                  "undo": spec["undo"], "boot_disk": boot_disk, "requester": {"channel": channel, **requester},
+                  "undo": spec["undo"], "boot_disk": boot_disk, "passphrase": bool(spec.get("passphrase")),
+                  "requester": {"channel": channel, **requester},
                   "state": "pending", "created_at": now, "expires_at": now + ttl if (ttl := self.profile["request_ttl_seconds"]) else None}
         with self.lock:
             self.save(record)
@@ -486,7 +567,7 @@ class Helper:
             # An app request is covered by its chat session's window, an SSH request by "ssh:<identity>".
             key = requester.get("session") if channel == "app" else "ssh:" + str(requester.get("identity", ""))
             record["allow_key"] = key
-            covered = spec["undo"] != "none" and not boot_disk and self.allow_window(key)
+            covered = spec["undo"] != "none" and not boot_disk and not spec.get("passphrase") and self.allow_window(key)
             self.save(record)
             if spec["read"] or covered:
                 record.update(state="approved", decided_at=now, decided_by="read-only" if spec["read"] else "allow-all")
@@ -503,7 +584,8 @@ class Helper:
             if record["state"] != "pending":
                 raise ValueError("request is " + record["state"])
             # Boot and disk approvals need the host approval passphrase, checked here, never by the app.
-            if decision == "approve" and record["boot_disk"]:
+            # So do File Manager grants outside the checkout (root-equivalent while live).
+            if decision == "approve" and (record["boot_disk"] or record.get("passphrase")):
                 self.check_passphrase(message.get("passphrase"))
             record.update(state="approved" if decision == "approve" else "denied", decided_at=self.clock(), decided_by=admin)
             self.save(record)
@@ -547,6 +629,50 @@ class Helper:
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
         self.log({"event": "passphrase_set"})
+
+    # File Manager outside the checkout ----------------------------------------------------
+    def file_grants(self):
+        """Live grants: administrator -> expiry time. host_files.py reads the same file."""
+        path = self.state / "file-grants.json"
+        grants = json.loads(path.read_text()) if path.exists() else {}
+        return {admin: until for admin, until in grants.items() if until > self.clock()}
+
+    def save_file_grants(self, grants):
+        path = self.state / "file-grants.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(grants, sort_keys=True))
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+
+    def file_log(self, limit):
+        """The newest changes the host file service made, newest first."""
+        path = self.state / "files-log.jsonl"
+        if not path.exists():
+            return []
+        with path.open("rb") as stream:
+            stream.seek(max(0, path.stat().st_size - 256 * 1024))
+            lines = stream.read().decode(errors="replace").splitlines()
+        entries = []
+        for line in reversed(lines):
+            try:
+                entries.append(json.loads(line))
+            except ValueError:
+                continue
+            if len(entries) >= limit:
+                break
+        return entries
+
+    def files_revoke(self, message):
+        """Narrowing needs no passphrase: any administrator may end a grant at once."""
+        admin, by = message.get("admin"), message.get("by")
+        if not isinstance(admin, str) or not admin or not isinstance(by, str) or not by:
+            raise ValueError("files_revoke takes the granted admin and the revoking admin")
+        with self.grants_lock:
+            grants = self.file_grants()
+            existed = grants.pop(admin, None) is not None
+            self.save_file_grants(grants)
+        self.log({"event": "files_revoke", "admin": admin, "by": by})
+        return {"admin": admin, "revoked": existed}
 
     def allow(self, message):
         session, seconds, admin = message.get("session"), message.get("seconds", self.profile["allow_default_seconds"]), message.get("admin")

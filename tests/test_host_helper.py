@@ -119,6 +119,35 @@ class HelperTests(unittest.TestCase):
             self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin", "passphrase": "guess"})
         self.assertEqual("done", self.approve(record, passphrase="correct horse battery")["state"])
 
+    def test_file_grants_need_the_passphrase_and_can_be_revoked(self):
+        self.helper.handle(APP, {"op": "allow", "session": "*", "seconds": 600, "admin": "admin"})
+        ask = lambda: self.helper.handle(APP, {"op": "request", "action": "files_grant", "args": {"admin": "alex"}, "requester": {"user": "alex"}})
+        record = ask()
+        self.assertEqual(("pending", True), (record["state"], record["passphrase"]))  # allow-all never covers it
+        self.assertEqual(record["id"], ask()["id"])  # a second click finds the same request
+        with self.assertRaises(ValueError):
+            self.helper.handle(APP, {"op": "request", "action": "files_grant", "args": {"admin": "a/b"}, "requester": {}})
+        with self.assertRaisesRegex(PermissionError, "no host approval passphrase"):
+            self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
+        self.helper.set_passphrase("correct horse battery")
+        self.assertEqual("done", self.approve(record, passphrase="correct horse battery")["state"])
+        page = self.helper.handle(APP, {"op": "list"})
+        self.assertEqual(self.now + 86400, page["file_grants"]["alex"])
+        self.now += 86401
+        self.assertEqual({}, self.helper.handle(APP, {"op": "list"})["file_grants"])  # expired
+        self.now -= 86401
+        with self.assertRaises(PermissionError):
+            self.helper.handle(OPERATOR, {"op": "files_revoke", "admin": "alex", "by": "me"})
+        self.assertTrue(self.helper.handle(APP, {"op": "files_revoke", "admin": "alex", "by": "admin"})["revoked"])
+        self.assertEqual({}, self.helper.handle(APP, {"op": "list"})["file_grants"])
+
+    def test_file_log_reads_newest_first(self):
+        import json
+        with (Path(self.temp.name) / "files-log.jsonl").open("w") as stream:
+            for n in range(3):
+                stream.write(json.dumps({"op": "write", "n": n}) + "\n")
+        self.assertEqual([2, 1], [e["n"] for e in self.helper.file_log(2)])
+
     def test_wrong_passphrases_lock_for_fifteen_minutes(self):
         self.helper.set_passphrase("correct horse battery")
         for _ in range(5):
