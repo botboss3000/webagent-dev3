@@ -96,6 +96,14 @@ pub(crate) async fn memory_delete(
     app.store.delete(&key).await?;
     Ok(Json(json!({"deleted":true})))
 }
+/// How often an open event stream re-runs its full session, access and login check and
+/// refreshes the session summary when nothing new arrives. New events always get a fresh
+/// check before they are sent.
+const STREAM_RECHECK_SECONDS: u64 = 3;
+/// After this long without new events or summary changes the stream probes more slowly.
+const STREAM_QUIET_SECONDS: u64 = 30;
+const STREAM_BUSY_PROBE: Duration = Duration::from_millis(200);
+const STREAM_QUIET_PROBE: Duration = Duration::from_secs(1);
 pub(crate) async fn events(
     State(app): State<App>,
     Path(id): Path<String>,
@@ -156,6 +164,7 @@ pub(crate) async fn events(
             access_revision,
             None::<String>,
             0u64,
+            now(),
         ),
         move |(
             app,
@@ -172,31 +181,35 @@ pub(crate) async fn events(
             access_revision,
             mut metadata_revision,
             mut metadata_checked,
+            mut active_at,
         )| async move {
             loop {
-                if !app
-                    .store
-                    .get(&key("session", &id))
-                    .await
-                    .is_ok_and(|session| {
-                        session.is_some_and(|s| {
-                            s["status"] == "active"
-                                && s["execution_epoch"].as_u64().unwrap_or(0) == execution_epoch
-                        })
-                    })
-                {
-                    return None;
-                }
                 if now() - start > 3600 || app.stop.is_cancelled() || now() >= expires {
                     return None;
                 }
-                if crate::shared_chat::resolve(&app, &id, &user_id)
-                    .await
-                    .is_err()
-                {
-                    return None;
-                }
-                if now() > checked {
+                // The full check (session, access, login, account) runs every
+                // STREAM_RECHECK_SECONDS and always before newly fetched events are sent;
+                // the 200 ms probe between checks reads only the event log.
+                if now() >= checked.saturating_add(STREAM_RECHECK_SECONDS) {
+                    if !app
+                        .store
+                        .get(&key("session", &id))
+                        .await
+                        .is_ok_and(|session| {
+                            session.is_some_and(|s| {
+                                s["status"] == "active"
+                                    && s["execution_epoch"].as_u64().unwrap_or(0) == execution_epoch
+                            })
+                        })
+                    {
+                        return None;
+                    }
+                    if crate::shared_chat::resolve(&app, &id, &user_id)
+                        .await
+                        .is_err()
+                    {
+                        return None;
+                    }
                     let doc = app.store.get(&auth_key).await.ok().flatten();
                     let account = app.store.account_by_id(&user_id).await.ok().flatten();
                     let access =
@@ -250,6 +263,7 @@ pub(crate) async fn events(
                             access_revision,
                             metadata_revision,
                             metadata_checked,
+                            active_at,
                         ),
                     ));
                 }
@@ -267,7 +281,14 @@ pub(crate) async fn events(
                     }
                     Err(_) => return None,
                 };
-                if queue.is_empty() && now() > metadata_checked {
+                if !queue.is_empty() {
+                    // Re-run the full check before sending, then refresh the summary soon after.
+                    checked = 0;
+                    metadata_checked = 0;
+                    active_at = now();
+                    continue;
+                }
+                if now() >= metadata_checked.saturating_add(STREAM_RECHECK_SECONDS) {
                     metadata_checked = now();
                     let summary = app.store.session_read_summary(&id).await.ok()?;
                     let participation = app.store.participation_state(&id).await.ok()?;
@@ -305,7 +326,14 @@ pub(crate) async fn events(
                         notes_revision
                     ]));
                     if metadata_revision.as_ref() != Some(&revision) {
+                        if now() > checked {
+                            // A changed summary is sent only after a full check this second.
+                            checked = 0;
+                            metadata_checked = 0;
+                            continue;
+                        }
                         metadata_revision = Some(revision);
+                        active_at = now();
                         // Metadata events deliberately carry no SSE ID: event-log
                         // sequence numbers are not public chat sequence numbers.
                         let event = Event::default().event("session_updated")
@@ -327,12 +355,20 @@ pub(crate) async fn events(
                                 access_revision,
                                 metadata_revision,
                                 metadata_checked,
+                                active_at,
                             ),
                         ));
                     }
                 }
                 if queue.is_empty() {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    // Probe quickly while the conversation is busy, slowly once it is quiet.
+                    let quiet = now().saturating_sub(active_at) >= STREAM_QUIET_SECONDS;
+                    tokio::time::sleep(if quiet {
+                        STREAM_QUIET_PROBE
+                    } else {
+                        STREAM_BUSY_PROBE
+                    })
+                    .await;
                 }
             }
         },
