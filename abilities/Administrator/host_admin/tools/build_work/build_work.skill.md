@@ -10,9 +10,9 @@
 - Ownership and publication gates remain enforced.
 
 The isolated broker task lifecycle: begin, status, review, check, preflight,
-finish, decide, receipt, wait, cancel and abandon. File tools create a task
-automatically; begin explicitly only to set a summary. Creating or editing a
-task never builds or deploys.
+finish, decide, receipt, wait, cancel and abandon. Begin every new piece of work
+explicitly (label and summary); file tools then continue it but cannot create a
+task. Creating or editing a task never builds or deploys.
 
 ## Checks before finish
 

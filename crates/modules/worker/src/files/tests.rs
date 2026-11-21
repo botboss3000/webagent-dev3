@@ -129,6 +129,60 @@ fn reads_page_by_lines_and_report_the_next_offset() {
 }
 
 #[test]
+fn edits_replace_several_blocks_at_once_or_none() {
+    let fixture = fixture();
+    let path = fixture.path("multi.txt");
+    fixture.call(
+        "file_write",
+        json!({"path":path,"content":"alpha\nbeta\ngamma\n"}),
+    );
+    let edited = fixture.call(
+        "file_edit",
+        json!({"path":path,"edits":[{"old_text":"gamma","new_text":"third"},
+            {"old_text":"alpha","new_text":"first"}],"old_text":null,"new_text":null}),
+    );
+    assert_eq!(edited["status"], "success", "{edited}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("file"),
+        "first\nbeta\nthird\n"
+    );
+    for (edits, output) in [
+        (
+            json!([{"old_text":"first","new_text":"x"},{"old_text":"missing","new_text":"y"}]),
+            "edits[2].old_text must match exactly once",
+        ),
+        (
+            json!([{"old_text":"first\nbeta","new_text":"x"},{"old_text":"beta","new_text":"y"}]),
+            "edits[1].old_text and edits[2].old_text overlap; merge them into one edit",
+        ),
+        (
+            json!([]),
+            "edits must list 1 to 20 {old_text,new_text} pairs",
+        ),
+        (
+            json!([{"old_text":"first","new_text":"x","path":"other"}]),
+            "each edit takes only old_text and new_text",
+        ),
+    ] {
+        let refused = fixture.call("file_edit", json!({"path":path,"edits":edits}));
+        assert_eq!(refused["output"], output, "{refused}");
+    }
+    let both = fixture.call(
+        "file_edit",
+        json!({"path":path,"old_text":"first","new_text":"x",
+            "edits":[{"old_text":"beta","new_text":"y"}]}),
+    );
+    assert_eq!(
+        both["output"],
+        "file_edit takes edits or old_text/new_text, not both"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("file"),
+        "first\nbeta\nthird\n"
+    );
+}
+
+#[test]
 fn an_edit_must_match_exactly_once_and_respects_the_expected_hash() {
     let fixture = fixture();
     let path = fixture.path("twice.txt");
@@ -251,7 +305,7 @@ fn checkout_edits_refuse_runtime_state_and_ambiguous_requests() {
     );
     assert_eq!(
         both["output"],
-        "Pass content to write a file, or old_text and new_text to edit one"
+        "Pass content to write a file, or old_text and new_text (or edits) to edit one"
     );
 }
 

@@ -1,6 +1,6 @@
 # checkout_edit
 
-Write or edit one file directly in the live checkout (/code), without a broker task. Pass path (source-relative or under /code) and either content to create/replace the file, or old_text and new_text to replace exactly one matching span (optionally expected_sha256 from an earlier read). Runtime state, workspaces, build output and Git metadata are excluded.
+Write or edit one file directly in the live checkout (/code), without a broker task. Pass path (source-relative or under /code) and either content to create/replace the file, or old_text and new_text to replace exactly one matching span, or `edits` (up to 20 `{"old_text","new_text"}` pairs, each matching the original file exactly once, not overlapping, applied all or none) to change several places in one call (optionally expected_sha256 from an earlier read). Runtime state, workspaces, build output and Git metadata are excluded.
 
 Use it for live files: the .json and .md files listed in /code/live-files.json (for example prompt Markdown and runtime JSON configuration). The app reads them live and the broker commits the edit automatically. When a live-file change belongs with code that depends on it, put it in that code's broker task instead, so both ship in one release; the broker checks it against the task's base bytes, so an in-place edit made after the task began stops promotion instead of being overwritten.
 

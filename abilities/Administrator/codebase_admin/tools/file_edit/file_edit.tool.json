@@ -1,6 +1,6 @@
 {
   "name": "file_edit",
-  "description": "Replace exactly one matching span in an existing container or live-checkout file; policy-gated, never deploys.",
+  "description": "Replace exact text spans (one old_text/new_text pair or an edits list) in an existing container or live-checkout file; policy-gated, never deploys.",
   "parameters": {
     "type": "object",
     "properties": {
@@ -12,6 +12,29 @@
       },
       "new_text": {
         "type": "string"
+      },
+      "edits": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "description": "Several replacements in this file, applied together or not at all; use instead of old_text/new_text.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "old_text": {
+              "type": "string",
+              "minLength": 1
+            },
+            "new_text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "old_text",
+            "new_text"
+          ],
+          "additionalProperties": false
+        }
       },
       "expected_sha256": {
         "type": "string"
@@ -38,9 +61,7 @@
       }
     },
     "required": [
-      "path",
-      "old_text",
-      "new_text"
+      "path"
     ],
     "additionalProperties": false
   },

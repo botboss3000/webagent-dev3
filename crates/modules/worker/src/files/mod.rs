@@ -345,9 +345,11 @@ fn route(roots: &Roots, name: &str, args: &Value) -> Outcome<Map<String, Value>>
                 "Path must be a live-checkout source path outside runtime state",
             ));
         }
-        if args.contains_key("content") == args.contains_key("old_text") {
+        if args.contains_key("content")
+            == (args.contains_key("old_text") || args.contains_key("edits"))
+        {
             return Err(rejected(
-                "Pass content to write a file, or old_text and new_text to edit one",
+                "Pass content to write a file, or old_text and new_text (or edits) to edit one",
             ));
         }
         let mut routed = present;
@@ -691,19 +693,105 @@ fn hex_digest(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// Most `edits` pairs one `file_edit` call applies.
+const MAX_EDITS: usize = 20;
+
+/// The replacements a call asks for: one `old_text`/`new_text` pair, or `edits` (1 to
+/// [`MAX_EDITS`] `{old_text, new_text}` pairs), never both. Null counts as absent, since
+/// some providers send every declared field.
+fn edit_pairs(args: &Map<String, Value>) -> Outcome<Vec<(&str, &str)>> {
+    let present = |key: &str| args.get(key).filter(|value| !value.is_null());
+    let Some(edits) = present("edits") else {
+        return Ok(vec![edit_pair(present("old_text"), present("new_text"))?]);
+    };
+    if present("old_text").is_some() || present("new_text").is_some() {
+        return Err(rejected(
+            "file_edit takes edits or old_text/new_text, not both",
+        ));
+    }
+    let edits = edits
+        .as_array()
+        .filter(|edits| (1..=MAX_EDITS).contains(&edits.len()))
+        .ok_or_else(|| rejected("edits must list 1 to 20 {old_text,new_text} pairs"))?;
+    edits
+        .iter()
+        .map(|edit| {
+            let edit = edit
+                .as_object()
+                .filter(|edit| {
+                    edit.keys()
+                        .all(|key| key == "old_text" || key == "new_text")
+                })
+                .ok_or_else(|| rejected("each edit takes only old_text and new_text"))?;
+            edit_pair(edit.get("old_text"), edit.get("new_text"))
+        })
+        .collect()
+}
+
+/// One `{old_text, new_text}` replacement: nonempty old text and any new text.
+fn edit_pair<'a>(old: Option<&'a Value>, new: Option<&'a Value>) -> Outcome<(&'a str, &'a str)> {
+    let old = old.ok_or_else(|| rejected("'old_text'"))?;
+    let new = new.ok_or_else(|| rejected("'new_text'"))?;
+    let old = old
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| rejected("old_text must be nonempty text"))?;
+    let new = new
+        .as_str()
+        .ok_or_else(|| rejected("new_text must be text"))?;
+    Ok((old, new))
+}
+
+/// `original` with every pair's `old_text` replaced. Each `old_text` must match the
+/// original exactly once and matched spans may not overlap; any failure rejects the whole
+/// call, so the file gets every replacement or none.
+fn replaced(original: &[u8], pairs: &[(&str, &str)]) -> Outcome<Vec<u8>> {
+    let label = |index: usize| {
+        if pairs.len() == 1 {
+            "old_text".to_owned()
+        } else {
+            format!("edits[{}].old_text", index + 1)
+        }
+    };
+    let mut spans = Vec::with_capacity(pairs.len());
+    for (index, (old, new)) in pairs.iter().enumerate() {
+        let before = old.as_bytes();
+        let at = find(original, before)
+            .filter(|at| find(&original[at + before.len()..], before).is_none())
+            .ok_or_else(|| {
+                rejected_kind(
+                    "ambiguous_match",
+                    &format!("{} must match exactly once", label(index)),
+                )
+            })?;
+        spans.push((at, at + before.len(), new.as_bytes(), index));
+    }
+    spans.sort_unstable_by_key(|span| span.0);
+    for pair in spans.windows(2) {
+        if pair[1].0 < pair[0].1 {
+            return Err(rejected(&format!(
+                "{} and {} overlap; merge them into one edit",
+                label(pair[0].3),
+                label(pair[1].3)
+            )));
+        }
+    }
+    let mut updated = Vec::with_capacity(original.len());
+    let mut cursor = 0;
+    for (start, end, new, _) in spans {
+        updated.extend_from_slice(&original[cursor..start]);
+        updated.extend_from_slice(new);
+        cursor = end;
+    }
+    updated.extend_from_slice(&original[cursor..]);
+    Ok(updated)
+}
+
 fn edit(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome<Value> {
     if leaf == "." {
         return Err(rejected("path must name a file"));
     }
-    let old_text = args.get("old_text").ok_or_else(|| rejected("'old_text'"))?;
-    let new_text = args.get("new_text").ok_or_else(|| rejected("'new_text'"))?;
-    let old_text = old_text
-        .as_str()
-        .filter(|text| !text.is_empty())
-        .ok_or_else(|| rejected("old_text must be nonempty text"))?;
-    let new_text = new_text
-        .as_str()
-        .ok_or_else(|| rejected("new_text must be text"))?;
+    let pairs = edit_pairs(args)?;
     let expected = match args.get("expected_sha256") {
         None | Some(Value::Null) => None,
         Some(Value::String(hash)) if hex_digest(hash) => Some(hash.as_str()),
@@ -733,23 +821,7 @@ fn edit(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome
             "file changed since inspection",
         ));
     }
-    let before = old_text.as_bytes();
-    let Some(at) = find(&original, before) else {
-        return Err(rejected_kind(
-            "ambiguous_match",
-            "old_text must match exactly once",
-        ));
-    };
-    if find(&original[at + before.len()..], before).is_some() {
-        return Err(rejected_kind(
-            "ambiguous_match",
-            "old_text must match exactly once",
-        ));
-    }
-    let mut updated = Vec::with_capacity(original.len() + new_text.len());
-    updated.extend_from_slice(&original[..at]);
-    updated.extend_from_slice(new_text.as_bytes());
-    updated.extend_from_slice(&original[at + before.len()..]);
+    let updated = replaced(&original, &pairs)?;
     if updated.len() > LIMIT {
         return Err(rejected_kind("too_large", "file content exceeds limit"));
     }

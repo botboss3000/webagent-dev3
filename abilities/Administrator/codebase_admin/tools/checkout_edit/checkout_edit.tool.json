@@ -1,6 +1,6 @@
 {
   "name": "checkout_edit",
-  "description": "Write (content) or edit (old_text/new_text) one live-checkout source file directly, without a broker task; not built or deployed; policy-gated",
+  "description": "Write (content) or edit (old_text/new_text or edits) one live-checkout source file directly, without a broker task; not built or deployed; policy-gated",
   "parameters": {
     "type": "object",
     "properties": {
@@ -15,6 +15,29 @@
       },
       "new_text": {
         "type": "string"
+      },
+      "edits": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "description": "Several replacements in this file, applied together or not at all; use instead of old_text/new_text.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "old_text": {
+              "type": "string",
+              "minLength": 1
+            },
+            "new_text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "old_text",
+            "new_text"
+          ],
+          "additionalProperties": false
+        }
       },
       "expected_sha256": {
         "type": "string",

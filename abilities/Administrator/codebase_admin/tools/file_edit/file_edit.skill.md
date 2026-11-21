@@ -2,14 +2,16 @@
 
 ## Usage
 
-- Replace exactly one matching span in an existing container or live-checkout file; policy-gated.
-- Source writes use isolated broker work automatically.
+- Replace exact text spans in an existing container or live-checkout file; policy-gated.
+- Source writes need open broker work: start new work with build_work action=begin (label and summary), then edit; later edits continue it. A source write with no open work is refused.
 - Files are read from the source checkout (/code) and this session's workspace; other container paths, including runtime data, are refused.
 - Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads.
 - Optional broker_id selects current, new or returned work.
 - Explicit runtime/workspace paths retain their owning tools.
 - Never deploys.
 
-file_edit replaces exactly one matching old_text block, which may span many lines.
+file_edit replaces old_text with new_text; old_text must match the file exactly once and may span many lines.
 
-Paths are source-relative (src/example.rs). Writes without task_id create or reuse an isolated task and return its ID; reuse it. Writes need a stable request_id and the latest expected_inputs_sha256; reread after a stale-input error. No task write may modify data/. Live files (listed in /code/live-files.json) are edited with checkout_edit instead. Pass the task ID to read or search the private draft; reads without it see published source.
+To change several places in one file, send them in one call as `edits`: a list of up to 20 `{"old_text","new_text"}` pairs, instead of old_text/new_text. Every old_text is matched against the file as it was before the call, so later pairs never see earlier replacements, and matched spans may not overlap (merge neighbouring changes into one pair). The call applies all pairs or none: a pair that matches zero or several times, or overlaps another, refuses the whole call and names it (`edits[2].old_text must match exactly once`). Prefer one `edits` call over a run of single edits: it takes one expected_inputs_sha256 and one request_id. Rewrite a file whose changes touch most of it with file_write instead.
+
+Paths are source-relative (src/example.rs). Writes continue the current broker work, or the one broker_id names. Writes need a stable request_id and the latest expected_inputs_sha256; reread after a stale-input error. No task write may modify data/. Live files (listed in /code/live-files.json) are edited with checkout_edit instead. Pass the task ID to read or search the private draft; reads without it see published source.
