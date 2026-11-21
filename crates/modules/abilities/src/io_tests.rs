@@ -31,7 +31,7 @@ impl Host for Fixture {
     fn module_known(_: &str) -> bool {
         false
     }
-    fn module_available(_: &str) -> bool {
+    fn module_enabled(_: &str) -> bool {
         false
     }
     fn optimization_folder() -> PathBuf {
@@ -46,7 +46,7 @@ impl Host for Fixture {
             .map_err(|_| anyhow!("Invalid fixture optional declaration"))?;
         Ok(Some((hex::encode(Sha256::digest(&bytes)), value)))
     }
-    fn optimization_available() -> bool {
+    fn optimization_installed() -> bool {
         true
     }
     fn optimization_generation() -> Option<String> {
@@ -58,7 +58,7 @@ impl Host for Fixture {
     fn optimization_guidance() -> Option<String> {
         Some("Owned fixture guidance".into())
     }
-    fn mcp_available() -> bool {
+    fn mcp_installed() -> bool {
         false
     }
     fn administrator_tier() -> bool {

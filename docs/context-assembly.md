@@ -11,7 +11,7 @@ up to the first byte that changed.
 
 | Part | What it holds | When it changes |
 | --- | --- | --- |
-| Tool definitions | Schemas of the active abilities' tools | The user activates or removes an ability (a major reorder) |
+| Tool definitions | Schemas of every installed, enabled tool the agent may use | Only a direct change: Off, session removal, permissions, or an install or release that changes a tool (a major reorder); see **What the tool definitions depend on** |
 | Instructions | Base instructions and prompt slots, skills not in the history, the skill menu, Main Notes guidance and snapshot, the session task list snapshot | A block merge or major reorder; a changed live source (prompt, skill or menu file) |
 | Retained rows R1, R2, ... | Per fold: loaded skills (`load_skill` results), the latest `set_execution_mode` result, one combined Main Notes change, one combined task list change | Written once by their fold, then unchanged until a merge or major reorder |
 | Summary blocks B1, B2, ... | One summary per fold | A merge rewrites the oldest ones into one |
@@ -26,8 +26,8 @@ Four events reshape the request:
 - **Merge** (built): once the blocks together pass `merge_tokens`, folds the oldest
   blocks and their rows into one block; their skills and notes go into the
   instructions.
-- **Major reorder**: after the cache timeout or when the user
-  activates an ability, moves every retained row into the instructions, rebuilds
+- **Major reorder**: after the cache timeout or when the tool definitions
+  change (a direct change only), moves every retained row into the instructions, rebuilds
   the Main Notes snapshot and summarizes only if over the trigger.
 - **Keep-alive** (experimental, off by default): resends the last request
   before the timeout so the cache stays warm; the context does not change. It
@@ -203,8 +203,9 @@ tokens cached by the provider); after fold 2 the first change was entry 5, right
 after R1 and B1 (252,932 bytes, 66,176 tokens).
 
 **Major reorder (built, commits 4b118d5, f9b7c50).** Triggered by the cache
-timeout (idle time since the session's last model call) or by the user activating
-an ability (it changes the tool definitions; agents have no activation tool).
+timeout (idle time since the session's last model call) or by a change to the tool
+definitions, which only a direct change makes (see below; agents have no activation
+tool).
 Retained rows move into the instructions and Main Notes becomes one current
 snapshot with the diffs dropped. The current mode arrives as one fresh
 `set_execution_mode` exchange at the end of the history, as later mode changes do. Skills in history that is not summarized
@@ -215,6 +216,28 @@ new tools, pausing only when a summary is needed. The loop keeps each session's
 last call time in memory; after a restart the first pass of a run uses the
 session's latest stored run update instead. Each reorder logs `context reordered`
 with its reason (`idle` or `tools`).
+
+**What the tool definitions depend on.** The tool list sent with each call is every
+installed tool of an ability that is not Off, minus tools switched Off, abilities removed
+from the session and tools the caller's permissions deny, with fixed per-agent schema
+edits (web search providers, `start_session` without delegation). Nothing else changes
+it, so it changes only when a user or administrator does something: switches an ability
+or tool Off or back on, removes an ability from the session, changes permissions or
+those settings, installs, enables or disables an optional package, or releases a changed
+tool. An ability's discoverable (`on_request`) or visible (`loaded`) mode decides only
+whether its skills are in the instructions, never whether its tools are listed.
+Optional packages (Automation, outbound notifications, MCP, Optimization) count as
+present while they are installed and enabled, whatever their health: the catalog's host
+interface (`module_enabled`, `mcp_installed`, `optimization_installed` in
+`crates/modules/abilities/src/ports.rs`) has no health input. A call made while a package
+is unhealthy or not ready fails with an error at execution instead
+(`crates/modules/extensions/host/modules.rs` checks the module health receipt, the MCP
+bridge its readiness marker, `performance_work` the optimizer's). Module health probes
+run every `PROBE_INTERVAL_SECONDS` (60) and stay valid for 90 seconds
+(`crates/modules/extensions/src/health.rs`). Before 2026-11-21 the catalog offered a
+package's tools only while its health was current, and a 15-second health window against
+the 60-second probe dropped Automation's 14 tools for most of each minute, so most model
+calls started with a `tools` reorder.
 
 **Cache timeout (built).** `cache_timeout_minutes` per model or provider in
 `config/models/providers/<provider>.json` (60 minutes when absent), and

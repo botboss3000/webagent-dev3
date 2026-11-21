@@ -115,8 +115,8 @@ impl webagent_abilities::Host for NativeHost {
     fn module_known(name: &str) -> bool {
         crate::modules::package_root(name).is_some()
     }
-    fn module_available(name: &str) -> bool {
-        crate::modules::available(name)
+    fn module_enabled(name: &str) -> bool {
+        crate::modules::enabled(name)
     }
     fn optimization_folder() -> PathBuf {
         crate::optimization::folder()
@@ -124,8 +124,8 @@ impl webagent_abilities::Host for NativeHost {
     fn optimization_declaration() -> Result<Option<(String, Value)>> {
         crate::optimization::declaration()
     }
-    fn optimization_available() -> bool {
-        crate::optimization::available()
+    fn optimization_installed() -> bool {
+        crate::optimization::installed()
     }
     fn optimization_generation() -> Option<String> {
         crate::optimization::generation()
@@ -133,8 +133,8 @@ impl webagent_abilities::Host for NativeHost {
     fn optimization_guidance() -> Option<String> {
         crate::optimization::guidance()
     }
-    fn mcp_available() -> bool {
-        crate::mcp::bridge::available()
+    fn mcp_installed() -> bool {
+        crate::mcp::bridge::installed()
     }
     fn drift() -> std::sync::Arc<webagent_abilities::drift::Drift> {
         crate::ability_drift::current()

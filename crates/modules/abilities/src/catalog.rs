@@ -722,7 +722,7 @@ impl<H: Host> Catalog<H> {
                     || manifest
                         .required_module
                         .as_deref()
-                        .is_some_and(|module| !H::module_available(module));
+                        .is_some_and(|module| !H::module_enabled(module));
                 if !omitted_module
                     && matches!(readiness, Readiness::Ready | Readiness::Partial)
                     && (!matches!(manifest.kind, EntryKind::Ability | EntryKind::VirtualCore)
@@ -993,15 +993,17 @@ impl<H: Host> Catalog<H> {
     }
 
     fn present(ability: &Ability) -> bool {
-        // MCP tools work only while its separately installed package is present.
-        if ability.id == "mcp" && !H::mcp_available() {
+        // MCP tools exist only while its separately installed package is present. Readiness
+        // is not checked here: schemas must not change when a plugin restarts, and a call
+        // made while it is not ready fails at execution.
+        if ability.id == "mcp" && !H::mcp_installed() {
             return false;
         }
         if ability.id == crate::base::ID {
             return true;
         }
         if ability.id == "optimization" {
-            return H::optimization_available();
+            return H::optimization_installed();
         }
         // Presence alone cannot retain an old executable declaration after an
         // operator disables or edits its manifest. Unreadable/changed bytes fail closed.
@@ -1346,7 +1348,7 @@ impl<H: Host> Catalog<H> {
             && ability
                 .required_module
                 .as_deref()
-                .is_none_or(H::module_available)
+                .is_none_or(H::module_enabled)
             && matches!(ability.readiness, Readiness::Ready | Readiness::Partial)
             && matches!(ability.kind, EntryKind::Ability | EntryKind::VirtualCore)
     }
@@ -3403,7 +3405,7 @@ pub mod registered_tests {
                 .iter()
                 .find(|a| a.id == "automation")
                 .unwrap();
-            assert!(!H::module_available("automation"));
+            assert!(!H::module_enabled("automation"));
             assert!(!Catalog::<H>::executable(entry));
             assert!(!catalog.tool_available(
                 "schedule_task",

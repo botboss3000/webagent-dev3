@@ -224,7 +224,9 @@ Builds use the locked offline standalone crate and its complete test suite.
 Content-addressed artifacts resolve from the active immutable publication.
 Compatible implementation updates preserve activation identity and schedules;
 admitted calls retain their pinned executable. Missing or disabled packages
-reject new calls. Installation changes rotate activation identity, invalidate
+reject new calls. An installed, enabled package keeps its tool schemas in the model's
+tool list whatever its health; a call made while its health probe is failing or stale
+(probes run every 60 seconds and stay valid for 90) fails with an error instead. Installation changes rotate activation identity, invalidate
 health and deactivate retained work. Legacy copied files remain rollback
 material and cannot become an executable fallback.
 

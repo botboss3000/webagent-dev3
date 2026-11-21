@@ -9,13 +9,17 @@ pub trait Host: Clone + Send + Sync + 'static {
     fn native_schemas() -> Vec<Value>;
     fn administrator_supported(name: &str) -> bool;
     fn module_known(name: &str) -> bool;
-    fn module_available(name: &str) -> bool;
+    /// Installed and enabled by an administrator, whatever its health: the catalog offers
+    /// a module's tools from this, so their schemas never follow a health probe.
+    fn module_enabled(name: &str) -> bool;
     fn optimization_folder() -> PathBuf;
     fn optimization_declaration() -> Result<Option<(String, Value)>>;
-    fn optimization_available() -> bool;
+    /// A valid package is installed, whatever its readiness marker says.
+    fn optimization_installed() -> bool;
     fn optimization_generation() -> Option<String>;
     fn optimization_guidance() -> Option<String>;
-    fn mcp_available() -> bool;
+    /// A valid package is installed, whatever its readiness marker says.
+    fn mcp_installed() -> bool;
     /// Whether this build carries the Administrator tier. Without it the catalog skips the
     /// `Administrator` group, whose abilities would have no installed adapters.
     fn administrator_tier() -> bool {

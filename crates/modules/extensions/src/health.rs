@@ -1,17 +1,21 @@
 //! Package health and idle polling. Health receipts are content-free probe results bound
 //! to one activation generation (and, for native packages, one implementation); they
-//! expire fifteen seconds after the probe. Idle decisions never replace a reducer's or an
+//! expire [`FRESH`] seconds after the probe. Idle decisions never replace a reducer's or an
 //! admission's own decision.
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use webagent_platform::fs::MetadataExt;
 
-/// Seconds a probe result stays valid.
-const FRESH: u64 = 15;
+/// Seconds between health probes of an unchanged module installation.
+pub const PROBE_INTERVAL_SECONDS: u64 = 60;
+/// Seconds a probe result stays valid: one probe interval plus a margin for the
+/// five-second check loop and a slow probe, so a healthy package never lapses between
+/// probes (a 15-second window left it unavailable for most of each minute).
+const FRESH: u64 = PROBE_INTERVAL_SECONDS + 30;
 const CACHED: usize = 16;
 
-/// Whether `health` is a healthy probe of `generation` no older than fifteen seconds.
+/// Whether `health` is a healthy probe of `generation` no older than [`FRESH`] seconds.
 #[must_use]
 pub fn current(health: &Value, generation: &str, at: u64) -> bool {
     health["healthy"] == true
@@ -260,8 +264,15 @@ mod tests {
             json!({"healthy":true,"generation":"epoch","implementation":"code","checked_at":100});
         std::fs::write(&path, receipt.to_string()).unwrap();
         assert!(available(&path, "epoch", Some("code"), 100));
-        assert!(available(&path, "epoch", Some("code"), 115));
-        assert!(!available(&path, "epoch", Some("code"), 116));
+        // A probe stays valid until the next one is due, with margin.
+        assert!(available(
+            &path,
+            "epoch",
+            Some("code"),
+            100 + PROBE_INTERVAL_SECONDS + 5
+        ));
+        assert!(available(&path, "epoch", Some("code"), 100 + FRESH));
+        assert!(!available(&path, "epoch", Some("code"), 100 + FRESH + 1));
         assert!(!available(&path, "other", Some("code"), 101));
         assert!(!available(&path, "epoch", Some("new"), 101));
         let failed =
@@ -277,12 +288,17 @@ mod tests {
         assert!(binding_current(&health, "epoch", Some("code-a"), 100));
         assert!(!binding_current(&health, "epoch", Some("code-b"), 100));
         assert!(!binding_current(&health, "next-epoch", Some("code-a"), 100));
-        assert!(!binding_current(&health, "epoch", Some("code-a"), 116));
+        assert!(!binding_current(
+            &health,
+            "epoch",
+            Some("code-a"),
+            100 + FRESH + 1
+        ));
         health["implementation"] = Value::Null;
         assert!(!binding_current(&health, "epoch", Some("code-a"), 100));
         assert!(binding_current(&health, "epoch", None, 100));
-        assert!(current(&health, "epoch", 115));
-        assert!(!current(&health, "epoch", 116));
+        assert!(current(&health, "epoch", 100 + FRESH));
+        assert!(!current(&health, "epoch", 100 + FRESH + 1));
     }
 
     #[test]

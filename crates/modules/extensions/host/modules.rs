@@ -349,40 +349,48 @@ fn health_path(root: &FsPath, id: &str) -> PathBuf {
 /// tool, so a page load asked thousands of times. Running a tool still re-validates
 /// through `manifest`; this only bounds how stale a displayed or admitted answer can be.
 const AVAILABLE_REUSE: Duration = Duration::from_secs(1);
-static RECENT_AVAILABLE: std::sync::Mutex<Vec<(&'static str, std::time::Instant, bool)>> =
-    std::sync::Mutex::new(Vec::new());
+type Recent = std::sync::Mutex<Vec<(&'static str, std::time::Instant, bool)>>;
+static RECENT_AVAILABLE: Recent = std::sync::Mutex::new(Vec::new());
+static RECENT_ENABLED: Recent = std::sync::Mutex::new(Vec::new());
 /// The live package schema list, reused for the same window: catalog checks rebuild the
 /// whole tool list once per tool, and Automation's comes from its tool folders on disk.
 static RECENT_SCHEMAS: std::sync::Mutex<Option<(std::time::Instant, Vec<Value>)>> =
     std::sync::Mutex::new(None);
 /// Drop reused answers after this host changes an activation or health record.
 fn forget_available() {
-    RECENT_AVAILABLE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
+    for recent in [&RECENT_AVAILABLE, &RECENT_ENABLED] {
+        recent.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
     *RECENT_SCHEMAS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
+/// Installed, enabled and healthy: what running one of its tools needs.
 pub(crate) fn available(id: &str) -> bool {
+    reused(&RECENT_AVAILABLE, id, available_now)
+}
+/// Installed and enabled, whatever the last health probe said. The model's tool list
+/// follows this, so only an administrator's install, enable or disable changes it; a
+/// call made while the package is unhealthy fails instead (see `available`).
+pub(crate) fn enabled(id: &str) -> bool {
+    reused(&RECENT_ENABLED, id, |id| generation(id).is_ok())
+}
+fn reused(recent: &Recent, id: &str, check: fn(&str) -> bool) -> bool {
     // Only known package IDs are remembered, so the list stays bounded.
     let Some(id) = IDS.iter().copied().find(|known| *known == id) else {
-        return available_now(id);
+        return check(id);
     };
-    let recent = |id| {
-        RECENT_AVAILABLE
+    if cfg!(not(test)) {
+        if let Some(answer) = recent
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
             .find(|(known, at, _)| *known == id && at.elapsed() < AVAILABLE_REUSE)
             .map(|(_, _, answer)| *answer)
-    };
-    if cfg!(not(test)) {
-        if let Some(answer) = recent(id) {
+        {
             return answer;
         }
     }
-    let answer = available_now(id);
-    let mut list = RECENT_AVAILABLE.lock().unwrap_or_else(|e| e.into_inner());
+    let answer = check(id);
+    let mut list = recent.lock().unwrap_or_else(|e| e.into_inner());
     list.retain(|(known, _, _)| *known != id);
     list.push((id, std::time::Instant::now(), answer));
     answer
@@ -511,7 +519,7 @@ pub(crate) fn schemas() -> Vec<Value> {
     }
     let list: Vec<Value> = IDS
         .into_iter()
-        .filter(|id| available(id))
+        .filter(|id| enabled(id))
         .flat_map(package_schemas)
         .collect();
     *RECENT_SCHEMAS.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -523,7 +531,7 @@ pub(crate) fn owns_tool(name: &str) -> bool {
 }
 fn tool_package(name: &str) -> Option<&'static str> {
     IDS.into_iter().find(|id| {
-        available(id)
+        enabled(id)
             && package_schemas(id)
                 .iter()
                 .any(|schema| schema["name"] == name)
@@ -744,7 +752,9 @@ async fn perform(
         return Err(anyhow!("Module installation unavailable"));
     }
     if !internal && !available(id) {
-        return Err(anyhow!("Module health unavailable"));
+        return Err(anyhow!(
+            "Module service unavailable: its health check is failing or stale; try again shortly"
+        ));
     }
     let mut envelope = app.store.module_state(id).await?;
     // Internal host calls compare against this copy to skip rewriting an unchanged envelope.
@@ -1549,8 +1559,6 @@ pub(crate) async fn service(app: App) {
     }
     while workers.join_next().await.is_some() {}
 }
-/// Seconds between health probes of an unchanged module installation.
-const PROBE_INTERVAL_SECONDS: u64 = 60;
 async fn package_service(app: App, id: &'static str) {
     let mut jobs = tokio::task::JoinSet::new();
     let mut inflight = std::collections::HashSet::new();
@@ -1572,7 +1580,8 @@ async fn package_service(app: App, id: &'static str) {
             last_check = now();
             let due = |gen: &String| {
                 *gen != probed_generation
-                    || now().saturating_sub(last_probe) >= PROBE_INTERVAL_SECONDS
+                    || now().saturating_sub(last_probe)
+                        >= webagent_extensions::health::PROBE_INTERVAL_SECONDS
             };
             if let Some(gen) = generation(id).ok().filter(due) {
                 probed_generation = gen.clone();
@@ -2273,11 +2282,17 @@ mod tests {
     #[test]
     fn health_withdraws_stale_changed_and_failed_packages() {
         let health = json!({"generation":"current","healthy":true,"checked_at":100});
+        let interval = webagent_extensions::health::PROBE_INTERVAL_SECONDS;
+        // Healthy until the next probe is due; stale once probes stop.
         assert!(webagent_extensions::health::current(
-            &health, "current", 115
+            &health,
+            "current",
+            100 + interval + 5
         ));
         assert!(!webagent_extensions::health::current(
-            &health, "current", 116
+            &health,
+            "current",
+            100 + 3 * interval
         ));
         assert!(!webagent_extensions::health::current(
             &health, "changed", 100

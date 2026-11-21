@@ -326,6 +326,11 @@ pub(crate) fn generation() -> Option<String> {
 pub(crate) fn available() -> bool {
     generation().is_some()
 }
+/// Whether a valid package is installed, whatever its readiness marker says. The model's
+/// tool list follows this; running the optimizer still needs `available`.
+pub(crate) fn installed() -> bool {
+    ROOT.get().is_some() && package(&folder()).is_some()
+}
 pub(crate) fn guidance() -> Option<String> {
     let before = generation()?;
     let package = package(&folder())?;

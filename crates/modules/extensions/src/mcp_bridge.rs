@@ -135,6 +135,25 @@ pub fn available() -> bool {
     answer
 }
 
+/// Whether the administrator installed a valid package, whatever its readiness. The
+/// model's tool list follows this, so a plugin restart never changes it; a call made
+/// while the plugin is not ready fails in `call` instead.
+pub fn installed() -> bool {
+    static RECENT: std::sync::Mutex<Option<(std::time::Instant, bool)>> =
+        std::sync::Mutex::new(None);
+    let mut recent = RECENT.lock().unwrap_or_else(|e| e.into_inner());
+    if cfg!(not(test)) {
+        if let Some((at, answer)) = *recent {
+            if at.elapsed() < std::time::Duration::from_secs(1) {
+                return answer;
+            }
+        }
+    }
+    let answer = ROOT.get().is_some() && package(&folder()).is_some();
+    *recent = Some((std::time::Instant::now(), answer));
+    answer
+}
+
 fn response(bytes: &[u8]) -> anyhow::Result<Value> {
     let value: Value = serde_json::from_slice(bytes).context("Invalid MCP plugin response")?;
     if value.get("version").and_then(Value::as_u64) != Some(1) {
