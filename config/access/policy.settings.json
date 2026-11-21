@@ -423,6 +423,7 @@
     "/login_protection/account/*": "Other login-protection timings; not offered in v1.",
     "/login_protection/address/*": "Other login-protection timings; not offered in v1.",
     "/request_limits/**": "Request rate limits; tuned in policy.json, not offered in v1.",
+    "/pages/**": "Which account levels may open each app page; a security setting changed only on its access page or by a reviewed source edit.",
     "/revision": "Internal revision counter.",
     "/tier_order": "Account level order; changed with the account levels themselves.",
     "/tiers/*/allowed_models/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
