@@ -1187,16 +1187,41 @@ impl<
         Ok(changed == 1)
     }
 
+    /// A dedicated connection to the application database for loop liveness. The heartbeat and
+    /// the readiness probe must not wait behind ordinary work for a slot in the shared pool:
+    /// under load that wait passed the watchdog's limit and restarted a working loop.
+    async fn liveness_pool(&self) -> Result<SqlitePool> {
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        use std::sync::{Mutex, OnceLock};
+        static POOLS: OnceLock<Mutex<HashMap<PathBuf, SqlitePool>>> = OnceLock::new();
+        let path = self.root.join("db/app.db");
+        let pools = POOLS.get_or_init(Default::default);
+        if let Some(pool) = pools.lock().unwrap().get(&path) {
+            return Ok(pool.clone());
+        }
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
+        Ok(pools.lock().unwrap().entry(path).or_insert(pool).clone())
+    }
+
     pub async fn write_loop_heartbeat(&self, owner: &str) -> Result<()> {
+        let pool = self.liveness_pool().await?;
         sqlx::query("INSERT INTO loop_heartbeat(singleton,owner,protocol_version,updated_at) VALUES(1,?,1,strftime('%s','now')) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner,protocol_version=1,updated_at=excluded.updated_at")
-            .bind(owner).execute(self.app_pool).await?;
+            .bind(owner).execute(&pool).await?;
         Ok(())
     }
 
     pub async fn loop_fresh(&self, seconds: i64) -> Result<bool> {
+        let pool = self.liveness_pool().await?;
         let age:Option<i64>=sqlx::query_scalar(
             "SELECT CAST(strftime('%s','now') AS INTEGER)-updated_at FROM loop_heartbeat WHERE singleton=1 AND protocol_version=1")
-            .fetch_optional(self.app_pool).await?;
+            .fetch_optional(&pool).await?;
         Ok(age.is_some_and(|age| age >= 0 && age <= seconds))
     }
 

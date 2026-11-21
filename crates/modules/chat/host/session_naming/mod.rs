@@ -1206,7 +1206,9 @@ mod metadata_event_tests {
             flag_run_id: None,
         };
         app.store.patch_session(sid, &patch).await.unwrap();
-        let update = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        // The stream checks session metadata every 3 s (STREAM_RECHECK_SECONDS in api/chat.rs), so
+        // a loaded test machine can need a little more than one cycle to deliver the rename.
+        let update = tokio::time::timeout(Duration::from_secs(10), stream.next())
             .await
             .unwrap()
             .unwrap()

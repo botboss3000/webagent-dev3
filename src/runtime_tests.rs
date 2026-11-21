@@ -11784,3 +11784,23 @@ async fn compaction_only_run_folds_without_a_model_call() {
         .unwrap();
     assert_eq!(request["state"], "started");
 }
+
+#[tokio::test]
+async fn loop_liveness_does_not_wait_for_the_shared_application_pool() {
+    let (_root, app) = fixture().await;
+    // Every slot of the shared application pool is busy, as under heavy load.
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(app.store.app_pool.acquire().await.unwrap());
+    }
+    let limit = std::time::Duration::from_secs(10);
+    tokio::time::timeout(limit, app.store.write_loop_heartbeat("liveness-owner"))
+        .await
+        .expect("heartbeat waited for the shared pool")
+        .unwrap();
+    assert!(tokio::time::timeout(limit, app.store.loop_fresh(30))
+        .await
+        .expect("readiness waited for the shared pool")
+        .unwrap());
+    drop(held);
+}
