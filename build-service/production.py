@@ -8,7 +8,9 @@ v3_production_decide from the app; the local operator cannot approve. An approve
 release exports an allowlist of the requested commit, stamps the version, runs the
 credential guard over every file, builds and compiles the tests with the stable
 profile, then pushes one commit and tag to the production repository with a
-broker-only token. State lives under the broker's state root in production/.
+broker-only token. The build and the installers run on the broker sidekick, beside dev builds
+rather than in their queue; a running release still counts as busy for broker installs (the host
+helper reads these records). State lives under the broker's state root in production/.
 """
 import hashlib
 import json
@@ -44,6 +46,9 @@ ALLOW = ("src", "crates", "ui", "abilities", "config", "plugins", "Cargo.toml", 
 INSTALLER = "crates/app-shell/installer"
 WORKFLOWS = {"release-macos.yml": INSTALLER + "/release-macos.yml"}
 INSTALLER_SECONDS = 3 * 3600
+# The stable linked build of the exported tree and its tests (CARGO_TARGET_DIR is the phase's cache).
+BUILD_SCRIPT = ("set -e; cargo build --locked --profile stable --features stable-abilities; "
+                "cargo test --locked --profile stable --features stable-abilities --no-run")
 SIDEKICK_WAIT = 30 * 60
 # The installers phase: every platform, then the outputs and a manifest into /output.
 INSTALLER_SCRIPT = r"""set -e
@@ -69,9 +74,11 @@ COLLECT
 EXCLUDE = ("abilities/Administrator/host_admin", "ui/main-panel/builds", "ui/main-panel/host-admin")
 FIRST = "0.1.0"
 BUMPS = ("patch", "minor", "major")
-# Rust build of the exported tree: the broker's pinned toolchain, at most this share of the host.
-BUILD_CPUS = "4"
-BUILD_MEMORY = "10g"
+# Release settings: scheduler "production" in the installation JSON overrides these
+# (scheduler-defaults.json carries the same values). On the sidekick the release gets every CPU
+# and no memory cap unless /etc/broker-sidekick.json sets production_build_jobs or
+# production_memory_bytes; on the main server it takes at most this share, so dev builds keep running.
+SETTINGS = {"sidekick": True, "server_cpus": 4, "server_memory_bytes": 10 * 1024**3}
 BUILD_SECONDS = 4 * 3600
 AGENT_ACTIONS = {"production_request": "request", "production_status": "status",
                  "production_list": "list"}
@@ -260,6 +267,10 @@ class Production:
         self.save(record)
 
     def run(self, release_id):
+        """Export and check, build the stable app and its tests and then the installers in one
+        sidekick hold (the main server builds when the sidekick cannot), push, then upload. A
+        build failure stops the release before anything is public; an installer failure is
+        recorded on the published release."""
         record = self.load(release_id)
         record["status"] = "running"
         self.save(record)
@@ -268,20 +279,34 @@ class Production:
         try:
             self.stage(record, "export", lambda: self.export(record["commit"], tree, record["version"]))
             self.stage(record, "credential_guard", lambda: self.guard(tree))
-            self.stage(record, "build", lambda: self.build(tree, folder))
+            session, reason = self.sidekick_open(tree, folder, record)
+            result = "failed"
+            try:
+                if session:
+                    self.stage(record, "build", lambda: self.remote_build(session, folder))
+                    try:
+                        self.stage(record, "installers", lambda: self.remote_installers(session, folder, record))
+                    except Exception as error:
+                        record["installers"] = {"error": str(error)[:500]}
+                    result = "passed"
+                else:
+                    self.stage(record, "build", lambda: {**self.build(tree, folder), "where": "server", "why": reason})
+                    record["installers"] = {"error": "not built: " + reason}
+            finally:
+                if session:
+                    self.sidekick_end(session, result)
             self.stage(record, "push", lambda: self.push(tree, record))
             self.stage(record, "dev_tag", lambda: self.tag(record))
         except Exception as error:  # Recorded for the Host Admin page and the agent.
             record.update(status="failed", finished_at=time.time(), error=str(error)[:500])
             self.save(record)
             return
-        # The source release stands; installers are added to it, and a failure here says so
-        # without undoing the release (macOS comes from the repository's own workflow).
-        try:
-            self.stage(record, "installers", lambda: self.installers(tree, folder, record))
-            self.stage(record, "upload", lambda: self.upload(folder / "installers", record))
-        except Exception as error:
-            record["installers"] = {"error": str(error)[:500]}
+        output = folder / "installers"
+        if output.is_dir() and any(p.name != "manifest.json" for p in output.iterdir()):
+            try:
+                self.stage(record, "upload", lambda: self.upload(output, record))
+            except Exception as error:
+                record["installers"] = {**(record.get("installers") or {}), "error": str(error)[:500]}
         record.update(status="published", finished_at=time.time(), stage=None)
         self.save(record)
 
@@ -326,8 +351,9 @@ class Production:
         script = ("set -e; export CARGO_HOME=/cache/cargo CARGO_TARGET_DIR=/cache/target; "
                   "cargo build --locked --profile stable --features stable-abilities; "
                   "cargo test --locked --profile stable --features stable-abilities --no-run")
-        result = self.runner(["nice", "-n", "15", "docker", "run", "--rm", "--cpus", BUILD_CPUS,
-                              "--memory", BUILD_MEMORY, "--user", f"{os.getuid()}:{os.getgid()}",
+        settings = self.settings()
+        result = self.runner(["nice", "-n", "15", "docker", "run", "--rm", "--cpus", str(settings["server_cpus"]),
+                              "--memory", str(settings["server_memory_bytes"]), "--user", f"{os.getuid()}:{os.getgid()}",
                               "-v", f"{tree}:/src:ro", "-v", f"{cache}:/cache", "-w", "/src",
                               self.rust_image, "sh", "-c", script],
                              capture_output=True, text=True, timeout=BUILD_SECONDS)
@@ -407,17 +433,29 @@ class Production:
             raise RuntimeError(f"sidekick {words[0]} failed: {result.stderr.decode(errors='replace')[-300:]}")
         return result.stdout
 
-    def installers(self, tree, folder, record):
-        """Linux, Windows and Android installers built on the sidekick, the APK signed here."""
+    def settings(self):
+        value = self.broker.runner.executor.tuning("production", {}) if self.broker else {}
+        return {**SETTINGS, **(value if isinstance(value, dict) else {})}
+
+    def sidekick_open(self, tree, folder, record):
+        """Hold the sidekick for this release with the installer image and the exported tree in
+        place: ({settings, image, job}, None), or (None, why the main server builds instead)."""
+        if not self.settings()["sidekick"]:
+            return None, "production releases are set to build on the main server"
         executor = self.broker.runner.executor
         settings = executor.sidekick_settings()
-        if not settings or not all(isinstance(settings.get(k), str) and settings[k]
+        if not settings or settings.get("enabled") is not True or not all(isinstance(settings.get(k), str) and settings[k]
                                    for k in ("host", "user", "key", "known_hosts")):
-            raise RuntimeError("no sidekick is configured for installer builds")
+            return None, "no sidekick is configured"
+        if executor.sidekick_state().get("enabled") is False:
+            return None, "the sidekick is switched off"
         image = self.installer_image(tree, folder)
-        status = executor.sidekick_sync(settings, {})
+        try:
+            status = executor.sidekick_sync(settings, {})
+        except Exception as error:
+            return None, "the sidekick did not answer: " + str(error)[:200]
         if status.get("version", 0) < 5:
-            raise RuntimeError("the sidekick program is too old for installer builds")
+            return None, "the sidekick program is too old for production builds"
         job = record["id"]
         deadline = time.time() + SIDEKICK_WAIT
         while True:  # A dev test half may hold the sidekick; it frees it within minutes.
@@ -425,9 +463,9 @@ class Production:
             if decision.get("decision") == "accepted":
                 break
             if decision.get("decision") != "busy" or time.time() > deadline:
-                raise RuntimeError(f"sidekick did not take the installer build: {decision}")
+                return None, f"the sidekick did not take the release ({decision.get('decision')})"
             time.sleep(30)
-        result = "failed"
+        session = {"settings": settings, "image": image, "job": job}
         try:
             if image not in status.get("images", []):
                 saved = subprocess.Popen(["docker", "save", image], stdout=subprocess.PIPE)
@@ -439,29 +477,49 @@ class Production:
             body, digest = executor.sidekick_tree(tree)
             synced = json.loads(self.sidekick(settings, "sync-installer-source", job, stdin=body, timeout=600))
             if synced.get("sha256") != digest:
-                raise RuntimeError("the sidekick's installer source does not match the export")
-            request = json.dumps({"argv": ["sh", "-c", INSTALLER_SCRIPT], "image": image, "cargo_key": None,
-                                  "incremental": "0"}).encode()
-            with open(folder / "installers.log", "wb") as log:
-                argv = executor.sidekick_argv(settings, "run", job, "installers", str(INSTALLER_SECONDS))
-                ran = self.runner(argv, input=request, stdout=log, stderr=subprocess.STDOUT,
-                                  timeout=INSTALLER_SECONDS + 300)
-            if ran.returncode != 0:
-                raise RuntimeError("installer builds failed on the sidekick; see installers.log")
-            manifest = json.loads(self.fetch(settings, job, ["installers/manifest.json"], folder)
-                                  .joinpath("manifest.json").read_text())
-            names = [item["name"] for item in manifest]
-            if not names or any("/" in n or n.startswith(".") for n in names):
-                raise RuntimeError("the sidekick listed no usable installers")
-            output = self.fetch(settings, job, ["installers/" + n for n in names], folder)
-            for item in manifest:
-                body = (output / item["name"]).read_bytes()
-                if hashlib.sha256(body).hexdigest() != item["sha256"]:
-                    raise RuntimeError(f"{item['name']} changed in transfer")
-            result = "passed"
-        finally:
-            self.sidekick(settings, "end", job, result)
-        notes = self.sign_apks(output, image, record["version"])
+                raise RuntimeError("the sidekick's copy does not match the export")
+        except Exception as error:
+            self.sidekick_end(session, "failed")
+            return None, "the sidekick could not be prepared: " + str(error)[:200]
+        return session, None
+
+    def sidekick_end(self, session, result):
+        try:
+            self.sidekick(session["settings"], "end", session["job"], result)
+        except Exception:
+            pass  # A stale hold expires on the sidekick by itself.
+
+    def sidekick_phase(self, session, script, log, seconds):
+        """One script in the installer image on the sidekick (networked installers phase); its
+        output goes to `log`."""
+        request = json.dumps({"argv": ["sh", "-c", script], "image": session["image"], "cargo_key": None,
+                              "incremental": "0"}).encode()
+        argv = self.broker.runner.executor.sidekick_argv(session["settings"], "run", session["job"],
+                                                         "installers", str(seconds))
+        with open(log, "wb") as stream:
+            ran = self.runner(argv, input=request, stdout=stream, stderr=subprocess.STDOUT, timeout=seconds + 300)
+        return ran.returncode
+
+    def remote_build(self, session, folder):
+        if self.sidekick_phase(session, BUILD_SCRIPT, folder / "build.log", BUILD_SECONDS) != 0:
+            raise RuntimeError("stable build of the exported tree failed on the sidekick; see build.log")
+        return {"profile": "stable", "features": "stable-abilities", "where": "sidekick"}
+
+    def remote_installers(self, session, folder, record):
+        """Linux, Windows and Android installers built on the sidekick, the APK signed here."""
+        settings, job = session["settings"], session["job"]
+        if self.sidekick_phase(session, INSTALLER_SCRIPT, folder / "installers.log", INSTALLER_SECONDS) != 0:
+            raise RuntimeError("installer builds failed on the sidekick; see installers.log")
+        manifest = json.loads(self.fetch(settings, job, ["installers/manifest.json"], folder)
+                              .joinpath("manifest.json").read_text())
+        names = [item["name"] for item in manifest]
+        if not names or any("/" in n or n.startswith(".") for n in names):
+            raise RuntimeError("the sidekick listed no usable installers")
+        output = self.fetch(settings, job, ["installers/" + n for n in names], folder)
+        for item in manifest:
+            if hashlib.sha256((output / item["name"]).read_bytes()).hexdigest() != item["sha256"]:
+                raise RuntimeError(f"{item['name']} changed in transfer")
+        notes = self.sign_apks(output, session["image"], record["version"])
         built = sorted(p.name for p in output.iterdir() if p.name != "manifest.json")
         record["installers"] = {"files": built, **notes}
         return {"files": len(built)}

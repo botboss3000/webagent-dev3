@@ -51,5 +51,10 @@
     "pause_seconds": 1800,
     "max_failures": 3,
     "trust_test_failures": true
+  },
+  "production": {
+    "sidekick": true,
+    "server_cpus": 4,
+    "server_memory_bytes": 10737418240
   }
 }

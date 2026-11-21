@@ -45,7 +45,7 @@ def validate(value):
  # Retired Code Index keys (code_index_ledger_max_bytes, post_deployment_indexing,
  # documentation_review_order) stay accepted so existing installed configs still load.
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","rollback_keep_releases","rollback_keep_archives","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","failed_scratch_retention_seconds","cargo_download_retention_seconds","orphan_release_seconds","note_ttl_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators","remote_tests","sidekick"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","rollback_keep_releases","rollback_keep_archives","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","failed_scratch_retention_seconds","cargo_download_retention_seconds","orphan_release_seconds","note_ttl_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators","remote_tests","sidekick","production"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  cpu=cpu_policy(policy)
  if type(cpu["cpu_budget_millis"])is not int or cpu["cpu_budget_millis"]!=0 and not 1000<=cpu["cpu_budget_millis"]<=max(1,(os.cpu_count()or 1)-1)*1000:raise ValueError("CPU budget must retain host headroom")
@@ -98,6 +98,14 @@ def validate(value):
    raise ValueError("Broker sidekick policy requires a host, a user and protected key paths under /etc/webagent")
   for key,low,high in (("pause_seconds",60,86400),("max_failures",1,20)):
    if key in remote and(type(remote[key])is not int or not low<=remote[key]<=high):raise ValueError("Invalid broker sidekick policy: "+key)
+ # Production releases (production.py): build on the sidekick or the main server, and the
+ # main-server build's CPU and memory share.
+ release=policy.get("production",{})
+ if(not isinstance(release,dict)or set(release)-{"sidekick","server_cpus","server_memory_bytes"}
+     or type(release.get("sidekick",True))is not bool
+     or type(release.get("server_cpus",4))is not int or not 1<=release.get("server_cpus",4)<=64
+     or type(release.get("server_memory_bytes",10*1024**3))is not int or not 2*1024**3<=release.get("server_memory_bytes",10*1024**3)<=256*1024**3):
+  raise ValueError("Invalid production release policy")
  v["scheduler"]=policy
  # Legacy installations retain their prior budget until an explicit operator reconfiguration.
  v.setdefault("api_pids_limit",256)

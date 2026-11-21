@@ -346,8 +346,21 @@ class Helper:
         root = Path(self.build_config()["state_root"])
         return {p.name: json.loads(p.read_text()).get("status") for p in root.glob("*.json") if p.name != "maintenance.json"}
 
+    def production_releases(self):
+        """Production releases the broker is running (production.py): not queue jobs, but a broker
+        install would cut them off, so they count as busy too."""
+        root = Path(self.build_config()["state_root"]) / "production"
+        found = {}
+        for path in root.glob("*.json") if root.is_dir() else ():
+            try:
+                found["production " + path.stem[:8]] = json.loads(path.read_text()).get("status")
+            except ValueError:
+                continue
+        return found
+
     def require_idle(self):
         busy = [name for name, status in self.jobs().items() if status in ("running", "needs_decision")]
+        busy += [name for name, status in self.production_releases().items() if status in ("approved", "running")]
         if busy:
             raise RuntimeError("broker is busy (" + ", ".join(busy[:3]) + "); drain it and wait until idle")
 

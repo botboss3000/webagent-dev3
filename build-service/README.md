@@ -712,6 +712,50 @@ command: `restrict,from="<server>",command="/usr/bin/python3 -I
 `cargo_keep`), the `broker-sidekick-prune` timer (`sidekick_bootstrap.py prune`: compile
 cache cap, old crate stores and images), and the NUC's console dashboard.
 
+## Production releases
+
+`production.py` publishes the app to the public repository `botboss3000/webagent`. Any agent
+(build_work `production_request`) or the operator (`buildctl production request [--bump
+patch|minor|major] [--notes TEXT]`) asks; only an administrator's Approve on the Host Admin page
+starts it (the app's `v3_production_decide`; the operator cannot approve). One release runs at a
+time and is not a queue job: dev releases keep building beside it. While one runs, the host
+helper counts it as busy, so a `broker_install` drains and waits for it like a running job.
+
+Stages: export the allowlisted files of the requested dev commit (no broker, tests, Host Admin
+ability or dev documents) and set the version; run the credential guard over every file; then,
+in one sidekick hold, build the stable app and its tests (`--profile stable --features
+stable-abilities`) and the Linux, Windows and Android installers (image
+`crates/app-shell/installer/Dockerfile`); push one "Release vX.Y.Z" commit and tag; tag the
+dev commit `production-vX.Y.Z`; sign the APK here; upload the installers to the GitHub release.
+The production repository's own workflow adds the macOS `.dmg`. A build failure publishes
+nothing; an installer failure is recorded on the published release. Records and logs:
+`<state_root>/production/<id>.json` and `<state_root>/production/<id>/` (`build.log`,
+`installers.log`).
+
+**Where it builds, and limits.** The installation JSON's `scheduler` may set:
+
+    "production": {"sidekick": true, "server_cpus": 4, "server_memory_bytes": 10737418240}
+
+`sidekick: false` makes releases host-only: the stable build runs on the main server in the
+pinned Rust image at low priority with at most `server_cpus` CPUs and `server_memory_bytes`
+memory (raise them to build faster, at the cost of slowing dev builds beside it), and no
+installers are built (the release says so). The same fallback applies when the sidekick is
+not configured, is switched off (`buildctl sidekick off`, which also stops dev test halves
+there) or stays busy for 30 minutes. Edit the installed file with sudo and restart the broker
+while idle, as for the other tuning settings.
+
+On the sidekick a release gets every CPU and no memory cap. If the sidekick changes (fewer
+cores, less memory, other work on it), set these in the sidekick's `/etc/broker-sidekick.json`
+(no restart; read at each phase): `production_build_jobs` (Cargo jobs; 0 = every CPU) and
+`production_memory_bytes` (container memory cap; 0 = none). `installer_cache_max_bytes`
+(default 60 GiB) caps its installer caches.
+
+**Credentials** (broker-only, created by the administrator, never by an agent; owner `ar`,
+folder 0700, files 0600): `/etc/webagent/production/github-token` (fine-grained, this
+repository only: Contents and Workflows read and write), and for the APK
+`android-keystore.jks` (key alias `webagent`) and `android-keystore-pass`. Without the key
+pair a release ships no APK and says so.
+
 ## Stale-tree install guard
 
 `lifecycle.py install --install-tree HASH` compares each broker file in the tree

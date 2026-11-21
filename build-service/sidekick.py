@@ -31,7 +31,7 @@ JOB=re.compile(r"[a-f0-9-]{36}");IMAGE=re.compile(r"sha256:[a-f0-9]{64}");KEY=re
 PHASES={"compile_test","test","installers"}
 DEFAULTS={"uid":1000,"gid":1000,"cargo_build_jobs":12,"memory_bytes":13*1024**3,"min_free_bytes":15*1024**3,
     "target_max_bytes":100*1024**3,"cargo_keep":3,"stale_lock_seconds":7200,"binaries_max_bytes":20*1024**3,
-    "installer_cache_max_bytes":60*1024**3}
+    "installer_cache_max_bytes":60*1024**3,"production_build_jobs":0,"production_memory_bytes":0}
 RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
 
 
@@ -276,8 +276,11 @@ def cmd_run(args):
 
 
 def run_installers(job,request,timeout):
-    """The installers phase: the exported tree read-write (the bundlers write into it), its own caches,
-    network on, results in /output (OUTPUT/installers, fetched as installers/...)."""
+    """The installers phase (production releases: the stable build and the installers): the exported
+    tree read-write (the bundlers write into it), its own caches, network on, every CPU and no memory
+    cap unless production_build_jobs or production_memory_bytes is set (production releases are rare
+    and get the whole sidekick), results in /output
+    (OUTPUT/installers, fetched as installers/...)."""
     argv,image=request["argv"],request["image"]
     keep_image(image,INSTALLER_TAG)
     cfg=settings();name="broker-sidekick-"+job.replace("-","")+"-installers-"+os.urandom(4).hex()
@@ -285,17 +288,20 @@ def run_installers(job,request,timeout):
     output=OUTPUT/"installers";output.mkdir(parents=True,exist_ok=True);INSTALLER_CACHE.mkdir(parents=True,exist_ok=True)
     if not INSTALLER_SOURCE.is_dir():fail("installer source missing",3)
     create=["docker","create","--name",name,"--label",LABEL+"="+job,"--cap-drop","ALL","--security-opt","no-new-privileges",
-        "--pids-limit","4096","--user","%d:%d"%(cfg["uid"],cfg["gid"]),"--memory",str(cfg["memory_bytes"]),"--memory-swap",str(cfg["memory_bytes"]),
+        "--pids-limit","4096","--user","%d:%d"%(cfg["uid"],cfg["gid"]),
+        *(["--memory",str(cfg["production_memory_bytes"]),"--memory-swap",str(cfg["production_memory_bytes"])]if cfg["production_memory_bytes"]else[]),
         "--mount","type=bind,src=%s,dst=/src"%INSTALLER_SOURCE,"--mount","type=bind,src=%s,dst=/output"%output,
         "--mount","type=bind,src=%s,dst=/cache"%INSTALLER_CACHE,"-w","/src","--tmpfs","/tmp:rw,exec,nosuid,nodev,size=4g,mode=1777",
         "-e","HOME=/tmp","-e","CARGO_HOME=/cache/cargo-home","-e","CARGO_TARGET_DIR=/cache/target","-e","GRADLE_USER_HOME=/cache/gradle",
-        "-e","CARGO_BUILD_JOBS=%d"%cfg["cargo_build_jobs"],image,*argv]
+        "-e","CARGO_BUILD_JOBS=%d"%(cfg["production_build_jobs"]or os.cpu_count()),image,*argv]
     created=run(create)
     if created.returncode:fail("container create failed: "+created.stderr)
-    deadline=time.monotonic()+timeout;parent=os.getppid()
+    deadline=time.monotonic()+timeout;parent=os.getppid();refreshed=0
     try:
         logs=subprocess.Popen(["docker","start","-a",name],stdout=sys.stdout.buffer,stderr=subprocess.STDOUT)
         while logs.poll()is None:
+            # A long release holds the sidekick past the stale-lock age: keep its claim fresh.
+            if time.monotonic()-refreshed>60:write_json(LOCK,{"job_id":job,"at":time.time()});refreshed=time.monotonic()
             if os.getppid()!=parent or time.monotonic()>deadline:
                 run(["docker","kill",name]);logs.wait(30);fail("phase stopped: "+("deadline"if time.monotonic()>deadline else"server disconnected"),124)
             time.sleep(0.5)

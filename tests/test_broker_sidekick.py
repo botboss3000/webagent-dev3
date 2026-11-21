@@ -363,7 +363,18 @@ class BootstrapTests(unittest.TestCase):
 class ConfigTests(unittest.TestCase):
     def test_enabled_sidekick_needs_protected_key_paths(self):
         source=(SERVICE/"config.py").read_text()
-        self.assertIn('"remote_tests","sidekick"}-RESOURCE_KEYS-TUNING_KEYS',source)
+        self.assertIn('"remote_tests","sidekick","production"}-RESOURCE_KEYS-TUNING_KEYS',source)
         self.assertEqual(json.loads((SERVICE/"scheduler-defaults.json").read_text())["sidekick"]["enabled"],False)
         self.assertIn('"sidekick.py"',(SERVICE/"install.py").read_text())
+    def test_production_release_settings_are_bounded(self):
+        config=load("config")
+        defaults=json.loads((SERVICE/"scheduler-defaults.json").read_text())["production"]
+        self.assertEqual(defaults,{"sidekick":True,"server_cpus":4,"server_memory_bytes":10*1024**3})
+        base={**config.defaults(),"scheduler":{}}
+        for policy,ok in (({"sidekick":False},True),({"server_cpus":12,"server_memory_bytes":16*1024**3},True),
+                          ({"sidekick":"no"},False),({"server_cpus":0},False),({"server_memory_bytes":1024},False),({"other":1},False)):
+            value={**base,"scheduler":{"production":policy}}
+            if ok:self.assertEqual(config.validate(value)["scheduler"]["production"],policy)
+            else:
+                with self.assertRaises(ValueError):config.validate(value)
 if __name__=="__main__":unittest.main()

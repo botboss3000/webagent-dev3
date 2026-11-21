@@ -231,6 +231,16 @@ class SupervisorTests(unittest.TestCase):
         run = lambda command, timeout=30: self.fake(command).stdout
         return request, lambda: self.helper.install_broker(request["args"], request["id"], run)
 
+    def test_a_running_production_release_counts_as_busy(self):
+        import json
+        (self.state_root / "production").mkdir()
+        record = self.state_root / "production" / "f7749ee1-5023-45eb-afec-79b2ca271d05.json"
+        record.write_text(json.dumps({"status": "running"}))
+        with self.assertRaisesRegex(RuntimeError, "production f7749ee1"):
+            self.helper.require_idle()
+        record.write_text(json.dumps({"status": "published"}))
+        self.helper.require_idle()
+
     def test_healthy_install_keeps_the_new_release(self):
         request, install = self.install()
         result = install()

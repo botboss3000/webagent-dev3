@@ -191,13 +191,49 @@ class InstallerTests(unittest.TestCase):
         for name in ("export", "guard", "build", "push", "tag"):
             setattr(self.production, name, lambda *a, **k: None)
 
-        def broken(*args):
-            raise RuntimeError("no sidekick is configured for installer builds")
-        self.production.installers = broken
+        self.production.sidekick_open = lambda *a: (None, "no sidekick is configured")
+        self.production.build = lambda *a: {"profile": "stable"}
         self.production.run(made["id"])
         record = self.production.load(made["id"])
         self.assertEqual(record["status"], "published")
-        self.assertIn("no sidekick", record["installers"]["error"])
+        self.assertEqual(record["stages"]["build"]["where"], "server")
+        self.assertIn("not built: no sidekick", record["installers"]["error"])
+
+    def test_host_only_setting_never_touches_the_sidekick(self):
+        executor = types.SimpleNamespace(tuning=lambda key, default: {"sidekick": False},
+                                         sidekick_settings=lambda: self.fail("sidekick read"))
+        self.production.broker = types.SimpleNamespace(runner=types.SimpleNamespace(executor=executor))
+        session, reason = self.production.sidekick_open(None, None, {"id": "x"})
+        self.assertIsNone(session)
+        self.assertIn("main server", reason)
+        self.assertEqual(self.production.settings()["server_cpus"], 4)
+
+    def test_one_sidekick_hold_builds_before_the_push_and_a_build_failure_publishes_nothing(self):
+        made = self.production.handle("v3_production", LOCAL, {"action": "request"})
+        order = []
+        for name in ("export", "guard"):
+            setattr(self.production, name, lambda *a, **k: None)
+        self.production.sidekick_open = lambda *a: ({"job": made["id"]}, None)
+        self.production.sidekick_end = lambda session, result: order.append(("end", result))
+        self.production.push = lambda *a: order.append("push")
+        self.production.tag = lambda *a: order.append("tag")
+
+        def build(*a):
+            order.append("build")
+            raise RuntimeError("stable build of the exported tree failed on the sidekick; see build.log")
+        self.production.remote_build = build
+        self.production.run(made["id"])
+        self.assertEqual(order, ["build", ("end", "failed")])
+        self.assertEqual(self.production.load(made["id"])["status"], "failed")
+
+        again = self.production.handle("v3_production", LOCAL, {"action": "request"})
+        order.clear()
+        self.production.sidekick_open = lambda *a: ({"job": again["id"]}, None)
+        self.production.remote_build = lambda *a: order.append("build") or {"where": "sidekick"}
+        self.production.remote_installers = lambda *a: order.append("installers") or {"files": 0}
+        self.production.run(again["id"])
+        self.assertEqual(order, ["build", "installers", ("end", "passed"), "push", "tag"])
+        self.assertEqual(self.production.load(again["id"])["status"], "published")
 
 
 if __name__ == "__main__":
