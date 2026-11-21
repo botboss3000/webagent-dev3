@@ -1,4 +1,5 @@
 import { createAdministratorNotices } from './administrator-notices.js';
+import { readConversation, saveConversation, forgetConversation, mergeDelta } from './conversation-cache.js';
 
 // V3 transport only: cookie/CSRF request policy is supplied by the shell.
 /**
@@ -10,8 +11,9 @@ import { createAdministratorNotices } from './administrator-notices.js';
  * and continue until a snapshot succeeds or the session closes.
  */
 // Locates the v3 chat transport and sequence-based stream recovery
+// cacheUser names the signed-in user for the conversation cache; '' disables it.
 export function createChatClient({request, note, issues, clearNoticeFrom = () => {}, createStream, EventSourceClass = EventSource,
-  setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout}) {
+  setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout, cacheUser = () => ''}) {
   const administratorNotices = createAdministratorNotices({ request });
   let source = null, epoch = 0, current = null;
   // Reflects connection state in the chat toggle when the shell control exists.
@@ -51,7 +53,9 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
       try {
         do {
           state.again = false;
-          const data = await request('/sessions/' + encodeURIComponent(state.id));
+          // Recovery only needs what is past state.last (plus recent in-place changes).
+          const data = await request('/sessions/' + encodeURIComponent(state.id) +
+            '?since=' + state.last + '&history_revision=' + state.historyRevision);
           if (!valid(state)) return;
           const historyRevision=data.session?.history_revision||0;
           if(historyRevision!==state.historyRevision){
@@ -95,7 +99,16 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
   async function open(id, render, publish, metadataChanged = () => {}, snapshotChanged = () => {}) {
     disconnect();
     const turn = epoch;
-    const data = await request('/sessions/' + encodeURIComponent(id));
+    // A cached copy makes this a delta request: only messages past its last_seq (and the
+    // newest few, which can still change) come back, unless the history was rewritten.
+    const user = cacheUser(), cached = await readConversation(user, id).catch(() => null);
+    const query = cached ? '?since=' + cached.last_seq + '&history_revision=' + cached.history_revision : '';
+    let data;
+    try { data = await request('/sessions/' + encodeURIComponent(id) + query); }
+    catch (error) { if ([401, 403, 404].includes(error?.status)) void forgetConversation(user, id); throw error; }
+    if (data.delta) data = {...data, messages: mergeDelta(cached?.messages || [], data)};
+    void saveConversation(user, id, {history_revision: data.session?.history_revision || 0,
+      last_seq: data.last_seq || 0, messages: data.messages}).catch(() => {});
     if (turn !== epoch) return;
     render(data);
     const state = current = {id, epoch:turn, publish, metadataChanged, snapshotChanged, historyRevision:data.session?.history_revision||0,historyChanged:false,last:data.last_seq || 0,

@@ -869,8 +869,40 @@ impl Store {
         let rows = sqlx::query("SELECT seq,id,run_id,role,content,created_at FROM chat WHERE session_id=? AND seq<=? ORDER BY seq")
             .bind(sid).bind(cursor).fetch_all(&mut *tx).await?;
         tx.commit().await?;
-        let messages = rows
-            .iter()
+        Ok((self.chat_rows(&rows)?, cursor))
+    }
+    /// Messages after `since`, plus the newest `recent` whatever their sequence, for a client
+    /// that already holds the rest; only those rows are decrypted.
+    pub async fn chat_snapshot_since(
+        &self,
+        sid: &str,
+        since: i64,
+        recent: i64,
+    ) -> Result<(Vec<Value>, i64)> {
+        let mut tx = self.pool.begin().await?;
+        let cursor = sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(MAX(seq),0) FROM chat WHERE session_id=?",
+        )
+        .bind(sid)
+        .fetch_one(&mut *tx)
+        .await?;
+        let rows = sqlx::query(
+            "SELECT seq,id,run_id,role,content,created_at FROM chat WHERE session_id=? AND seq<=? \
+             AND (seq>? OR seq>=COALESCE((SELECT seq FROM chat WHERE session_id=? ORDER BY seq DESC \
+             LIMIT 1 OFFSET ?),0)) ORDER BY seq",
+        )
+        .bind(sid)
+        .bind(cursor)
+        .bind(since)
+        .bind(sid)
+        .bind(recent.max(1) - 1)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok((self.chat_rows(&rows)?, cursor))
+    }
+    fn chat_rows(&self, rows: &[sqlx::sqlite::SqliteRow]) -> Result<Vec<Value>> {
+        rows.iter()
             .map(|row| {
                 Ok(json!({
                     "seq":row.get::<i64,_>("seq"),"id":row.get::<String,_>("id"),
@@ -879,8 +911,7 @@ impl Store {
                     "created_at":row.get::<i64,_>("created_at")
                 }))
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok((messages, cursor))
+            .collect()
     }
     /// Read bounded identity and public-chat counts without exposing private recovery input.
     pub async fn session_summary(&self, sid: &str) -> Result<Value> {

@@ -2702,6 +2702,66 @@ async fn legacy_run_binds_selection_once_and_invalid_selection_pauses_before_dis
 }
 
 #[tokio::test]
+async fn delta_snapshot_sends_new_and_recent_messages_only_for_the_held_revision() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    for index in 0..8_i64 {
+        sqlx::query(
+            "INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,?,?,?,?,?)",
+        )
+        .bind(uuid())
+        .bind(&sid)
+        .bind("run-test")
+        .bind("user")
+        .bind(app.store.seal(&json!(format!("message {index}"))).unwrap())
+        .bind(index)
+        .execute(&app.store.pool)
+        .await
+        .unwrap();
+    }
+    let (all, last) = app.store.chat_snapshot(&sid).await.unwrap();
+    let seqs = |messages: &[Value]| {
+        messages
+            .iter()
+            .map(|m| m["seq"].as_i64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let all_seqs = seqs(&all);
+    // After the third message, with the newest 2 always resent: messages 4..8.
+    let (delta, delta_last) = app
+        .store
+        .chat_snapshot_since(&sid, all_seqs[2], 2)
+        .await
+        .unwrap();
+    assert_eq!(seqs(&delta), all_seqs[3..].to_vec());
+    assert_eq!(delta_last, last);
+    // Nothing new: only the newest 2.
+    let (recent, _) = app.store.chat_snapshot_since(&sid, last, 2).await.unwrap();
+    assert_eq!(seqs(&recent), all_seqs[6..].to_vec());
+    // The handler uses the delta only for the history revision the client holds.
+    let revision = app.store.get(&key("session", &sid)).await.unwrap().unwrap()["history_revision"]
+        .as_u64()
+        .unwrap_or(0);
+    let held = SnapshotArgs {
+        since: Some(last),
+        history_revision: Some(revision),
+    };
+    let Json(body) = snapshot_query(State(app.clone()), Path(sid.clone()), Query(held))
+        .await
+        .unwrap();
+    assert_eq!(body["delta"], true);
+    let stale = SnapshotArgs {
+        since: Some(last),
+        history_revision: Some(revision + 1),
+    };
+    let Json(body) = snapshot_query(State(app.clone()), Path(sid.clone()), Query(stale))
+        .await
+        .unwrap();
+    assert_eq!(body["delta"], false);
+    assert_eq!(body["messages"].as_array().unwrap().len(), 8);
+}
+
+#[tokio::test]
 async fn state_inspection_is_authenticated_policy_controlled_and_session_bounded() {
     let (_root, app) = fixture().await;
     let sid = conversation(&app).await;

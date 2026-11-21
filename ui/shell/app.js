@@ -11,6 +11,7 @@ privateReveal.onclick=()=>{privateHost.hidden=false;privateReveal.hidden=true;pr
 function privateVisible(visible){document.body.classList.toggle('app-restricted',visible);document.getElementById('app-restricted-overlay').setAttribute('aria-hidden',String(!visible));privateHost.hidden=true;privateReveal.hidden=false;privateReveal.setAttribute('aria-expanded','false');}
 import { initHeaderCarousel } from './header-carousel/header-carousel.js';
 import { idlePaused } from '../chat/core/idle-pause.js';
+import { clearConversations } from '../chat/core/conversation-cache.js';
 initHeaderCarousel();
 import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../shared/page-tabs/page-tabs.js';
 import { consumeBack, pushBackHandler } from '../shared/history-back/history-back.js';
@@ -557,7 +558,8 @@ function abilityDriftFor(me){
   document.getElementById('ability-drift')?.remove();document.body.append(view.element);
   abilityDrift=createAbilityDrift({request:api,render:view.render});abilityDrift.start();
 }
-function out(){if(document.body.classList.contains('app-restricted'))return;abilityDriftFor(null);issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);clearInterval(accessNoticePoll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+// Signing out (or losing the session) also drops the browser's cached conversations.
+function out(){if(document.body.classList.contains('app-restricted'))return;void clearConversations();abilityDriftFor(null);issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);clearInterval(accessNoticePoll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;
 // The agent settings widgets belong to the agents page, which loads on first navigation.
 if($('connection')){$('shutoff').querySelector('span').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}}chat.runs(state.runs||[]);}

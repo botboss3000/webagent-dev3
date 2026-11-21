@@ -401,7 +401,25 @@ pub(crate) async fn prepare_session_id(
         result,
     })
 }
-pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> Api {
+/// A client that already holds this conversation at `history_revision` up to message `since`
+/// asks only for what is new; any other revision gets the full transcript.
+#[derive(Deserialize, Default)]
+pub(crate) struct SnapshotArgs {
+    pub since: Option<i64>,
+    pub history_revision: Option<u64>,
+}
+/// Messages a delta snapshot always resends in full, because recent ones can still change
+/// in place (admission status, decorations) without a new sequence number.
+const SNAPSHOT_RECENT: i64 = 50;
+/// The full conversation snapshot.
+pub(crate) async fn snapshot(state: State<App>, path: Path<String>) -> Api {
+    snapshot_query(state, path, Query(SnapshotArgs::default())).await
+}
+pub(crate) async fn snapshot_query(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    Query(args): Query<SnapshotArgs>,
+) -> Api {
     let _guard = app.gate.lock().await;
     let _session = app
         .store
@@ -413,7 +431,17 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
             .shared_observe_audit(&id, crate::shared_chat::actor(&app))
             .await?;
     }
-    let (mut messages, last_seq) = app.store.chat_snapshot(&id).await?;
+    let delta = args.since.filter(|_| {
+        args.history_revision == Some(_session["history_revision"].as_u64().unwrap_or(0))
+    });
+    let (mut messages, last_seq) = match delta {
+        Some(since) => {
+            app.store
+                .chat_snapshot_since(&id, since, SNAPSHOT_RECENT)
+                .await?
+        }
+        None => app.store.chat_snapshot(&id).await?,
+    };
     uploads::message_files(&app, &mut messages).await?;
     crate::shared_projection::messages(&app, &mut messages).await?;
     crate::manager::decorate(&app, &mut messages).await?;
@@ -448,7 +476,7 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     Ok(Json(
         json!({"access":{"observer":crate::shared_projection::observer(&app),"operator_reply":crate::shared_projection::observer(&app)&&_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true,
         "can_send":!crate::shared_projection::observer(&app)||(_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id(),"agent_operator":agent_operator},"usage":usage,"session":app.store.session_read_summary(&id).await?,
-        "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"artifacts":artifacts,"task_list":task_list,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"],"repeat_similarity":webagent_engine::gates::repeat_similarity()}),
+        "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"artifacts":artifacts,"task_list":task_list,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"delta":delta.is_some(),"queue":queue["queue"],"queue_state":queue["queue_state"],"repeat_similarity":webagent_engine::gates::repeat_similarity()}),
     ))
 }
 /// Characters of a first message returned for the Spawns panel preview.

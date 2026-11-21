@@ -266,7 +266,24 @@ async fn direct_message(Extension(app): Extension<App>, Json(body): Json<Value>)
         .await
         .into_response()
 }
-path_arg!(snapshot => snapshot, String);
+/// The conversation snapshot: the same session and access guard as `path_arg!`, plus the
+/// optional delta query (`since`, `history_revision`) the chat client's cache sends.
+async fn snapshot(
+    Extension(app): Extension<App>,
+    Path(path): Path<String>,
+    Query(args): Query<crate::SnapshotArgs>,
+) -> Response {
+    let app = match session_app(app, path.session_id()).await {
+        Ok(app) => app,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = guard_access(&app, false, false) {
+        return error.into_response();
+    }
+    crate::snapshot_query(State(app), Path(path), Query(args))
+        .await
+        .into_response()
+}
 path_arg!(first_message => first_message, String);
 path_arg!(background_task_metadata => background_task_metadata_api, (String,String));
 path_json!(session_undo => undo_session_api, String, crate::store::conversation_history::HistoryRequest);

@@ -67,7 +67,7 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   async function refreshGutterRuns(id=session){const epoch=sessionGeneration;try{const data=await client.snapshot(id);if(id===session&&epoch===sessionGeneration){rememberRuns(data.runs||[]);issues?.resolve('message_statistics',id);}}catch(error){if(id===session&&epoch===sessionGeneration)issues?issues.fail('message_statistics',error,id):note('Message statistics unavailable: '+error.message);}}
   // Projects panel run states into the activity view's display-state vocabulary.
   const paintActivity=()=>{try{activity.render({sessionId:session,runs:activityRuns.map(r=>({...r,state:({completed:'completed',failed:'failed',stopped:'cancelled',waiting_approval:'running',waiting_gate:'finalizing'})[r.status]||r.status}))},$('chat-messages-inner'));issues?.resolve('activity_display',session);}catch(error){if(issues)issues.fail('activity_display',error,session);else note('Activity display unavailable: '+error.message);}};
-  const client = createChatClient({request, note, issues, clearNoticeFrom, createStream});
+  const client = createChatClient({request, note, issues, clearNoticeFrom, createStream, cacheUser:()=>getIdentity()?.user_id||''});
   let privacyMode=null;
   // The server's tools notice (agent has no saved capability levels) shares the privacy hint line.
   function privacyNotice(mode,toolsNotice){privacyMode=mode;const notice=$('chat-privacy-notice');if(!notice)return;
