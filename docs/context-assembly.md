@@ -432,6 +432,16 @@ harness session, which it resumes while the history only grows.
   sees a changed prefix and starts a fresh harness session.
 - A fold changes the history prefix, so the next call starts a fresh harness session with
   the compacted history (or a fork of a checkpoint session where the harness supports it).
+- Every WebAgent tool reaches the harness model as a full native tool definition, so it can
+  call any listed tool and load its skill by name. OpenCode runs its tool server with code
+  mode off (`"codemode": false` in `opencode_config`); Claude runs with tool search off
+  (`ENABLE_TOOL_SEARCH=false`, `CLAUDE_ENV`), which otherwise shows the model only deferred
+  tool names. Each call writes the server's tool list to the chat's `tools.json`: a Claude
+  call starts a new process whose tool server reads it, and OpenCode restarts its tool
+  server when the file's digest changes, so an added or removed tool reaches a resumed
+  session at its next call. The tool definitions lead the provider's request, so such a
+  change costs that call its cached prefix; the tool list changes only on a direct change
+  (see **What the tool definitions depend on**).
 
 ## Provider-specific projection
 

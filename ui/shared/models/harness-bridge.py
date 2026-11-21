@@ -159,6 +159,12 @@ PREVIEW = 2000  # characters of a long message shown inline; the full text stays
 # CLAUDE.md or settings files, hooks, auto-memory, skills or Chrome, and no MCP server but this
 # script's stub for WebAgent's tools. The CLI still adds the account email, working directory,
 # date and model identity.
+# Claude Code defers MCP tool definitions behind a search tool once there are many, so the
+# model would see only tool names. WebAgent agents need every schema (to call tools and to
+# load their skills by name), so tool search stays off and each call lists the full set the
+# server sent; a changed set reaches a resumed session at its next call (the stub rereads
+# tools.json), like OpenCode with code mode off (see opencode_config).
+CLAUDE_ENV = {"ENABLE_TOOL_SEARCH": "false"}
 BARE = ["--setting-sources=", "--settings", '{"autoMemoryEnabled":false}', "--strict-mcp-config",
         "--disable-slash-commands", "--no-chrome"]
 AUTO_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
@@ -1423,7 +1429,7 @@ def run_claude(command, prompt, folder):
     """Run one `claude -p` in the chat folder (its sessions live under that project); return its JSON output."""
     # Prompt on stdin: a fresh chat's full history exceeds Linux's 128 KiB single-argument limit.
     started = time.time()
-    process = start_harness(command, cwd=folder)
+    process = start_harness(command, cwd=folder, env={**os.environ, **CLAUDE_ENV})
     try:
         stdout, stderr = process.communicate(prompt, timeout=HARNESS_SECS)
     except subprocess.TimeoutExpired:
