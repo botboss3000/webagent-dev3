@@ -211,6 +211,17 @@ Each requirement has an ID for reference in commits and reviews.
 | UI-2 | Markdown always through DOMPurify; plain text through `textContent`. | In force | skill "Rendering untrusted text" |
 | UI-3 | User uploads are never served inline as active content (HTML, SVG) from the app origin. | Reviewed | sweep upload review; keep on every new download route |
 
+### 3.12 File Manager outside the checkout (FILES)
+
+| ID | Requirement | Status | Evidence / work item |
+| --- | --- | --- | --- |
+| FILES-1 | The File Manager reaches folders outside the checkout only through the host file service (`build-service/host_files.py`, socket `runtime/files/files.sock`). The service answers only uid 1100 (SO_PEERCRED), and every file operation needs a live `files_grant` for the signed-in administrator. A grant comes only from an approval with the host approval passphrase (on Host Admin or in the File Manager's own prompt; only the helper checks the passphrase), no allow window covers it, it lasts the time the approver sets (1 h by default, at most 24 h), and Host Admin revokes it without the passphrase. Each operation runs in a child process as the operator account without its `sudo` and `docker` groups, so it has that account's file permissions only; new files are `ar:ar 600`, new folders 700, edits keep owner and mode. App data (`state/`), sockets (`runtime/`), `/proc`, `/sys` and `/dev` are refused as well, and the checkout stays with the worker (`/live-checkout`). Every write, create, rename and delete is logged and shown on Host Admin. | In force | `host_files.py` `as_operator`, `host_helper.py` `files_grant`/`files_revoke`, `file_manager.rs` `host_files`; `tests/test_host_files.py`, `tests/test_host_helper.py`; commits `a7e5e5e`, `6ce6444` |
+| FILES-2 | In-app agents never use the host file service, and only the File Manager may request its grants (an agent's or SSH request for `files_grant`/`terminal_grant` is refused); agent access outside the checkout would be a separate Administrator ability, off by default. | In force | `host_helper.py` `request`; sandboxed commands cannot open Unix sockets (TOOL-14); commit `1cb07c5` |
+| FILES-3 | File Manager terminals need their own `terminal_grant` (same approval, time limit and revoke as FILES-1). Each is a login shell on a pseudo-terminal run as the operator account without its `sudo` and `docker` groups. At most 4 per administrator; they close when the grant ends, after 30 idle minutes or on request. Opening and closing are logged; input and output are not recorded. | In force | `host_files.py` `Terminal`, `terminal_open`; `TerminalTests`; commits `035ce55`, `6ce6444` |
+
+The socket `runtime/files/files.sock` is reachable from the API container (rule 5.6): the File
+Manager needs it to reach host folders and terminals, and it answers only uid 1100.
+
 ## 4. Multi-tenant and other hosted servers
 
 A hosted deployment for other people must meet all **In force** requirements plus:
@@ -257,6 +268,7 @@ A hosted deployment for other people must meet all **In force** requirements plu
 | Shared-chat writers can approve tools that use the owner's data and connections (SHARE-3). | User | 2026-11-20 | SHARE-3/4 ship |
 | The operator may open a 24 h allow-all host window for all requesters (`session: "*"`) during active release work. | User ("I'm controlling it") | 2026-11-20 | HOSTACT-5 ships |
 | SSH listens on all interfaces; the firewall restricts it to Tailscale. | sec-host recommendation | 2026-11-20 | — |
+| With a File Manager grant (up to 24 h), the File Manager and its terminals can change anything the operator account can, including the live checkout without a broker task (FILES-1, FILES-3). | User | 2026-11-21 | — |
 
 ## 7. Work items and decision log
 
@@ -285,3 +297,7 @@ L10 (origin server timeouts), L11.
   L3/L5/L7 (latent or mitigated; Fable). Assumptions to review: login queue allows two of the
   longest delays; 16 live embed challenges per address; 32 live views per user; media share is half
   the slots; Tailscale left reachable from containers; CPU limit 4 per app container.
+- 2026-11-21: File Manager outside the checkout restored here after the B–F status update dropped
+  it (FILES-1..3). File operations now run as the operator account instead of root (new files
+  `ar:ar 600`); grant time is set at approval (default 1 h, maximum 24 h); terminals added with a
+  separate grant.

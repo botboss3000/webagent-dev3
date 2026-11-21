@@ -269,7 +269,7 @@ export function start(mount) {
     const grants = [...Object.entries(page.file_grants || {}).map(([admin, until]) => ['files', admin, until]),
       ...Object.entries(page.terminal_grants || {}).map(([admin, until]) => ['terminal', admin, until])];
     box.append(el('p', 'host-help', grants.length
-      ? 'File access is root-equivalent: any file except app data and sockets. Terminal access is a shell as the operator account without sudo or docker.'
+      ? 'File and terminal access both act as the operator account without sudo or docker: anything that account can read or change, except app data and sockets.'
       : 'No administrator can browse outside the checkout or open a terminal. The File Manager asks here (or in its own prompt).'));
     const list = el('ul', 'host-list');
     for (const [kind, admin, until] of grants) {
@@ -302,7 +302,7 @@ export function start(mount) {
 
   function render(page, production) {
     const wrap = el('div', 'host-wrap');
-    // A live File Manager approval is root-equivalent: pin it to the top so Revoke is one tap away.
+    // A live File Manager approval: pin it to the top so Revoke is one tap away.
     const pinned = hasGrants(page);
     if (pinned) wrap.append(fileAccess(page));
     wrap.append(el('h2', '', 'Waiting for approval' + (page.pending.length ? ' (' + page.pending.length + ')' : '')));
