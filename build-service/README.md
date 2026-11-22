@@ -212,6 +212,30 @@ profile key the new helper requires (for example `approvers`) goes into
 `/etc/webagent/host-profile.json` before the update, or the helper falls back to its
 fail-closed default.
 
+## Local models relay
+
+`local_models_relay.py` lets the app use self-hosted models (Laya and Kev on the sidekick)
+while the firewall keeps containers off Tailscale addresses. It is not on the broker's install
+list; it is installed by hand as root:
+
+- code: `/var/lib/webagent/development/local-models/relay.py`, unit
+  `webagent-local-models-development.service` (`Restart=always`, `UMask=0077`);
+- registry: `/etc/webagent/development/local-models.json` (root, 0644), schema version 1, one
+  entry per model: `id`, `name`, `capabilities` (`decision`, later `text`), `api`
+  (`system_one`; `openai_chat` is reserved), `url` (https, or http to a Tailscale address),
+  `upstream_model` (sent as the request's `model`), `key_file`, `max_input_tokens`,
+  `needs_instructions`, optional `health_path` (default `/health`);
+- keys: `/etc/webagent/development/local-models/<key_file>` (root, 0600);
+- socket: `<runtime>/local-models/relay.sock`, `/runtime/local-models/relay.sock` in the
+  containers, served only to the app's user (SO_PEERCRED).
+
+One JSON request per line: `{"op":"models"}` lists the registry with an `up` health flag, and
+`{"op":"decide","model":ID,"body":{state,questions}}` forwards to `/v1/systemone` with the
+model's key. Failures carry `kind` (`unknown_model`, `unavailable`, `timeout`, `rejected` with
+the HTTP `status`, `too_large`, `invalid`). The registry is re-read when it changes and a bad
+file keeps the last good one, so adding a model is: copy its key file in, add its entry, then
+publish it from the Model Catalog. Tests: `tests/test_local_models_relay.py`.
+
 ## Release-scope guards
 
 Checked source patches are text unified diffs, except that image and font assets
