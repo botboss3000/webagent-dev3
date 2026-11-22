@@ -390,11 +390,25 @@ export function mountModelTable(host, opts = {}) {
     return stored === modelNameOf(p) ? '' : stored;
   };
   const rowDisplayName = (p) => userDisplayName(p) || modelNameOf(p) || '—';
-  // Treat a blank alias as one shared slot, and compare named aliases without case or edge spaces.
-  const displayNameConflict = (candidate, except = null) => {
-    const name = String(candidate || '').trim().toLocaleLowerCase();
-    const exists = S.providers.some(row => row !== except && userDisplayName(row).toLocaleLowerCase() === name);
-    return exists ? (name ? 'Display names must be unique in this agent.' : 'Only one model can have no display name.') : '';
+  // Every model in an agent's list needs a unique shown name: its display name, or its model
+  // name (`fallback`) when it has none. Names compare without case or edge spaces.
+  const displayNameConflict = (candidate, except = null, fallback = '') => {
+    const typed = String(candidate || '').trim();
+    const name = typed || String(fallback || '').trim();
+    if (!name) return '';
+    const key = name.toLocaleLowerCase();
+    const taken = S.providers.some(row => row !== except && rowDisplayName(row).toLocaleLowerCase() === key);
+    if (!taken) return '';
+    return typed ? `Unique name needed: "${name}" is already taken.` : `Unique name needed: "${name}" is already taken. Add a display name.`;
+  };
+  // The name the model picked in the add form would show with no display name.
+  const pickedModelName = () => {
+    if (!S.selectedModel) return '';
+    const chosen = S.allModels.find(row => row.id === S.selectedModel) || {};
+    const platform = userCatalog && listProvider() && S.currentProvider === 'webagent_catalog';
+    return modelNameOf(platform
+      ? { catalog_origin: 'platform', catalog_name: chosen.catalog_name || chosen.display_name || '' }
+      : { model: S.selectedModel });
   };
   const saveRoster = () => adapter.saveRoster({
     providers: S.providers,
@@ -695,7 +709,7 @@ export function mountModelTable(host, opts = {}) {
   displayNameInput.addEventListener('click', (event) => event.stopPropagation());
   inlineNameForm.addEventListener('click', (event) => event.stopPropagation());
   const updateInlineNameState = () => {
-    const duplicate = displayNameConflict(displayNameInput.value);
+    const duplicate = displayNameConflict(displayNameInput.value, null, pickedModelName());
     inlineNameError.textContent = duplicate;
     inlineAddBtn.disabled = catalogAddBusy || !!duplicate;
   };
@@ -2518,7 +2532,7 @@ export function mountModelTable(host, opts = {}) {
         done = true;
         const next = aliasInput.value.trim();
         if (commit && next !== current) {
-          const conflict = displayNameConflict(next, p);
+          const conflict = displayNameConflict(next, p, modelNameOf(p));
           if (conflict) {
             aliasInput.replaceWith(aliasValue);
             _flashSaveCheck(aliasLine, false, conflict);
@@ -3125,7 +3139,7 @@ export function mountModelTable(host, opts = {}) {
     if (guardMessage) return setModelStatus(guardMessage);
     {
       const requestedName = displayNameInput.value.trim() || (free ? nextFreeSlotLabel() : '');
-      const conflict = displayNameConflict(requestedName);
+      const conflict = displayNameConflict(requestedName, null, free ? 'openrouter/free' : pickedModelName());
       if (conflict) return setModelStatus(conflict);
       const chosen = S.allModels.find(row => row.id === S.selectedModel) || {};
       const subscriptionConnection = subscription ? matchingSubscriptionRow() : null;
