@@ -329,7 +329,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
       {label:'Deny',kind:'deny',run:()=>decide('deny')}
     ];
     if(active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
-    const node=card({title:plan?'Start this plan? Auto stops asking for tool approvals; Ask keeps them.':toAuto?'Switch to Auto mode? Tools will no longer ask for approval.':approval.messaging_binding?'Approve agent message':approval.repeat_of ? 'Repeat an action the agent already ran?' : approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : approval.guard_hold ? 'Did you ask for this? The guard did not match it to your messages:' : 'Need approval:',details:{toggle,body:details},actions});
+    const node=card({title:plan?'Start this plan? Auto stops asking for tool approvals; Ask keeps them.':toAuto?'Switch to Auto mode? Tools will no longer ask for approval.':approval.messaging_binding?'Approve agent message':approval.repeat_of ? 'Repeat an action the agent already ran?' : approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : approval.guard_hold ? 'Did you ask for this?' : 'Need approval:',details:{toggle,body:details},actions});
     // The tool's repeat warning tells the user what approving may duplicate.
     if(approval.repeat_of&&typeof approval.repeat_warning==='string'){const text=document.createElement('p');text.textContent=approval.repeat_warning;node.insertBefore(text,node.lastChild);}
     // The critical tool guard's verdict: which message it matched, or why it held the call.
