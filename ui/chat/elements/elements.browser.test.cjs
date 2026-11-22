@@ -77,18 +77,23 @@ for(const opts of [{},{mobile:true,dark:true}])test('sub agent spawns read as su
  assert.equal(await body.locator('.v2-activity-group').count(),0,'no nested activity group');
  assert.equal(await p.locator('#messages > .v2-activity-group:not(.v3-activity-cluster)').isVisible(),false,'member stays hidden');
 });
-test('an idle activity poll that finds no changes leaves the transcript DOM untouched',async t=>{
+test('activity refreshes only on a pushed seq change, at most every 2 s, never while hidden, and an empty refresh leaves the DOM untouched',async t=>{
  const p=await fixture(t);let polls=0;
- // Later routes win: cursor polls report no new summaries.
+ const group=p.locator('.v2-activity-group');await group.waitFor();await p.waitForTimeout(500);
+ // Later routes win: cursor reads report no new summaries.
  await p.route('**/api/v3/sessions/*/activity?*after=*',route=>{polls++;return route.fulfill({json:{segments:[],cursor:1}});});
- const group=p.locator('.v2-activity-group');await group.waitFor();
- const settle=Date.now()+8000;while(polls<1 && Date.now()<settle)await p.waitForTimeout(100);
- await p.waitForTimeout(300);
- await p.evaluate(()=>{window.mutations=0;new MutationObserver(list=>{window.mutations+=list.length;}).observe(document.querySelector('#messages'),{subtree:true,childList:true,attributes:true,characterData:true});});
- const start=polls,deadline=Date.now()+8000;
- while(polls<start+2 && Date.now()<deadline)await p.waitForTimeout(100);
- assert.ok(polls>=start+2,'two idle polls ran');
- assert.equal(await p.evaluate(()=>window.mutations),0,'idle polls leave the transcript DOM untouched');
+ await p.evaluate(()=>{window.mutations=0;new MutationObserver(list=>{window.mutations+=list.length;}).observe(document.querySelector('#messages'),{subtree:true,childList:true,attributes:true,characterData:true});
+  window.push=(seq,extra={})=>document.dispatchEvent(new CustomEvent('v3:activity-seq',{detail:{session_id:'s',seq,...extra}}));});
+ await p.waitForTimeout(2500);assert.equal(polls,0,'no timer polls without a push');
+ await p.evaluate(()=>push(5));await p.waitForTimeout(300);assert.equal(polls,1,'a new seq reads once');
+ await p.evaluate(()=>push(5));await p.waitForTimeout(300);assert.equal(polls,1,'an unchanged seq reads nothing');
+ await p.evaluate(()=>{push(6);push(7);});await p.waitForTimeout(500);assert.equal(polls,1,'pushes inside 2 s wait');
+ await p.waitForTimeout(2000);assert.equal(polls,2,'held pushes read once when the 2 s cap passes');
+ await p.evaluate(()=>push(8,{session_id:'other'}));await p.waitForTimeout(2300);assert.equal(polls,2,'another session is ignored');
+ await p.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});push(9);});await p.waitForTimeout(2300);assert.equal(polls,2,'a hidden tab reads nothing');
+ await p.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});document.dispatchEvent(new Event('visibilitychange'));});await p.waitForTimeout(300);assert.equal(polls,3,'becoming visible reads once');
+ await p.waitForTimeout(2000);await p.evaluate(()=>push(null,{reconnect:true}));await p.waitForTimeout(300);assert.equal(polls,4,'a reconnect reads once');
+ assert.equal(await p.evaluate(()=>window.mutations),0,'empty refreshes leave the transcript DOM untouched');
  assert.match(await group.locator('summary').first().textContent(),/^1 message · Working/);
 });
 test('mini transcript can be opened by an alternate ellipsis trigger',async t=>{

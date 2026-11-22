@@ -56,7 +56,7 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   let panelAnswerRuns=new Set();
   const dispatchAppView=createAppViewDispatcher();
   // Chat elements share the panel session, public runs and merged profile; private groups retain admin gating.
-  const activity=createChatElements({app:{/* Reads the current selected session. */get currentSessionId(){return session;}},/* Returns the current account's admin flag. */isAdmin:()=>!!getIdentity().is_admin,/* Uses profile configuration when set, otherwise the default. */chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback});
+  const activity=createChatElements({app:{/* Reads the current selected session. */get currentSessionId(){return session;}},/* Returns the current account's admin flag. */isAdmin:()=>!!getIdentity().is_admin,/* Uses profile configuration when set, otherwise the default. */chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback,/* Names the signed-in user for the browser activity cache. */cacheUser:()=>getIdentity()?.user_id||''});
   let activityRuns=[],ownRunsBusy=false;
   const expandedApprovals=new Set();
   const expandedRecovery=new Set();

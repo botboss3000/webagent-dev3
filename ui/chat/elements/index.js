@@ -3,6 +3,7 @@ import {activityRows} from '../core/activity.js';
 import {createMiniTranscript} from './mini-transcript/index.js';
 import {createActivityGroup,paintActivityHead} from './activity-group/index.js';
 import {createTypingEllipsis} from './typing-ellipsis/index.js';
+import {readActivity,saveActivity,forgetActivity} from '../core/conversation-cache.js';
 
 // UI preview captures: `/app?session_id=<id>&ui_sample=activity` replaces the session's activity with one
 // fixed sample group after its first message, so screenshots never depend on live work. Static text only;
@@ -30,9 +31,11 @@ async function sampleGet(url) {
 // Own session-scoped chat elements and a separately authorized private activity view.
 // Group summaries (counts, flags) load only for drawn messages; a group's events load only
 // when it is expanded, so the private journal is never downloaded wholesale.
-export function createChatElements({app,isAdmin,chatUiFlag}) {
+// cacheUser names the signed-in user for the browser activity cache; '' disables it.
+export function createChatElements({app,isAdmin,chatUiFlag,cacheUser=()=>''}) {
 let session=null, publicState=null, container=null, error='', enabled=false;
-let summaries=new Map(), requested=new Set(), cursor=null, timer=0, busy=false, generation=0;
+let summaries=new Map(), requested=new Set(), cursor=null, timer=0, busy=false, pending=false, generation=0;
+let lastSeq=null, nextAllowed=0, runSignature=null, savedSignature='';
 const nodes=new Map(), clusters=new Map();
 let ellipsis=null;
 // Load each element-owned stylesheet once across session changes.
@@ -90,7 +93,9 @@ async function loadEvents(id) {
 }
 // Fetches summaries for newly drawn messages, then groups that changed since the cursor.
 async function refresh() {
-  if(busy || !session)return;
+  if(!session)return;
+  // A refresh asked for while one runs follows it, so no push or newly drawn message is lost.
+  if(busy){pending=true;return;}
   busy=true;const epoch=generation,id=session,before=error;let changed=false;
   try {
     const drawn=[...container?.children||[]].map(node=>node.dataset.publicId).filter(value=>value && !requested.has(value));
@@ -112,22 +117,65 @@ async function refresh() {
     error='';
   } catch(failure) {
     if(epoch!==generation)return;
-    if([401,403,404].includes(failure.status)){disconnectActivity();return;}
-    error='Loading…';
+    if([401,403,404].includes(failure.status)){void forgetActivity(cacheUser(),id).catch(()=>{});disconnectActivity();return;}
+    error='Loading…';clearTimeout(timer);timer=setTimeout(poke,RETRY_MS);
   } finally {if(epoch===generation)busy=false;}
-  // An idle poll with no new summaries, messages, error or progress change leaves the DOM untouched.
+  if(epoch!==generation)return;
+  if(changed)persist(id);
+  if(pending){pending=false;void refresh();}
+  // A refresh with no new summaries, messages, error or progress change leaves the DOM untouched.
   if(changed || error!==before || (document.querySelector('#chat-above-pill.visible')!==null)!==paintedProgress)paint();
   // Share the newest group's counts so the session dropdown shows them without its own request.
   const latest=changed&&[...summaries.values()].find(summary=>summary.latest);
   if(latest)document.dispatchEvent(new CustomEvent('v3:activity-latest',{detail:{session_id:id,run_id:latest.run_id,counts:latest.counts}}));
 }
-// Activity changes while a run works: poll every 2 s then, every 15 s otherwise. New messages
-// and run updates arriving on the session stream repaint the panel, which refreshes sooner.
-const ACTIVE_POLL_MS=2000,QUIET_POLL_MS=15000,ACTIVE_STATUSES=new Set(['queued','running','waiting_gate']);
-// The panel's runs carry the server status; callers with only a display state use that.
-function runActive(){return (publicState?.runs||[]).some(run=>(!run.session_id||run.session_id===session)&&ACTIVE_STATUSES.has(run.status||run.state));}
-let dueAt=0;
-function schedule(delay=runActive()?ACTIVE_POLL_MS:QUIET_POLL_MS){clearTimeout(timer);if(!enabled)return;dueAt=Date.now()+delay;timer=setTimeout(()=>{void refresh().finally(()=>schedule());},delay);}
+// New activity is pushed, not polled: the session stream's session_updated carries the newest
+// activity seq (v3:activity-seq from the chat client). A changed seq, a reconnect, a run starting or
+// ending, or the tab becoming visible asks for the groups after the cursor, at most once per
+// PUSH_MIN_MS per tab and never while the tab is hidden. A failed read retries after RETRY_MS.
+const PUSH_MIN_MS=2000,RETRY_MS=5000,ENDED=new Set(['completed','failed','cancelled']);
+function poke() {
+  clearTimeout(timer);timer=0;
+  if(!enabled || document.hidden)return;
+  const wait=nextAllowed-Date.now();
+  if(wait>0){timer=setTimeout(poke,wait);return;}
+  nextAllowed=Date.now()+PUSH_MIN_MS;void refresh();
+}
+document.addEventListener('v3:activity-seq',event=>{
+  const detail=event.detail||{};
+  if(!enabled || detail.session_id!==session)return;
+  if(!detail.reconnect){if(detail.seq===lastSeq)return;lastSeq=detail.seq;}
+  poke();
+});
+document.addEventListener('visibilitychange',()=>{if(enabled && !document.hidden)poke();});
+// Saves finished groups (counts and seq ranges, never events) for the next open. Groups of a run that
+// may still change stay out and the saved cursor stops before them, so the next open re-reads them.
+function persist(id) {
+  const user=cacheUser();
+  if(!user || sample || cursor===null)return;
+  const runs=publicState?.runs||[],saved=[];let through=cursor;
+  for(const summary of summaries.values()) {
+    const run=runs.find(r=>r.id===summary.run_id);
+    if(run?ENDED.has(run.status||run.state):summary.closed && !summary.latest){const {events,rows,...rest}=summary;saved.push(rest);}
+    else through=Math.min(through,summary.first_seq-1);
+  }
+  const signature=through+':'+saved.length+':'+saved.reduce((most,summary)=>Math.max(most,summary.last_seq),0);
+  if(signature===savedSignature)return;
+  savedSignature=signature;
+  void saveActivity(user,id,{cursor:through,requested:[...requested],segments:saved}).catch(()=>{});
+}
+// Draws cached finished groups at once, then asks the server only for what follows their cursor.
+async function start() {
+  const epoch=generation,id=session,user=cacheUser();
+  if(user && !sample) {
+    busy=true;
+    const cached=await readActivity(user,id).catch(()=>null);
+    if(epoch!==generation)return;
+    if(cached){merge(cached.segments);cursor=cached.cursor;for(const value of cached.requested)requested.add(value);paint();}
+    busy=false;pending=false;
+  }
+  await refresh();
+}
 // Progress-pill state at the last paint, so a poll repaints when the pill toggles.
 let paintedProgress=null;
 // Place groups after matching public-message anchors and refresh labels from summary state.
@@ -227,7 +275,8 @@ function cluster(shown,active,lastNode) {
 }
 // Stop polling and drop every private summary and group, for a policy change or a new session.
 function stopActivity() {
-  ++generation;enabled=false;busy=false;clearTimeout(timer);
+  ++generation;enabled=false;busy=false;pending=false;clearTimeout(timer);timer=0;
+  lastSeq=null;nextAllowed=0;runSignature=null;savedSignature='';
   summaries=new Map();requested=new Set();cursor=null;sampleShown=false;
   for(const entry of nodes.values())entry.dispose();nodes.clear();
   for(const element of clusters.values()){element._transcript?.dispose();element.remove();}clusters.clear();
@@ -257,9 +306,10 @@ function renderActivity(state,target) {
   if(!chatUiFlag('show_activity_groups',false) || config?.activity_group?.enabled===false || !isAdmin()) {
     stopActivity();return;
   }
-  if(!enabled){enabled=true;void refresh().finally(()=>schedule());}
-  // A repaint from the stream pulls the next refresh forward, never later than it was due.
-  else if(!busy&&dueAt-Date.now()>500)schedule(500);
+  // A run starting or ending changes group flags and counts without new activity rows.
+  const runs=(state.runs||[]).filter(run=>!run.session_id||run.session_id===session).map(run=>run.id+':'+(run.status||run.state)).join(',');
+  if(!enabled){enabled=true;runSignature=runs;void start();}
+  else if(runs!==runSignature){runSignature=runs;poke();}
   paint();
 }
 // The panel owns render/disconnect and calls disconnect on session change or teardown.

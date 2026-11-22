@@ -30,6 +30,11 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     current = null;
     administratorNotices.stop(); source?.close(); source = null; setConnecting(false);
   }
+  // Tells the chat elements the newest activity seq, or that the stream reconnected, so activity
+  // groups refresh on a push instead of a timer.
+  function announceActivity(detail) {
+    if (typeof CustomEvent === 'function') globalThis.document?.dispatchEvent?.(new CustomEvent('v3:activity-seq', {detail}));
+  }
   // Rejects callbacks from any connection or session superseded by disconnect/open.
   function valid(state) { return current === state && state.epoch === epoch; }
   // Validates and deduplicates one sequenced event before publishing it to the panel.
@@ -121,7 +126,7 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     source = createStream ? createStream(streamUrl) : new EventSourceClass(streamUrl);
     setConnecting(true);
     source.addEventListener('queue_updated', () => { if (valid(state)) void recover(state); });
-    source.addEventListener('session_updated', event => { if (valid(state)) {try {const summary=JSON.parse(event.data).session;if((summary?.history_revision||0)>state.historyRevision)state.historyChanged=true;metadataChanged(summary);if((JSON.parse(event.data).app_view_revision||0)>state.appViewRevision||(JSON.parse(event.data).component_revision||0)>state.componentRevision)void recover(state);} catch {metadataChanged();}} });
+    source.addEventListener('session_updated', event => { if (valid(state)) {try {const summary=JSON.parse(event.data).session,activitySeq=JSON.parse(event.data).activity_seq;if(Number.isSafeInteger(activitySeq))announceActivity({session_id:state.id,seq:activitySeq});if((summary?.history_revision||0)>state.historyRevision)state.historyChanged=true;metadataChanged(summary);if((JSON.parse(event.data).app_view_revision||0)>state.appViewRevision||(JSON.parse(event.data).component_revision||0)>state.componentRevision)void recover(state);} catch {metadataChanged();}} });
     // Validates each SSE payload; rendering/parse failures trigger snapshot recovery.
     source.onmessage = event => {
       if (!valid(state)||state.historyChanged) return;
@@ -133,7 +138,7 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     // Clears the connection indicator and, on a reconnect, checks for messages missed while
     // disconnected. The first open needs no check: the stream resumes after the snapshot's last_seq.
     let opened = false;
-    source.onopen = () => { if (valid(state)) {setConnecting(false); if (opened) void recover(state); opened = true;} };
+    source.onopen = () => { if (valid(state)) {setConnecting(false); if (opened) {void recover(state); announceActivity({session_id:state.id,reconnect:true});} opened = true;} };
   }
   return {
     open, disconnect, updateRuns,

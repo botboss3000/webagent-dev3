@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeDelta, readConversation, saveConversation, clearConversations } from './conversation-cache.js';
+import { mergeDelta, readConversation, saveConversation, clearConversations, readActivity, saveActivity, forgetActivity } from './conversation-cache.js';
 
 const message = (seq, text = 'm' + seq) => ({seq, id: 'id' + seq, text});
 
@@ -21,5 +21,8 @@ test('without IndexedDB the cache is a quiet no-op', async () => {
   assert.equal(globalThis.indexedDB, undefined);
   await saveConversation('u', 's', {history_revision: 0, last_seq: 1, messages: []});
   assert.equal(await readConversation('u', 's'), null);
+  await saveActivity('u', 's', {cursor: 3, requested: ['q'], segments: [{id: 'g', first_seq: 1, last_seq: 3}]});
+  assert.equal(await readActivity('u', 's'), null);
+  await forgetActivity('u', 's');
   await clearConversations();
 });
