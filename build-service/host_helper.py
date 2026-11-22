@@ -2,9 +2,13 @@
 
 Runs as root (webagent-host-helper.service). Callers are identified only by SO_PEERCRED:
 the app may request, list, decide and set allow-all windows; the operator account (ar, which
-runs operator_shell.py for release keys) may request and read status. Nothing that changes
-the host runs without an approved decision or a live allow-all window. Every request,
-decision and result is appended to the log. Host-specific values come from the host profile.
+runs operator_shell.py for release keys) may request and read status; root (the host operator
+over SSH, `sudo buildctl host ...`) may list, decide and open windows without the app. Nothing
+that changes the host runs without an approved decision or a live allow-all window. The app
+approves a root-equivalent action ("root" below) or opens a window only with the host approval
+passphrase, and opens windows at all only where the profile's window_openers lists "app"
+(HOSTACT-5). Every request, decision and result is appended to the log. Host-specific values
+come from the host profile.
 """
 import difflib
 import getpass
@@ -39,7 +43,14 @@ DEFAULTS = {"host_id": socket.gethostname(), "socket": "/home/ar/webagent-dev3/r
             "drain_seconds": 3600,
             # files_grant / terminal_grant: how long an administrator may use the host file service
             # (host_files.py); the approver picks the time, up to the maximum.
-            "grant_default_seconds": 3600, "grant_max_seconds": 86400, "files_unit": "webagent-host-files.service"}
+            "grant_default_seconds": 3600, "grant_max_seconds": 86400, "files_unit": "webagent-host-files.service",
+            # Who may open allow-all windows: "app" (Host Admin page, with the passphrase) and/or
+            # "host" (root over SSH: sudo buildctl host allow). Development lists both; production
+            # only "host", so no credential for a window ever passes through the app.
+            "window_openers": ["host"],
+            # Root-owned wrapper for the SSH route, installed with the helper by supervisor_update.
+            "operator_command": "/usr/local/sbin/buildctl"}
+WINDOW_OPENERS = ("app", "host")
 # Grant actions and the file each one's live grants are kept in (host_files.py reads them too).
 GRANTS = {"files_grant": "file-grants.json", "terminal_grant": "terminal-grants.json"}
 FILES_UNIT = """[Unit]
@@ -55,20 +66,33 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 """
+# The host operator's route that never passes through the app. It runs only the root-owned
+# installed helper, never a checkout's buildctl.py (which the worker's group can write).
+OPERATOR_COMMAND = """#!/bin/sh
+# Installed by the WebAgent host helper (supervisor_update): sudo buildctl host pending|approve|deny|allow.
+if [ "$1" != host ]; then
+  echo "usage: sudo buildctl host pending | approve ID | deny ID | allow HOURS [--session KEY]" >&2
+  exit 2
+fi
+shift
+exec /usr/bin/python3 -I {path} operator "$@"
+"""
 # Undo classes: exact, best_effort or none. "read" actions change nothing and need no approval.
 # Allow-all windows never cover "none" or boot/disk actions (step 3 adds the edit actions).
+# "root" actions are root-equivalent: an app approval needs the passphrase unless a window
+# (itself opened with the passphrase or over SSH) covers the request.
 ACTIONS = {
     "host_status": {"read": True, "undo": "exact", "boot_disk": False},
     "noop": {"read": False, "undo": "exact", "boot_disk": False},
-    "file_write": {"read": False, "undo": "exact", "boot_disk": False},
-    "host_revert": {"read": False, "undo": "exact", "boot_disk": False},
+    "file_write": {"read": False, "undo": "exact", "boot_disk": False, "root": True},
+    "host_revert": {"read": False, "undo": "exact", "boot_disk": False, "root": True},
     "unit_restart": {"read": False, "undo": "best_effort", "boot_disk": False},
     "container_restart": {"read": False, "undo": "best_effort", "boot_disk": False},
-    "packages_upgrade": {"read": False, "undo": "best_effort", "boot_disk": False},
+    "packages_upgrade": {"read": False, "undo": "best_effort", "boot_disk": False, "root": True},
     # Install supervisor: each runs in its own transient unit (it outlives a helper restart),
     # keeps the last-known-good copy, health-tests the result and reverts it on failure.
-    "broker_install": {"read": False, "undo": "exact", "boot_disk": False},
-    "supervisor_update": {"read": False, "undo": "exact", "boot_disk": False},
+    "broker_install": {"read": False, "undo": "exact", "boot_disk": False, "root": True},
+    "supervisor_update": {"read": False, "undo": "exact", "boot_disk": False, "root": True},
     # Lets one administrator use the File Manager outside the checkout until it expires or is
     # revoked. It is root-equivalent while live, so it always needs the host approval
     # passphrase and no allow-all window covers it.
@@ -85,6 +109,9 @@ def load_profile(path=PROFILE):
     value = dict(DEFAULTS)
     if path.exists():
         value.update(json.loads(path.read_text()))
+    openers = value["window_openers"]
+    if not isinstance(openers, list) or not set(openers) <= set(WINDOW_OPENERS):
+        raise ValueError("window_openers must list only " + " and ".join(WINDOW_OPENERS))
     return value
 
 
@@ -489,6 +516,14 @@ class Helper:
         self.runner(["systemctl", "restart", self.profile["files_unit"]], timeout=60)
         return True
 
+    def update_operator_command(self):
+        """Install the root-owned `buildctl` wrapper for the SSH route; False if current."""
+        target, text = Path(self.profile["operator_command"]), OPERATOR_COMMAND.format(path=self.helper_path()).encode()
+        if target.exists() and target.read_bytes() == text:
+            return False
+        self.write(target, text, 0o755, 0, 0)
+        return True
+
     def update_helper(self, request_id):
         target = self.helper_path()
         new = (Path(self.build_config()["service_dir"]) / "host_helper.py").read_bytes()
@@ -497,6 +532,7 @@ class Helper:
         folder.mkdir(parents=True, mode=0o700, exist_ok=True)
         # The file service ships beside the helper; a failed file service never blocks the helper update.
         files = self.update_files_service(folder)
+        self.update_operator_command()
         if new == old:
             return {"changed": False, "files_service": files}
         (folder / "host_helper.py").write_bytes(old)
@@ -542,26 +578,29 @@ class Helper:
     def handle(self, uid, message):
         op = message.get("op")
         app = uid == self.app_uid
-        operator = uid in (self.operator_uid, 0)
+        root = uid == 0
+        operator = uid == self.operator_uid or root
         if op == "request" and (app or operator):
             return self.request(message, "app" if app else "ssh")
         if op == "status" and (app or operator):
             record = self.load(message.get("id"))
-            if not app and record["requester"]["channel"] != "ssh":
+            if not app and not root and record["requester"]["channel"] != "ssh":
                 raise PermissionError("not your request")
             return record
-        if op == "list" and app:
+        if op == "list" and (app or root):
             with self.lock:
                 records = [self.load(p.stem) for p in sorted((self.state / "requests").glob("*.json"))]
             pending = [r for r in records if r["state"] == "pending"]
             recent = sorted((r for r in records if r["state"] != "pending"), key=lambda r: -r.get("decided_at", 0))[:50]
             return {"pending": pending, "recent": recent, "windows": self.windows(),
+                    "window_openers": self.profile["window_openers"],
                     "file_grants": self.grants("files_grant"), "terminal_grants": self.grants("terminal_grant"),
                     "file_log": self.file_log(50)}
-        if op == "decide" and app:
-            return self.decide(message)
-        if op == "allow" and app:
-            return self.allow(message)
+        # Root is the host operator over SSH (sudo): its decisions and windows never pass through the app.
+        if op == "decide" and (app or root):
+            return self.decide(message, "app" if app else "host")
+        if op == "allow" and (app or root):
+            return self.allow(message, "app" if app else "host")
         if op == "files_revoke" and app:
             return self.files_revoke(message)
         raise PermissionError("operation not allowed for this caller")
@@ -589,6 +628,7 @@ class Helper:
                         return waiting
         record = {"id": secrets.token_hex(16), "action": action, "args": args, "preview": self.preview(action, args),
                   "undo": spec["undo"], "boot_disk": boot_disk, "passphrase": bool(spec.get("passphrase")),
+                  "root": bool(spec.get("root")),
                   "requester": {"channel": channel, **requester},
                   "state": "pending", "created_at": now, "expires_at": now + ttl if (ttl := self.profile["request_ttl_seconds"]) else None}
         with self.lock:
@@ -605,7 +645,7 @@ class Helper:
                 self.run_approved(record)
         return record
 
-    def decide(self, message):
+    def decide(self, message, caller="app"):
         decision, admin = message.get("decision"), message.get("admin")
         if decision not in ("approve", "deny") or not isinstance(admin, str) or not admin:
             raise ValueError("decision approve or deny and the deciding admin required")
@@ -614,8 +654,10 @@ class Helper:
             if record["state"] != "pending":
                 raise ValueError("request is " + record["state"])
             # Boot and disk approvals need the host approval passphrase, checked here, never by the app.
-            # So do File Manager grants (files and terminals outside the checkout).
-            if decision == "approve" and (record["boot_disk"] or record.get("passphrase")):
+            # So do File Manager grants (files and terminals outside the checkout) and every
+            # root-equivalent action. Root over SSH already holds root and needs no passphrase.
+            needs = record["boot_disk"] or record.get("passphrase") or ACTIONS[record["action"]].get("root")
+            if decision == "approve" and needs and caller == "app":
                 self.check_passphrase(message.get("passphrase"))
             if decision == "approve" and record["action"] in GRANTS:
                 # The approver sets how long the grant lasts: default 1 h, never above the maximum.
@@ -711,11 +753,18 @@ class Helper:
         self.log({"event": "files_revoke", "kind": message.get("kind", "files"), "admin": admin, "by": by})
         return {"admin": admin, "kind": message.get("kind", "files"), "revoked": existed}
 
-    def allow(self, message):
+    def allow(self, message, caller="app"):
         session, seconds, admin = message.get("session"), message.get("seconds", self.profile["allow_default_seconds"]), message.get("admin")
         if not isinstance(session, str) or not session or not isinstance(admin, str) or type(seconds) is not int \
                 or not 0 <= seconds <= self.profile["allow_max_seconds"]:
             raise ValueError("allow takes a session, an admin and seconds up to the configured maximum")
+        # Opening or extending a window is root-equivalent; ending one (0 seconds) is free, like files_revoke.
+        if seconds:
+            if caller not in self.profile["window_openers"]:
+                raise PermissionError("on this host windows are opened only "
+                                      + ("over SSH: sudo buildctl host allow <hours>" if caller == "app" else "in the app"))
+            if caller == "app":
+                self.check_passphrase(message.get("passphrase"))
         with self.lock:
             path = self.state / "allow.json"
             windows = json.loads(path.read_text()) if path.exists() else {}
@@ -725,7 +774,7 @@ class Helper:
             else:
                 windows.pop(session, None)
             path.write_text(json.dumps(windows))
-            self.log({"event": "allow", "session": session, "seconds": seconds, "by": admin})
+            self.log({"event": "allow", "session": session, "seconds": seconds, "by": admin, "caller": caller})
         return {"session": session, "until": windows.get(session)}
 
 
@@ -757,6 +806,56 @@ def client(helper, connection):
         connection.sendall(json.dumps(reply, sort_keys=True).encode() + b"\n")
 
 
+def call(path, message):
+    """One request to the running helper; as root it is the host operator (uid 0)."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(60)
+        connection.connect(path)
+        connection.sendall(json.dumps(message).encode() + b"\n")
+        reply = json.loads(connection.makefile("rb").readline(2 * 1024 * 1024))
+    if reply.get("status") != "success":
+        sys.exit(str(reply.get("output")))
+    return reply["output"]
+
+
+def operator(argv, profile):
+    """`sudo buildctl host ...`: read, decide and open windows as root, never through the app.
+    Root needs no passphrase; the decisions are logged as host:<sudo user>."""
+    import argparse
+    parser = argparse.ArgumentParser(prog="sudo buildctl host")
+    commands = parser.add_subparsers(dest="op", required=True)
+    commands.add_parser("pending", help="waiting requests and live windows")
+    for name in ("approve", "deny"):
+        decide = commands.add_parser(name, help=name + " one waiting request")
+        decide.add_argument("id")
+        if name == "approve":
+            decide.add_argument("--hours", type=float, help="File Manager grants: how long (default 1)")
+    allow = commands.add_parser("allow", help="open an allow-all window for HOURS (0 ends it)")
+    allow.add_argument("hours", type=float)
+    allow.add_argument("--session", default="*", help='requester key; "*" (default) covers every requester')
+    args = parser.parse_args(argv)
+    admin, path = "host:" + os.environ.get("SUDO_USER", "root"), profile["socket"]
+    left = lambda until: f"until {time.strftime('%m-%d %H:%M', time.localtime(until))} ({int(until - time.time()) // 60} min left)"
+    if args.op == "pending":
+        page = call(path, {"op": "list"})
+        for record in page["pending"]:
+            flags = [f for f in ("root", "boot_disk", "passphrase") if record.get(f)]
+            print(record["id"], record["action"], json.dumps(record["requester"], sort_keys=True), " ".join(flags))
+            print("    " + "\n    ".join(record["preview"].splitlines()[:6]))
+        print(f"{len(page['pending'])} waiting. Windows: "
+              + (", ".join(f"{key} {left(until)}" for key, until in page["windows"].items()) or "none")
+              + ". Openers on this host: " + ", ".join(page.get("window_openers", [])))
+    elif args.op in ("approve", "deny"):
+        message = {"op": "decide", "id": args.id, "decision": args.op, "admin": admin}
+        if getattr(args, "hours", None) is not None:
+            message["seconds"] = round(args.hours * 3600)
+        record = call(path, message)
+        print(record["id"], record["action"], record["state"])
+    else:
+        result = call(path, {"op": "allow", "session": args.session, "seconds": round(args.hours * 3600), "admin": admin})
+        print(f"window {result['session']} " + (left(result["until"]) if result.get("until") else "ended"))
+
+
 def main():
     if os.geteuid() != 0:
         sys.exit("host helper must run as root")
@@ -769,6 +868,9 @@ def main():
         if record["state"] != "running" or record["action"] not in SUPERVISED:
             sys.exit("request is not a running supervised action")
         helper.settle(record)
+        return
+    if sys.argv[1:2] == ["operator"]:
+        operator(sys.argv[2:], profile)
         return
     if sys.argv[1:] == ["passphrase"]:
         # Console only: set or change the host approval passphrase (never over the app).

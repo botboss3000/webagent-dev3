@@ -9,7 +9,8 @@ from pathlib import Path
 spec = importlib.util.spec_from_file_location("host_helper", Path(__file__).resolve().parents[1] / "build-service" / "host_helper.py")
 helper_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper_module)
-APP, OPERATOR, OTHER = 1100, os.getuid(), 4242
+APP, OPERATOR, OTHER, ROOT = 1100, os.getuid(), 4242, 0
+PASS = "correct horse battery"
 
 
 class HelperTests(unittest.TestCase):
@@ -18,7 +19,7 @@ class HelperTests(unittest.TestCase):
         self.now = 1000.0
         import pwd
         profile = {**helper_module.DEFAULTS, "state": self.temp.name, "app_uid": APP,
-                   "operator_account": pwd.getpwuid(OPERATOR).pw_name}
+                   "operator_account": pwd.getpwuid(OPERATOR).pw_name, "window_openers": ["app", "host"]}
         self.helper = helper_module.Helper(profile, clock=lambda: self.now,
                                            runner=lambda *a, **k: type("R", (), {"stdout": "up"})())
 
@@ -52,19 +53,19 @@ class HelperTests(unittest.TestCase):
 
     def test_reads_run_at_once_and_allow_all_covers_a_session_until_it_ends(self):
         self.assertEqual("done", self.request("host_status")["state"])
-        self.helper.handle(APP, {"op": "allow", "session": "s1", "seconds": 600, "admin": "admin"})
-        self.helper.handle(APP, {"op": "allow", "session": "ssh:t480", "seconds": 600, "admin": "admin"})
+        self.helper.handle(ROOT, {"op": "allow", "session": "s1", "seconds": 600, "admin": "host:ar"})
+        self.helper.handle(ROOT, {"op": "allow", "session": "ssh:t480", "seconds": 600, "admin": "host:ar"})
         app = lambda session: self.helper.handle(APP, {"op": "request", "action": "noop", "requester": {"session": session}})
         self.assertEqual("done", app("s1")["state"])
         self.assertEqual("pending", app("s2")["state"])
         self.assertEqual("done", self.request()["state"])  # SSH identity t480
         self.now += 601
         self.assertEqual("pending", app("s1")["state"])
-        self.helper.handle(APP, {"op": "allow", "session": "*", "seconds": 600, "admin": "admin"})  # page-wide
+        self.helper.handle(ROOT, {"op": "allow", "session": "*", "seconds": 600, "admin": "host:ar"})  # page-wide
         self.assertEqual(("done", "done"), (app("s9")["state"], self.request()["state"]))
         self.assertIn("*", self.helper.handle(APP, {"op": "list"})["windows"])
         with self.assertRaises(ValueError):
-            self.helper.handle(APP, {"op": "allow", "session": "s1", "seconds": 86401, "admin": "admin"})
+            self.helper.handle(ROOT, {"op": "allow", "session": "s1", "seconds": 86401, "admin": "host:ar"})
 
     def test_unknown_callers_and_actions_are_refused(self):
         with self.assertRaises(PermissionError):
@@ -95,11 +96,12 @@ class HelperTests(unittest.TestCase):
         self.helper.profile["editable"] = [str(target.parent) + "/*"]
         write = self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": str(target), "content": "new\n"}, "requester": {"session": "s"}})
         self.assertIn("-old", write["preview"]); self.assertIn("+new", write["preview"])
-        self.assertEqual("pending", write["state"])
-        self.assertEqual("done", self.approve(write)["state"])
+        self.assertEqual(("pending", True), (write["state"], write["root"]))
+        self.helper.set_passphrase(PASS)
+        self.assertEqual("done", self.approve(write, passphrase=PASS)["state"])
         self.assertEqual("new\n", target.read_text())
         revert = self.helper.handle(APP, {"op": "request", "action": "host_revert", "args": {"request_id": write["id"]}, "requester": {"session": "s"}})
-        self.assertEqual("done", self.approve(revert)["state"])
+        self.assertEqual("done", self.approve(revert, passphrase=PASS)["state"])
         self.assertEqual("old\n", target.read_text())
         with self.assertRaises(ValueError):  # a write is reverted once
             self.helper.handle(APP, {"op": "request", "action": "host_revert", "args": {"request_id": write["id"]}, "requester": {"session": "s"}})
@@ -109,7 +111,7 @@ class HelperTests(unittest.TestCase):
             self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": "/etc/passwd", "content": "x"}, "requester": {"session": "s"}})
         boot = Path(self.temp.name) / "boot.cfg"
         self.helper.profile["boot_disk_paths"] = [str(boot)]
-        self.helper.handle(APP, {"op": "allow", "session": "s", "seconds": 600, "admin": "admin"})
+        self.helper.handle(ROOT, {"op": "allow", "session": "s", "seconds": 600, "admin": "host:ar"})
         record = self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": str(boot), "content": "x"}, "requester": {"session": "s"}})
         self.assertEqual(("pending", True), (record["state"], record["boot_disk"]))  # allow-all never covers boot/disk
         with self.assertRaisesRegex(PermissionError, "no host approval passphrase"):
@@ -120,7 +122,7 @@ class HelperTests(unittest.TestCase):
         self.assertEqual("done", self.approve(record, passphrase="correct horse battery")["state"])
 
     def test_file_grants_need_the_passphrase_and_can_be_revoked(self):
-        self.helper.handle(APP, {"op": "allow", "session": "*", "seconds": 600, "admin": "admin"})
+        self.helper.handle(ROOT, {"op": "allow", "session": "*", "seconds": 600, "admin": "host:ar"})
         ask = lambda: self.helper.handle(APP, {"op": "request", "action": "files_grant", "args": {"admin": "alex"}, "requester": {"user": "alex"}})
         record = ask()
         self.assertEqual(("pending", True), (record["state"], record["passphrase"]))  # allow-all never covers it
@@ -152,6 +154,110 @@ class HelperTests(unittest.TestCase):
             self.helper.handle(OPERATOR, {"op": "files_revoke", "admin": "alex", "by": "me"})
         self.assertTrue(self.helper.handle(APP, {"op": "files_revoke", "admin": "alex", "by": "admin"})["revoked"])
         self.assertEqual({}, self.helper.handle(APP, {"op": "list"})["file_grants"])
+
+    def write_request(self, content):
+        """A file_write (a root action) from chat session s to an editable temporary file."""
+        folder = Path(self.temp.name) / "etc"
+        folder.mkdir(exist_ok=True)
+        self.helper.profile["editable"] = [str(folder) + "/*"]
+        return self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": str(folder / "w.conf"), "content": content}, "requester": {"session": "s"}})
+
+    def test_root_actions_need_the_passphrase_from_the_app(self):
+        plain = self.helper.handle(APP, {"op": "request", "action": "noop", "requester": {"session": "s"}})
+        self.assertFalse(plain["root"])
+        self.assertEqual("done", self.approve(plain)["state"])  # not root-equivalent: no passphrase
+        self.assertFalse(any(helper_module.ACTIONS[a].get("root") for a in ("unit_restart", "container_restart", "noop")))
+        install = lambda: self.write_request("x")
+        record = install()
+        self.assertEqual(("pending", True), (record["state"], record["root"]))
+        with self.assertRaisesRegex(PermissionError, "no host approval passphrase"):
+            self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
+        self.helper.set_passphrase(PASS)
+        for given in (None, "guess"):
+            with self.assertRaisesRegex(PermissionError, "wrong"):
+                self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin", "passphrase": given})
+        self.assertEqual("pending", self.helper.handle(APP, {"op": "status", "id": record["id"]})["state"])
+        self.assertEqual("denied", self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "deny", "admin": "admin"})["state"])
+        with mock.patch.object(self.helper, "run_approved"):  # approved; the supervisor itself is not started here
+            approved = self.helper.handle(APP, {"op": "decide", "id": install()["id"], "decision": "approve", "admin": "admin", "passphrase": PASS})
+        self.assertEqual("approved", approved["state"])
+
+    def test_app_windows_need_the_passphrase_and_then_cover_root_actions(self):
+        allow = lambda seconds, **more: self.helper.handle(APP, {"op": "allow", "session": "s", "seconds": seconds, "admin": "admin", **more})
+        with self.assertRaisesRegex(PermissionError, "no host approval passphrase"):
+            allow(600)
+        self.helper.set_passphrase(PASS)
+        with self.assertRaisesRegex(PermissionError, "wrong"):
+            allow(600, passphrase="guess")
+        self.assertEqual({}, self.helper.windows())
+        self.assertEqual(self.now + 600, allow(600, passphrase=PASS)["until"])
+        write = self.write_request("x\n")
+        self.assertEqual(("done", "allow-all"), (self.wait(write["id"])["state"], write["decided_by"]))  # one prompt per window (D1)
+        self.assertIsNone(allow(0)["until"])  # ending a window needs no passphrase
+        self.assertNotIn("s", self.helper.windows())
+
+    def test_the_host_operator_route_is_root_only(self):
+        record = self.write_request("x")
+        self.assertEqual([record["id"]], [r["id"] for r in self.helper.handle(ROOT, {"op": "list"})["pending"]])
+        self.assertEqual("pending", self.helper.handle(ROOT, {"op": "status", "id": record["id"]})["state"])
+        if OPERATOR != ROOT:  # the operator account (release keys) never decides, lists or opens windows
+            for message in ({"op": "decide", "id": record["id"], "decision": "approve", "admin": "me"},
+                            {"op": "allow", "session": "*", "seconds": 600, "admin": "me"}, {"op": "list"}):
+                with self.assertRaises(PermissionError):
+                    self.helper.handle(OPERATOR, message)
+        with self.assertRaises(PermissionError):
+            self.helper.handle(OTHER, {"op": "allow", "session": "*", "seconds": 600, "admin": "me"})
+        with mock.patch.object(self.helper, "run_approved"):  # no passphrase is set: root needs none
+            decided = self.helper.handle(ROOT, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "host:ar"})
+        self.assertEqual(("approved", "host:ar"), (decided["state"], decided["decided_by"]))
+        self.assertEqual(self.now + 3600, self.helper.handle(ROOT, {"op": "allow", "session": "*", "seconds": 3600, "admin": "host:ar"})["until"])
+        self.assertIn('"caller": "host"', (Path(self.temp.name) / "log.jsonl").read_text())
+
+    def test_window_openers_choose_who_may_open_a_window(self):
+        self.helper.set_passphrase(PASS)
+        app = lambda seconds: self.helper.handle(APP, {"op": "allow", "session": "*", "seconds": seconds, "admin": "admin", "passphrase": PASS})
+        root = lambda seconds: self.helper.handle(ROOT, {"op": "allow", "session": "*", "seconds": seconds, "admin": "host:ar"})
+        # Development: both callers open windows.
+        self.assertEqual(["app", "host"], self.helper.handle(APP, {"op": "list"})["window_openers"])
+        self.assertIsNotNone(app(600)["until"])
+        self.assertIsNotNone(root(600)["until"])
+        # Production: only the host operator over SSH; the app is refused even with the right
+        # passphrase, but may still end a window.
+        self.helper.profile["window_openers"] = ["host"]
+        self.assertEqual(["host"], self.helper.handle(APP, {"op": "list"})["window_openers"])
+        with self.assertRaisesRegex(PermissionError, "sudo buildctl host allow"):
+            app(600)
+        self.assertIsNone(app(0)["until"])
+        self.assertIsNotNone(root(600)["until"])
+        # And the reverse, for completeness: an app-only host refuses root's window.
+        self.helper.profile["window_openers"] = ["app"]
+        with self.assertRaisesRegex(PermissionError, "in the app"):
+            root(600)
+        self.assertIsNone(root(0)["until"])
+
+    def test_profile_window_openers_are_checked_and_default_to_host_only(self):
+        import json
+        path = Path(self.temp.name) / "profile.json"
+        self.assertEqual(["host"], helper_module.load_profile(path)["window_openers"])  # no file: defaults
+        for good in (["app", "host"], ["host"], []):
+            path.write_text(json.dumps({"window_openers": good}))
+            self.assertEqual(good, helper_module.load_profile(path)["window_openers"])
+        for bad in (["app", "everyone"], "app"):
+            path.write_text(json.dumps({"window_openers": bad}))
+            with self.assertRaises(ValueError):
+                helper_module.load_profile(path)
+
+    def test_supervisor_update_installs_the_root_owned_operator_command(self):
+        target = Path(self.temp.name) / "sbin" / "buildctl"
+        target.parent.mkdir()
+        self.helper.profile["operator_command"] = str(target)
+        with mock.patch.object(helper_module.os, "chown"):
+            self.assertTrue(self.helper.update_operator_command())
+            self.assertFalse(self.helper.update_operator_command())  # current: unchanged
+        text = target.read_text()
+        self.assertIn(str(self.helper.helper_path()) + ' operator "$@"', text)
+        self.assertNotIn("buildctl.py", text.split("\n", 2)[2])  # never runs a checkout's buildctl
+        self.assertEqual(0o755, target.stat().st_mode & 0o777)
 
     def test_file_log_reads_newest_first(self):
         import json
