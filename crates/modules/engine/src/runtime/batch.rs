@@ -418,6 +418,20 @@ impl<
                     );
                 }
             }
+            // The critical tool guard, as for a single call.
+            if result.is_none() {
+                let mut view = run.clone();
+                view["pending"] = pending.clone();
+                if let Some(record) = app
+                    .critical_guard(&view, &name, &args, &visibility["settings"])
+                    .await?
+                {
+                    if record["mode"] == "enforce" && record["passed"] != true {
+                        pending["guard_hold"] = json!(true);
+                    }
+                    pending["guard"] = record;
+                }
+            }
             if result.is_none() {
                 let mut view = run.clone();
                 view["pending"] = pending.clone();
@@ -474,7 +488,7 @@ impl<
                 {
                     admitted.insert(tools::retry_guard::key(&name, &args), call_id);
                 }
-                if pending["new_intent_confirmation"] == true {
+                if tools::retry_guard::needs_specific_approval(&pending) {
                     effective.permission = access::Permission::Ask;
                 }
             }
@@ -500,7 +514,8 @@ impl<
                 .as_array_mut()
                 .expect("batch checkpoint is an array")
             {
-                if item["state"] != "waiting" || item["pending"]["new_intent_confirmation"] == true
+                if item["state"] != "waiting"
+                    || tools::retry_guard::needs_specific_approval(&item["pending"])
                 {
                     continue;
                 }
@@ -509,9 +524,9 @@ impl<
                 item["pending"]["mode_revision"] = json!(mode_revision);
                 item["pending"]["decision"] = Value::Null;
             }
-            // A repeat or additional-action confirmation stays waiting under Auto, so its
+            // A repeat, additional-action or guard confirmation stays waiting under Auto, so its
             // pending decision is kept for the matching below; dropping it re-asked forever.
-            if run["pending"]["new_intent_confirmation"] != true {
+            if !tools::retry_guard::needs_specific_approval(&run["pending"]) {
                 run["pending"] = Value::Null;
             }
         }

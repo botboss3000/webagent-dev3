@@ -35,6 +35,28 @@
         ],
         "hint": "Before a tool call runs, its user request must be cited on a section or step of the session task list, with a step in progress (the app opens a section itself when none is open). All tool calls (default): every tool except the core basics (task list, skills, time, mode); a request set aside as needing no tools cannot get tool calls. Changes only: just tools that change something. Off: the agent is only reminded.",
         "scope": "agent"
+      },
+      {
+        "key": "critical_guard",
+        "label": "Critical Tool Guard",
+        "type": "select",
+        "default": "enforce",
+        "options": [
+          {
+            "value": "enforce",
+            "label": "Enforce — a critical action no message of yours clearly asks for waits for your approval"
+          },
+          {
+            "value": "record",
+            "label": "Record only — the check runs and is recorded in the action ledger, nothing waits"
+          },
+          {
+            "value": "off",
+            "label": "Off — no check"
+          }
+        ],
+        "hint": "Before a critical tool (sending, buying, changing access or settings) runs, a model compares the action with your newest messages. Only your own messages and the action's short details are shown to it, never pages or files the agent read. The agent's Decision model is asked first, then that model's backups; an agent with no Decision model uses its System model. Enforce (default): unless the check is confident you asked for it, the action waits for your approval. Record only: the result is only recorded. Off: no check.",
+        "scope": "agent"
       }
     ]
   }

@@ -20,6 +20,7 @@ pub mod build_tasks;
 pub mod cache_estimate;
 pub mod components;
 pub mod config;
+pub mod critical_guard;
 pub mod failure;
 pub mod followup;
 pub mod health;

@@ -124,6 +124,50 @@ impl Catalog {
         self.resolve_roster(roster, role, &appointment.entry_id, None)
     }
 
+    /// The critical tool guard's models in the order it tries them, each as a one-model plan:
+    /// the agent's Decision model and that model's aliases (an alias may be a decision or a
+    /// text model), or with no Decision model assigned its System model and that model's
+    /// aliases. A model this agent cannot use is skipped; no usable model is an error.
+    pub fn resolve_guard(&self, agent_id: &str) -> Result<Vec<SelectionPlan>> {
+        let roster = self
+            .agent_models
+            .get(agent_id)
+            .ok_or_else(|| anyhow::anyhow!("Guard model required"))?;
+        let (role, appointment) = match roster.roles.get(&ModelRole::Decision) {
+            Some(appointment) => (ModelRole::Decision, appointment),
+            None => (
+                ModelRole::System,
+                roster
+                    .roles
+                    .get(&ModelRole::System)
+                    .ok_or_else(|| anyhow::anyhow!("Guard model required"))?,
+            ),
+        };
+        let aliases = roster
+            .aliases
+            .get(&appointment.entry_id)
+            .map_or(&[][..], Vec::as_slice);
+        let mut plans = Vec::new();
+        for id in std::iter::once(&appointment.entry_id).chain(aliases) {
+            let decision = self
+                .entries
+                .get(id)
+                .is_some_and(|entry| ModelRole::Decision.supported_by(entry));
+            let role = match role {
+                ModelRole::Decision if !decision => ModelRole::Standard,
+                role => role,
+            };
+            if let Ok(mut plan) = self.resolve_roster(roster, role, id, None) {
+                plan.candidates.truncate(1);
+                plans.push(plan);
+            }
+        }
+        if plans.is_empty() {
+            bail!("No usable guard model");
+        }
+        Ok(plans)
+    }
+
     /// The text model for a chat in execution mode `mode`: the mode's own model when the
     /// roster names one, else the Standard (Text) appointment.
     pub fn resolve_mode(&self, agent_id: &str, mode: Option<&str>) -> Result<SelectionPlan> {
@@ -927,6 +971,49 @@ mod tests {
             .capabilities
             .remove("decision");
         assert!(c.resolve_role("agent-a", ModelRole::Decision).is_err());
+    }
+    #[test]
+    fn the_guard_tries_decision_then_its_aliases_or_falls_back_to_system() {
+        let mut c = catalog_fixture();
+        // No Decision or System model: nothing to ask.
+        assert!(c.resolve_guard("agent-a").is_err());
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.roles.insert(ModelRole::System, role("a"));
+        let plans = c.resolve_guard("agent-a").unwrap();
+        let order: Vec<(&str, ModelRole)> = plans
+            .iter()
+            .map(|p| (p.candidates[0].entry_id.as_str(), p.role))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("a", ModelRole::System),
+                ("c", ModelRole::System),
+                ("b", ModelRole::System)
+            ]
+        );
+        assert!(plans.iter().all(|p| p.candidates.len() == 1));
+        c.entries
+            .get_mut("b")
+            .unwrap()
+            .capabilities
+            .insert("decision".into());
+        let roster = c.agent_models.get_mut("agent-a").unwrap();
+        roster.roles.insert(ModelRole::Decision, role("b"));
+        roster.aliases.insert("b".into(), vec!["a".into()]);
+        let order: Vec<(String, ModelRole)> = c
+            .resolve_guard("agent-a")
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.candidates[0].entry_id.clone(), p.role))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("b".to_owned(), ModelRole::Decision),
+                ("a".to_owned(), ModelRole::Standard)
+            ]
+        );
     }
     #[test]
     fn modes_use_their_own_text_model_or_fall_back_to_text() {

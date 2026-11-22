@@ -407,9 +407,19 @@ pub(crate) async fn prepare_on(
     {
         return Ok(None);
     }
-    let (link, requests) = base.action_requests(sid, &candidate["origin"]).await?;
+    // The critical tool guard's verdict for this call, when it ran: its linked message
+    // replaces the cited or inferred link.
+    let guard = &run["pending"]["guard"];
+    let (link, requests) = base
+        .action_requests(sid, &candidate["origin"], guard["message"].as_str())
+        .await?;
     candidate["request_link"] = link.into();
     candidate["requests"] = requests.into();
+    if guard.is_object() {
+        candidate["guard"] = serde_json::json!({"verdict":guard["verdict"],
+            "confidence":guard["confidence"],"message":guard["message"],"model":guard["model"],
+            "mode":guard["mode"],"passed":guard["passed"],"error":guard["error"]});
+    }
     Ok(Some(
         store
             .action_prepare(
@@ -637,6 +647,7 @@ fn panel_row(action: &Value) -> Value {
         "requester",
         "request_link",
         "requests",
+        "guard",
     ] {
         row[key] = action[key].clone();
     }

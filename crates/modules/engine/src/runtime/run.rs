@@ -1495,6 +1495,23 @@ impl<
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
         }
+        // The critical tool guard: a critical call that no user message clearly asks for
+        // waits for the user's approval (see docs/tool-policy.md). Its record also goes to the
+        // action ledger. An approved call comes back here and is not checked again.
+        if effective.permission != access::Permission::Deny
+            && run["pending"]["guard"].is_null()
+            && run["pending"]["decision"] != "approve"
+        {
+            if let Some(record) = app
+                .critical_guard(&run, &name, &args, &visibility["settings"])
+                .await?
+            {
+                if record["mode"] == "enforce" && record["passed"] != true {
+                    run["pending"]["guard_hold"] = json!(true);
+                }
+                run["pending"]["guard"] = record;
+            }
+        }
         if effective.permission != access::Permission::Deny {
             match app
                 .actions
@@ -1573,7 +1590,7 @@ impl<
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
             }
-            if run["pending"]["new_intent_confirmation"] == true {
+            if tools::retry_guard::needs_specific_approval(&run["pending"]) {
                 effective.permission = access::Permission::Ask;
             }
         }

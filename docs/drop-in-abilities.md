@@ -66,7 +66,12 @@ it, naming exactly its tool folders. `<tool>.tool.json` holds:
 - `critical` (optional, default false): the action ledger records every call with the user
   requests it answers, and the record outlives its session; stored calls are never trimmed,
   so a critical tool takes no `retention` level or `drop_input_fields`. Only writes may set
-  it. See [tool-policy.md](tool-policy.md) section 7.
+  it. Before each call the critical tool guard checks the user asked for it. See
+  [tool-policy.md](tool-policy.md) sections 7 and 8.
+- `guard` (optional, critical tools only): `{"check": "...", "show": [...], "hide": [...]}`
+  adds details the critical tool guard must match (`check`, up to 300 characters) and names
+  parameters it always sees in full (`show`) or never sees (`hide`). It can only add to
+  the guard's rule. See [tool-policy.md](tool-policy.md) section 8.
 
 `<tool>.skill.md` is its optional guidance. The handler stays compiled Rust and lists the
 tool in its adapter's `TOOLS`. At startup every listed handler must have a valid folder

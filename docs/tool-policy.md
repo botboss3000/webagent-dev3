@@ -119,7 +119,44 @@ full arguments, the result, and the user requests it answers (`requests`, `reque
   ledger record (`action_link:{sid}`).
 - `none`: no request to link; the Actions panel flags the record.
 - `automated`: the run was started by an automation or another agent, not a user message.
+- `guard`: the critical tool guard (section 8) matched the call to this request.
 
 Each request's text is cut to `ledger.request_text_max_chars` (default 1000) in
 `config/access/policy.json`. Ledger records (`action:{id}`) are kept when their session is
 deleted.
+
+## 8. The critical tool guard
+
+Before a critical call reaches the action ledger, one model request asks whether the user
+asked for this action and which of their messages did
+(`crates/modules/engine/src/runtime/critical_guard.rs`, rules in
+`crates/modules/engine/src/tools/critical_guard.rs`).
+
+- **What it sees:** the user's newest requests by label (`u1`, ...; for a scheduled task's
+  run, its stored instruction as `task`; never another agent's message) and the call's
+  short arguments. A string longer than `guard.argument_max_chars` is shown only as its
+  size, so text the agent read (a page, an email body) cannot argue for the call. It never
+  sees tool results or the agent's reasoning.
+- **Rule:** one universal rule. A tool's `tool.json` may add a `guard` object: `check`
+  (details that must match, at most 300 characters), `show` and `hide` (parameters always
+  shown in full, or never shown). Only a critical tool may have one, and it cannot loosen
+  the rule.
+- **Models:** the agent's Decision model (a System One decision model such as TypeSafe
+  Jev; the request goes to `{base_url}/v1/systemone` from its provider file), then that
+  model's aliases in order, which may be decision or text models. An agent with no
+  Decision model uses its System model and that model's aliases. A text model answers in
+  one line (`requested u3`). Each model gets `guard.model_seconds`, all together
+  `guard.total_seconds`.
+- **Outcome:** a `requested` answer at or above `guard.pass_confidence` (a text model's
+  answer has no confidence and counts at face value) lets the call continue. Anything
+  else, including no model answering, holds the call for the user's approval
+  (`pending.guard_hold`): Auto mode does not convert it and only a human approval
+  dispatches it. The approval card shows the verdict line. An approved call is not checked
+  again.
+- **Record:** the verdict, confidence, linked request and model are kept on the pending
+  call (`pending.guard`) and in the ledger record (`guard`, `request_link: guard`).
+- **Mode:** the agent's Task Progress setting `critical_guard`: `enforce` (default),
+  `record` (checked and recorded, never held) or `off`. It is changed by whoever may change
+  the agent's ability settings.
+- **Settings:** the `guard` section of `config/access/policy.json` (defaults: 0.9, 12
+  messages, 300 characters each, 120 characters per argument, 5 s per model, 10 s in total).

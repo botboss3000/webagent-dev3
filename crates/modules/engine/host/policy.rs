@@ -177,6 +177,15 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
     ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
         store.task_list_end_reminder(sid)
     }
+    fn guard_messages<'a>(
+        &'a self,
+        store: &'a Store,
+        sid: &'a str,
+        rid: &'a str,
+        count: usize,
+    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send + 'a {
+        store.guard_messages(sid, rid, count)
+    }
     fn session_task_gate<'a>(
         &'a self,
         store: &'a Store,

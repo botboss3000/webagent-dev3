@@ -145,6 +145,18 @@ impl<
         input: Vec<Value>,
         instructions: &'a str,
     ) -> impl std::future::Future<Output = Result<String, LaneError>> + Send + 'a {
+        self.lane_answer_gated(run, input, instructions, false)
+    }
+
+    /// [`Self::lane_answer`] for a caller that already holds the dispatch gate (a tool step,
+    /// such as the critical tool guard): the gate is not taken again.
+    pub fn lane_answer_gated<'a>(
+        &'a self,
+        run: &'a Value,
+        input: Vec<Value>,
+        instructions: &'a str,
+        gate_held: bool,
+    ) -> impl std::future::Future<Output = Result<String, LaneError>> + Send + 'a {
         // Keep the complete media state machine on the heap: callers otherwise embed both
         // credential-selection futures and their dispatch fence. Borrowing preserves
         // session_operation cancellation without a detached task.
@@ -168,7 +180,11 @@ impl<
                 )
                 .prepare(root, &cancel)
                 .await?;
-                let dispatch_guard = self.gate.lock().await;
+                let dispatch_guard = if gate_held {
+                    None
+                } else {
+                    Some(self.gate.lock().await)
+                };
                 let (current, _) = self
                     .lane_selection(run)
                     .await

@@ -111,17 +111,30 @@ impl Store {
     }
     /// The user requests run `rid`'s action answers, for its ledger record: `(link, requests)`
     /// as `webagent_actions::links` finds them, each with its message text cut to the policy
-    /// limit. A run no user message started (an automation, another agent) links `automated`.
-    /// Moves the session's mark so the next record infers only newer requests.
+    /// limit. The critical tool guard's linked request label (`guarded`), when it names one,
+    /// is the link (`guard`). Otherwise a run no user message started (an automation, another
+    /// agent) links `automated`. Moves the session's mark so the next record infers only newer
+    /// requests.
     pub(crate) async fn action_requests(
         &self,
         sid: &str,
         origin: &Value,
+        guarded: Option<&str>,
     ) -> Result<(String, Vec<Value>)> {
+        let requests = self.task_requests(sid).await?;
+        let max = links::LedgerPolicy::live().request_text_max_chars;
+        if let Some(request) =
+            guarded.and_then(|label| requests.items.iter().find(|request| request.id == label))
+        {
+            let text = self.request_text(sid, request).await?;
+            return Ok((
+                "guard".into(),
+                vec![links::request_entry(request, &text, max)],
+            ));
+        }
         if origin.is_null() {
             return Ok(("automated".into(), Vec::new()));
         }
-        let requests = self.task_requests(sid).await?;
         let list = self
             .task_list_current(sid)
             .await?
@@ -142,24 +155,10 @@ impl Store {
                     .map_or(0, |newest| newest.saturating_sub(1))
             });
         let (kind, found) = links::linked(list.as_ref(), &requests, after);
-        let max = links::LedgerPolicy::live().request_text_max_chars;
         let mut entries = Vec::with_capacity(found.len());
         for request in found {
-            let stored: Option<Vec<u8>> =
-                sqlx::query_scalar("SELECT content FROM chat WHERE id=? AND session_id=?")
-                    .bind(&request.message)
-                    .bind(sid)
-                    .fetch_optional(&self.pool)
-                    .await?;
-            let text = match stored {
-                Some(raw) => self.unseal(&raw)?.as_str().map(str::to_owned),
-                None => None,
-            };
-            entries.push(links::request_entry(
-                request,
-                text.as_deref().unwrap_or(&request.text),
-                max,
-            ));
+            let text = self.request_text(sid, request).await?;
+            entries.push(links::request_entry(request, &text, max));
         }
         if let Some(newest) = requests
             .items
@@ -171,6 +170,62 @@ impl Store {
                 .await?;
         }
         Ok((kind.as_str().into(), entries))
+    }
+    /// The full text of user request `request` (its first words when the message is gone).
+    async fn request_text(
+        &self,
+        sid: &str,
+        request: &webagent_chat::task_list::Request,
+    ) -> Result<String> {
+        let stored: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT content FROM chat WHERE id=? AND session_id=?")
+                .bind(&request.message)
+                .bind(sid)
+                .fetch_optional(&self.pool)
+                .await?;
+        let text = match stored {
+            Some(raw) => self.unseal(&raw)?.as_str().map(str::to_owned),
+            None => None,
+        };
+        Ok(text.unwrap_or_else(|| request.text.clone()))
+    }
+    /// The critical tool guard's view of what the user asked in session `sid`: the newest
+    /// `count` requests by label, oldest first, then for an automated run `rid` the
+    /// instruction it was started with (a scheduled task's prompt), labelled `task`. Messages
+    /// from other agents are never included.
+    pub(crate) async fn guard_messages(
+        &self,
+        sid: &str,
+        rid: &str,
+        count: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let requests = self.task_requests(sid).await?;
+        let skip = requests.items.len().saturating_sub(count);
+        let mut messages = Vec::new();
+        for request in &requests.items[skip..] {
+            messages.push((request.id.clone(), self.request_text(sid, request).await?));
+        }
+        let automation = self
+            .get(&format!("run:{rid}"))
+            .await?
+            .is_some_and(|run| run["module_binding"].is_object());
+        if automation {
+            let stored: Option<Vec<u8>> = sqlx::query_scalar(
+                "SELECT content FROM chat WHERE session_id=? AND run_id=? AND role='user' ORDER BY seq DESC LIMIT 1",
+            )
+            .bind(sid)
+            .bind(rid)
+            .fetch_optional(&self.pool)
+            .await?;
+            if let Some(text) = stored
+                .map(|raw| self.unseal(&raw))
+                .transpose()?
+                .and_then(|value| value.as_str().map(str::to_owned))
+            {
+                messages.push(("task".to_owned(), text));
+            }
+        }
+        Ok(messages)
     }
     /// See [`Ledger::get`].
     pub(crate) async fn action_get(&self, id: &str) -> Result<Option<Value>> {

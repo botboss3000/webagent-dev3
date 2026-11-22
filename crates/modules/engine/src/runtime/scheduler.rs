@@ -82,7 +82,8 @@ impl<
         }
         let mut restricted = Vec::new();
         fn requires_specific_approval(pending: &Value) -> bool {
-            !pending["authorization"].is_null() || pending["new_intent_confirmation"] == true
+            !pending["authorization"].is_null()
+                || crate::tools::retry_guard::needs_specific_approval(pending)
         }
         if requires_specific_approval(&run["pending"]) {
             restricted.push(run["pending"].clone());

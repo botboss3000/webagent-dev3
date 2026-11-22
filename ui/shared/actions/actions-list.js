@@ -17,6 +17,21 @@ export function sortActions(actions) {
 
 const STATUS = {prepared: 'pending', running: 'in-progress', completed: 'completed', confirmed_failed: 'failed', uncertain: 'need-help'};
 
+// The critical tool guard's verdict for a critical action: a badge when it did not pass.
+function guardBadge(guard) {
+  if (!guard || typeof guard !== 'object' || guard.passed === true) return '';
+  return guard.mode === 'record' ? 'Guard: unmatched' : 'Guard held';
+}
+
+function guardText(guard) {
+  const confidence = typeof guard.confidence === 'number' ? `, ${Math.round(guard.confidence * 100)}%` : '';
+  const model = guard.model ? ` (${guard.model})` : '';
+  if (guard.verdict === 'requested') return `Guard: matched request ${guard.message || ''}${confidence}${model}.`;
+  if (guard.verdict === 'not_requested') return `Guard: no user message asks for this${confidence}${model}.`;
+  if (guard.verdict === 'unclear') return `Guard: unclear whether the user asked for this${confidence}${model}.`;
+  return `Guard: could not check this action (${guard.error || 'no model answered'}).`;
+}
+
 /**
  * Fills `box` with an expand-list row per action; uncertain ones start open. `resolve(id,
  * state)` settles an uncertain action (omit it for a read-only list); `changed()` runs after a
@@ -29,13 +44,14 @@ export function renderActions(box, actions, {resolve, changed = () => {}, showSe
   list.update(sortActions(actions).map(action => ({
     id: action.id || String(action.created_at), title: action.tool || 'tool', status: STATUS[action.state] || 'pending',
     icon: action.critical ? 'ShieldAlert' : null, pill: STATE[action.state] || action.state || false,
-    badges: [action.critical ? 'Critical' : '', action.request_link === 'none' ? 'No request' : '', when(action.updated_at || action.created_at)].filter(Boolean),
+    badges: [action.critical ? 'Critical' : '', action.request_link === 'none' ? 'No request' : '', guardBadge(action.guard), when(action.updated_at || action.created_at)].filter(Boolean),
     description: [showUser && action.requester ? 'User ' + action.requester : '', action.attempt ? 'Attempt ' + action.attempt : '', showSession && action.session_id ? 'Chat ' + String(action.session_id).slice(0, 8) : '', action.resolved_by ? 'Marked by ' + action.resolved_by : ''].filter(Boolean).join(' · '),
     content: host => {
       // The user requests the action answers; flagged when none could be linked.
       if (action.request_link === 'none') host.append(el('p', 'actions-hint', 'No user request was linked to this action.'));
+      if (action.guard && typeof action.guard === 'object') host.append(el('p', 'actions-hint', guardText(action.guard)));
       for (const request of Array.isArray(action.requests) ? action.requests : []) {
-        const label = `Request ${request.label || ''}${action.request_link === 'inferred' ? ' (inferred)' : ''}`;
+        const label = `Request ${request.label || ''}${action.request_link === 'inferred' ? ' (inferred)' : action.request_link === 'guard' ? ' (matched by the guard)' : ''}`;
         host.append(el('small', 'actions-label', label), el('p', 'actions-request', (request.text || '') + (request.cut ? ' …' : '')));
       }
       if (action.arguments && typeof action.arguments === 'object') host.append(el('small', 'actions-label', 'Arguments'), el('pre', 'actions-args-body', JSON.stringify(action.arguments, null, 2).slice(0, 4000)));

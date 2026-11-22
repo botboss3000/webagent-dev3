@@ -167,6 +167,13 @@ pub fn admit(
     }
 }
 
+/// Whether a pending call needs the user's own approval whatever the execution mode: a
+/// repeat or additional-action confirmation, or a critical call the critical tool guard held.
+#[must_use]
+pub fn needs_specific_approval(pending: &Value) -> bool {
+    pending["new_intent_confirmation"] == true || pending["guard_hold"] == true
+}
+
 /// Mark `pending` as waiting for the user's approval of an intended repeat.
 pub fn require_approval(pending: &mut Value, args: &Value, retry: &Retry) {
     // Reuses the Actions rule: never converted by Auto mode and checked again at dispatch.

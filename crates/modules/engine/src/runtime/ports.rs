@@ -223,6 +223,16 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         store: &'a S,
         sid: &'a str,
     ) -> impl Future<Output = Result<Option<String>>> + Send + 'a;
+    /// The user's newest `count` requests in session `sid` for the critical tool guard, oldest
+    /// first, as `(label, text)`; for an automated run `rid` (a scheduled task) its stored
+    /// instruction comes last, labelled `task`.
+    fn guard_messages<'a>(
+        &'a self,
+        store: &'a S,
+        sid: &'a str,
+        rid: &'a str,
+        count: usize,
+    ) -> impl Future<Output = Result<Vec<(String, String)>>> + Send + 'a;
 }
 
 pub trait ModelDiagnostics<S>: Clone + Send + Sync + 'static {

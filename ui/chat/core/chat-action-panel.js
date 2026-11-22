@@ -329,9 +329,11 @@ export function mountChatActionPanel({root,guard,request,note}) {
       {label:'Deny',kind:'deny',run:()=>decide('deny')}
     ];
     if(active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
-    const node=card({title:plan?'Start this plan? Auto stops asking for tool approvals; Ask keeps them.':toAuto?'Switch to Auto mode? Tools will no longer ask for approval.':approval.messaging_binding?'Approve agent message':approval.repeat_of ? 'Repeat an action the agent already ran?' : approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : 'Need approval:',details:{toggle,body:details},actions});
+    const node=card({title:plan?'Start this plan? Auto stops asking for tool approvals; Ask keeps them.':toAuto?'Switch to Auto mode? Tools will no longer ask for approval.':approval.messaging_binding?'Approve agent message':approval.repeat_of ? 'Repeat an action the agent already ran?' : approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : approval.guard_hold ? 'Did you ask for this? The guard did not match it to your messages:' : 'Need approval:',details:{toggle,body:details},actions});
     // The tool's repeat warning tells the user what approving may duplicate.
     if(approval.repeat_of&&typeof approval.repeat_warning==='string'){const text=document.createElement('p');text.textContent=approval.repeat_warning;node.insertBefore(text,node.lastChild);}
+    // The critical tool guard's verdict: which message it matched, or why it held the call.
+    if(typeof approval.guard?.line==='string'){const text=document.createElement('p');text.textContent=approval.guard.line;node.insertBefore(text,node.lastChild);}
     if(approval.messaging_binding){const text=document.createElement('p');const b=approval.messaging_binding;text.textContent='From '+(b.source_title||b.source_session_id)+' to '+(b.target_title||b.target_session_id)+' · '+b.target_agent_id+' · '+b.delivery;node.insertBefore(text,node.lastChild);}
     if(approval.messaging_can_remember)node.insertBefore(rememberLabel,node.lastChild);
     if(plan)node.insertBefore(planSummary(plan),node.lastChild);

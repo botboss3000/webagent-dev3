@@ -273,7 +273,9 @@ impl<
             let mut run = app.run(&run_id).await?;
             let mut pending =
                 crate::runtime::batch::pending_call(&run, &pending_id).unwrap_or(Value::Null);
-            if pending["new_intent_confirmation"] == true && pending["human_approved"] != true {
+            if crate::tools::retry_guard::needs_specific_approval(&pending)
+                && pending["human_approved"] != true
+            {
                 return Ok(
                     json!({"status":"denied","output":"Additional matching action needs specific human authorization"}),
                 );
@@ -300,7 +302,9 @@ impl<
                 }
                 app.save(&mut run).await?;
             }
-            if pending["new_intent_confirmation"] == true && pending["human_approved"] != true {
+            if crate::tools::retry_guard::needs_specific_approval(&pending)
+                && pending["human_approved"] != true
+            {
                 return Ok(
                     json!({"status":"denied","output":"Additional matching action needs specific human authorization"}),
                 );

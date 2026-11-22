@@ -304,6 +304,8 @@ pub(crate) async fn fixture() -> (TempDir, App) {
     // reminder its placeholder step brings) is switched on only where a test covers it.
     webagent_engine::runtime::run::TASK_GATE_DEFAULT
         .store(false, std::sync::atomic::Ordering::Relaxed);
+    webagent_engine::runtime::critical_guard::GUARD_DEFAULT
+        .store(false, std::sync::atomic::Ordering::Relaxed);
     crate::store::RECORD_MESSAGE_REQUESTS.store(false, std::sync::atomic::Ordering::Relaxed);
     (root, app)
 }
@@ -8368,7 +8370,7 @@ async fn bundle_withdrawal_during_credentials_rebuilds_before_provider_dispatch(
                 .any(|item| item["role"] == "assistant"));
         } else {
             assert_eq!(run["status"], "completed", "{}", run["error"]);
-            assert_eq!(requests.len(), 1);
+            assert_eq!(requests.len(), 1, "{}", run["pending"]);
             assert!(!requests[0]["tools"]
                 .as_array()
                 .unwrap()
@@ -10259,7 +10261,7 @@ async fn experimental_lifetime_controls_stay_disabled_without_an_extra_call() {
         1
     );
     let requests = requests.lock().await;
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 1, "{}", run["pending"]);
     assert!(!requests[0]["tools"]
         .as_array()
         .unwrap()
@@ -12000,4 +12002,134 @@ async fn loop_liveness_does_not_wait_for_the_shared_application_pool() {
         .expect("readiness waited for the shared pool")
         .unwrap());
     drop(held);
+}
+
+/// Run one Auto-mode turn in which the agent calls the critical tool `save_own_skill`, with the
+/// critical tool guard enforced and the System model (the guard's model here, since the
+/// fixture assigns no Decision model) answering `verdict`. Returns the run and the model
+/// requests the guard made.
+async fn guarded_turn(verdict: &'static str) -> (App, Value, Vec<Value>) {
+    use axum::routing::post;
+
+    let (_root, mut app) = fixture().await;
+    let mut settings = app.store.agent_abilities().await.unwrap();
+    let revision = settings["revision"].as_u64().unwrap();
+    if !settings["settings"].is_object() {
+        settings["settings"] = json!({});
+    }
+    settings["settings"]["task_progress"] = json!({"critical_guard":"enforce"});
+    app.store
+        .save_agent_abilities(&settings, revision)
+        .await
+        .unwrap();
+    let args = json!({"name":"weekly_report","expected_revision":0,
+        "description":"How I write the weekly report","instructions":"Keep it short."});
+    let call = json!({"type":"function_call","call_id":"skill-call",
+        "name":"save_own_skill","arguments":args.to_string()});
+    let guard_requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let agent_calls = Arc::new(Mutex::new(0usize));
+    let (captured, calls) = (guard_requests.clone(), agent_calls.clone());
+    let mock = Router::new().route(
+        "/responses",
+        post(move |Json(body): Json<Value>| {
+            let (captured, calls, call) = (captured.clone(), calls.clone(), call.clone());
+            async move {
+                let output = if body.to_string().contains("You check one action") {
+                    captured.lock().await.push(body);
+                    json!([{"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":verdict}]}])
+                } else {
+                    let mut calls = calls.lock().await;
+                    *calls += 1;
+                    if *calls == 1 {
+                        json!([call])
+                    } else {
+                        json!([{"type":"message","role":"assistant",
+                            "content":[{"type":"output_text","text":"Saved."}]}])
+                    }
+                };
+                let event = json!({"type":"response.completed",
+                    "response":{"status":"completed","output":output}});
+                (
+                    [("content-type", "text/event-stream")],
+                    format!("data: {event}\n\n"),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid = conversation(&app).await;
+    session_mode_set(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(SessionModeBody {
+            mode: "auto".into(),
+            expected_revision: Some(
+                session_mode(&app, &sid).await.unwrap()["revision"]
+                    .as_u64()
+                    .unwrap(),
+            ),
+            confirm_write: true,
+        }),
+    )
+    .await
+    .unwrap();
+    let id = queued(&app, &sid).await;
+    let mut tx = app.store.pool.begin().await.unwrap();
+    app.store
+        .record_task_request(&mut tx, &sid, &format!("user:{id}"), "hello")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    running(&app, &id, "guard-first").await;
+    execute_run(
+        app.clone(),
+        id.clone(),
+        "guard-first".into(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let run = app.run(&id).await.unwrap();
+    let requests = guard_requests.lock().await.clone();
+    server.abort();
+    (app, run, requests)
+}
+
+#[tokio::test]
+async fn the_critical_tool_guard_holds_an_unmatched_call_even_in_auto_mode() {
+    let (_app, run, requests) = guarded_turn("unclear none").await;
+    assert_eq!(requests.len(), 1, "{}", run["pending"]);
+    // The guard sees the user's labelled message and the call, never the agent's reasoning.
+    let prompt = requests[0].to_string();
+    assert!(prompt.contains("u1") && prompt.contains("save_own_skill"));
+    assert_eq!(run["status"], "waiting_approval");
+    assert_eq!(run["pending"]["guard_hold"], true);
+    assert_eq!(run["pending"]["guard"]["verdict"], "unclear");
+    assert_eq!(run["pending"]["guard"]["passed"], false);
+    assert_eq!(
+        run["pending"]["guard"]["line"],
+        "Guard: unclear whether you asked for this"
+    );
+}
+
+#[tokio::test]
+async fn the_critical_tool_guard_lets_a_matched_call_run_and_records_the_request() {
+    let (app, run, requests) = guarded_turn("requested u1").await;
+    assert_eq!(requests.len(), 1, "{}", run["pending"]);
+    assert_ne!(run["status"], "waiting_approval");
+    let actions = app.store.action_list("agent:shared_default").await.unwrap();
+    let action = actions
+        .iter()
+        .find(|a| a["tool"] == "save_own_skill")
+        .expect("critical call recorded");
+    assert_eq!(action["guard"]["verdict"], "requested");
+    assert_eq!(action["guard"]["passed"], true);
+    assert_eq!(action["request_link"], "guard");
+    assert_eq!(action["requests"][0]["label"], "u1");
 }
