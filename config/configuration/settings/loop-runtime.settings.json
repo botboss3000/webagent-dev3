@@ -189,6 +189,26 @@
       "min": 1,
       "max": 1000,
       "bounds": "validator"
+    },
+    {
+      "id": "loop.workflow.max_turns",
+      "description": "Most model turns one agent run may take before it pauses and asks to be continued; 0 means no limit.",
+      "type": "integer",
+      "pointer": "/workflow/max_turns",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "limit runs to 80 turns",
+        "let runs take as many turns as they need"
+      ],
+      "areas": [
+        "runs",
+        "limits"
+      ],
+      "min": 0,
+      "max": 1000,
+      "bounds": "proposed"
     }
   ],
   "excluded": {
@@ -205,7 +225,6 @@
     "/tools/parallel_modes/**": "Per-tool concurrency classes set by each tool's owner.",
     "/workflow/max_attempts": "Scheduler internals; not offered in v1.",
     "/workflow/max_publication_bytes": "Scheduler internals; not offered in v1.",
-    "/workflow/max_turns": "Scheduler internals; not offered in v1.",
     "/workflow/modules/**": "Gate wiring; changed only with the gates themselves."
   }
 }

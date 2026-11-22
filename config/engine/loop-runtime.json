@@ -40,7 +40,7 @@
   "workflow": {
     "max_attempts": 3,
     "max_publication_bytes": 262144,
-    "max_turns": 0,
+    "max_turns": 80,
     "modules": {
       "model_dispatch": [
         "message_visibility_v1"
