@@ -99,12 +99,13 @@ pub struct Outcome {
     pub retry_safe: bool,
 }
 
-/// Classify a tool result: only explicit success or denial without an uncertainty flag is
-/// settled; errors and everything else are uncertain.
+/// Classify a tool result: only explicit success (or an optional package's answered result,
+/// which carries no status) or denial without an uncertainty flag is settled; errors and
+/// everything else are uncertain.
 #[must_use]
 pub fn outcome(result: &Result<Value>) -> Outcome {
     let (state, value, retry_safe) = match result {
-        Ok(v) if v["status"] == "success" && v["uncertain"] != true => {
+        Ok(v) if (v["status"] == "success" || package_result(v)) && v["uncertain"] != true => {
             ("completed", v.clone(), false)
         }
         Ok(v) if v["status"] == "denied" && v["uncertain"] != true => {
@@ -121,6 +122,16 @@ pub fn outcome(result: &Result<Value>) -> Outcome {
         value,
         retry_safe,
     }
+}
+
+/// An optional package's reply to an executed operation: `{result, revision, available: true}`
+/// with no status or error field.
+fn package_result(value: &Value) -> bool {
+    value["available"] == true
+        && value.get("result").is_some()
+        && ["status", "error", "error_kind"]
+            .iter()
+            .all(|field| value.get(field).is_none())
 }
 
 /// Whether a completed native action takes its receipt from the agent transaction.

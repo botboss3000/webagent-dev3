@@ -219,6 +219,17 @@ fn outcomes_settle_only_explicit_success_or_denial() {
     );
     let flagged = outcome::outcome(&Ok(json!({"status":"success","uncertain":true})));
     assert_eq!(flagged.state, "uncertain");
+    let package = outcome::outcome(&Ok(
+        json!({"result":{"id":"r"},"revision":2,"available":true}),
+    ));
+    assert_eq!(package.state, "completed");
+    for unsettled in [
+        json!({"result":{},"available":false}),
+        json!({"result":{},"available":true,"error":"boom"}),
+        json!({"result":{},"available":true,"status":"error"}),
+    ] {
+        assert_eq!(outcome::outcome(&Ok(unsettled)).state, "uncertain");
+    }
     let failed = outcome::outcome(&Err(anyhow!("timeout")));
     assert_eq!((failed.state, failed.value), ("uncertain", Value::Null));
     assert!(outcome::uses_agent_receipt(
