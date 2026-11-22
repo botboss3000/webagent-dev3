@@ -191,3 +191,15 @@ lto = "thin"
 [profile.stable.package.webagent-v3]
 opt-level = 3
 strip = "none"
+
+# Installers (desktop, Android; crates/app-shell/package.py): smallest binary. Measured on the
+# Core feature set (11-22, work/unified-plan/quick-wins.md): 32.1 MB against 72 MB for release;
+# fat LTO on top made it larger (32.6 MB), so it stays off. Server releases keep `release`
+# (faster compile, symbols for perf).
+[profile.core]
+inherits = "release"
+codegen-units = 1
+strip = "symbols"
+
+[profile.core.package.webagent-v3]
+strip = "symbols"

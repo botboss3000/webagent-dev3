@@ -110,13 +110,14 @@ def sign_apks(env):
 
 
 def build_server(triple, debug, env):
-    profile = [] if debug else ["--release"]
+    # Installers use the size profile (root Cargo.toml [profile.core]).
+    profile = [] if debug else ["--profile", "core"]
     run(["cargo", "build", *profile, "--locked", "--target", triple, "-p", "webagent-v3",
          "--bin", "webagent-v3", "--no-default-features", "--features", FEATURES],
         cwd=ROOT, env=env)
     target_dir = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     suffix = ".exe" if "windows" in triple else ""
-    return target_dir / triple / ("debug" if debug else "release") / f"webagent-v3{suffix}"
+    return target_dir / triple / ("debug" if debug else "core") / f"webagent-v3{suffix}"
 
 
 def editable(relative):
