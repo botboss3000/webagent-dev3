@@ -191,6 +191,20 @@ Code that imports a new file must start without it (load it on first use, as
 `scheduler.BoardClient` does), and a list that requires it (the reviewed modules in host.py)
 can only name it from the release after it is installed.
 
+## Host helper updates
+
+`host_helper.py` is installed by the Host Admin action `supervisor_update` after a
+`broker_install` that changed it. The update runs the *running* helper's code, so since
+task `helper-approvers` (2026-11-21) it writes the new file and then runs
+`host_helper.py install REQUEST_ID` from that new file, which installs what ships beside the
+helper (the host file service and the root-owned `/usr/local/sbin/buildctl` wrapper) before
+the restart. A helper that adds install-time behaviour therefore needs one update. The update
+that first installs this change still runs older code: if a change to `install_extras` must
+land in the same step as that first update, approve a second `supervisor_update`. A new
+profile key the new helper requires (for example `approvers`) goes into
+`/etc/webagent/host-profile.json` before the update, or the helper falls back to its
+fail-closed default.
+
 ## Release-scope guards
 
 Checked source patches are text unified diffs, except that image and font assets

@@ -6,8 +6,8 @@ runs operator_shell.py for release keys) may request and read status; root (the 
 over SSH, `sudo buildctl host ...`) may list, decide and open windows without the app. Nothing
 that changes the host runs without an approved decision or a live allow-all window. The app
 approves a root-equivalent action ("root" below) or opens a window only with the host approval
-passphrase, and opens windows at all only where the profile's window_openers lists "app"
-(HOSTACT-5). Every request, decision and result is appended to the log. Host-specific values
+passphrase, and only where the profile lists "app": approvers for those approvals,
+window_openers for windows (HOSTACT-5). Every request, decision and result is appended to the log. Host-specific values
 come from the host profile.
 """
 import difflib
@@ -48,9 +48,14 @@ DEFAULTS = {"host_id": socket.gethostname(), "socket": "/home/ar/webagent-dev3/r
             # "host" (root over SSH: sudo buildctl host allow). Development lists both; production
             # only "host", so no credential for a window ever passes through the app.
             "window_openers": ["host"],
+            # Who may approve root-equivalent, boot/disk and File Manager grant requests: "app"
+            # (Host Admin page, with the passphrase) and/or "host" (sudo buildctl host approve).
+            # Development lists both; production only "host". Denials and ordinary approvals
+            # (listed restarts, noop) are not limited by it.
+            "approvers": ["host"],
             # Root-owned wrapper for the SSH route, installed with the helper by supervisor_update.
             "operator_command": "/usr/local/sbin/buildctl"}
-WINDOW_OPENERS = ("app", "host")
+CALLERS = ("app", "host")
 # Grant actions and the file each one's live grants are kept in (host_files.py reads them too).
 GRANTS = {"files_grant": "file-grants.json", "terminal_grant": "terminal-grants.json"}
 FILES_UNIT = """[Unit]
@@ -110,9 +115,10 @@ def load_profile(path=PROFILE):
     value = dict(DEFAULTS)
     if path.exists():
         value.update(json.loads(path.read_text()))
-    openers = value["window_openers"]
-    if not isinstance(openers, list) or not set(openers) <= set(WINDOW_OPENERS):
-        raise ValueError("window_openers must list only " + " and ".join(WINDOW_OPENERS))
+    for key in ("window_openers", "approvers"):
+        callers = value[key]
+        if not isinstance(callers, list) or not set(callers) <= set(CALLERS):
+            raise ValueError(key + " must list only " + " and ".join(CALLERS))
     return value
 
 
@@ -525,19 +531,34 @@ class Helper:
         self.write(target, text, 0o755, 0, 0)
         return True
 
-    def update_helper(self, request_id):
-        target = self.helper_path()
-        new = (Path(self.build_config()["service_dir"]) / "host_helper.py").read_bytes()
-        old = target.read_bytes()
+    def install_extras(self, request_id):
+        """What a helper update installs beside the helper itself; True if the file service changed."""
         folder = self.state / "snapshots" / request_id
         folder.mkdir(parents=True, mode=0o700, exist_ok=True)
         # The file service ships beside the helper; a failed file service never blocks the helper update.
         files = self.update_files_service(folder)
         self.update_operator_command()
+        return files
+
+    def update_helper(self, request_id):
+        target = self.helper_path()
+        new = (Path(self.build_config()["service_dir"]) / "host_helper.py").read_bytes()
+        old = target.read_bytes()
         if new == old:
-            return {"changed": False, "files_service": files}
+            return {"changed": False, "files_service": self.install_extras(request_id)}
+        folder = self.state / "snapshots" / request_id
+        folder.mkdir(parents=True, mode=0o700, exist_ok=True)
         (folder / "host_helper.py").write_bytes(old)
         self.write(target, new, 0o644)
+        # This update runs the old helper's code; the new file installs its own extras, so a
+        # helper that adds install-time behaviour needs one supervisor_update, not two.
+        result = self.runner(["/usr/bin/python3", "-I", str(target), "install", request_id],
+                             capture_output=True, text=True, timeout=300)
+        if result.returncode:
+            self.write(target, old, 0o644)
+            raise RuntimeError("the new helper's install step failed; previous copy restored: "
+                               + (result.stderr or result.stdout)[-300:])
+        files = result.stdout.strip() == "files_service changed"
         unit = self.profile["helper_unit"]
         self.runner(["systemctl", "restart", unit], timeout=60)
         deadline = self.clock() + 30
@@ -594,7 +615,7 @@ class Helper:
             pending = [r for r in records if r["state"] == "pending"]
             recent = sorted((r for r in records if r["state"] != "pending"), key=lambda r: -r.get("decided_at", 0))[:50]
             return {"pending": pending, "recent": recent, "windows": self.windows(),
-                    "window_openers": self.profile["window_openers"],
+                    "window_openers": self.profile["window_openers"], "approvers": self.profile["approvers"],
                     "file_grants": self.grants("files_grant"), "terminal_grants": self.grants("terminal_grant"),
                     "file_log": self.file_log(50)}
         # Root is the host operator over SSH (sudo): its decisions and windows never pass through the app.
@@ -658,8 +679,12 @@ class Helper:
             # So do File Manager grants (files and terminals outside the checkout) and every
             # root-equivalent action. Root over SSH already holds root and needs no passphrase.
             needs = record["boot_disk"] or record.get("passphrase") or ACTIONS[record["action"]].get("root")
-            if decision == "approve" and needs and caller == "app":
-                self.check_passphrase(message.get("passphrase"))
+            if decision == "approve" and needs:
+                if caller not in self.profile["approvers"]:
+                    raise PermissionError("on this host this request is approved only "
+                                          + ("over SSH: sudo buildctl host approve " + record["id"] if caller == "app" else "in the app"))
+                if caller == "app":
+                    self.check_passphrase(message.get("passphrase"))
             if decision == "approve" and record["action"] in GRANTS:
                 # The approver sets how long the grant lasts: default 1 h, never above the maximum.
                 seconds = message.get("seconds", self.profile["grant_default_seconds"])
@@ -678,7 +703,8 @@ class Helper:
         return self.state / "passphrase.json"
 
     def check_passphrase(self, given):
-        """Verify against the salted scrypt hash; 5 wrong tries lock it for 15 minutes."""
+        """Verify against the salted scrypt hash; 5 wrong tries lock it for 15 minutes. A missing
+        or empty passphrase is refused without counting as a try."""
         path = self.passphrase_path()
         if not path.exists():
             raise PermissionError("no host approval passphrase is set; set it at the server console first")
@@ -687,8 +713,10 @@ class Helper:
         failures = [t for t in stored.get("failures", []) if t > now - 900]
         if len(failures) >= 5:
             raise PermissionError("too many wrong passphrases; try again in 15 minutes")
-        digest = hashlib.scrypt(str(given or "").encode(), salt=bytes.fromhex(stored["salt"]), n=2 ** 14, r=8, p=1).hex()
-        if not isinstance(given, str) or not hmac.compare_digest(digest, stored["hash"]):
+        if not isinstance(given, str) or not given:
+            raise PermissionError("type the host approval passphrase")
+        digest = hashlib.scrypt(given.encode(), salt=bytes.fromhex(stored["salt"]), n=2 ** 14, r=8, p=1).hex()
+        if not hmac.compare_digest(digest, stored["hash"]):
             stored["failures"] = failures + [now]
             path.write_text(json.dumps(stored))
             self.log({"event": "passphrase_failed"})
@@ -869,6 +897,10 @@ def main():
         if record["state"] != "running" or record["action"] not in SUPERVISED:
             sys.exit("request is not a running supervised action")
         helper.settle(record)
+        return
+    if sys.argv[1:2] == ["install"] and len(sys.argv) == 3:
+        # Run by update_helper from the newly written helper file: install what ships beside it.
+        print("files_service changed" if Helper(profile).install_extras(sys.argv[2]) else "files_service current")
         return
     if sys.argv[1:2] == ["operator"]:
         operator(sys.argv[2:], profile)

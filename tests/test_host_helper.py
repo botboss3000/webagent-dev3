@@ -19,7 +19,8 @@ class HelperTests(unittest.TestCase):
         self.now = 1000.0
         import pwd
         profile = {**helper_module.DEFAULTS, "state": self.temp.name, "app_uid": APP,
-                   "operator_account": pwd.getpwuid(OPERATOR).pw_name, "window_openers": ["app", "host"]}
+                   "operator_account": pwd.getpwuid(OPERATOR).pw_name, "window_openers": ["app", "host"],
+                   "approvers": ["app", "host"]}
         self.helper = helper_module.Helper(profile, clock=lambda: self.now,
                                            runner=lambda *a, **k: type("R", (), {"stdout": "up"})())
 
@@ -173,8 +174,8 @@ class HelperTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "no host approval passphrase"):
             self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
         self.helper.set_passphrase(PASS)
-        for given in (None, "guess"):
-            with self.assertRaisesRegex(PermissionError, "wrong"):
+        for given, refusal in ((None, "type the host approval passphrase"), ("", "type the host"), ("guess", "wrong")):
+            with self.assertRaisesRegex(PermissionError, refusal):
                 self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin", "passphrase": given})
         self.assertEqual("pending", self.helper.handle(APP, {"op": "status", "id": record["id"]})["state"])
         self.assertEqual("denied", self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "deny", "admin": "admin"})["state"])
@@ -247,6 +248,82 @@ class HelperTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 helper_module.load_profile(path)
 
+    def test_approvers_choose_who_may_approve_root_requests(self):
+        self.helper.set_passphrase(PASS)
+        boot = Path(self.temp.name) / "boot.cfg"
+        self.helper.profile["boot_disk_paths"] = [str(boot)]
+        requests = lambda: [self.write_request("x"),
+                            self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": str(boot), "content": "x"}, "requester": {"session": "s"}}),
+                            self.helper.handle(APP, {"op": "request", "action": "files_grant", "args": {"admin": "admin"}, "requester": {"user": "admin"}})]
+        app = lambda record: self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin", "passphrase": PASS})
+        root = lambda record: self.helper.handle(ROOT, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "host:ar"})
+        # Development: the page (with the passphrase) and root over SSH both approve.
+        self.assertEqual(["app", "host"], self.helper.handle(APP, {"op": "list"})["approvers"])
+        with mock.patch.object(self.helper, "run_approved"):
+            for record in requests():
+                self.assertEqual("approved", app(record)["state"])
+            for record in requests():
+                self.assertEqual("approved", root(record)["state"])
+        # Production: root-equivalent, boot/disk and grant approvals only over SSH, even with
+        # the right passphrase; the app may still deny them and approve ordinary actions.
+        self.helper.profile["approvers"] = ["host"]
+        self.assertEqual(["host"], self.helper.handle(APP, {"op": "list"})["approvers"])
+        write, disk, grant = requests()
+        for record in (write, disk, grant):
+            with self.assertRaisesRegex(PermissionError, "sudo buildctl host approve " + record["id"]):
+                app(record)
+            self.assertEqual("pending", self.helper.handle(APP, {"op": "status", "id": record["id"]})["state"])
+        self.assertEqual("denied", self.helper.handle(APP, {"op": "decide", "id": write["id"], "decision": "deny", "admin": "admin"})["state"])
+        self.assertEqual("done", self.approve(self.helper.handle(APP, {"op": "request", "action": "noop", "requester": {"session": "s"}}))["state"])
+        with mock.patch.object(self.helper, "run_approved"):
+            self.assertEqual("approved", root(disk)["state"])
+        # An app-only host refuses root's approvals of the same requests.
+        self.helper.profile["approvers"] = ["app"]
+        with self.assertRaisesRegex(PermissionError, "in the app"):
+            root(grant)
+
+    def test_profile_approvers_are_checked_and_default_to_host_only(self):
+        import json
+        path = Path(self.temp.name) / "profile.json"
+        self.assertEqual(["host"], helper_module.load_profile(path)["approvers"])  # no file: defaults
+        path.write_text(json.dumps({"approvers": ["app", "host"]}))
+        self.assertEqual(["app", "host"], helper_module.load_profile(path)["approvers"])
+        for bad in (["app", "everyone"], "host"):
+            path.write_text(json.dumps({"approvers": bad}))
+            with self.assertRaisesRegex(ValueError, "approvers"):
+                helper_module.load_profile(path)
+
+    def test_helper_update_installs_extras_from_the_new_file(self):
+        import json
+        service, helper_dir = Path(self.temp.name) / "service", Path(self.temp.name) / "lib"
+        service.mkdir()
+        helper_dir.mkdir()
+        (service / "host_helper.py").write_text("new helper\n")
+        (helper_dir / "host_helper.py").write_text("old helper\n")
+        config = Path(self.temp.name) / "build.json"
+        config.write_text(json.dumps({"service_dir": str(service)}))
+        self.helper.profile.update(build_config=str(config), helper_dir=str(helper_dir))
+        calls = []
+
+        def runner(command, **_):
+            calls.append(command)
+            failed = "install" in command and self.fail_install
+            return type("R", (), {"returncode": int(failed), "stdout": "files_service current", "stderr": "boom"})()
+        self.helper.runner = runner
+        self.fail_install = True
+        with mock.patch.object(helper_module.os, "chown"), mock.patch.object(self.helper, "install_extras") as old_extras:
+            with self.assertRaisesRegex(RuntimeError, "install step failed"):
+                self.helper.update_helper("r1")
+            self.assertEqual("old helper\n", (helper_dir / "host_helper.py").read_text())  # restored
+            self.fail_install = False
+            with mock.patch.object(self.helper, "helper_answers", return_value=True), mock.patch.object(helper_module.time, "sleep"):
+                self.assertTrue(self.helper.update_helper("r2")["changed"])
+            old_extras.assert_not_called()  # the running (old) code no longer installs the extras itself
+        self.assertEqual("new helper\n", (helper_dir / "host_helper.py").read_text())
+        self.assertIn(["/usr/bin/python3", "-I", str(helper_dir / "host_helper.py"), "install", "r2"], calls)
+        install_at = calls.index(["/usr/bin/python3", "-I", str(helper_dir / "host_helper.py"), "install", "r2"])
+        self.assertTrue(any("restart" in c for c in calls[install_at + 1:]))  # installed before the restart
+
     def test_supervisor_update_installs_the_root_owned_operator_command(self):
         target = Path(self.temp.name) / "sbin" / "buildctl"
         target.parent.mkdir()
@@ -274,6 +351,12 @@ class HelperTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "too many"):
             self.helper.check_passphrase("correct horse battery")
         self.now += 901
+        self.helper.check_passphrase("correct horse battery")
+        # An empty or missing passphrase is refused without counting towards the lock.
+        for _ in range(6):
+            for given in ("", None):
+                with self.assertRaisesRegex(PermissionError, "type the host approval passphrase"):
+                    self.helper.check_passphrase(given)
         self.helper.check_passphrase("correct horse battery")
         with self.assertRaises(ValueError):
             self.helper.set_passphrase("short")
