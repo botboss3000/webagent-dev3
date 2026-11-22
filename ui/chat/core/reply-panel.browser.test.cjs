@@ -6,7 +6,8 @@ const ROOT=process.env.SOURCE_ROOT||path.resolve(__dirname,'../../..'),UI=path.j
 // Skip/Continue, takes "Something else…", keeps its pick list flush so the marks line up with the
 // comment field below, carries a comment typed under a pick list into the answer, stages files from
 // + inside a two-row text box, keeps Dismiss as a chip at the top right, hides the composer while a
-// panel field is focused and sends one answer message.
+// panel field is focused and sends one answer message. Any question can be skipped, a comment alone
+// counts as an answer, an answered card marks empty questions Skipped, and sizes match the Tasks panel.
 for(const mobile of [false,true])for(const light of [false,true])test(`reply panel ${mobile?'mobile':'desktop'} ${light?'light':'dark'}`,async t=>{
  const html='<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shell/app.css"><link rel="stylesheet" href="/chat/chat.css"><style>:root{--fg-1:#eee;--fg-2:#ddd;--fg-3:#aaa;--bg-0:#000;--bg-1:#222;--bg-elev:#181818;--brand:#48f;--accent:#48f;--danger:#e44;--border:#666;--border-width:1px}body{margin:0;background:#111;font-family:system-ui}body.light-mode{background:white;--fg-1:#222;--fg-2:#333;--fg-3:#666;--bg-0:#fff;--bg-1:#eee;--bg-elev:#fafafa}#chat-panel{max-width:650px;margin:auto}#chat-input-area{position:static!important}</style><main id="chat-panel">'+fs.readFileSync(path.join(UI,'chat/chat.html'),'utf8')+'</main>';
  const server=http.createServer((req,res)=>{const rel=new URL(req.url,'http://localhost').pathname;if(rel==='/'){res.setHeader('content-type','text/html');return res.end(html);}const p=path.resolve(UI,rel.replace(/^\/ui\//,'').replace(/^\//,''));if(!p.startsWith(UI+path.sep)){res.writeHead(403);return res.end();}fs.readFile(p,(e,b)=>{res.writeHead(e?404:200,{'content-type':p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':'text/plain'});res.end(e?'missing':b);});});
@@ -30,21 +31,25 @@ for(const mobile of [false,true])for(const light of [false,true])test(`reply pan
  const nav=async()=>[await shown('Previous question'),await shown('Next question'),await shown('Skip'),await shown('Continue'),await shown('Submit'),await shown('Dismiss')];
  assert.equal(await step(),'1 of 4');
  assert.equal(await live.getByRole('button',{name:'Back'}).count(),0);
- assert.deepEqual(await nav(),[false,true,false,true,false,true]);
+ // An empty first page offers Skip even though its question is marked required.
+ assert.deepEqual(await nav(),[false,true,true,false,false,true]);
  // Dismiss is a short chip above the first question, at the card's top right.
  const chip=await live.locator('.v3-reply-dismiss').boundingBox(),q=await live.locator('.v3-reply-q').first().boundingBox(),body=await live.locator('.message-content').boundingBox();
  assert.ok(chip.y<q.y&&chip.height<=30,'dismiss chip sits above the question');assert.ok(body.x+body.width-(chip.x+chip.width)<=12,'dismiss chip sits at the right edge');
- // The single-choice mark is a round 20 px circle; the checkbox mark is a rounded square.
+ // The single-choice mark is a round 16 px circle; the checkbox mark is a rounded square.
  const marks=await live.locator('.v3-reply-mark').evaluateAll(nodes=>nodes.map(n=>{const s=getComputedStyle(n);return [n.previousElementSibling.type,s.width,s.height,s.borderTopLeftRadius];}));
- assert.deepEqual(marks.find(m=>m[0]==='radio'),['radio','20px','20px','50%']);assert.deepEqual(marks.find(m=>m[0]==='checkbox'),['checkbox','20px','20px','5px']);
+ assert.deepEqual(marks.find(m=>m[0]==='radio'),['radio','16px','16px','50%']);assert.deepEqual(marks.find(m=>m[0]==='checkbox'),['checkbox','16px','16px','4px']);
  // The pick list has no box of its own, and its marks line up with the comment field below it.
  const listStyle=await live.locator('.v3-reply-options').first().evaluate(n=>{const s=getComputedStyle(n);return [s.borderTopWidth,s.borderLeftWidth,s.borderTopLeftRadius];});
  assert.deepEqual(listStyle,['0px','0px','0px']);
  assert.ok(Math.abs((await live.locator('.v3-reply-mark').first().boundingBox()).x-(await live.locator('.v3-reply-comment').first().boundingBox()).x)<=1,'marks align with the comment field');
  // A comment typed under a pick list goes out with the answer.
+ // A comment alone counts as an answer: the page turns from Skip to Continue without a pick.
  await live.getByRole('textbox',{name:'Layout: comments'}).fill('chosen for clarity');
- await live.getByRole('button',{name:'Continue'}).click();
- assert.equal(await live.locator('.v3-reply-error:visible').innerText(),'Choose one option.');assert.equal(await step(),'1 of 4');
+ assert.deepEqual([await shown('Skip'),await shown('Continue')],[false,true]);
+ // The card uses the Tasks panel's sizes: 13px text and 32px buttons.
+ assert.equal(await live.locator('.message-content').evaluate(n=>getComputedStyle(n).fontSize),'13px');
+ assert.equal(Math.round((await live.getByRole('button',{name:'Continue'}).boundingBox()).height),32);
  // Tapping the chosen radio again clears it.
  const list=live.getByRole('radio',{name:'List'});
  await live.locator('.v3-reply-option',{hasText:'List'}).click();assert.equal(await list.isChecked(),true);
@@ -72,10 +77,10 @@ for(const mobile of [false,true])for(const light of [false,true])test(`reply pan
  await p.evaluate(()=>document.activeElement.blur());assert.notEqual(await composer(),'none');
  await live.getByRole('button',{name:'Continue'}).click();assert.equal(await step(),'4 of 4');
  assert.deepEqual(await nav(),[true,false,false,false,true,true]);
- await live.getByRole('button',{name:'Submit'}).click();assert.equal(await live.locator('.v3-reply-error:visible').innerText(),'Name is required.');assert.equal(await p.evaluate(()=>sent.length),0);
- await live.getByRole('textbox',{name:'Name'}).fill('Ana');await live.getByRole('button',{name:'Submit'}).click();
+ // A required question left empty is sent as skipped.
+ await live.getByRole('button',{name:'Submit'}).click();
  await p.waitForFunction(()=>sent.length===1);
- assert.equal(await p.evaluate(()=>answerText('Panel setup',sent[0])),'Panel setup\nLayout: Tiles\nLayout — comment: chosen for clarity\nExtras: skipped\nNotes: Keep it short\nName: Ana');
+ assert.equal(await p.evaluate(()=>answerText('Panel setup',sent[0])),'Panel setup\nLayout: Tiles\nLayout — comment: chosen for clarity\nExtras: skipped\nNotes: Keep it short\nName: skipped');
  assert.equal(await p.evaluate(()=>sent[0].find(item=>item.name==='layout').comment),'chosen for clarity');
  assert.deepEqual(await p.evaluate(()=>staged),['a.txt','b.txt']);
  // An answered panel shows every recorded answer read-only and greyed out, with Complete where Submit was.
@@ -83,11 +88,12 @@ for(const mobile of [false,true])for(const light of [false,true])test(`reply pan
  assert.equal(await answered.locator('input:not([disabled]),textarea:not([disabled])').count(),0);
  assert.equal(await answered.getByRole('radio',{name:'List'}).isChecked(),true);
  assert.equal(await answered.locator('.v3-reply-state').count(),0);
+ assert.deepEqual(await answered.locator('.v3-reply-skipped').allInnerTexts(),['Skipped','Skipped']);
  assert.equal(await answered.locator('.v3-reply-complete').innerText(),'Complete');
  const complete=await answered.locator('.v3-reply-complete').boundingBox(),field=await answered.locator('.v3-reply-field').last().boundingBox(),options=await answered.locator('.v3-reply-options').first().boundingBox();
  assert.ok(complete.y>=field.y+field.height-1,'Complete sits below the answers');
  assert.ok(Math.abs(options.x+options.width-(complete.x+complete.width))<=1,'Complete sits where Submit was, at the footer right');
- assert.ok(complete.height>=44);
+ assert.equal(Math.round(complete.height),32);
  const greyed=await answered.locator('.v3-reply-options,.v3-reply-comment,.v3-reply-input').evaluateAll(nodes=>nodes.map(node=>Number(getComputedStyle(node).opacity)));
  assert.ok(greyed.length>=2&&greyed.every(value=>value>0&&value<1),'recorded picks and comments are greyed out');
  assert.deepEqual(await p.evaluate(()=>[...window.answeredPanelRuns([{component:{lifecycle:{message_run_id:'run-1'}}},{component:{lifecycle:{}}},{}])]),['run-1']);

@@ -3,7 +3,8 @@
 // else…" row, an optional comment box under each pick list (on unless the field sets comment:false),
 // text and free-text fields with + inside the box to stage files on the answer, and an
 // optional one-question-per-page flow with "N of M" between back/forward chevrons. Dismiss sits at
-// the card's top right; the main button reads Continue, Skip (optional page left empty) or Submit.
+// the card's top right; the main button reads Continue, Skip (page left empty) or Submit. Any
+// question can be skipped, and a comment alone counts as its answer.
 // The answer only ever goes out as the user's own message, which the transcript leaves out; a panel
 // never authorizes anything. An answered panel keeps its answers visible but greyed out and locked,
 // with Complete where Submit was.
@@ -62,7 +63,7 @@ function question(field,saved,locked,addFiles,key,savedComment){
       page.append(box);comment=()=>box.value.trim();clearComment=()=>{box.value='';};
     }
     read=()=>{const values=boxes.filter(box=>box.checked).map(box=>box===otherBox?other.value.trim():box.value).filter(Boolean);return single?values[0]||'':values;};
-    check=()=>{if(otherBox?.checked&&!other.value.trim())return 'Type your answer or pick another option.';if(field.required===true&&!boxes.some(box=>box.checked))return single?'Choose one option.':'Choose at least one option.';return '';};
+    check=()=>otherBox?.checked&&!other.value.trim()?'Type your answer or pick another option.':'';
     clear=()=>{for(const box of boxes)box.checked=false;if(other){other.value='';other.hidden=true;}clearComment();};
   }else{
     const wrap=el('div','v3-reply-input');
@@ -82,7 +83,7 @@ function question(field,saved,locked,addFiles,key,savedComment){
       wrap.append(plus,picker);page.append(files);
     }
     read=()=>String(input.value).trim();
-    check=()=>{if(field.required===true&&!read())return (label||'This answer')+' is required.';if(!input.checkValidity())return input.validationMessage||'Check this answer.';return '';};
+    check=()=>input.checkValidity()?'':input.validationMessage||'Check this answer.';
     clear=()=>{input.value='';};
   }
   page.append(error);
@@ -102,7 +103,10 @@ export function buildReplyForm({fields,paged=false,state='',values={},comments={
   const items=fields.map((field,index)=>question(field,values[field.name],locked,addFiles,key+'-'+index,comments[field.name]));
   for(const item of items)form.append(item.page);
   // An answered panel shows its recorded answer read-only, with Complete where Submit was.
-  if(locked){const foot=el('div','v3-reply-foot');if(state==='answered')foot.append(el('span','v3-reply-complete','Complete'));if(foot.childElementCount)form.append(foot);return form;}
+  if(locked){
+    // A question the answer left empty reads Skipped.
+    if(state==='answered')for(const item of items)if(!item.filled())item.page.lastElementChild.before(el('p','v3-reply-skipped','Skipped'));
+    const foot=el('div','v3-reply-foot');if(state==='answered')foot.append(el('span','v3-reply-complete','Complete'));if(foot.childElementCount)form.append(foot);return form;}
   // Dismiss sits at the card's top right, away from the answer buttons.
   dismiss.className='v3-reply-btn is-quiet v3-reply-dismiss';form.prepend(dismiss);
   const foot=el('div','v3-reply-foot');
@@ -114,11 +118,11 @@ export function buildReplyForm({fields,paged=false,state='',values={},comments={
   const done=el('button','v3-reply-btn is-primary','Submit');done.type='submit';
   foot.append(nav,main,done);form.append(foot);
   const pages=paged&&items.length>1;let index=0;
-  // The main button reads Skip while an optional page is empty, otherwise Continue.
-  const label=()=>{const item=items[index],skip=!item.filled()&&item.field.required!==true;main.textContent=skip?'Skip':'Continue';main.className='v3-reply-btn'+(skip?'':' is-primary');};
+  // The main button reads Skip while the page is empty, otherwise Continue.
+  const label=()=>{const item=items[index],skip=!item.filled();main.textContent=skip?'Skip':'Continue';main.className='v3-reply-btn'+(skip?'':' is-primary');};
   const show=()=>{const last=!pages||index===items.length-1;items.forEach((item,i)=>{item.page.hidden=pages&&i!==index;});nav.hidden=!pages;step.textContent=(index+1)+' of '+items.length;prev.classList.toggle('is-off',index===0);prev.disabled=index===0;fwd.classList.toggle('is-off',last);fwd.disabled=last;main.hidden=last;done.hidden=!last;if(!last)label();};
-  // Moving forward checks the page; an empty optional page counts as skipped.
-  const advance=()=>{const item=items[index];if(!item.filled()&&item.field.required!==true){item.clear();item.valid();}else if(!item.valid())return;index++;show();};
+  // Moving forward checks the page; an empty page counts as skipped.
+  const advance=()=>{const item=items[index];if(!item.filled()){item.clear();item.valid();}else if(!item.valid())return;index++;show();};
   main.onclick=advance;fwd.onclick=advance;
   prev.onclick=()=>{if(index>0){index--;show();}};
   form.addEventListener('change',()=>{if(pages&&index<items.length-1)label();});

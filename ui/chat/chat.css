@@ -386,62 +386,63 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 }
 /* Agent reply panels (choice and form cards from present_chat_component): round single-choice rows,
    checkbox rows, free text with +, and a footer with Submit and Dismiss; the answer is sent as the
-   user's own message. Rows and buttons are at least 44px tall for touch. */
-.v3-reply-form{display:flex;flex-direction:column;gap:14px;margin-top:8px}
-.v3-reply-field{display:flex;flex-direction:column;gap:8px;min-width:0}
+   user's own message. Sizes match the Tasks panel: 13px text and 32px rows and buttons. */
+.v3-reply-form{display:flex;flex-direction:column;gap:10px;margin-top:6px}
+.v3-reply-field{display:flex;flex-direction:column;gap:6px;min-width:0}
 .v3-reply-field[hidden]{display:none}
 .v3-reply-q{font-weight:600;color:var(--fg-1);overflow-wrap:anywhere}
-.v3-reply-hint{margin:-4px 0 0;font-size:13px;color:var(--fg-3)}
+.v3-reply-hint{margin:-2px 0 0;font-size:12px;color:var(--fg-3)}
+.v3-reply-skipped{margin:0;font-size:12px;color:var(--fg-3)}
 /* A pick list has no box of its own: the rows sit flush, so their marks line up with the left edge of a field below. */
 .v3-reply-options{display:flex;flex-direction:column}
-.v3-reply-option{position:relative;display:flex;align-items:center;gap:12px;min-height:44px;padding:10px 0;box-sizing:border-box;cursor:pointer;color:var(--fg-1);overflow-wrap:anywhere;-webkit-tap-highlight-color:transparent}
+.v3-reply-option{position:relative;display:flex;align-items:center;gap:10px;min-height:32px;padding:6px 0;box-sizing:border-box;cursor:pointer;color:var(--fg-1);overflow-wrap:anywhere;-webkit-tap-highlight-color:transparent}
 .v3-reply-option+.v3-reply-option{border-top:var(--border-width) solid var(--border-soft)}
 .v3-reply-option input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
 .v3-reply-option-text{min-width:0}
 /* Round radio: a ring that fills light with a small dark centre when chosen; checkboxes are squares with a cut-out tick. */
-.v3-reply-mark{flex:none;display:grid;place-items:center;width:20px;height:20px;box-sizing:border-box;border:2px solid var(--fg-3);border-radius:50%}
-.v3-reply-option input[type=checkbox]+.v3-reply-mark{border-radius:5px}
+.v3-reply-mark{flex:none;display:grid;place-items:center;width:16px;height:16px;box-sizing:border-box;border:2px solid var(--fg-3);border-radius:50%}
+.v3-reply-option input[type=checkbox]+.v3-reply-mark{border-radius:4px}
 .v3-reply-option input:checked+.v3-reply-mark{background:var(--fg-1);border-color:var(--fg-1)}
-.v3-reply-option input[type=radio]:checked+.v3-reply-mark::after{content:'';width:8px;height:8px;border-radius:50%;background:var(--bg-0)}
-.v3-reply-option input[type=checkbox]:checked+.v3-reply-mark::after{content:'';width:5px;height:10px;box-sizing:border-box;border:solid var(--bg-0);border-width:0 2.5px 2.5px 0;transform:translateY(-1px) rotate(45deg)}
+.v3-reply-option input[type=radio]:checked+.v3-reply-mark::after{content:'';width:6px;height:6px;border-radius:50%;background:var(--bg-0)}
+.v3-reply-option input[type=checkbox]:checked+.v3-reply-mark::after{content:'';width:4px;height:8px;box-sizing:border-box;border:solid var(--bg-0);border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg)}
 .v3-reply-option input:focus-visible+.v3-reply-mark{outline:2px solid var(--accent);outline-offset:2px}
 .v3-reply-option:has(input:disabled){cursor:default}
 @media (hover:hover){.v3-reply-option:not(:has(input:disabled)):hover{background:color-mix(in oklab,var(--fg-1) 8%,transparent)}}
 .v3-reply-input{display:flex;align-items:flex-start;gap:8px;min-width:0}
 /* Reply panel fields are frosted glass: a faint text-colour tint with a light blur, so any chat background shows through. */
 .v3-reply-form :is(input:not([type=radio],[type=checkbox],[type=file]),select,textarea){background:color-mix(in oklab,var(--fg-1) 6%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
-.v3-reply-form :is(input:not([type=radio],[type=checkbox],[type=file]),select,textarea){font:inherit;color:var(--fg-1);border:var(--border-width) solid var(--border);border-radius:8px;padding:10px 12px;min-height:44px;box-sizing:border-box;width:100%;min-width:0}
-.v3-reply-form textarea{resize:vertical;min-height:88px;line-height:1.4}
-.v3-reply-form .v3-reply-options input.v3-reply-other{width:auto;margin:0 0 12px 32px}
-.v3-reply-form textarea.v3-reply-comment{margin-top:0;min-height:56px}
+.v3-reply-form :is(input:not([type=radio],[type=checkbox],[type=file]),select,textarea){font:inherit;color:var(--fg-1);border:var(--border-width) solid var(--border);border-radius:8px;padding:6px 10px;min-height:32px;box-sizing:border-box;width:100%;min-width:0}
+.v3-reply-form textarea{resize:vertical;min-height:64px;line-height:1.45}
+.v3-reply-form .v3-reply-options input.v3-reply-other{width:auto;margin:0 0 8px 26px}
+.v3-reply-form textarea.v3-reply-comment{margin-top:0;min-height:48px}
 .v3-reply-form :is(input,select,textarea):disabled{opacity:.7}
-.v3-reply-attach{flex:none;width:44px;height:44px;border-radius:50%;border:var(--border-width) solid var(--border);color:var(--fg-1);font:inherit;font-size:22px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.v3-reply-files{color:var(--fg-2);font-size:13px}
-.v3-reply-error{margin:0;color:var(--danger);font-size:13px}
+.v3-reply-attach{flex:none;width:32px;height:32px;border-radius:50%;border:var(--border-width) solid var(--border);color:var(--fg-1);font:inherit;font-size:18px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.v3-reply-files{color:var(--fg-2);font-size:12px}
+.v3-reply-error{margin:0;color:var(--danger);font-size:12px}
 /* A text field with + is one box in two rows: full-width text on top, then + at left and the resize grip at right. */
 .v3-reply-form .v3-reply-input:has(.v3-reply-attach){flex-direction:column;align-items:stretch;gap:0;border:var(--border-width) solid var(--border);border-radius:8px;background:color-mix(in oklab,var(--fg-1) 6%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);overflow:hidden}
-.v3-reply-form .v3-reply-input:has(.v3-reply-attach):has(textarea){resize:vertical;min-height:132px}
+.v3-reply-form .v3-reply-input:has(.v3-reply-attach):has(textarea){resize:vertical;min-height:100px}
 .v3-reply-form .v3-reply-input:has(.v3-reply-attach):focus-within{outline:2px solid var(--accent);outline-offset:-1px}
-.v3-reply-form .v3-reply-input:has(.v3-reply-attach) :is(input,textarea),.v3-reply-form .v3-reply-input:has(.v3-reply-attach) :is(input,textarea):focus{flex:1 1 auto;border:none;border-radius:0;background:none;-webkit-backdrop-filter:none;backdrop-filter:none;outline:none;resize:none;min-height:44px}
+.v3-reply-form .v3-reply-input:has(.v3-reply-attach) :is(input,textarea),.v3-reply-form .v3-reply-input:has(.v3-reply-attach) :is(input,textarea):focus{flex:1 1 auto;border:none;border-radius:0;background:none;-webkit-backdrop-filter:none;backdrop-filter:none;outline:none;resize:none;min-height:32px}
 .v3-reply-form .v3-reply-input .v3-reply-attach{align-self:flex-start;border:none;border-radius:8px;background:none;color:var(--fg-2)}
 @media (hover:hover){.v3-reply-form .v3-reply-attach:hover:not(:disabled){color:var(--fg-1)}}
 /* Dismiss is a small chip at the panel's top right, away from the answer buttons; its tap area extends past the chip. */
-.v3-reply-panel .message-content{position:relative}
-.v3-reply-panel .message-content>strong{display:block;padding-right:96px}
-.v3-reply-form .v3-reply-dismiss{position:absolute;top:8px;right:8px;min-height:0;height:28px;padding:0 12px;font-size:13px;line-height:1;border:var(--border-width) solid var(--border);border-radius:999px;background:color-mix(in oklab,var(--fg-1) 6%,transparent);color:var(--fg-2)}
+.v3-reply-panel .message-content{position:relative;font-size:13px;line-height:1.45}
+.v3-reply-panel .message-content>strong{display:block;padding-right:80px}
+.v3-reply-form .v3-reply-dismiss{position:absolute;top:8px;right:8px;min-height:0;height:24px;padding:0 10px;font-size:12px;line-height:1;border:var(--border-width) solid var(--border);border-radius:999px;background:color-mix(in oklab,var(--fg-1) 6%,transparent);color:var(--fg-2)}
 .v3-reply-form .v3-reply-dismiss::after{content:'';position:absolute;inset:-8px -4px}
 @media (hover:hover){.v3-reply-form .v3-reply-dismiss:hover:not(:disabled){color:var(--fg-1);background:color-mix(in oklab,var(--fg-1) 10%,transparent)}}
-.v3-reply-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;padding-top:12px}
+.v3-reply-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px;padding-top:6px}
 /* Paged panels step with back/forward chevrons around "N of M"; a chevron at either end is hidden. */
 .v3-reply-nav{display:flex;align-items:center;margin-right:auto}
 .v3-reply-nav[hidden]{display:none}
-.v3-reply-chev{width:44px;height:44px;display:grid;place-items:center;padding:0;border:none;border-radius:50%;background:none;color:var(--fg-2);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.v3-reply-chev{width:32px;height:32px;display:grid;place-items:center;padding:0;border:none;border-radius:50%;background:none;color:var(--fg-2);cursor:pointer;-webkit-tap-highlight-color:transparent}
 .v3-reply-chev.is-off{visibility:hidden}
-.v3-reply-chev svg{width:22px;height:22px}
+.v3-reply-chev svg{width:18px;height:18px}
 @media (hover:hover){.v3-reply-chev:hover:not(:disabled){color:var(--fg-1);background:color-mix(in oklab,var(--fg-1) 8%,transparent)}}
 .v3-reply-chev:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-.v3-reply-step{min-width:3.6em;text-align:center;font-variant-numeric:tabular-nums;color:var(--fg-3);font-size:13px}
-.v3-reply-btn{font:inherit;min-height:44px;padding:0 18px;border-radius:999px;border:var(--border-width) solid var(--border);background:transparent;color:var(--fg-1);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.v3-reply-step{min-width:3.6em;text-align:center;font-variant-numeric:tabular-nums;color:var(--fg-3);font-size:12px}
+.v3-reply-btn{font:inherit;min-height:32px;padding:0 14px;border-radius:999px;border:var(--border-width) solid var(--border);background:transparent;color:var(--fg-1);cursor:pointer;-webkit-tap-highlight-color:transparent}
 .v3-reply-btn.is-primary{background:var(--fg-1);border-color:var(--fg-1);color:var(--bg-0);font-weight:600}
 .v3-reply-btn.is-quiet{border-color:transparent;color:var(--fg-2)}
 @media (hover:hover){.v3-reply-btn.is-quiet:hover:not(:disabled){background:color-mix(in oklab,var(--fg-1) 8%,transparent);color:var(--fg-1)}}
@@ -450,7 +451,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-reply-panel:is(.is-answered,.is-dismissed) :is(.v3-reply-options,.v3-reply-comment,.v3-reply-input){opacity:.6}
 .v3-reply-panel:is(.is-answered,.is-dismissed) :is(.v3-reply-options,.v3-reply-comment,.v3-reply-input) :is(input,select,textarea):disabled{opacity:1}
 /* Complete stands where Submit was: a quiet, non-interactive pill at the footer's right. */
-.v3-reply-complete{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:999px;border:var(--border-width) solid var(--border-soft);color:var(--fg-3);font-size:15px}
+.v3-reply-complete{display:inline-flex;align-items:center;min-height:32px;padding:0 14px;border-radius:999px;border:var(--border-width) solid var(--border-soft);color:var(--fg-3);font-size:13px}
 /* While a reply panel's text field holds focus the composer steps aside, so a phone keyboard shows the panel rather than two text boxes. */
 body:has(.v3-reply-panel :is(input:not([type=radio],[type=checkbox],[type=file]),textarea,select):focus) #composer{display:none!important}
 /* Admission review blocked this message: the agent never saw it. */
