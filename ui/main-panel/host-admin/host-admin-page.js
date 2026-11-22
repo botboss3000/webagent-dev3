@@ -2,9 +2,11 @@
 // Administrator Host Admin: approve or deny host actions held by the root host helper, open
 // time-limited allow-all windows for one requester, and read recent decisions. The helper
 // itself runs approved actions and never lets allow-all cover boot, disk or no-undo actions.
-// Root-equivalent approvals and opening a window need the host approval passphrase; where the
-// host's window_openers leaves out "app", windows are opened only over SSH and this page
-// shows that command and the time left instead.
+// Root-equivalent approvals and opening a window need the host approval passphrase, typed once
+// per page load into one shared field. Where the host's window_openers leaves out "app", windows
+// are opened only over SSH and this page shows that command and the time left instead; where
+// its approvers leaves out "app", those approvals are made only over SSH and each card shows
+// its `sudo buildctl host approve` command.
 // Production releases requested by agents or the operator wait here too; only this page
 // approves them, and the build broker then builds and publishes the release.
 
@@ -56,6 +58,11 @@ export function start(mount) {
     });
   let me = null;
   let timer = null;
+  // One passphrase field per page load, shared by the window toggle, window buttons and every
+  // card: typed once, it serves each approval until the page is reloaded.
+  const passphrase = passphraseInput();
+  const passBox = el('label', 'host-pass');
+  passBox.append(el('span', 'host-meta', 'Host approval passphrase, used by every approval and window on this page until you reload:'), passphrase);
 
   function setPending(count) {
     for (const badge of badges) {
@@ -70,7 +77,7 @@ export function start(mount) {
   async function post(path, body, button, shown) {
     if ('passphrase' in body && !body.passphrase) {
       if (button.type === 'checkbox') button.checked = !button.checked;
-      (shown || button).textContent = 'Type the host approval passphrase first';
+      (shown || button).textContent = 'Type the host approval passphrase above first';
       return;
     }
     button.disabled = true;
@@ -89,7 +96,7 @@ export function start(mount) {
     }
   }
 
-  function card(request, pending, appOpens) {
+  function card(request, pending, appOpens, appApproves) {
     const item = el('li', 'host-item');
     item.dataset.undo = request.undo;
     item.dataset.state = request.state;
@@ -107,17 +114,19 @@ export function start(mount) {
       const deny = el('button', '', 'Deny');
       // Boot and disk changes, File Manager access outside the checkout and root-equivalent
       // actions need the host approval passphrase, set at the server console. So does opening a
-      // window from here.
+      // window from here. Where the host's approvers leaves out "app", they are approved over SSH.
       const needsPass = request.boot_disk || request.passphrase || request.root;
+      const sshOnly = needsPass && !appApproves;
       const canWindow = appOpens && request.allow_key && request.undo !== 'none' && !request.boot_disk && !request.passphrase;
-      let passphrase = null;
-      if (needsPass || canWindow) {
-        passphrase = passphraseInput();
-        actions.append(passphrase);
+      const grant = request.action === 'files_grant' || request.action === 'terminal_grant';
+      if (sshOnly) {
+        const ssh = el('p', 'host-help', 'Approve on the server over SSH: ');
+        ssh.append(el('code', '', 'sudo buildctl host approve ' + request.id + (grant ? ' --hours 1' : '')));
+        actions.append(ssh);
       }
       // File Manager grants last the time set here: 1 h by default, at most 24 h.
       let hours = null;
-      if (request.action === 'files_grant' || request.action === 'terminal_grant') {
+      if (grant && !sshOnly) {
         hours = el('input');
         hours.type = 'number';
         hours.inputMode = 'decimal';
@@ -138,7 +147,7 @@ export function start(mount) {
             ? {decision, passphrase: passphrase.value, ...(hours ? {seconds: Math.round(Number(hours.value) * 3600)} : {})}
             : {decision}, button);
       }
-      actions.append(approve, deny);
+      actions.append(...(sshOnly ? [deny] : [approve, deny]));
       if (canWindow) {
         const select = el('select');
         select.setAttribute('aria-label', 'Allow-all window for this requester');
@@ -259,7 +268,7 @@ export function start(mount) {
 
   // Page-wide allow-all: every requester's ordinary actions run without a card until it ends,
   // for example overnight work. Boot, disk and no-undo actions still wait here. Opening needs the
-  // passphrase; ending never does. Without "app" in window_openers it opens only over SSH.
+  // shared passphrase; ending never does. Without "app" in window_openers it opens only over SSH.
   function allowAll(windows, appOpens) {
     const box = el('div', 'host-allow-all');
     const until = windows['*'];
@@ -277,12 +286,10 @@ export function start(mount) {
       for (const [seconds, text] of WINDOWS.slice(1)) select.append(new Option('for ' + text, String(seconds)));
       select.value = '86400';
       select.hidden = !!until;
-      const passphrase = passphraseInput();
-      passphrase.hidden = !!until;
       toggle.onchange = () => post('/api/v3/admin/host/allow', toggle.checked
         ? {requester: '*', seconds: Number(select.value), passphrase: passphrase.value}
         : {requester: '*', seconds: 0}, toggle, status);
-      box.append(label, select, passphrase, status);
+      box.append(label, select, status);
     } else {
       const ssh = el('p', 'host-help', 'On this host, windows are opened on the server over SSH: ');
       ssh.append(el('code', '', 'sudo buildctl host allow <hours>'));
@@ -351,10 +358,15 @@ export function start(mount) {
     if (pinned) wrap.append(fileAccess(page));
     wrap.append(el('h2', '', 'Waiting for approval' + (page.pending.length ? ' (' + page.pending.length + ')' : '')));
     const appOpens = (page.window_openers || []).includes('app');
-    wrap.append(el('p', 'host-help', 'Host actions from agents and SSH release keys wait here until you decide. Root-equivalent actions (file writes, reverts, broker installs, helper updates, package upgrades) need the host approval passphrase unless a window covers them. An allow-all window approves one requester\'s ordinary and root-equivalent actions until it ends; boot, disk and no-undo actions always ask.'));
+    // A helper from before the approvers setting accepted the page's approvals.
+    const appApproves = (page.approvers || ['app', 'host']).includes('app');
+    wrap.append(el('p', 'host-help', 'Host actions from agents and SSH release keys wait here until you decide. Root-equivalent actions (file writes, reverts, broker installs, helper updates, package upgrades) need '
+      + (appApproves ? 'the host approval passphrase' : 'approval on the server over SSH (sudo buildctl host approve ID)')
+      + ' unless a window covers them. An allow-all window approves one requester\'s ordinary and root-equivalent actions until it ends; boot, disk and no-undo actions always ask.'));
+    if (appApproves || appOpens) wrap.append(passBox);
     wrap.append(allowAll(page.windows || {}, appOpens));
     const pending = el('ul', 'host-list');
-    for (const request of page.pending) pending.append(card(request, true, appOpens));
+    for (const request of page.pending) pending.append(card(request, true, appOpens, appApproves));
     wrap.append(page.pending.length ? pending : el('p', 'host-empty', 'Nothing is waiting.'));
     wrap.append(releases(production));
     if (!pinned) wrap.append(fileAccess(page));
@@ -386,8 +398,9 @@ export function start(mount) {
     me = response.ok ? await response.json() : null;
     if (!me?.is_admin) return;
     const refresh = () => {
-      // Never wipe a passphrase being typed.
-      if ([...mount.querySelectorAll('input[type=password]')].some(input => input.value)) return Promise.resolve();
+      // Never move the passphrase field while it is being typed in (moving it drops the focus);
+      // its value survives every other refresh.
+      if (document.activeElement === passphrase) return Promise.resolve();
       return load().catch(error => { mount.textContent = error.message; });
     };
     await refresh();

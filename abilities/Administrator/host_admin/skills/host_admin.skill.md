@@ -33,6 +33,8 @@ For SSH access rules (keys only, Tailscale only) and how to undo them, read the
   `packages_upgrade`) also need the passphrase on approval, unless a live allow-all window
   covers the request. Opening a window needs it too, or is done by the host operator over SSH
   (`sudo buildctl host allow <hours>`); on hosts set to SSH-only windows (production) the page
-  has no passphrase prompt for windows. Listed unit and container restarts need no passphrase.
+  has no passphrase prompt for windows. On hosts whose `approvers` leave out the app
+  (production), those approvals are made only over SSH (`sudo buildctl host approve ID`).
+  Listed unit and container restarts need no passphrase.
   When you file a root-equivalent request, tell the user it needs the passphrase or a window.
 - A request waits for a decision without a time limit; the user may decide it later.

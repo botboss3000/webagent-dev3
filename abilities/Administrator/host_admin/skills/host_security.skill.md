@@ -66,7 +66,9 @@ sudo python3 -I /usr/local/lib/webagent-host/host_helper.py passphrase
 
 It asks twice and needs at least 12 characters. Only a salted scrypt hash is kept, in
 `/var/lib/webagent-host/passphrase.json` (root only). Five wrong entries within 15 minutes
-lock boot and disk approvals for 15 minutes; failures are logged without the value.
+lock boot and disk approvals for 15 minutes; failures are logged without the value. An empty
+entry is refused without counting. The Host Admin page has one passphrase field per page load,
+used by every card and the window form until the page is reloaded.
 Until a passphrase is set, those requests cannot be approved from the page at all.
 
 # Host operator route over SSH
@@ -84,3 +86,9 @@ default when unset). Without `"app"`, the Host Admin page refuses to open window
 the passphrase, and shows the SSH command and the time left instead. Ending a window is
 always allowed from the page. Change the list with a root edit of the profile, then
 `sudo systemctl restart webagent-host-helper.service`.
+
+Who may approve root-equivalent, boot/disk and File Manager grant requests is the profile's
+`approvers` list, set and changed the same way: `["app", "host"]` on the development server,
+`["host"]` in production (the default when unset). Without `"app"`, the page refuses those
+approvals even with the passphrase and each card shows `sudo buildctl host approve ID`
+instead; it can still deny them and approve listed restarts.
