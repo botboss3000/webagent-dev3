@@ -488,7 +488,8 @@ def post(path, body, timeout=60, url=None):
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
-        if error.code in (502, 503, 504):
+        # Any server error is the server's: it restarts during a deploy, so the poll is retried.
+        if error.code >= 500:
             raise Transient(f"HTTP {error.code}")
         detail = error.read()[:300].decode(errors="replace")
         if error.code in (404, 409):
@@ -1111,12 +1112,17 @@ class StallWatch:
         return None
 
     def close(self):
+        """Stop watching at once. Closing the response directly waits for the reader thread, which sits
+        in a read until the server's next keep-alive (about 15 s later), so the socket is shut down first."""
         self.closed = True
         if self.response:
+            sock = getattr(getattr(getattr(self.response, "fp", None), "raw", None), "_sock", None)
             try:
-                self.response.close()
+                if sock:
+                    sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+            threading.Thread(target=self.response.close, daemon=True).start()
 
 
 # OpenCode's own server sometimes drops a connection ("socket connection was closed unexpectedly"); the
@@ -1728,7 +1734,10 @@ def codex_command(body, stub, then):
                "-s", "read-only", "-m", body.get("model", ""),
                "-c", "developer_instructions=" + toml_value(CODEX_PROMPT),
                "-c", "mcp_servers.webagent.command=" + toml_value(sys.executable),
-               "-c", "mcp_servers.webagent.args=" + toml_value(["-B", str(Path(__file__).resolve()), "mcp", str(stub)])]
+               "-c", "mcp_servers.webagent.args=" + toml_value(["-B", str(Path(__file__).resolve()), "mcp", str(stub)]),
+               # Headless runs cannot ask anyone, so tools needing approval are refused; WebAgent's tools only
+               # record the call (WebAgent applies its own policy and approvals), so they run unasked.
+               "-c", "mcp_servers.webagent.default_tools_approval_mode=" + toml_value("approve")]
     if body.get("reasoning_effort"):
         command += ["-c", "model_reasoning_effort=" + toml_value(body["reasoning_effort"])]
     return command + then
@@ -1819,7 +1828,9 @@ def fork_codex(call):
 # they are refused; --sandbox also restricts its terminal. Antigravity cannot fork a conversation.
 AGY = shutil.which("agy") or str(Path.home() / ".local" / "bin" / "agy")
 ANTIGRAVITY_PROMPT = CODEX_PROMPT
-ANTIGRAVITY_SETTINGS = {"toolPermission": "request-review"}
+# Headless runs refuse any tool that needs review; WebAgent's tools only record the call, so they
+# are allowed by name (the rule needs the server/tool form: "mcp(webagent)" alone matches nothing).
+ANTIGRAVITY_SETTINGS = {"toolPermission": "request-review", "permissions": {"allow": ["mcp(webagent/*)"]}}
 
 
 def run_antigravity(command, prompt, folder):
