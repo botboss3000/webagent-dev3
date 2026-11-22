@@ -29,6 +29,8 @@ pub enum ProviderId {
     CodexBridge,
     /// A linked Antigravity CLI answers each call; no network endpoint.
     AntigravityBridge,
+    /// A linked Gemini CLI answers each call; no network endpoint.
+    GeminiBridge,
     /// Capacity tests: the server itself answers from the user message's script (`TOOL` and
     /// `REPLY` lines). No network, no cost; only an administrator can create its connections.
     Loadtest,
@@ -44,6 +46,7 @@ impl ProviderId {
                 | Self::MuseBridge
                 | Self::CodexBridge
                 | Self::AntigravityBridge
+                | Self::GeminiBridge
                 | Self::Loadtest
         )
     }
@@ -65,6 +68,7 @@ impl ProviderId {
             | Self::MuseBridge
             | Self::CodexBridge
             | Self::AntigravityBridge
+            | Self::GeminiBridge
             | Self::Loadtest => None,
             Self::Deepseek => Some("https://api.deepseek.com/chat/completions"),
             Self::OpenaiApi => Some("https://api.openai.com/v1/chat/completions"),

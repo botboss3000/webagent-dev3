@@ -30,6 +30,7 @@ pub enum ProviderIdV1 {
     MuseBridge,
     CodexBridge,
     AntigravityBridge,
+    GeminiBridge,
     Loadtest,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -128,6 +128,7 @@ mod tests {
             ProviderIdV1::MuseBridge,
             ProviderIdV1::CodexBridge,
             ProviderIdV1::AntigravityBridge,
+            ProviderIdV1::GeminiBridge,
             ProviderIdV1::Loadtest,
         ] {
             let result = project(&RequestV1::Profile {

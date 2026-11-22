@@ -351,6 +351,7 @@ pub enum Transport {
     MuseBridge,
     CodexBridge,
     AntigravityBridge,
+    GeminiBridge,
     Loadtest,
 }
 
@@ -381,6 +382,7 @@ impl Transport {
             Self::MuseBridge => crate::provider::ProviderId::MuseBridge,
             Self::CodexBridge => crate::provider::ProviderId::CodexBridge,
             Self::AntigravityBridge => crate::provider::ProviderId::AntigravityBridge,
+            Self::GeminiBridge => crate::provider::ProviderId::GeminiBridge,
             Self::Loadtest => crate::provider::ProviderId::Loadtest,
         }
     }

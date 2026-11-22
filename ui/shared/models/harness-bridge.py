@@ -2,8 +2,8 @@
 # ============================================================================================
 # SETUP GUIDE — for the person or coding agent (for example Claude Code) installing this file
 # ============================================================================================
-# What it is: the client for a WebAgent "bridge" model (Claude, OpenCode, Muse, Codex and
-# Antigravity Bridges). WebAgent queues each model call for this bridge; this script fetches it, runs it on
+# What it is: the client for a WebAgent "bridge" model (Claude, OpenCode, Muse, Codex,
+# Antigravity and Gemini Bridges). WebAgent queues each model call for this bridge; this script fetches it, runs it on
 # this computer with the matching local CLI harness, and posts the answer back. It never runs
 # WebAgent's tools itself: it only returns the model's reply and requested tool calls.
 #
@@ -15,6 +15,7 @@
 #   - Codex Bridge (prototype): the `codex` CLI installed and signed in (`codex login`).
 #   - Antigravity Bridge (prototype): the `agy` CLI installed and signed in (run `agy` once). It keeps
 #     its sign-in in the system keyring, so the service needs a user session whose keyring is unlocked.
+#   - Gemini Bridge (prototype): the `gemini` CLI installed and signed in (run `gemini` once).
 #   - Muse Bridge: no CLI. A Muse agent on this computer must answer handoff files: for each
 #     work/harness-bridge/sessions/<chat>/muse-inbox/<call>.request.json it writes the reply JSON
 #     to the handoff's reply_file within 25 minutes (Muse's queue watcher wakes the agent).
@@ -105,7 +106,7 @@
 # ============================================================================================
 """Harness bridge client: answer WebAgent v3 model calls for one paired bridge provider.
 
-Common to every bridge provider (Claude, OpenCode, Muse, Codex and Antigravity Bridges).
+Common to every bridge provider (Claude, OpenCode, Muse, Codex, Antigravity and Gemini Bridges).
 Download it from a bridge provider on the Models page and run it on the
 computer that answers the calls (Python 3 standard library only), then pair it.
 Every call is acknowledged before it runs, so any number of clients may serve one
@@ -129,6 +130,8 @@ harness (HARNESSES below).
                                   shell read-only; user config, rules and AGENTS.md ignored.
                                   antigravity_bridge (prototype): `agy --print`, resumed per chat with
                                   --conversation; its own tools are refused (no reviewer); no forks.
+                                  gemini_bridge (prototype): `gemini -p`, resumed per chat with --resume;
+                                  its own tools excluded; no forks.
     stats [HOURS]                 summarize auto-mode call timing (work/harness-bridge/timing.jsonl), default 24 h
 
 Session forks (auto mode, Claude and OpenCode only): when the CLI can fork a session (Claude Code's
@@ -1880,10 +1883,84 @@ def answer_antigravity(call, folder, state, delta):
     print(f"{call['id']}: answered chat {call.get('session')} ({'fresh' if fresh else 'resumed'} conversation {state['antigravity_session']})")
 
 
+# Gemini Bridge (prototype). `gemini -p` answers each call headlessly: a fresh chat starts a session
+# with a chosen --session-id, later calls --resume it. GEMINI_SYSTEM_MD replaces its system prompt with
+# GEMINI_PROMPT. The chat folder is the workspace: its .gemini/settings.json adds this script's MCP stub
+# (trusted, so its calls need no confirmation) and excludes the CLI's own tools. Gemini cannot fork.
+GEMINI = shutil.which("gemini") or str(Path.home() / ".local" / "bin" / "gemini")
+GEMINI_PROMPT = CODEX_PROMPT
+GEMINI_OWN_TOOLS = ["run_shell_command", "read_file", "read_many_files", "write_file", "replace", "glob",
+                    "grep_search", "list_directory", "web_fetch", "google_web_search", "save_memory",
+                    "write_todos", "activate_skill"]
+
+
+def run_gemini(command, prompt, folder):
+    """Run one `gemini -p -o stream-json` with the prompt on stdin; return (final text, usage). Events:
+    init, message (assistant text arrives as deltas), tool_use, tool_result, error and a closing result."""
+    process = start_harness(command, cwd=folder, env={**os.environ, "GEMINI_SYSTEM_MD": str(folder / "system.md")})
+    try:
+        stdout, stderr = process.communicate(prompt, timeout=HARNESS_SECS)
+    except subprocess.TimeoutExpired:
+        interrupt(process)
+        stdout, stderr = process.communicate()
+    check_stopped()
+    texts, result, errors = [], {}, []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        kind = event.get("type")
+        if kind == "message" and event.get("role") == "assistant":
+            texts.append(event.get("content") or "")
+        elif kind == "error":
+            errors.append(event.get("message") or str(event)[:300])
+        elif kind == "result":
+            result = event
+    if result.get("status") != "success":
+        error = (result.get("error") or {}).get("message") or "; ".join(errors) or stderr[-300:] \
+            or f"exit {process.returncode}"
+        upstream = classify(error)
+        detail = f"gemini failed ({process.returncode}): {error}"
+        raise HarnessFailure(detail, "upstream", *upstream) if upstream else HarnessFailure(detail)
+    stats = result.get("stats") or {}
+    prompt_tokens, cached = stats.get("input_tokens", 0), stats.get("cached", 0)
+    completion = stats.get("output_tokens", 0)
+    return "".join(texts), {
+        "prompt_tokens": prompt_tokens, "completion_tokens": completion, "total_tokens": prompt_tokens + completion,
+        "prompt_tokens_details": {"cached_tokens": min(cached, prompt_tokens)}}
+
+
+def answer_gemini(call, folder, state, delta):
+    body = call["body"]
+    fresh = not resumable(state, "gemini_session", delta)
+    (folder / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    (folder / "calls.jsonl").unlink(missing_ok=True)
+    (folder / "system.md").write_text(GEMINI_PROMPT + "\n")
+    (folder / ".gemini").mkdir(exist_ok=True)
+    (folder / ".gemini" / "settings.json").write_text(json.dumps({
+        "mcpServers": {"webagent": {"command": sys.executable, "trust": True,
+                                    "args": ["-B", str(Path(__file__).resolve()), "mcp", str(folder)]}},
+        "tools": {"exclude": GEMINI_OWN_TOOLS}}))
+    session = str(uuid.uuid4()) if fresh else state["gemini_session"]
+    command = [GEMINI, "-p", "", "-o", "stream-json", "--skip-trust", "-m", body.get("model", ""),
+               "--allowed-mcp-server-names", "webagent", "-e", "none"]
+    command += ["--session-id", session] if fresh else ["--resume", session]
+    started = time.time()
+    text, usage = run_gemini(command, prompt_for(call, delta, fresh, listed=False), folder)
+    ended = time.time()
+    message = parse_reply(json.dumps({"content": text, "tool_calls": stub_calls(folder)}), body)
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": usage})
+    record(call, state, delta, started, ended)
+    state["gemini_session"] = session
+    save_state(folder, state)
+    print(f"{call['id']}: answered chat {call.get('session')} ({'fresh' if fresh else 'resumed'} session {session})")
+
+
 # Bridge provider -> harness that answers its calls. Each takes (call, folder, state, delta).
 HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode, "muse_bridge": answer_muse,
-             "codex_bridge": answer_codex, "antigravity_bridge": answer_antigravity}
-# Bridge provider -> fork harness. Each takes (call); Muse and Antigravity cannot fork.
+             "codex_bridge": answer_codex, "antigravity_bridge": answer_antigravity, "gemini_bridge": answer_gemini}
+# Bridge provider -> fork harness. Each takes (call); Muse, Antigravity and Gemini cannot fork.
 FORKERS = {"claude_bridge": fork_claude, "opencode_bridge": fork_opencode, "codex_bridge": fork_codex}
 
 
