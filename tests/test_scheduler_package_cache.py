@@ -129,7 +129,7 @@ class RuntimeRecipeTests(unittest.TestCase):
         changed = self.dockerfile.replace("COPY v3/ui /opt/v3/ui", "COPY v3/ui /opt/v3/alternate-ui")
         self.assertEqual(first["key"], self.runtime.runtime_recipe(changed, "api", b"helper")["key"])
         for modified in (
-            self.dockerfile.replace("python3-selenium valgrind", "python3-selenium jq valgrind"),
+            self.dockerfile.replace("chromium-driver valgrind", "chromium-driver jq valgrind"),
         ):
             self.assertNotEqual(first["key"], self.runtime.runtime_recipe(modified, "api", b"helper")["key"])
         self.assertNotEqual(first["key"], self.runtime.runtime_recipe(self.dockerfile, "api", b"new helper")["key"])

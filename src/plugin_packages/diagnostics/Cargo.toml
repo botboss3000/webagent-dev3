@@ -22,7 +22,6 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 hex = "0.4"
-fs2 = "0.4"
 tracing = "0.1"
 webagent-context = { path = "../../../crates/modules/context", default-features = false }
 webagent-configuration = { path = "../../../crates/modules/configuration" }

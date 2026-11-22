@@ -1,6 +1,5 @@
 //! Bounded JSON configuration reads and cooperating, revision-fenced publication.
 use anyhow::{anyhow, bail, Result};
-use fs2::FileExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{fs::OpenOptions, io::Write, path::Path};
@@ -66,7 +65,7 @@ pub fn update_if_current(
         .read(true)
         .write(true)
         .open(lock_path)?;
-    lock.lock_exclusive()?;
+    lock.lock()?;
     let old = read_or_default(path, missing)?;
     if digest(&old) != expected_digest {
         return Ok(None);

@@ -51,7 +51,6 @@ impl<C: RecordCodec> Repository<'_, C> {
         self.root.join("access-policy.lock")
     }
     pub fn policy_lock(&self) -> Result<std::fs::File> {
-        use fs2::FileExt;
         let path = self.policy_lock_path();
         if let Some(directory) = path.parent() {
             std::fs::create_dir_all(directory)?;
@@ -61,7 +60,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             .read(true)
             .write(true)
             .open(path)?;
-        lock.lock_exclusive()?;
+        lock.lock()?;
         Ok(lock)
     }
     pub fn read_access_policy(&self) -> Result<Value> {

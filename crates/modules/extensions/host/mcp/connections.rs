@@ -261,11 +261,11 @@ async fn resource_lease(
     tokio::time::timeout(std::time::Duration::from_secs(35),async {
         loop {
             if cancel.is_cancelled(){anyhow::bail!("MCP resource wait cancelled");}
-            let locked=if write {fs2::FileExt::try_lock_exclusive(&file)}else{fs2::FileExt::try_lock_shared(&file)};
+            let locked=if write {file.try_lock()}else{file.try_lock_shared()};
             match locked {
                 Ok(())=>return Ok::<_,anyhow::Error>(()),
-                Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>{},
-                Err(error)=>return Err(error.into()),
+                Err(std::fs::TryLockError::WouldBlock)=>{},
+                Err(std::fs::TryLockError::Error(error))=>return Err(error.into()),
             }
             tokio::select!{_ = cancel.cancelled()=>anyhow::bail!("MCP resource wait cancelled"),_ = tokio::time::sleep(std::time::Duration::from_millis(25))=>{}}
         }

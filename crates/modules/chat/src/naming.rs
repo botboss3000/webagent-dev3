@@ -1,6 +1,5 @@
 //! Session auto-naming configuration (live `prompts/session_naming.json` and `session_naming/prompt.md`), title normalization and state transitions.
 use anyhow::{anyhow, Result};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{io::Write, path::Path};

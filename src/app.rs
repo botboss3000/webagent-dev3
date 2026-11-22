@@ -599,7 +599,7 @@ async fn session_mode(app: &App, sid: &str) -> Result<Value> {
 }
 fn marker(app: &App, shutoff: bool) -> Result<()> {
     let lock = File::open(app.control_dir.join("dispatch.lock"))?;
-    lock.lock_exclusive()?;
+    lock.lock()?;
     let result = (|| {
         let mut f = OpenOptions::new()
             .write(true)
@@ -609,7 +609,7 @@ fn marker(app: &App, shutoff: bool) -> Result<()> {
         f.sync_all()?;
         Ok(())
     })();
-    FileExt::unlock(&lock)?;
+    lock.unlock()?;
     result
 }
 /// Shared API/loop coordination folder (`/runtime/control`); never part of state.
@@ -973,7 +973,7 @@ async fn run_process() -> Result<()> {
             .truncate(false)
             .write(true)
             .open(control_root().join("loop.lock"))?;
-        lock.try_lock_exclusive()
+        lock.try_lock()
             .map_err(|_| anyhow!("Another v3 loop owns this state"))?;
         Some(lock)
     } else {

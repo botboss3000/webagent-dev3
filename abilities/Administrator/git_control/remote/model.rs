@@ -1,6 +1,5 @@
 //! User-owned connections and immutable provider operation receipts.
 use crate::*;
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -232,7 +231,7 @@ pub fn lock(store: &Store, agent: &str, id: &str) -> Result<File> {
             "source-control-{}.lock",
             digest(&json!([store.current_user_id(), agent, id]))
         )))?;
-    file.try_lock_exclusive()
+    file.try_lock()
         .map_err(|_| anyhow!("Source Control site is busy; inspect status before retry"))?;
     Ok(file)
 }

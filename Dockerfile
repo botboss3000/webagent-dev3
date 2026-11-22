@@ -110,7 +110,7 @@ RUN mkdir -p /opt/inference/models/bge-small-en-v1.5 && cd /opt/inference/models
     && chmod -R a+rX /opt/inference/models/bge-small-en-v1.5
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
-RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini git ripgrep build-essential pkg-config chromium chromium-driver python3-selenium valgrind heaptrack linux-perf \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini git ripgrep build-essential pkg-config chromium chromium-driver valgrind heaptrack linux-perf \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3app \
     && useradd -u 1101 -g 1100 -M -s /usr/sbin/nologin v3tools

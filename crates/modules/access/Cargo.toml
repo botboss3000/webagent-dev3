@@ -9,7 +9,6 @@ webagent-accounts = { path = "../accounts" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-fs2 = "0.4"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 uuid = { version = "1", features = ["v4"] }
 webagent-configuration = { path = "../configuration" }

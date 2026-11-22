@@ -3,8 +3,8 @@
 use crate::{
     access, anyhow, bad, conflict, digest, json, key, now, required, session_agent_id, shared_chat,
     status, terminal, uuid, wake, AccountsStore, Api, ApiError, App, CancellationToken, Digest,
-    Duration, File, FileExt, HashMap, Json, OpenOptions, Path, PathBuf, Result, Sha256, StatusCode,
-    Store, Uuid, Value, Write,
+    Duration, File, HashMap, Json, OpenOptions, Path, PathBuf, Result, Sha256, StatusCode, Store,
+    Uuid, Value, Write,
 };
 use axum::Extension;
 use std::{
@@ -51,9 +51,9 @@ fn package_lock_store(store: &Store, id: &str, exclusive: bool) -> Result<File> 
         .mode(0o600)
         .open(dir.join(format!("package-{id}.lock")))?;
     if exclusive {
-        file.try_lock_exclusive()
+        file.try_lock()
     } else {
-        FileExt::try_lock_shared(&file)
+        file.try_lock_shared()
     }
     .map_err(|_| anyhow!("Module lifecycle busy"))?;
     Ok(file)
@@ -74,8 +74,7 @@ fn host_lock(app: &App, id: &str) -> Result<File> {
         .write(true)
         .mode(0o600)
         .open(path)?;
-    file.try_lock_exclusive()
-        .map_err(|_| anyhow!("Module busy"))?;
+    file.try_lock().map_err(|_| anyhow!("Module busy"))?;
     Ok(file)
 }
 // Trusted Automation lifecycle, pinned reducer execution and current permissions.
