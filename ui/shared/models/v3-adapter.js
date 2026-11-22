@@ -77,7 +77,9 @@ export function createModelAdapter(request, agentId, onAssignment) {
     if(destroyed)throw Error('Models page closed');
     if(!data.can_manage)throw Error('Agent model management is read-only');
     for(const p of providers){
-      if((p.provider==='webagent_catalog'||p.provider==='my_models')&&!catalog.entries[p.entry_id]){
+      // A fresh pick from either list is adopted first, even when the server already offers it in
+      // this agent's catalog (published local models are offered to every agent unadopted).
+      if(p.provider==='webagent_catalog'||p.provider==='my_models'){
         const choices=await accountChoices();const choice=((p.provider==='my_models'?choices.entries:choices.available_platform_models)||[]).find(c=>c.id===p.entry_id);
         if(!choice)throw Error('Model choice is no longer available');
         const alias=p.display_name||choices.aliases?.[choice.id]||choice.display_name;

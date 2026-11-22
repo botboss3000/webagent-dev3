@@ -47,3 +47,33 @@ test('DeepSeek key uses live discovery and preserves provider additions and erro
   const broken = await adapter(async () => { throw Error('Provider unavailable'); });
   await assert.rejects(broken.fetchModels({provider:'deepseek',api_key:'fixture-key'}), /Provider unavailable/);
 });
+
+test('A catalog model the server already offers is adopted when added, not saved as WebAgent Catalog', async () => {
+  // Published local models are in the agent's catalog view before any adoption.
+  const kev = {id:'platform:local_kev',owner_id:'platform_catalog',connection_id:'platform:local_kev',upstream_model:'kev-0.8b',
+    display_name:'Kev 0.8B (sidekick)',capabilities:['decision'],allowed_agents:['shared_default'],revision:1};
+  const catalog = {revision:4,entries:{'platform:local_kev':kev},
+    connections:{'platform:local_kev':{id:'platform:local_kev',owner_id:'platform_catalog',transport:'local',credential_ref:'platform_key:local_kev',allowed_agents:['shared_default'],revision:1,revoked:false}},
+    platform_sources:{'platform:local_kev':{}},agent_models:{shared_default:{agent_id:'shared_default',owner_id:'admin',entry_ids:[],roles:{},revision:2}}};
+  const view = () => ({catalog:structuredClone(catalog),can_manage:true,caller_id:'admin',agent_owner_id:'admin',adoptions:{}});
+  const calls = [];
+  const models = await adapter(async (url, method, body) => {
+    calls.push([url, method || 'GET']);
+    if (url === '/models/providers') return {providers:[{provider:'local',name:'Local models',base_url:'relay://local-models',validated:true}]};
+    if (url === '/models/me/catalog') return {available_platform_models:[{id:'platform:local_kev',origin:'platform',display_name:'Kev 0.8B (sidekick)'}],entries:[]};
+    if (url.endsWith('/adoptions')) {
+      assert.deepEqual([body.source, body.alias], [{origin:'platform',entry_id:'platform:local_kev'}, 'Kev']);
+      return {entry_id:'platform:local_kev'};
+    }
+    if (url.startsWith('/models/catalog') && method === 'PUT') {
+      assert.deepEqual(body.agent_models.shared_default.entry_ids, ['platform:local_kev']);
+      return view();
+    }
+    if (url.startsWith('/models/catalog')) return view();
+    throw Error('Unexpected request ' + url);
+  });
+  await models.loadConfig();
+  await models.saveRoster({providers:[{provider:'webagent_catalog',entry_id:'platform:local_kev',model:'platform:local_kev',display_name:'Kev',decision_capable:true}]});
+  assert.ok(calls.some(([url]) => url.endsWith('/adoptions')));
+  assert.ok(calls.some(([url, method]) => url.startsWith('/models/catalog') && method === 'PUT'));
+});
