@@ -71,11 +71,17 @@ pub(crate) async fn link_code(
         if doc["expires"].as_u64().unwrap_or(0) < at {
             app.store.delete(&key).await?;
         } else if doc["user"] == user {
-            own.push((doc["expires"].as_u64().unwrap_or(0), key));
+            own.push((
+                doc["expires"].as_u64().unwrap_or(0),
+                doc["issued"].as_u64().unwrap_or(0),
+                key,
+            ));
         }
     }
+    // Codes issued in the same second share an expiry, so the issue order breaks the tie.
     own.sort();
-    for (_, key) in own.iter().take((own.len() + 1).saturating_sub(LIVE_CODES)) {
+    let issued = own.iter().map(|(_, n, _)| n + 1).max().unwrap_or(0);
+    for (_, _, key) in own.iter().take((own.len() + 1).saturating_sub(LIVE_CODES)) {
         app.store.delete(key).await?;
     }
     let code = rules::link_code();
@@ -83,7 +89,7 @@ pub(crate) async fn link_code(
     app.store
         .put(
             &key,
-            &json!({"key":key,"user":user,"expires":at + rules::LINK_SECS,"source":source,
+            &json!({"key":key,"user":user,"expires":at + rules::LINK_SECS,"issued":issued,"source":source,
                 "generation":identity["generation"]}),
         )
         .await?;

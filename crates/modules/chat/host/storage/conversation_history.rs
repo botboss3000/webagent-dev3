@@ -526,6 +526,13 @@ impl Store {
                     .execute(&mut *tx)
                     .await?;
             }
+            // Undone runs and messages change group counts: stored summaries rebuild lazily.
+            for table in ["activity_summaries", "activity_summary_marks"] {
+                sqlx::query(&format!("DELETE FROM {table} WHERE session_id=?"))
+                    .bind(sid)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             sqlx::query("DELETE FROM chat_context_boundaries WHERE message_id IN (SELECT id FROM chat WHERE session_id=? AND seq>=?)").bind(sid).bind(target_seq).execute(&mut *tx).await?;
             sqlx::query("DELETE FROM chat WHERE session_id=? AND seq>=?")
                 .bind(sid)

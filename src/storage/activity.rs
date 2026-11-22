@@ -36,19 +36,22 @@ fn echoed_steps(id: &str) -> Vec<(String, String)> {
 }
 /// Every (run, step) whose message the chat already shows: messages a working bubble repeats
 /// and each completed run's final reply (the messages of its last model turn), so activity
-/// groups hold only messages the user has not seen.
+/// groups hold only messages the user has not seen. Final replies are read only among the
+/// interactions after `after`, the rows the caller is about to count or show.
 async fn in_chat_steps<'e, E: sqlx::SqliteExecutor<'e>>(
     executor: E,
     sid: &str,
+    after: i64,
 ) -> Result<HashSet<(String, String)>> {
     let rows = sqlx::query(
         "SELECT id AS a,NULL AS b FROM chat WHERE session_id=? AND (id LIKE 'working:%' OR id LIKE 'live:%') \
          UNION ALL SELECT i.run_id,i.step FROM interactions i JOIN chat c ON c.terminal_run_id=i.run_id \
-         WHERE c.session_id=? AND i.session_id=? AND i.step LIKE 'model:%'",
+         WHERE c.session_id=? AND i.session_id=? AND i.step LIKE 'model:%' AND i.seq>?",
     )
     .bind(sid)
     .bind(sid)
     .bind(sid)
+    .bind(after)
     .fetch_all(executor)
     .await?;
     let turn = |step: &str| {
@@ -77,6 +80,114 @@ async fn in_chat_steps<'e, E: sqlx::SqliteExecutor<'e>>(
         steps.extend(last.into_iter().map(|step| (run.clone(), step)));
     }
     Ok(steps)
+}
+/// One activity group: a run's interactions under one chat anchor, with its stored summary line
+/// once the group has been sealed.
+struct Group {
+    run: String,
+    recorded: Option<String>,
+    anchor: String,
+    first: i64,
+    last: i64,
+    stored: Option<Value>,
+}
+fn group(r: &SqliteRow, stored: Option<Value>) -> Group {
+    Group {
+        run: r.get("run_id"),
+        recorded: r.get("boundary_item_id"),
+        anchor: boundary(r),
+        first: r.get("first_seq"),
+        last: r.get("last_seq"),
+        stored,
+    }
+}
+/// Every activity group of a session in order, with the stored-through mark it was read at and
+/// the mark saved in the database. Groups up to the mark come from stored summaries and only
+/// rows after it are scanned. A run that wrote again after its groups were stored (a retry or
+/// resume) moves the mark back before them, so they are counted again.
+async fn activity_groups(
+    conn: &mut sqlx::SqliteConnection,
+    sid: &str,
+) -> Result<(i64, i64, Vec<Group>)> {
+    let saved: Option<i64> =
+        sqlx::query_scalar("SELECT through_seq FROM activity_summary_marks WHERE session_id=?")
+            .bind(sid)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let saved = saved.unwrap_or(0);
+    let mut mark = saved;
+    loop {
+        let back: Option<i64> = sqlx::query_scalar("SELECT MIN(first_seq) FROM activity_summaries WHERE session_id=? AND first_seq<=? AND (last_seq>? OR run_id IN (SELECT run_id FROM interactions WHERE session_id=? AND seq>?))")
+            .bind(sid).bind(mark).bind(mark).bind(sid).bind(mark).fetch_one(&mut *conn).await?;
+        let Some(first) = back else { break };
+        mark = first - 1;
+    }
+    let stored = sqlx::query("SELECT run_id,boundary_item_id,first_seq,last_seq,summary FROM activity_summaries WHERE session_id=? AND last_seq<=? ORDER BY first_seq")
+        .bind(sid).bind(mark).fetch_all(&mut *conn).await?;
+    let mut groups = Vec::new();
+    for r in &stored {
+        groups.push(group(r, Some(serde_json::from_str(r.get("summary"))?)));
+    }
+    let scanned = sqlx::query("SELECT i.run_id,b.boundary_item_id,MIN(i.seq) first_seq,MAX(i.seq) last_seq FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.seq>? GROUP BY i.run_id,b.boundary_item_id ORDER BY MIN(i.seq)")
+        .bind(sid).bind(mark).fetch_all(&mut *conn).await?;
+    groups.extend(scanned.iter().map(|r| group(r, None)));
+    Ok((mark, saved, groups))
+}
+/// How far stored summaries can reach after this request: past every scanned group whose run
+/// has ended (completed, failed or cancelled), stopping before the first group whose run is
+/// still open and before any group that overlaps one.
+async fn sealed_through(
+    conn: &mut sqlx::SqliteConnection,
+    mark: i64,
+    groups: &[Group],
+) -> Result<i64> {
+    let mut ended = HashMap::new();
+    for g in groups.iter().filter(|g| g.stored.is_none()) {
+        if ended.contains_key(g.run.as_str()) {
+            continue;
+        }
+        let status: Option<String> = sqlx::query_scalar("SELECT status FROM run_index WHERE id=?")
+            .bind(&g.run)
+            .fetch_optional(&mut *conn)
+            .await?;
+        let done = matches!(
+            status.as_deref(),
+            Some("completed" | "failed" | "cancelled")
+        );
+        ended.insert(g.run.as_str(), done);
+    }
+    let scanned = || groups.iter().filter(|g| g.stored.is_none());
+    let mut through = scanned().map(|g| g.last).max().unwrap_or(mark);
+    while let Some(first) = scanned()
+        .filter(|g| g.first <= through && (!ended[g.run.as_str()] || g.last > through))
+        .map(|g| g.first)
+        .min()
+    {
+        through = first - 1;
+    }
+    Ok(through)
+}
+/// Store newly sealed group summaries and move the session's stored-through mark. Stored rows
+/// above the mark this request read at (left by a run that wrote again) are dropped first.
+async fn seal_groups(
+    conn: &mut sqlx::SqliteConnection,
+    sid: &str,
+    mark: i64,
+    through: i64,
+    sealed: &[(&Group, Value)],
+) -> Result<()> {
+    sqlx::query("DELETE FROM activity_summaries WHERE session_id=? AND last_seq>?")
+        .bind(sid)
+        .bind(mark)
+        .execute(&mut *conn)
+        .await?;
+    for (g, summary) in sealed {
+        sqlx::query("INSERT OR REPLACE INTO activity_summaries(run_id,anchor,session_id,boundary_item_id,first_seq,last_seq,summary) VALUES(?,?,?,?,?,?,?)")
+            .bind(&g.run).bind(&g.anchor).bind(sid).bind(&g.recorded).bind(g.first).bind(g.last).bind(summary.to_string()).execute(&mut *conn).await?;
+    }
+    sqlx::query("INSERT INTO activity_summary_marks(session_id,through_seq) VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET through_seq=excluded.through_seq")
+        .bind(sid).bind(through).execute(&mut *conn).await?;
+    Ok(())
 }
 fn event(
     row: &SqliteRow,
@@ -278,7 +389,7 @@ impl Store {
             .bind(sid).bind(rid).bind(after).fetch_all(&self.pool).await?;
         let more = rows.len() > 100;
         let page = &rows[..rows.len().min(100)];
-        let in_chat = in_chat_steps(&self.pool, sid).await?;
+        let in_chat = in_chat_steps(&self.pool, sid, after).await?;
         let events = page
             .iter()
             .map(|row| event(row, self, sid, &in_chat))
@@ -293,48 +404,60 @@ impl Store {
     /// Summary-line data for activity groups, without their events: counts plus the flags the
     /// transcript needs to label each group. `boundaries` selects the groups next to drawn
     /// messages; without it, only groups with events after the `after` cursor are returned.
-    /// Only selected groups are decrypted, so cost follows the drawn window, not the history.
+    /// Groups whose run has ended are stored once and read back; only rows after the stored
+    /// groups are scanned, and only selected or newly stored groups are decrypted.
     pub async fn private_activity_summary(
         &self,
         sid: &str,
         after: i64,
         boundaries: Option<&[String]>,
     ) -> Result<Value> {
-        let groups=sqlx::query("SELECT i.run_id,b.boundary_item_id,MIN(i.seq) first_seq,MAX(i.seq) last_seq FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? GROUP BY i.run_id,b.boundary_item_id ORDER BY MIN(i.seq)")
-            .bind(sid).fetch_all(&self.pool).await?;
+        let mut tx = self.pool.begin().await?;
+        let (mark, saved, groups) = activity_groups(&mut tx, sid).await?;
         let latest: Option<String> =
             sqlx::query_scalar("SELECT id FROM chat WHERE session_id=? ORDER BY seq DESC LIMIT 1")
                 .bind(sid)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await?;
-        let cursor = groups
-            .iter()
-            .map(|r| r.get::<i64, _>("last_seq"))
-            .max()
-            .unwrap_or(0);
+        let cursor = groups.iter().map(|g| g.last).max().unwrap_or(0);
         let mut last_of_run = HashMap::new();
-        for (index, r) in groups.iter().enumerate() {
-            last_of_run.insert(r.get::<String, _>("run_id"), index);
+        for (index, g) in groups.iter().enumerate() {
+            last_of_run.insert(g.run.as_str(), index);
         }
-        let in_chat = in_chat_steps(&self.pool, sid).await?;
-        let mut segments = Vec::new();
-        for (index, r) in groups.iter().enumerate() {
-            let anchor = boundary(r);
-            let (run, first, last) = (
-                r.get::<String, _>("run_id"),
-                r.get::<i64, _>("first_seq"),
-                r.get::<i64, _>("last_seq"),
-            );
-            let wanted = match boundaries {
-                Some(list) => list.iter().any(|item| *item == anchor),
-                None => last > after,
-            };
-            if !wanted {
+        let through = sealed_through(&mut tx, mark, &groups).await?;
+        let wanted = |g: &Group| match boundaries {
+            Some(list) => list.contains(&g.anchor),
+            None => g.last > after,
+        };
+        let flagged = |mut summary: Value, index: usize, g: &Group| {
+            summary["closed"] = json!(latest.as_deref() != Some(g.anchor.as_str()));
+            summary["latest"] = json!(index + 1 == groups.len());
+            summary["last_of_run"] = json!(last_of_run.get(g.run.as_str()) == Some(&index));
+            summary
+        };
+        // Only groups after the mark are counted here, so only their rows are checked against
+        // the messages the chat shows.
+        let counting = groups
+            .iter()
+            .any(|g| g.stored.is_none() && (wanted(g) || g.last <= through));
+        let in_chat = if counting {
+            in_chat_steps(&mut *tx, sid, mark).await?
+        } else {
+            HashSet::new()
+        };
+        let (mut segments, mut sealed) = (Vec::new(), Vec::new());
+        for (index, g) in groups.iter().enumerate() {
+            let seal = g.stored.is_none() && g.last <= through;
+            if !wanted(g) && !seal {
                 continue;
             }
-            let recorded = r.get::<Option<String>, _>("boundary_item_id");
+            if let Some(summary) = &g.stored {
+                segments.push(flagged(summary.clone(), index, g));
+                continue;
+            }
+            let run = g.run.clone();
             let items=sqlx::query("SELECT i.step,i.item FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq BETWEEN ? AND ? AND b.boundary_item_id IS ? ORDER BY i.seq")
-                .bind(sid).bind(&run).bind(first).bind(last).bind(&recorded).fetch_all(&self.pool).await?;
+                .bind(sid).bind(&run).bind(g.first).bind(g.last).bind(&g.recorded).fetch_all(&mut *tx).await?;
             // Same categories as the page's activityRows: one tool per call id, one update per message.
             let (mut tools, mut updates, mut compactions, mut retries) = (HashSet::new(), 0, 0, 0);
             // Model calls and their summed input and cache reads, for the group's cache share.
@@ -378,13 +501,37 @@ impl Store {
                     _ => Value::Null,
                 };
             }
-            segments.push(json!({"id":format!("activity:{run}:{anchor}"),"run_id":run,"boundary_item_id":anchor,"first_seq":first,"last_seq":last,
-                "closed":latest.as_deref()!=Some(anchor.as_str()),"latest":index+1==groups.len(),"last_of_run":last_of_run.get(&run)==Some(&index),
-                "boundary_quality":if recorded.is_some(){"recorded"}else{"legacy_unverified"},
+            let summary = json!({"id":format!("activity:{run}:{}",g.anchor),"run_id":run,"boundary_item_id":g.anchor,"first_seq":g.first,"last_seq":g.last,
+                "boundary_quality":if g.recorded.is_some(){"recorded"}else{"legacy_unverified"},
                 "retrying":retrying,"cache":{"input":input,"cached":cached},
-                "counts":{"tools":tools.len(),"subagents":subagents.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions,"retries":retries,"models":models}}));
+                "counts":{"tools":tools.len(),"subagents":subagents.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions,"retries":retries,"models":models}});
+            if seal {
+                sealed.push((g, summary.clone()));
+            }
+            if wanted(g) {
+                segments.push(flagged(summary, index, g));
+            }
+        }
+        // A write since this snapshot (new activity, a deleted message, an undo) makes storing
+        // fail; the groups are then stored by a later request, never from stale rows.
+        if (through != saved || !sealed.is_empty())
+            && seal_groups(&mut tx, sid, mark, through, &sealed)
+                .await
+                .is_ok()
+        {
+            let _ = tx.commit().await;
         }
         Ok(json!({"segments":segments,"cursor":cursor}))
+    }
+    /// The newest interaction's sequence number in a session (0 when it has none), so an open
+    /// chat learns from its stream that activity changed instead of polling for it.
+    pub async fn activity_seq(&self, sid: &str) -> Result<i64> {
+        let seq: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(seq) FROM interactions WHERE session_id=?")
+                .bind(sid)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(seq.unwrap_or(0))
     }
     /// The newest run's start time and the counts of its latest activity group, for a session
     /// list row while that run is live. Decrypts one run view and that run's groups only.
@@ -435,7 +582,7 @@ impl Store {
             .bind(sid).bind(after).fetch_all(&mut *tx).await?;
         let more = rows.len() > 200;
         let page = &rows[..rows.len().min(200)];
-        let in_chat = in_chat_steps(&mut *tx, sid).await?;
+        let in_chat = in_chat_steps(&mut *tx, sid, after).await?;
         let events = page
             .iter()
             .map(|row| event(row, self, sid, &in_chat))
@@ -447,18 +594,16 @@ impl Store {
             })
             .collect::<Result<Vec<_>>>()?;
         let cursor = page.last().map(|r| r.get::<i64, _>("seq")).unwrap_or(after);
-        let groups=sqlx::query("SELECT i.run_id,b.boundary_item_id,MIN(i.seq) first_seq,MAX(i.seq) last_seq FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? GROUP BY i.run_id,b.boundary_item_id ORDER BY MIN(i.seq)")
-            .bind(sid).fetch_all(&mut *tx).await?;
+        let (_, _, groups) = activity_groups(&mut tx, sid).await?;
         let latest: Option<String> =
             sqlx::query_scalar("SELECT id FROM chat WHERE session_id=? ORDER BY seq DESC LIMIT 1")
                 .bind(sid)
                 .fetch_optional(&mut *tx)
                 .await?;
-        let segments=groups.iter().map(|r|{
-            let anchor=boundary(r);
-            json!({"id":format!("activity:{}:{}",r.get::<String,_>("run_id"),anchor),"run_id":r.get::<String,_>("run_id"),"boundary_item_id":anchor,
-                "first_seq":r.get::<i64,_>("first_seq"),"last_seq":r.get::<i64,_>("last_seq"),"closed":latest.as_deref()!=Some(anchor.as_str()),
-                "boundary_quality":if r.get::<Option<String>,_>("boundary_item_id").is_some(){"recorded"}else{"legacy_unverified"}})
+        let segments=groups.iter().map(|g|{
+            json!({"id":format!("activity:{}:{}",g.run,g.anchor),"run_id":g.run,"boundary_item_id":g.anchor,
+                "first_seq":g.first,"last_seq":g.last,"closed":latest.as_deref()!=Some(g.anchor.as_str()),
+                "boundary_quality":if g.recorded.is_some(){"recorded"}else{"legacy_unverified"}})
         }).collect::<Vec<_>>();
         tx.commit().await?;
         Ok(json!({"events":events,"segments":segments,"cursor":cursor,"has_more":more}))
@@ -943,6 +1088,129 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+    async fn stored_rows(store: &Store) -> (i64, i64) {
+        let rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM activity_summaries WHERE session_id='s'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        let mark: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(through_seq),0) FROM activity_summary_marks WHERE session_id='s'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        (rows, mark)
+    }
+    async fn set_status(store: &Store, status: &str) {
+        sqlx::query("INSERT INTO run_index(id,session_id,status,updated_at) VALUES('r','s',?,1) ON CONFLICT(id) DO UPDATE SET status=excluded.status")
+            .bind(status)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+    }
+    /// Finished groups are stored once and read back unchanged; a run that writes again is
+    /// counted afresh, and a deleted message clears stored groups so they rebuild.
+    #[tokio::test]
+    async fn ended_groups_are_stored_and_rebuilt_after_resume_or_delete() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_chat(&mut tx, "s", "r", "user", &json!("Hello"))
+            .await
+            .unwrap();
+        store
+            .insert_interaction(
+                &mut tx,
+                "s",
+                "r",
+                "step:1",
+                &json!({"type":"function_call","call_id":"t1","name":"read","arguments":"{}"}),
+            )
+            .await
+            .unwrap();
+        store
+            .insert_interaction(
+                &mut tx,
+                "s",
+                "r",
+                "step:2",
+                &json!({"type":"function_call_output","call_id":"t1","output":"ok"}),
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        set_status(&store, "completed").await;
+        let first = store.private_activity_summary("s", 0, None).await.unwrap();
+        assert_eq!(first["segments"][0]["counts"]["tools"], 1);
+        let last = first["segments"][0]["last_seq"].as_i64().unwrap();
+        assert_eq!(stored_rows(&store).await, (1, last));
+        assert_eq!(
+            store.private_activity_summary("s", 0, None).await.unwrap(),
+            first,
+            "a stored group reads back unchanged"
+        );
+        for table in ["activity_summaries", "activity_summary_marks"] {
+            sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&store.pool)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            store.private_activity_summary("s", 0, None).await.unwrap(),
+            first,
+            "stored equals recomputed"
+        );
+        assert!(store
+            .private_activity_summary("s", last, None)
+            .await
+            .unwrap()["segments"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        // A resumed run writes again: its group is counted afresh and not stored while open.
+        set_status(&store, "running").await;
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_interaction(
+                &mut tx,
+                "s",
+                "r",
+                "step:3",
+                &json!({"type":"function_call","call_id":"t2","name":"list","arguments":"{}"}),
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let resumed = store.private_activity_summary("s", 0, None).await.unwrap();
+        assert_eq!(resumed["segments"][0]["counts"]["tools"], 2);
+        assert_eq!(stored_rows(&store).await, (0, 0));
+        set_status(&store, "completed").await;
+        store.private_activity_summary("s", 0, None).await.unwrap();
+        assert_eq!(stored_rows(&store).await.0, 1);
+        // Deleting a message clears stored groups; they rebuild on the next read.
+        let id: String = sqlx::query_scalar("SELECT id FROM chat WHERE session_id='s'")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        let mut tx = store.pool.begin().await.unwrap();
+        store.remove_chat_row(&mut tx, "s", &id).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(stored_rows(&store).await, (0, 0));
+        let rebuilt = store.private_activity_summary("s", 0, None).await.unwrap();
+        assert_eq!(rebuilt["segments"][0]["boundary_item_id"], "user:r");
+        assert_eq!(rebuilt["segments"][0]["counts"]["tools"], 2);
+        assert_eq!(stored_rows(&store).await.0, 1);
+        assert_eq!(store.activity_seq("s").await.unwrap(), rebuilt["cursor"]);
     }
     #[tokio::test]
     async fn errors_filter_keeps_only_failed_results_and_paging() {

@@ -317,6 +317,23 @@ pub(crate) async fn events(
                     let component_revision = app.store.base_component_revision(&id).await.ok()?;
                     let app_view = tools::core_app_control::projection(&app, &id).await.ok()?;
                     let app_view_revision = app_view["revision"].as_u64().unwrap_or(0);
+                    // Only administrators see activity groups, so only their streams are
+                    // pushed activity changes; members get no extra events during a run.
+                    let administrator = app
+                        .store
+                        .account_by_id(&user_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|account| {
+                            access::Principal::from_account(&account)
+                                .is_ok_and(|principal| principal.administrator())
+                        });
+                    let activity_seq = if administrator {
+                        json!(app.store.activity_seq(&id).await.ok()?)
+                    } else {
+                        Value::Null
+                    };
                     // Flag fields are part of the digest so a settled run or a dismissal is
                     // pushed to the open session's dropdown row.
                     let revision = digest(&json!([
@@ -330,7 +347,8 @@ pub(crate) async fn events(
                         participation["revision"],
                         participation["generation"],
                         queue_state["queue_state"]["revision"],
-                        notes_revision
+                        notes_revision,
+                        activity_seq
                     ]));
                     if metadata_revision.as_ref() != Some(&revision) {
                         if now() > checked {
@@ -344,7 +362,7 @@ pub(crate) async fn events(
                         // Metadata events deliberately carry no SSE ID: event-log
                         // sequence numbers are not public chat sequence numbers.
                         let event = Event::default().event("session_updated")
-                            .data(json!({"component_revision":component_revision,"app_view_revision":app_view_revision,"session":summary,"participation":participation,"queue":queue_state["queue"],"queue_state":queue_state["queue_state"],"main_notes_revision":notes_revision,"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()}).to_string());
+                            .data(json!({"component_revision":component_revision,"app_view_revision":app_view_revision,"session":summary,"participation":participation,"queue":queue_state["queue"],"queue_state":queue_state["queue_state"],"main_notes_revision":notes_revision,"activity_seq":activity_seq,"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()}).to_string());
                         return Some((
                             Ok(event),
                             (

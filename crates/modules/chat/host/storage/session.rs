@@ -821,6 +821,8 @@ impl Store {
             "events",
             "reasoning_cleanup",
             "run_index",
+            "activity_summaries",
+            "activity_summary_marks",
         ] {
             sqlx::query(&format!("DELETE FROM {table} WHERE session_id=?"))
                 .bind(sid)

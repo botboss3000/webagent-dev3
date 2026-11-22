@@ -104,6 +104,9 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
             CREATE TABLE IF NOT EXISTS interactions(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,run_id TEXT NOT NULL,step TEXT NOT NULL,item BLOB NOT NULL,created_at INTEGER NOT NULL,UNIQUE(run_id,step));
             CREATE INDEX IF NOT EXISTS interactions_session ON interactions(session_id,seq);
             CREATE TABLE IF NOT EXISTS activity_boundaries(interaction_seq INTEGER PRIMARY KEY,boundary_item_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS activity_summaries(run_id TEXT NOT NULL,anchor TEXT NOT NULL,session_id TEXT NOT NULL,boundary_item_id TEXT,first_seq INTEGER NOT NULL,last_seq INTEGER NOT NULL,summary TEXT NOT NULL,PRIMARY KEY(run_id,anchor));
+            CREATE INDEX IF NOT EXISTS activity_summaries_session ON activity_summaries(session_id,first_seq);
+            CREATE TABLE IF NOT EXISTS activity_summary_marks(session_id TEXT PRIMARY KEY,through_seq INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS chat_context_boundaries(message_id TEXT PRIMARY KEY,through_seq INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS activity_boundary_item ON activity_boundaries(boundary_item_id);
             CREATE TABLE IF NOT EXISTS chat(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,run_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant','notice')),content BLOB NOT NULL,created_at INTEGER NOT NULL,terminal_run_id TEXT UNIQUE);
