@@ -182,6 +182,13 @@ is divided by weight (weight × (1 + priority + up to 2 for steps running past
 15 min)), rebalanced every few seconds as steps start and end. Memory, disk,
 packaging and admission keys are described in their own sections below.
 
+Build output redacts the values of the app containers' environment variables only
+when the variable's name contains key, token, password, passwd, secret, credential,
+cookie, auth or private (any case), plus the names listed in `secret_env_names`
+(default `[]`, at most 64 names). Other values, such as `V3_PROCESS_ROLE=loop`, stay
+readable in logs. Pattern redaction of `authorization:`, `bearer`, `password=` and
+similar text applies to all output regardless.
+
 ## New broker files need two installs
 
 An install runs the installed broker's own installer, which copies only the files on its list.

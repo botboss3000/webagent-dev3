@@ -286,6 +286,18 @@ def scrub(text, secrets=()):
     return text[-MAX_LOG:]
 
 
+# Container environment values become redaction secrets only when the variable's name looks
+# secret, or is listed in scheduler.secret_env_names; plain values such as V3_PROCESS_ROLE=loop
+# would otherwise hide every "loop" in build output.
+SECRET_ENV_NAME = re.compile(r"(?i)key|token|password|passwd|secret|credential|cookie|auth|private")
+
+
+def secret_env_values(env):
+    extra = set(CONFIG.get("scheduler", {}).get("secret_env_names", []))
+    return [value for name, separator, value in (item.partition("=") for item in env)
+            if separator and (SECRET_ENV_NAME.search(name) or name in extra)]
+
+
 REJECTION_KINDS=(
     ("denied","denied"),("permission","denied"),("forbidden","denied"),("not allowed","denied"),
     ("not found","not_found"),("does not exist","not_found"),("no such","not_found"),
@@ -2235,7 +2247,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         if name not in (*TARGETS, BROWSER) and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name) for target in (*TARGETS, BROWSER)):
             raise ValueError("container outside development target")
         value = json.loads(self.command(["docker", "inspect", name], timeout=30, private_raw=True))[0]
-        self.secrets.extend(item.partition("=")[2] for item in value.get("Config", {}).get("Env", []) if "=" in item)
+        self.secrets.extend(secret_env_values(value.get("Config", {}).get("Env") or []))
         return value
 
     def inspect_recovery(self,name):

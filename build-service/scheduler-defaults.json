@@ -46,6 +46,7 @@
     "default": 100
   },
   "cpu_phase_weights": {},
+  "secret_env_names": [],
   "sidekick": {
     "enabled": false,
     "pause_seconds": 1800,

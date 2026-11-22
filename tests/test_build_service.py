@@ -1473,6 +1473,19 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
    self.assertEqual(runner.create(fixtures.host.TARGETS[0],"sha256:"+"2"*64,previous,"/frozen"),"a"*64)
   labels=json.loads(connection.request.call_args.kwargs["body"])["Labels"]
   self.assertEqual(labels,{"existing":"preserved","webagent.release.job":job,"webagent.release.role":"api","webagent.release.instance":fixtures.host.CONFIG["instance"]})
+ def test_inspect_redacts_only_secret_named_environment_values(self):
+  from unittest.mock import Mock
+  host=fixtures.host;value="synthetic-"+"credential-"+uuid.uuid4().hex
+  env=["V3_PROCESS_ROLE=loop","V3_STATE_ROOT=/state","SOME_API_"+"KEY="+value,"EXTRA_NAMED=listed-value"]
+  runner=host.Runner();runner.command=Mock(return_value=json.dumps([{"Config":{"Env":env}}]))
+  with patch.dict(host.CONFIG["scheduler"],{"secret_env_names":["EXTRA_NAMED"]}):runner.inspect(host.TARGETS[0])
+  text=host.scrub("src/engine/loop/run.rs /state "+value+" listed-value",runner.secrets)
+  self.assertEqual(text,"src/engine/loop/run.rs /state [redacted] [redacted]")
+  with patch.object(config.pwd,"getpwnam",side_effect=ConfigurationTests().account):
+   installed=config.defaults("/srv/one");installed.update(service_account="builder",source_owner="owner")
+   self.assertEqual(config.validate(installed)["scheduler"]["secret_env_names"],[])
+   for invalid in ("NAME",["BAD NAME"],[1]):
+    with self.assertRaises(ValueError):config.validate({**installed,"scheduler":{"secret_env_names":invalid}})
  def test_rejected_create_keeps_a_bounded_scrubbed_docker_reason(self):
   from unittest.mock import Mock
   runner=fixtures.host.Runner();runner.secrets=["inspected-private-value"]
