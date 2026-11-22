@@ -236,6 +236,8 @@ fn failure_kind(value: &Value) -> crate::model_selection::FailureKind {
 /// runs it with the harness `provider` names.
 pub struct BridgeCall {
     pub link: String,
+    /// Paired clients (ids) that may take the call; empty means any client of the link.
+    pub clients: Vec<String>,
     pub session: String,
     pub provider: ProviderId,
     pub body: Value,

@@ -508,6 +508,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                         display_name: entry.display_name,
                         capabilities: entry.capabilities,
                         allowed_agents: BTreeSet::new(),
+                        bridge_clients: Vec::new(),
                         revision: 1,
                     },
                     crate::model_selection::Connection {

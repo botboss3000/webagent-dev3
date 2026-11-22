@@ -112,7 +112,7 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
             if candidate.is_none() {
                 return Err(anyhow!("API providers require an explicit connection"));
             }
-            let tokens = self.store.get(reference).await?.ok_or_else(|| {
+            let mut tokens = self.store.get(reference).await?.ok_or_else(|| {
                 provider::typed_failure(
                     model_selection::FailureKind::InvalidCredentials,
                     false,
@@ -125,6 +125,12 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
                     false,
                     "Provider API key unavailable",
                 ));
+            }
+            // A bridge call goes only to the clients its entry names (see `BridgeCall`).
+            if let Some(clients) = candidate.as_ref().map(|c| &c.bridge_clients) {
+                if !clients.is_empty() {
+                    tokens["bridge_clients"] = serde_json::json!(clients);
+                }
             }
             Ok(tokens)
         }

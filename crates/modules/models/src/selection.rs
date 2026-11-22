@@ -60,6 +60,8 @@ impl Catalog {
                 || e.display_name.len() > 200
                 || e.revision == 0
                 || e.allowed_agents.iter().any(|id| !valid_id(id))
+                || e.bridge_clients.len() > 16
+                || e.bridge_clients.iter().any(|id| !valid_id(id))
                 || !self.connections.contains_key(&e.connection_id)
             {
                 bail!("Invalid model entry record");
@@ -225,6 +227,7 @@ impl Catalog {
                 transport: connection.transport.clone(),
                 upstream_model: entry.upstream_model.clone(),
                 vision: entry.capabilities.contains("vision"),
+                bridge_clients: entry.bridge_clients.clone(),
             });
         }
         Ok(SelectionPlan {
@@ -455,6 +458,10 @@ pub struct ModelEntry {
     pub display_name: String,
     pub capabilities: BTreeSet<String>,
     pub allowed_agents: BTreeSet<String>,
+    /// Bridge models: the paired clients (their ids) that may answer this entry's calls. Empty
+    /// means any client paired with the connection's link, including ones paired later.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bridge_clients: Vec<String>,
     pub revision: u64,
 }
 
@@ -610,6 +617,9 @@ pub struct Candidate {
     /// The entry accepts image input, so sent images may go to it directly.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vision: bool,
+    /// The entry's `bridge_clients`: who may answer a bridge call for this candidate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bridge_clients: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -811,6 +821,7 @@ mod tests {
                     display_name: id.into(),
                     capabilities: BTreeSet::from(["text".into()]),
                     allowed_agents: BTreeSet::from(["agent-a".into()]),
+                    bridge_clients: Vec::new(),
                     revision: 1,
                 },
             );

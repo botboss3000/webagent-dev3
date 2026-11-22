@@ -80,6 +80,7 @@ enum ReadyTransport<'a> {
         provider: ProviderId,
         fork: bool,
         link: &'a str,
+        clients: Vec<String>,
     },
 }
 
@@ -398,6 +399,12 @@ impl<'a> ValidatedCall<'a> {
                 provider,
                 fork,
                 link: required(tokens, "api_key")?,
+                clients: tokens["bridge_clients"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.as_str().map(str::to_owned))
+                    .collect(),
             },
         };
         Ok(ReadyCall {
@@ -438,6 +445,7 @@ impl Provider {
                 provider,
                 fork,
                 link,
+                clients,
             } => {
                 if provider == ProviderId::Loadtest {
                     let (message, wait) = super::loadtest::reply(&body);
@@ -463,6 +471,7 @@ impl Provider {
                 let reply = queue
                     .exchange(super::BridgeCall {
                         link: link.to_owned(),
+                        clients,
                         session: session.to_owned(),
                         provider,
                         body,

@@ -261,6 +261,7 @@ async fn default_subscription_roster(store: &Store, catalog: &mut model_selectio
             display_name: "Default subscription".into(),
             capabilities: BTreeSet::from(["text".into()]),
             allowed_agents: grants,
+            bridge_clients: Vec::new(),
             revision: 1,
         },
     );
@@ -5597,6 +5598,7 @@ pub(crate) async fn selection_fixture(app: &App) -> model_selection::Catalog {
                 display_name: model.into(),
                 capabilities: BTreeSet::from(["text".into()]),
                 allowed_agents: BTreeSet::from(["shared_default".into(), "agent-a".into()]),
+                bridge_clients: Vec::new(),
                 revision: 1,
             },
         );

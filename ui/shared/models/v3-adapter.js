@@ -68,6 +68,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
       ...catalogCapabilityFlags(e.capabilities,c.transport),
       default_effort:catalog.agent_models?.[agentId]?.efforts?.[e.id]||'',
       aliases:catalog.agent_models?.[agentId]?.aliases?.[e.id]||[],
+      bridge_clients:e.bridge_clients||[],
       credential_configured:!!statuses.get(c.id)?.connected,
       credential_email:c.owner_id===data.caller_id ? (statuses.get(c.id)?.account_email||'') : '',
       catalog_origin:catalog.platform_sources?.[e.id]?'platform':'byo'};
@@ -104,11 +105,14 @@ export function createModelAdapter(request, agentId, onAssignment) {
         }
         next.connections[connectionId]??={id:connectionId,owner_id:data.caller_id,transport:p.provider,credential_ref:'provider_credential:'+crypto.randomUUID(),allowed_agents:[agentId],revision:1,revoked:false};
         e=next.entries[id]={id,owner_id:data.caller_id,connection_id:connectionId,upstream_model:p.model,display_name:p.display_name||p.model,capabilities:[['decision',!!p.decision_capable],['text',p.text_capable!==false],['vision',p.vision_capable],['image',p.image_capable],['voice',p.voice_capable],['video',p.video_capable]].filter(([,enabled])=>enabled).map(([name])=>name),allowed_agents:[agentId],revision:1};
+        if(p.bridge_clients?.length)e.bridge_clients=[...p.bridge_clients];
         // Hydrate reference row identity only after the catalog write succeeds below.
       }else if(data.adoptions?.[e.id]||next.platform_sources?.[e.id]){
         if(p.api_key)throw Error('Adopted credentials cannot be replaced through the roster');
       }else if(e.owner_id===data.caller_id){
         e.display_name=p.display_name||e.upstream_model;
+        // Bridge models: the paired clients that answer this entry; none listed means every client.
+        if(p.bridge_clients?.length)e.bridge_clients=[...p.bridge_clients];else delete e.bridge_clients;
         e.capabilities=[['decision',!!p.decision_capable],['text',p.text_capable!==false],['vision',p.vision_capable],['image',p.image_capable],['voice',p.voice_capable],['video',p.video_capable]].filter(([,enabled])=>enabled).map(([name])=>name);
       }else if(p.display_name!==e.display_name)throw Error('Only the model owner can rename this connection');
       rowIds.push(e.id);

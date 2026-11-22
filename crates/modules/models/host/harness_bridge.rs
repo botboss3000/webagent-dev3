@@ -1,7 +1,8 @@
 //! Harness bridge, common to every bridge provider (Claude, OpenCode, Muse): a model call waits in
 //! the shared application store until a paired client fetches it, runs it with the harness its
 //! `provider` names, and posts the reply. Any number of clients, and processes of one client, may
-//! serve one user's bridge provider (all of their models of it, on one link): a fetched call is
+//! serve one user's bridge provider (all of their models of it, on one link; a model entry may
+//! name the clients that answer it, see `offered_to`): a fetched call is
 //! only offered until one process acknowledges it, so a
 //! lost poll response returns the call to the queue instead of stranding it.
 //! The API (client endpoints) and the loop (calls) are separate processes; both
@@ -55,6 +56,28 @@ fn polled_since(seen: Option<u64>, since: u64) -> bool {
 /// sessions (`fork` in the link's seen record holds the last report time per provider).
 fn forks_recently(seen: &Value, provider: &str, at: u64, b: &Bridge) -> bool {
     recently_seen(seen["fork"][provider].as_u64(), at, b)
+}
+
+/// Whether `client` may take the call: a call naming clients goes only to those.
+fn offered_to(call: &Value, client: &str) -> bool {
+    call["clients"]
+        .as_array()
+        .is_none_or(|ids| ids.is_empty() || ids.iter().any(|id| id == client))
+}
+
+/// When a client that may take a call last polled: any client of the link, or the newest of
+/// the clients the call names.
+async fn last_poll(store: &Store, link: &str, clients: &[String]) -> Result<Option<u64>> {
+    if clients.is_empty() {
+        let seen = store.get(&format!("{SEEN}{link}")).await?;
+        return Ok(seen.and_then(|v| v["at"].as_u64()));
+    }
+    let mut newest = None;
+    for client in clients {
+        let record = store.get(&format!("{CLIENTS}{link}:{client}")).await?;
+        newest = newest.max(record.and_then(|v| v["last_seen"].as_u64()));
+    }
+    Ok(newest)
 }
 
 /// A call no process holds: never fetched, or offered and left unacknowledged past its lease.
@@ -114,7 +137,8 @@ impl BridgeQueue for Queue {
                 .get(&format!("{SEEN}{link}"))
                 .await?
                 .unwrap_or(Value::Null);
-            if !recently_seen(seen["at"].as_u64(), now(), &bridge()) {
+            let polled = last_poll(&self.0, &link, &call.clients).await?;
+            if !recently_seen(polled, now(), &bridge()) {
                 return Err(offline());
             }
             // A fork goes only to a client that can make one; without one it fails at once, so
@@ -134,7 +158,7 @@ impl BridgeQueue for Queue {
             self.0
                 .put(&body_key(&key), &json!({"body":call.body}))
                 .await?;
-            self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"fork":call.fork,"state":"pending","created":now()})).await?;
+            self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"fork":call.fork,"clients":call.clients,"state":"pending","created":now()})).await?;
             // Stop usually drops this future rather than firing `call.cancel`; the guard settles
             // the call either way.
             let mut guard = Abandoned {
@@ -176,7 +200,7 @@ impl BridgeQueue for Queue {
                     };
                     // No poll since the step began: the clients are gone, so the call moves to
                     // the model's next alias at once instead of retrying into an empty queue.
-                    let seen = self.0.get(&format!("{SEEN}{link}")).await?.and_then(|v| v["at"].as_u64());
+                    let seen = last_poll(&self.0, &link, &call.clients).await?;
                     return Err(if polled_since(seen, lapse.0) {
                         typed_failure(FailureKind::Transient, false, lapse.1)
                     } else {
@@ -376,7 +400,7 @@ pub async fn next(
                 stale(call, now(), &b)
                     || (call["state"] == "cancelled"
                         && call["instance"] == caller.instance.as_str())
-                    || open(call, now(), &b)
+                    || (open(call, now(), &b) && offered_to(call, &caller.client))
             });
         if actionable {
             let _guard = app.gate.lock().await;
@@ -396,7 +420,10 @@ pub async fn next(
                     cancelled.push(call["id"].clone());
                     continue;
                 }
-                if !open(&call, now(), &b) || session.is_some_and(|s| call["session"] != s) {
+                if !open(&call, now(), &b)
+                    || !offered_to(&call, &caller.client)
+                    || session.is_some_and(|s| call["session"] != s)
+                {
                     continue;
                 }
                 let provider = call["provider"].as_str().unwrap_or("");
@@ -731,6 +758,7 @@ mod body_tests {
                 Queue(store)
                     .exchange(BridgeCall {
                         link: "fixture-link-value".into(),
+                        clients: Vec::new(),
                         session: "session".into(),
                         provider: ProviderId::MuseBridge,
                         body: json!({"messages":[{"role":"user","content":"large request"}]}),
@@ -774,6 +802,14 @@ mod tests {
         assert!(!id.contains("fixture"));
         assert_eq!(id, super::link_id("fixture-link-value"));
         assert_ne!(id, super::link_id("fixture-link-other"));
+    }
+
+    #[test]
+    fn a_call_naming_clients_is_offered_only_to_them() {
+        assert!(super::offered_to(&json!({}), "a"));
+        assert!(super::offered_to(&json!({"clients":[]}), "a"));
+        assert!(super::offered_to(&json!({"clients":["a","b"]}), "a"));
+        assert!(!super::offered_to(&json!({"clients":["b"]}), "a"));
     }
 
     #[test]

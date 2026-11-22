@@ -70,6 +70,7 @@ mod tests {
                     display_name: id.into(),
                     capabilities: BTreeSet::from(["text".into()]),
                     allowed_agents: BTreeSet::from(["agent-a".into()]),
+                    bridge_clients: Vec::new(),
                     revision: 1,
                 },
             );

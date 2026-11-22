@@ -815,6 +815,7 @@ mod independent_runtime_io {
                     display_name: "Fixture".into(),
                     capabilities: BTreeSet::from(["text".into()]),
                     allowed_agents: shared,
+                    bridge_clients: Vec::new(),
                     revision: 1,
                 },
             );

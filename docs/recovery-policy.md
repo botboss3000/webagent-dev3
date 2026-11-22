@@ -79,6 +79,12 @@ that uses the local `claude` or `opencode` command-line tool (no desktop app nee
 queues each call; the script fetches it, confirms it, sends a progress signal while it runs, and
 posts the reply. Code: `crates/modules/models/host/harness_bridge.rs`.
 
+**Which computer answers.** Any number of paired computers ("clients") may serve one bridge
+provider. A model answers on every client by default; with more than one client paired, the Models
+page shows a checkbox per client, and a model with some unticked is offered only to the ticked ones.
+"Offline" is then judged by those clients alone. The same model can be added once per client, with
+one entry listed as the other's alias, so one computer backs up another.
+
 **Online and offline.** The script keeps a request open to WebAgent at all times (each held up to
 `poll_hold_seconds` = 10). A bridge with no request seen for `client_online_seconds` = 120 shows as
 offline on the Models page.

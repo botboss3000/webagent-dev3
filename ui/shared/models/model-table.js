@@ -585,7 +585,11 @@ export function mountModelTable(host, opts = {}) {
   // Filled with the chosen provider's Bridge clients section: pair first, then add its models.
   const renderBridgeClients = () => {
     if (!isBridgeProvider() || typeof adapter.bridgeClients !== 'function') return bridgeClientRow.replaceChildren();
-    bridgeClientRow.replaceChildren(bridgeClientsSection(S.currentProvider));
+    // BRIDGE-CLIENT-CHOICE: the clients ticked here answer the model about to be added.
+    S.bridgeClientChoice = [];
+    bridgeClientRow.replaceChildren(bridgeClientsSection(S.currentProvider, {
+      get: () => S.bridgeClientChoice, set: ids => { S.bridgeClientChoice = ids; },
+    }));
   };
   table.insertBefore(bridgeClientRow, keyRow);
 
@@ -2001,7 +2005,10 @@ export function mountModelTable(host, opts = {}) {
   // BRIDGE-CLIENTS: clients pair once per bridge provider with one-time codes and answer every
   // model of that provider the user adds, before or after pairing. Each client holds its own
   // secret and can be revoked alone.
-  function bridgeClientsSection(provider) {
+  // `choice` ({get, set} of client ids; empty = every client) adds a checkbox per client once the
+  // provider has more than one, so the same model can be saved once per client and one entry can
+  // back up another.
+  function bridgeClientsSection(provider, choice = null) {
     const section = document.createElement('div');
     section.className = 'model-bridge-clients';
     section.style.cssText = 'margin-top:12px;display:flex;flex-direction:column;gap:8px;';
@@ -2036,10 +2043,40 @@ export function mountModelTable(host, opts = {}) {
         list.appendChild(none);
       }
       const now = Date.now() / 1000;
+      const choosing = !!choice && clients.length > 1;
+      const boxes = [];
+      // Every box ticked is saved as "any client", which also covers clients paired later.
+      const saveChoice = async changed => {
+        const ticked = boxes.filter(([, box]) => box.checked).map(([id]) => id);
+        if (!ticked.length) { changed.checked = true; return; }   // one client must answer
+        boxes.forEach(([, box]) => { box.disabled = true; });
+        try {
+          await choice.set(ticked.length === boxes.length ? [] : ticked);
+        } catch (error) {
+          changed.checked = !changed.checked;
+          _flashSaveCheck(changed.closest('div'), false, error?.message || 'Not saved');
+        }
+        boxes.forEach(([, box]) => { box.disabled = false; });
+      };
       clients.forEach(client => {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;';
-        const name = document.createElement('span'); name.className = 'ac-model-meta-v'; name.textContent = client.name;
+        let name = document.createElement('span'); name.className = 'ac-model-meta-v'; name.textContent = client.name;
+        if (choosing) {
+          const chosen = choice.get();
+          const box = document.createElement('input');
+          box.type = 'checkbox'; box.className = 'ac-model-bridge-client-check';
+          box.checked = !chosen.length || chosen.includes(client.id);
+          box.addEventListener('click', event => event.stopPropagation());
+          box.addEventListener('change', event => { requestTouchVibration(event); saveChoice(box); });
+          boxes.push([client.id, box]);
+          const label = document.createElement('label');
+          label.className = 'ac-model-default-choice'; label.title = `${client.name} answers this model's calls`;
+          label.style.webkitTapHighlightColor = 'transparent';
+          label.addEventListener('click', event => event.stopPropagation());
+          label.append(box, name);
+          name = label;
+        }
         const state = document.createElement('span'); state.className = 'ac-model-meta-k';
         state.textContent = client.processes > 1 ? `running (${client.processes} processes)`
           : client.processes === 1 ? 'running' : client.last_seen ? `last seen ${ago(now - client.last_seen)}` : 'never connected';
@@ -2060,6 +2097,12 @@ export function mountModelTable(host, opts = {}) {
         row.append(name, state, revoke);
         list.appendChild(row);
       });
+      if (choosing) {
+        const hint = document.createElement('div'); hint.className = 'ac-hint'; hint.style.margin = '0';
+        hint.textContent = 'Ticked clients answer this model. With every client ticked, clients paired later answer it too. '
+          + 'To use one client as a backup of another, add the model once per client and list one as the other\'s alias.';
+        list.appendChild(hint);
+      }
     }
     let refresh = null;
     pairBtn.addEventListener('click', async event => {
@@ -2428,7 +2471,16 @@ export function mountModelTable(host, opts = {}) {
 
     // BRIDGE-CLIENTS: the provider's paired clients answer this model's calls.
     if (p.provider?.endsWith('_bridge') && typeof adapter.bridgeClients === 'function') {
-      body.appendChild(bridgeClientsSection(p.provider));
+      // BRIDGE-CLIENT-CHOICE: a saved model's own choice of clients, saved on each change.
+      const choice = catalogOnly || !p.entry_id || isCatalogRow(p) ? null : {
+        get: () => p.bridge_clients || [],
+        set: async ids => {
+          const before = p.bridge_clients;
+          p.bridge_clients = ids;
+          try { await saveRoster(); } catch (error) { p.bridge_clients = before; throw error; }
+        },
+      };
+      body.appendChild(bridgeClientsSection(p.provider, choice));
     }
 
     // Display name lives in the unified list above as ONE editable row. Clicking
@@ -3078,6 +3130,7 @@ export function mountModelTable(host, opts = {}) {
       newP.video_capable = free ? false : !!chosen.video_capable;
       newP.decision_capable = !!chosen.decision_capable;
       if (pendingEffort) newP.default_effort = pendingEffort;
+      if (isBridgeProvider() && S.bridgeClientChoice?.length) newP.bridge_clients = [...S.bridgeClientChoice];
       const previousRoles = { ...S.roleAssignments };
       S.providers.push(newP);
       try {
@@ -3309,6 +3362,7 @@ export function mountModelTable(host, opts = {}) {
         connection_id: p.connection_id || '',
         catalog_source_id: p.catalog_source_id || '',
         aliases: Array.isArray(p.aliases) ? p.aliases.map(String) : [],
+        bridge_clients: Array.isArray(p.bridge_clients) ? p.bridge_clients.map(String) : [],
         display_name: p.display_name || '',
         // MODEL-NAME-LEVELS: the catalog's own model name for a catalog row (its
         // authored alias). Blank on a BYO row, whose model name is the real model id.

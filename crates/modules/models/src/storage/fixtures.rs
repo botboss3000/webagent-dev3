@@ -227,6 +227,7 @@ pub(crate) fn byo_catalog() -> crate::model_selection::Catalog {
             display_name: "Model".into(),
             capabilities: BTreeSet::from(["text".into()]),
             allowed_agents: BTreeSet::new(),
+            bridge_clients: Vec::new(),
             revision: 1,
         },
     );
