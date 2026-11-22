@@ -688,6 +688,20 @@ async fn change_session_mode_authorized(
     let next =
         json!({"execution_mode":named["id"],"revision":current["revision"].as_u64().unwrap()+1});
     let mut docs = vec![(key("session_mode", &id), next.clone())];
+    // The model follows the mode: a switch drops the chat's own model pick, so the
+    // new mode's text model applies from the next model call.
+    let controls_key = format!("session_chat_controls:{id}");
+    if named["id"] != current["execution_mode"] {
+        if let Some(saved) = app.store.get(&controls_key).await? {
+            if !saved["entry_id"].is_null() {
+                let revision = saved["revision"].as_u64().unwrap_or(0) + 1;
+                docs.push((
+                    controls_key,
+                    json!({"entry_id":null,"effort":null,"revision":revision}),
+                ));
+            }
+        }
+    }
     if let Some((receipt_key, hash)) = receipt {
         docs.push((receipt_key, json!({"request_hash":hash,"result":next})));
     }

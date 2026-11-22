@@ -53,7 +53,7 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
             .map(|(role, _)| role)
             .collect();
         models.push(json!({"entry_id":id,"label":if id.is_none(){format!("Mode default · {display}")}else{display.to_owned()},
-            "model":first.upstream_model,"connected":connected,"roles":roles,
+            "display":display,"model":first.upstream_model,"connected":connected,"roles":roles,
             "efforts":efforts.levels,"default_effort":default_effort,"provider_default_effort":efforts.default,
             "vision":first.vision}));
     }
@@ -579,6 +579,18 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(10), shared.started.notified())
             .await
             .unwrap();
+        // The mode comes first: a later mode switch would drop the chat's own model pick.
+        session_mode_set(
+            State(app.clone()),
+            Path(sid.clone()),
+            Json(SessionModeBody {
+                mode: "plan".into(),
+                expected_revision: Some(0),
+                confirm_write: false,
+            }),
+        )
+        .await
+        .unwrap();
         chat_model_set(
             State(app.clone()),
             Path(sid.clone()),
@@ -587,17 +599,6 @@ mod tests {
                 expected_revision: 0,
                 client_request_id: uuid(),
                 effort: None,
-            }),
-        )
-        .await
-        .unwrap();
-        session_mode_set(
-            State(app.clone()),
-            Path(sid.clone()),
-            Json(SessionModeBody {
-                mode: "plan".into(),
-                expected_revision: Some(0),
-                confirm_write: false,
             }),
         )
         .await
@@ -713,6 +714,49 @@ mod tests {
         assert_eq!(
             session_mode(&app, &sid).await.unwrap()["execution_mode"],
             "auto"
+        );
+    }
+
+    #[tokio::test]
+    async fn mode_switch_returns_the_chat_to_the_mode_model() {
+        let (_root, app) = fixture().await;
+        selection_fixture(&app).await;
+        let Json(session) = create_session(
+            State(app.clone()),
+            Json(json!({"client_request_id":uuid()})),
+        )
+        .await
+        .unwrap();
+        let sid = session["id"].as_str().unwrap().to_owned();
+        let pick = ChatModelBody {
+            entry_id: Some("two".into()),
+            expected_revision: 0,
+            client_request_id: uuid(),
+            effort: None,
+        };
+        chat_model_set(State(app.clone()), Path(sid.clone()), Json(pick))
+            .await
+            .unwrap();
+        let mode = SessionModeBody {
+            mode: "plan".into(),
+            expected_revision: Some(0),
+            confirm_write: false,
+        };
+        session_mode_set(State(app.clone()), Path(sid.clone()), Json(mode))
+            .await
+            .unwrap();
+        let Json(options) = chat_controls_get(State(app.clone()), Path(sid))
+            .await
+            .unwrap();
+        assert_eq!(
+            options["model"],
+            json!({"entry_id":null,"effort":null,"revision":2})
+        );
+        // The picker's default row carries the model's bare display name for the change row.
+        let default = &options["models"][0];
+        assert_eq!(
+            default["label"],
+            format!("Mode default · {}", default["display"].as_str().unwrap())
         );
     }
 

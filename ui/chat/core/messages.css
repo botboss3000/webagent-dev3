@@ -146,3 +146,7 @@ body.light-mode .chat-bubble.user.pending {
 body.light-mode .chat-bubble.user.pending .label {
   color: var(--warning);
 }
+
+/* Mode and model changes made before the next message: one row styled like an activity group summary. */
+.chat-change-notice{box-sizing:border-box;max-width:100%;min-height:28px;padding:6px 8px 6px 6px;font-family:var(--font-sans);font-size:12.5px;line-height:1.4;color:var(--fg-2);overflow-wrap:anywhere}
+.chat-change-notice b{font-weight:500;color:var(--fg-1)}

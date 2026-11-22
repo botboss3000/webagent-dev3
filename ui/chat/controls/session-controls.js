@@ -4,6 +4,14 @@ import {createEffortSlider} from '../../shared/models/effort-slider.js';
 // Compact role markers on picker rows (V2 footer picker).
 const ROLE_ICONS={standard:['T','Text'],vision:['👁','Vision'],image:['🖼','Image generation'],
   system:['⚙','System'],voice:['🎤','Voice'],decision:['D','Decision']};
+/** Wording of the transcript row for mode and model changes since the last message, as [text, name] pairs; empty once both are back where they started. */
+export function changeParts(before,now) {
+  const parts=[];
+  if(now.mode!==before.mode)parts.push(['Mode changed to ',now.mode]);
+  if(now.model&&now.model!==before.model)parts.push(['Model changed to ',now.model]);
+  else if(now.model&&parts.length)parts.push(['Model stays ',now.model]);
+  return parts;
+}
 /** Purpose: Mount execution-mode and model controls for the current conversation. The optional onState callback receives refreshed control data so panel.js can gate composer features. The panel drives open/updateRuns/disconnect/destroy; this module reads client.controls and writes client.mode/client.model. */
 export function mountSessionControls({root,client,guard,note,issues,ensureSession,notifications,onState=()=>{},canWrite=()=>true}) {
     // Resolve controls within this chat root rather than the whole document.
@@ -18,6 +26,26 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
   // Persistent effort control below the roster, for the selected model in this conversation.
   const effort=createEffortSlider({defaultName:'Saved default',onCommit:level=>setEffort(level)});
   model.setAttribute('aria-haspopup','dialog');model.setAttribute('aria-expanded','false');
+  // One transcript row reports the mode and model changes made since the last message; each further change rewrites it.
+  const transcript=$('chat-messages-inner');
+  let notice=null,baseline=null;
+  const current=()=>({mode:state?.execution_modes.find(item=>item.id===state.mode.execution_mode)?.label||'',
+    model:state?.models.find(item=>item.entry_id===state.model.entry_id)?.display||''});
+  function report(before){
+    if(!transcript||!state)return;
+    // A message after the row closes it, so the next change starts a new row.
+    let later=notice?.nextElementSibling;
+    while(later&&!later.dataset?.publicId)later=later.nextElementSibling;
+    if(!notice?.isConnected||later){notice=null;baseline=before;}
+    const parts=changeParts(baseline,current());
+    if(!parts.length){notice?.remove();notice=null;return;}
+    if(!notice){notice=document.createElement('div');notice.className='chat-change-notice';notice.setAttribute('role','status');transcript.append(notice);}
+    notice.replaceChildren(...parts.flatMap(([text,name],index)=>{
+      const value=document.createElement('b');value.textContent=name;
+      return [document.createTextNode((index?' · ':'')+text),value];
+    }));
+    notice.scrollIntoView?.({block:'nearest'});
+  }
     // Hide the picker and clear the model button expanded state.
   function close(){picker.hidden=true;model.setAttribute('aria-expanded','false');}
     // Render the current execution mode, selected model, and active run model without treating display state as a write.
@@ -57,7 +85,7 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
   async function cycleMode(){
     if(busy)return;
     await ready();
-    const sid=session,epoch=generation,snapshot=state.mode;
+    const sid=session,epoch=generation,snapshot=state.mode,before=current();
     const modes=state.execution_modes;
     if(!modes.length)return;
     const index=modes.findIndex(item=>item.id===snapshot.execution_mode);
@@ -67,20 +95,23 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
     if(sid!==session||epoch!==generation)return;
     state={...state,mode:{...snapshot,execution_mode:next.id}};
     busy=true;paint();
+    let changed=false;
     try{
       await client.mode(sid,{mode:next.id,expected_revision:snapshot.revision,confirm_write:confirmationRequired});
-      if(sid===session&&epoch===generation)note('Execution mode changed to '+next.label);
-    }finally{if(sid===session&&epoch===generation){busy=false;await load();paint();}}
+      changed=true;
+    }finally{if(sid===session&&epoch===generation){busy=false;await load();paint();if(changed)report(before);}}
   }
     // Persist the selected connected model with the snapshot revision and a unique request ID; it applies at the next model-call boundary; an already-dispatched call retains its pinned model.
   async function choose(entry){
     if(busy)return;
-    const sid=session,epoch=generation,revision=state.model.revision;
+    const sid=session,epoch=generation,revision=state.model.revision,before=current();
     busy=true;paint();
+    let changed=false;
     try{
       await client.model(sid,{entry_id:entry.entry_id,expected_revision:revision,client_request_id:crypto.randomUUID()});
-      if(sid===session&&epoch===generation){close();note('Next loop turn will use '+entry.label);}
-    }finally{if(sid===session&&epoch===generation){busy=false;await load();paint();}}
+      changed=true;
+      if(sid===session&&epoch===generation)close();
+    }finally{if(sid===session&&epoch===generation){busy=false;await load();paint();if(changed)report(before);}}
   }
     // Save this conversation's effort for the selected model (null = that model's saved default); the revision fence applies.
   async function setEffort(level){
