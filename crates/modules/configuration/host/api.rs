@@ -136,6 +136,7 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         "access_policy" => {
             crate::registration::validate_configuration(value)?;
             webagent_actions::links::LedgerPolicy::from_policy(value)?;
+            webagent_engine::tools::critical_guard::Policy::from_policy(value)?;
             // Fixture policies may omit storage; the live file always has it.
             if let Some(storage) = value.get("storage") {
                 let storage = serde_json::to_vec(storage)?;

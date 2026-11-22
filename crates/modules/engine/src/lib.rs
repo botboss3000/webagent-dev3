@@ -34,6 +34,7 @@ pub mod context {
 }
 pub mod tools {
     pub mod arguments;
+    pub mod critical_guard;
     pub mod dispatch;
     pub mod execution;
     pub mod failure;

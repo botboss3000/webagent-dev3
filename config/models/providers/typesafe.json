@@ -2,6 +2,11 @@
   "provider": "typesafe",
   "name": "TypeSafe AI",
   "base_url": "https://api.typesafe.ai",
-  "validated": false,
-  "models": []
+  "validated": true,
+  "models": [
+    {
+      "id": "jev-latest",
+      "name": "Jev"
+    }
+  ]
 }

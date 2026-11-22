@@ -81,6 +81,23 @@ pub struct DuplicateProtection {
     pub window: Window,
 }
 
+/// A critical tool's addition to the critical tool guard's universal rule: what else must
+/// match the user's request, and which arguments the guard always or never sees. It can only
+/// add checks; the guard's rule, threshold and mode are not the tool's to change.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Guard {
+    /// Details that must match what the user asked, in one or two sentences.
+    #[serde(default)]
+    pub check: Option<String>,
+    /// Parameters shown in full even when long.
+    #[serde(default)]
+    pub show: Vec<String>,
+    /// Parameters never shown (only their size).
+    #[serde(default)]
+    pub hide: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolDefinition {
@@ -133,6 +150,9 @@ pub struct ToolDefinition {
     /// exempt, otherwise a write is required and a read exempt.
     #[serde(default)]
     pub task: Option<Task>,
+    /// The critical tool guard's per-tool addition; only a critical tool may have one.
+    #[serde(default)]
+    pub guard: Option<Guard>,
 }
 
 /// Discovery hints: short example requests (embedded) and exact words (keyword evidence).
@@ -223,6 +243,21 @@ impl ToolDefinition {
         }
         if self.critical && !self.retention.keeps_everything() {
             bail!("A critical tool keeps its calls whole: no retention level or drop_input_fields: {folder}");
+        }
+        if let Some(guard) = &self.guard {
+            let properties = self.parameters["properties"].as_object();
+            let named = |field: &String| properties.is_some_and(|known| known.contains_key(field));
+            if !self.critical
+                || guard
+                    .check
+                    .as_ref()
+                    .is_some_and(|check| check.trim().is_empty() || check.len() > 300)
+                || guard.show.len() + guard.hide.len() > 32
+                || !guard.show.iter().chain(&guard.hide).all(named)
+                || guard.show.iter().any(|field| guard.hide.contains(field))
+            {
+                bail!("guard needs a critical tool, a check of 1 to 300 characters and show/hide naming distinct tool parameters: {folder}");
+            }
         }
         if let Some(protection) = &self.duplicate_protection {
             let properties = self.parameters["properties"].as_object();
@@ -626,6 +661,32 @@ mod tests {
         json!({"name":name,"description":"Look something up","effect":"read",
             "parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false},
             "default_policy":{"operator":"allow","member":"require_approval"}})
+    }
+
+    #[test]
+    fn guard_addition_needs_a_critical_tool_and_real_parameters() {
+        let parse = |extra: Value| {
+            let mut tool = body("push");
+            tool["effect"] = json!("write");
+            tool.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            ToolDefinition::parse(&serde_json::to_vec(&tool).unwrap(), "push")
+        };
+        let ok = parse(json!({"critical":true,
+            "guard":{"check":"The query must be what the user asked.","show":["q"]}}))
+        .unwrap();
+        assert_eq!(ok.guard.unwrap().show, ["q"]);
+        assert!(parse(json!({"critical":true,"guard":{}})).is_ok());
+        for bad in [
+            json!({"guard":{"show":["q"]}}),
+            json!({"critical":true,"guard":{"show":["missing"]}}),
+            json!({"critical":true,"guard":{"show":["q"],"hide":["q"]}}),
+            json!({"critical":true,"guard":{"check":" "}}),
+            json!({"critical":true,"guard":{"loosen":true}}),
+        ] {
+            assert!(parse(bad.clone()).is_err(), "{bad}");
+        }
     }
 
     #[test]
