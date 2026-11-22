@@ -51,9 +51,12 @@ fails, undo as above from the still-open session or from the console.
 # Host approval passphrase
 
 Boot loader and disk changes (paths in the host profile's `boot_disk_paths`, such as
-`/etc/fstab`, `/etc/default/grub` and `/boot/*`) need this passphrase on the approval card.
-The root host helper checks it; the app never stores it. It is separate from every login
-and `sudo` password: if it leaked, it could approve only boot and disk cards.
+`/etc/fstab`, `/etc/default/grub` and `/boot/*`), File Manager grants and root-equivalent
+actions (`file_write`, `host_revert`, `broker_install`, `supervisor_update`,
+`packages_upgrade`) need this passphrase on the approval card, and so does opening an
+allow-all window from the page. The root host helper checks it; the app never stores it. It
+is separate from every login and `sudo` password, but it is root-equivalent: treat it like
+the root password.
 
 Set or change it at the server's own console (not over the app), as root:
 
@@ -64,4 +67,20 @@ sudo python3 -I /usr/local/lib/webagent-host/host_helper.py passphrase
 It asks twice and needs at least 12 characters. Only a salted scrypt hash is kept, in
 `/var/lib/webagent-host/passphrase.json` (root only). Five wrong entries within 15 minutes
 lock boot and disk approvals for 15 minutes; failures are logged without the value.
-Until a passphrase is set, boot and disk requests cannot be approved at all.
+Until a passphrase is set, those requests cannot be approved from the page at all.
+
+# Host operator route over SSH
+
+`sudo buildctl host pending | approve ID | deny ID | allow HOURS [--session KEY]` reaches the
+root host helper as root, never through the app, and needs no passphrase (sudo is the proof).
+Decisions are logged as `host:<your account>`. `allow` opens a window for every requester
+(`*`) unless `--session` names one; `allow 0` ends it. Use this route when the app may be
+compromised. `/usr/local/sbin/buildctl` is a root-owned wrapper installed with the helper by
+`supervisor_update`; it runs only the installed helper.
+
+Who may open windows is the `window_openers` list in `/etc/webagent/host-profile.json`
+(root-owned): `["app", "host"]` on the development server, `["host"]` in production (the
+default when unset). Without `"app"`, the Host Admin page refuses to open windows, even with
+the passphrase, and shows the SSH command and the time left instead. Ending a window is
+always allowed from the page. Change the list with a root edit of the profile, then
+`sudo systemctl restart webagent-host-helper.service`.

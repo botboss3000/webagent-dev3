@@ -178,10 +178,10 @@ Each requirement has an ID for reference in commits and reviews.
 | ID | Requirement | Status | Evidence / work item |
 | --- | --- | --- | --- |
 | HOSTACT-1 | Every host-changing action runs only after a recorded decision or inside a live allow window; reads run at once. | In force | `build-service/host_helper.py:1-8,492-512` |
-| HOSTACT-2 | Decisions come only from the admin Host Admin page (admin cookie + CSRF + Origin), never from an agent's tool call. | In force | `administration/host/api/host_admin.rs:152-200`, admin router |
+| HOSTACT-2 | Decisions come only from the admin Host Admin page (admin cookie + CSRF + Origin) or from root over SSH (`sudo buildctl host approve`), never from an agent's tool call. | In force | `administration/host/api/host_admin.rs:152-200`, admin router; `host_helper.py` `handle` (uid 0), `operator` |
 | HOSTACT-3 | Boot and disk changes also need the host approval passphrase, set at the console and checked only by the helper. | In force | `host_helper.py:505-534` |
 | HOSTACT-4 | Allow windows never cover boot, disk or no-undo actions and are capped at 24 h. | In force | `host_helper.py` defaults, `host_admin.rs:176-200` |
-| HOSTACT-5 | A compromised app process cannot approve its own root actions or open allow windows: decisions and windows need a factor the app process does not hold (host passphrase, operator SSH, or a signed confirmation). | Target | sweep H4: the helper trusts uid 1100 to decide; Fable item "trust boundary" Plan `trust-boundary` step 1. |
+| HOSTACT-5 | A compromised app process cannot approve its own root actions or open allow windows: decisions and windows need a factor the app process does not hold (host passphrase, operator SSH, or a signed confirmation). Who may open windows is the root-owned profile's `window_openers` (`app` with the passphrase, `host` over SSH; production `host` only), enforced by the caller's uid. | In force | `host_helper.py` `ACTIONS` `root`, `decide`, `allow`, `load_profile`; `tests/test_host_helper.py` `test_root_actions_need_the_passphrase_from_the_app`, `test_app_windows_need_the_passphrase_and_then_cover_root_actions`, `test_the_host_operator_route_is_root_only`, `test_window_openers_choose_who_may_open_a_window`; broker tasks `helper-window-openers`, `host-window-page`. Limit: the passphrase is typed into the app's page, so an attacker already in the app process can wait and capture it; the SSH route is the answer for that case. |
 | HOSTACT-6 | Allow windows are visible on the Host Admin page with requester, scope and expiry, and are logged. | In force (logged) | helper log `event: allow`; UI visibility to confirm |
 
 ### 3.9 Host and network (HOST)
@@ -271,7 +271,7 @@ A hosted deployment for other people must meet all **In force** requirements plu
 | Risk | Accepted by | Date | Until |
 | --- | --- | --- | --- |
 | Shared-chat writers can approve tools that use the owner's data and connections (SHARE-3). | User | 2026-11-20 | SHARE-3/4 ship |
-| The operator may open a 24 h allow-all host window for all requesters (`session: "*"`) during active release work. | User ("I'm controlling it") | 2026-11-20 | HOSTACT-5 ships |
+| While an allow-all window the operator opened (with the passphrase or over SSH) is live, the app process can run root-equivalent host actions under it; windows may last 24 h and cover all requesters (`session: "*"`). | User (trust-boundary D1) | 2026-11-21 | — |
 | SSH listens on all interfaces; the firewall restricts it to Tailscale. | sec-host recommendation | 2026-11-20 | — |
 | With a File Manager grant (up to 24 h), the File Manager and its terminals can do anything the operator account can, including the live checkout without a broker task and root through sudo (the sudo password, typed in the page, passes through the app process) (FILES-1, FILES-3). | User | 2026-11-21 | — |
 
@@ -322,3 +322,9 @@ step 1 (the approval floor), embed-and-capacity step 1, sharing step 1, then the
   before it is built; sweep L3 is treated as mitigated by the command sandbox (a test is added);
   L10 is accepted for this host and becomes a hosted-server requirement. Still open for the user:
   the decision lists at the end of each plan.
+- 2026-11-21 (evening): the user answered every plan decision (unified plan sections 8 and 9).
+  Trust-boundary step 1 shipped (HOSTACT-5): app approvals of root-equivalent actions and
+  windows opened from the page need the host passphrase; root over SSH lists, decides and opens
+  windows (`sudo buildctl host ...`); the root-owned profile's `window_openers` chooses who may
+  open windows (development `app` and `host`, production `host` only). Windows still cover root
+  actions (D1), recorded in section 6.

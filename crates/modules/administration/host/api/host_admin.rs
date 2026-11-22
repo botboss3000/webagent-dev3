@@ -308,7 +308,8 @@ pub(crate) async fn decide(
     }
     let admin = identity["_user_id"].as_str().unwrap_or_default();
     let mut message = json!({"op": "decide", "id": id, "decision": decision, "admin": admin});
-    // Boot and disk approvals carry the host approval passphrase; only the helper checks it.
+    // Root-equivalent, boot and disk approvals carry the host approval passphrase; only the
+    // helper checks it.
     if let Some(passphrase) = body["passphrase"].as_str() {
         if passphrase.len() > 256 {
             return Err(bad("Passphrase too long"));
@@ -323,8 +324,9 @@ pub(crate) async fn decide(
 }
 
 /// Open (or end, with 0 seconds) an allow-all window for one requester: `{"requester":
-/// "<session or ssh:identity>", "seconds": n}`. The helper caps it and never lets it cover
-/// boot, disk or irreversible actions.
+/// "<session or ssh:identity>", "seconds": n, "passphrase": "..."}`. Opening needs the host
+/// approval passphrase and a host whose `window_openers` lists the app; the helper checks
+/// both, caps the window and never lets it cover boot, disk or irreversible actions.
 pub(crate) async fn allow(
     State(_app): State<App>,
     Extension(identity): Extension<Value>,
@@ -338,8 +340,13 @@ pub(crate) async fn allow(
         return Err(bad("Requester required"));
     }
     let admin = identity["_user_id"].as_str().unwrap_or_default();
-    Ok(Json(
-        helper(json!({"op": "allow", "session": requester, "seconds": seconds, "admin": admin}))
-            .await?,
-    ))
+    let mut message =
+        json!({"op": "allow", "session": requester, "seconds": seconds, "admin": admin});
+    if let Some(passphrase) = body["passphrase"].as_str() {
+        if passphrase.len() > 256 {
+            return Err(bad("Passphrase too long"));
+        }
+        message["passphrase"] = json!(passphrase);
+    }
+    Ok(Json(helper(message).await?))
 }

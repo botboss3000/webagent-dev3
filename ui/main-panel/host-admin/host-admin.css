@@ -27,6 +27,9 @@
 #tab-host-admin .host-allow-toggle{display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}
 #tab-host-admin .host-allow-toggle input{width:20px;height:20px;accent-color:var(--accent)}
 #tab-host-admin .host-allow-all .host-meta{flex:1 1 100%}
+/* Hosts that open windows only over SSH show the command instead of the toggle. */
+#tab-host-admin .host-allow-all .host-help{flex:1 1 100%}
+#tab-host-admin .host-allow-all code{padding:1px 6px;border-radius:var(--r-sm,4px);background:var(--bg-1);overflow-wrap:anywhere}
 #tab-host-admin .host-releases{display:grid;gap:10px;min-width:0}
 /* A live File Manager approval sits pinned at the top of the page, marked as root-equivalent. */
 .host-files.is-active{display:grid;gap:8px;padding:12px 14px;border:var(--border-width) solid var(--danger);border-radius:var(--r-lg);background:var(--bg-elev)}

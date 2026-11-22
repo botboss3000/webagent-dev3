@@ -4,6 +4,7 @@
 
 - Request a change to the server through the root host helper, or read host status.
 - Every change waits for an administrator's approval on the Host Admin page; a background notice wakes this chat when it is decided and finished.
+- `file_write`, `host_revert`, `broker_install`, `supervisor_update` and `packages_upgrade` are root-equivalent: approval needs the host approval passphrase unless an allow-all window covers this chat (the request then runs at once). Say so when you file one.
 
 - `{"action":"status"}`: uptime, disk, listed units and containers. Runs at once.
 - `{"action":"request","host_action":"file_write","host_args":{"path":"/etc/webagent/x.json","content":"<whole file>"}}`:

@@ -2,6 +2,9 @@
 // Administrator Host Admin: approve or deny host actions held by the root host helper, open
 // time-limited allow-all windows for one requester, and read recent decisions. The helper
 // itself runs approved actions and never lets allow-all cover boot, disk or no-undo actions.
+// Root-equivalent approvals and opening a window need the host approval passphrase; where the
+// host's window_openers leaves out "app", windows are opened only over SSH and this page
+// shows that command and the time left instead.
 // Production releases requested by agents or the operator wait here too; only this page
 // approves them, and the build broker then builds and publishes the release.
 
@@ -19,6 +22,21 @@ function el(tag, className, text) {
 
 function when(seconds) {
   return new Date(seconds * 1000).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
+}
+
+// "3 h 20 min left" until the epoch-seconds time `until`.
+function left(until) {
+  const minutes = Math.max(0, Math.round((until - Date.now() / 1000) / 60));
+  return (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60) + ' min left';
+}
+
+function passphraseInput() {
+  const input = el('input');
+  input.type = 'password';
+  input.autocomplete = 'off';
+  input.placeholder = 'Host approval passphrase';
+  input.setAttribute('aria-label', 'Host approval passphrase');
+  return input;
 }
 
 function who(requester) {
@@ -46,7 +64,8 @@ export function start(mount) {
     }
   }
 
-  async function post(path, body, button) {
+  // `shown` takes the error text when `button` cannot (a checkbox); a failed checkbox flips back.
+  async function post(path, body, button, shown) {
     button.disabled = true;
     try {
       const response = await fetch(path, {
@@ -58,11 +77,12 @@ export function start(mount) {
       await load();
     } catch (error) {
       button.disabled = false;
-      button.textContent = error.message.slice(0, 80);
+      if (button.type === 'checkbox') button.checked = !button.checked;
+      (shown || button).textContent = error.message.slice(0, 80);
     }
   }
 
-  function card(request, pending) {
+  function card(request, pending, appOpens) {
     const item = el('li', 'host-item');
     item.dataset.undo = request.undo;
     item.dataset.state = request.state;
@@ -78,15 +98,14 @@ export function start(mount) {
       const actions = el('div', 'host-actions');
       const approve = el('button', 'host-approve', 'Approve');
       const deny = el('button', '', 'Deny');
-      // Boot and disk changes, and File Manager access outside the checkout, need the host
-      // approval passphrase, set at the server console.
+      // Boot and disk changes, File Manager access outside the checkout and root-equivalent
+      // actions need the host approval passphrase, set at the server console. So does opening a
+      // window from here.
+      const needsPass = request.boot_disk || request.passphrase || request.root;
+      const canWindow = appOpens && request.allow_key && request.undo !== 'none' && !request.boot_disk && !request.passphrase;
       let passphrase = null;
-      if (request.boot_disk || request.passphrase) {
-        passphrase = el('input');
-        passphrase.type = 'password';
-        passphrase.autocomplete = 'off';
-        passphrase.placeholder = 'Host approval passphrase';
-        passphrase.setAttribute('aria-label', 'Host approval passphrase');
+      if (needsPass || canWindow) {
+        passphrase = passphraseInput();
         actions.append(passphrase);
       }
       // File Manager grants last the time set here: 1 h by default, at most 24 h.
@@ -108,18 +127,18 @@ export function start(mount) {
       for (const [button, decision] of [[approve, 'approve'], [deny, 'deny']]) {
         button.type = 'button';
         button.onclick = () => post('/api/v3/admin/host/requests/' + encodeURIComponent(request.id) + '/decision',
-          decision === 'approve' && passphrase
+          decision === 'approve' && needsPass
             ? {decision, passphrase: passphrase.value, ...(hours ? {seconds: Math.round(Number(hours.value) * 3600)} : {})}
             : {decision}, button);
       }
       actions.append(approve, deny);
-      if (request.allow_key && request.undo !== 'none' && !request.boot_disk && !request.passphrase) {
+      if (canWindow) {
         const select = el('select');
         select.setAttribute('aria-label', 'Allow-all window for this requester');
         for (const [seconds, label] of WINDOWS.slice(1)) select.append(new Option('Allow all for ' + label, String(seconds)));
         const open = el('button', '', 'Open window');
         open.type = 'button';
-        open.onclick = () => post('/api/v3/admin/host/allow', {requester: request.allow_key, seconds: Number(select.value)}, open);
+        open.onclick = () => post('/api/v3/admin/host/allow', {requester: request.allow_key, seconds: Number(select.value), passphrase: passphrase.value}, open);
         actions.append(select, open);
       }
       item.append(actions);
@@ -232,27 +251,45 @@ export function start(mount) {
   }
 
   // Page-wide allow-all: every requester's ordinary actions run without a card until it ends,
-  // for example overnight work. Boot, disk and no-undo actions still wait here.
-  function allowAll(windows) {
+  // for example overnight work. Boot, disk and no-undo actions still wait here. Opening needs the
+  // passphrase; ending never does. Without "app" in window_openers it opens only over SSH.
+  function allowAll(windows, appOpens) {
     const box = el('div', 'host-allow-all');
     const until = windows['*'];
-    const label = el('label', 'host-allow-toggle');
-    const toggle = el('input');
-    toggle.type = 'checkbox';
-    toggle.checked = !!until;
-    label.append(toggle, el('span', '', 'Allow all requesters'));
-    const select = el('select');
-    select.setAttribute('aria-label', 'Allow-all duration');
-    for (const [seconds, text] of WINDOWS.slice(1)) select.append(new Option('for ' + text, String(seconds)));
-    select.value = '86400';
-    select.hidden = !!until;
-    toggle.onchange = () => post('/api/v3/admin/host/allow', {requester: '*', seconds: toggle.checked ? Number(select.value) : 0}, toggle);
-    box.append(label, select, el('span', 'host-meta', until
-      ? 'On until ' + when(until) + '. Boot, disk and no-undo actions still ask.'
-      : 'Off. Turn on for unattended work, such as overnight tasks.'));
+    const status = el('span', 'host-meta', until
+      ? 'On until ' + when(until) + ' (' + left(until) + '). Boot, disk and no-undo actions still ask.'
+      : appOpens ? 'Off. Turn on for unattended work, such as overnight tasks.' : 'Off.');
+    if (appOpens) {
+      const label = el('label', 'host-allow-toggle');
+      const toggle = el('input');
+      toggle.type = 'checkbox';
+      toggle.checked = !!until;
+      label.append(toggle, el('span', '', 'Allow all requesters'));
+      const select = el('select');
+      select.setAttribute('aria-label', 'Allow-all duration');
+      for (const [seconds, text] of WINDOWS.slice(1)) select.append(new Option('for ' + text, String(seconds)));
+      select.value = '86400';
+      select.hidden = !!until;
+      const passphrase = passphraseInput();
+      passphrase.hidden = !!until;
+      toggle.onchange = () => post('/api/v3/admin/host/allow', toggle.checked
+        ? {requester: '*', seconds: Number(select.value), passphrase: passphrase.value}
+        : {requester: '*', seconds: 0}, toggle, status);
+      box.append(label, select, passphrase, status);
+    } else {
+      const ssh = el('p', 'host-help', 'On this host, windows are opened on the server over SSH: ');
+      ssh.append(el('code', '', 'sudo buildctl host allow <hours>'));
+      box.append(ssh, status);
+      if (until) {
+        const end = el('button', '', 'End now');
+        end.type = 'button';
+        end.onclick = () => post('/api/v3/admin/host/allow', {requester: '*', seconds: 0}, end);
+        box.append(end);
+      }
+    }
     const others = Object.entries(windows).filter(([key]) => key !== '*');
     if (others.length) box.append(el('span', 'host-meta', 'Per-requester windows: ' + others
-      .map(([key, end]) => (key.startsWith('ssh:') ? 'SSH key ' + key.slice(4) : 'app session ' + key.slice(0, 8)) + ' until ' + when(end)).join(', ')));
+      .map(([key, end]) => (key.startsWith('ssh:') ? 'SSH key ' + key.slice(4) : 'app session ' + key.slice(0, 8)) + ' until ' + when(end) + ' (' + left(end) + ')').join(', ')));
     return box;
   }
 
@@ -306,10 +343,11 @@ export function start(mount) {
     const pinned = hasGrants(page);
     if (pinned) wrap.append(fileAccess(page));
     wrap.append(el('h2', '', 'Waiting for approval' + (page.pending.length ? ' (' + page.pending.length + ')' : '')));
-    wrap.append(el('p', 'host-help', 'Host actions from agents and SSH release keys wait here until you decide. An allow-all window approves one requester\'s ordinary actions until it ends; boot, disk and no-undo actions always ask.'));
-    wrap.append(allowAll(page.windows || {}));
+    const appOpens = (page.window_openers || []).includes('app');
+    wrap.append(el('p', 'host-help', 'Host actions from agents and SSH release keys wait here until you decide. Root-equivalent actions (file writes, reverts, broker installs, helper updates, package upgrades) need the host approval passphrase unless a window covers them. An allow-all window approves one requester\'s ordinary and root-equivalent actions until it ends; boot, disk and no-undo actions always ask.'));
+    wrap.append(allowAll(page.windows || {}, appOpens));
     const pending = el('ul', 'host-list');
-    for (const request of page.pending) pending.append(card(request, true));
+    for (const request of page.pending) pending.append(card(request, true, appOpens));
     wrap.append(page.pending.length ? pending : el('p', 'host-empty', 'Nothing is waiting.'));
     wrap.append(releases(production));
     if (!pinned) wrap.append(fileAccess(page));

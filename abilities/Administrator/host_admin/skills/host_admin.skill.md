@@ -27,6 +27,12 @@ For SSH access rules (keys only, Tailscale only) and how to undo them, read the
 
 - Files only under the paths the host profile allows (by default `/etc/webagent/*`).
 - Units and containers only from the host profile's lists.
-- Boot loader and disk files need the administrator's password on approval, and an
+- Boot loader and disk files need the host approval passphrase on approval, and an
   allow-all window never covers them.
+- Root-equivalent actions (`file_write`, `host_revert`, `broker_install`, `supervisor_update`,
+  `packages_upgrade`) also need the passphrase on approval, unless a live allow-all window
+  covers the request. Opening a window needs it too, or is done by the host operator over SSH
+  (`sudo buildctl host allow <hours>`); on hosts set to SSH-only windows (production) the page
+  has no passphrase prompt for windows. Listed unit and container restarts need no passphrase.
+  When you file a root-equivalent request, tell the user it needs the passphrase or a window.
 - A request waits for a decision without a time limit; the user may decide it later.
