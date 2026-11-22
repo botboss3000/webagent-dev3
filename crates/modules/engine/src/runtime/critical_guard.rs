@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use webagent_models::model_selection::{FailoverState, ModelRole, SelectionPlan};
+use webagent_models::provider::ProviderId;
 
 /// Whether the guard runs for an agent that saved no mode. Runtime test fixtures switch it
 /// off, since most of them count model calls exactly; a test that covers the guard saves a mode.
@@ -144,22 +145,23 @@ impl<
             "failover_state": FailoverState::default(),
         });
         if decision {
+            use webagent_models::decision;
             let (selection, tokens) = self.lane_selection(&lane).await.map_err(lane_error)?;
-            let provider = webagent_models::providers::load(selection.provider)?
-                .ok_or_else(|| anyhow!("Decision provider file missing"))?;
-            let body = webagent_models::decision::request(
-                &selection.model,
-                state.clone(),
-                &rules::questions(messages),
-            );
             // The caller's timeout bounds the request; this only caps a stuck connection.
-            let choices = webagent_models::decision::ask(
-                &provider.base_url,
-                tokens["api_key"].as_str(),
-                &body,
-                Duration::from_secs(120),
-            )
-            .await?;
+            let limit = Duration::from_secs(120);
+            let choices = if selection.provider == ProviderId::Local {
+                // A self-hosted model reads little: show it only the newest messages that fit.
+                let reads = decision::local_input_limit(&selection.model).await?;
+                let (state, messages) = rules::fit(state, messages, reads);
+                let body = decision::request(&selection.model, state, &rules::questions(&messages));
+                decision::ask_local(&selection.model, &body, limit).await?
+            } else {
+                let provider = webagent_models::providers::load(selection.provider)?
+                    .ok_or_else(|| anyhow!("Decision provider file missing"))?;
+                let body =
+                    decision::request(&selection.model, state.clone(), &rules::questions(messages));
+                decision::ask(&provider.base_url, tokens["api_key"].as_str(), &body, limit).await?
+            };
             return rules::from_choices(&choices, &selection.model);
         }
         let model = plan

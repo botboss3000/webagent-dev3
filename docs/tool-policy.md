@@ -146,7 +146,18 @@ asked for this action and which of their messages did
   model's aliases in order, which may be decision or text models. An agent with no
   Decision model uses its System model and that model's aliases. A text model answers in
   one line (`requested u3`). Each model gets `guard.model_seconds`, all together
-  `guard.total_seconds`.
+  `guard.total_seconds`. Every question carries an `instructions` text.
+- **Local models:** self-hosted decision models (Laya, Kev on the sidekick) are the `local`
+  provider ("Local models"). The containers cannot reach the private network, so the
+  request goes over `/runtime/local-models/relay.sock` to the host's local models relay
+  (`build-service/local_models_relay.py`; registry, keys and install in
+  `build-service/README.md`), which holds each model's address and key. The administrator
+  adds them in the Model Catalog from the relay's list (`GET
+  /admin/models/catalog/local-models`, no key) as decision-only entries; once published,
+  each is offered on every agent's Models page and is stored for an agent when its saved
+  roster uses it. Such a model reads only `max_input_tokens` (from the relay's list), so
+  the guard shows it the newest messages whose whole request still fits (about four
+  characters a token). The `decide_with_jev` tool stays TypeSafe-only.
 - **Outcome:** a `requested` answer at or above `guard.pass_confidence` (a text model's
   answer has no confidence and counts at face value) lets the call continue. Anything
   else, including no model answering, holds the call for the user's approval

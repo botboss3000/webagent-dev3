@@ -1183,6 +1183,10 @@ export function mountModelTable(host, opts = {}) {
   function isBridgeProvider() {
     return (S.presets[S.currentProvider]?.base_url || '').startsWith('bridge://');
   }
+  // Local models are reached through the server's relay (base URL relay://...), which holds their keys.
+  function isRelayProvider() {
+    return (S.presets[S.currentProvider]?.base_url || '').startsWith('relay://');
+  }
   async function subscriptionRequest(path, entryId = '', options = {}) {
     const joiner = path.includes('?') ? '&' : '?';
     const rowPath = entryId
@@ -1350,9 +1354,10 @@ export function mountModelTable(host, opts = {}) {
     // The read-only and catalog paths above hide it with display:none too; restore it here.
     bridgeClientRow.style.display = bridge ? '' : 'none';
     keyRow.querySelector('.ac-ability-name').textContent = bridge ? 'Link token' : 'API Key';
-    urlRow.style.display = subscription || bridge ? 'none' : '';
-    keyRow.style.display = subscription || bridge ? 'none' : '';
-    savedKeyRow.style.display = subscription || bridge ? 'none' : '';
+    const keyless = subscription || bridge || isRelayProvider();
+    urlRow.style.display = keyless ? 'none' : '';
+    keyRow.style.display = keyless ? 'none' : '';
+    savedKeyRow.style.display = keyless ? 'none' : '';
     subscriptionRow.style.display = subscription ? '' : 'none';
     if (!subscription) {
       clearSubscriptionCountdown(subscriptionState);
@@ -1510,7 +1515,7 @@ export function mountModelTable(host, opts = {}) {
     const key = keyInput.value.trim();
     const base = urlInput.value.trim() || S.presets[S.currentProvider]?.base_url || '';
     const platformCatalog = userCatalog && listProvider();
-    if (!isSubscriptionProvider() && !platformCatalog && provider !== 'deepseek' && !key) {
+    if (!isSubscriptionProvider() && !platformCatalog && !isRelayProvider() && provider !== 'deepseek' && !key) {
       setModelStatus('Enter an API key to see available models.');
       S.allModels = [];
       renderModelDropdown(modelSearch.value.toLowerCase());
@@ -3103,7 +3108,7 @@ export function mountModelTable(host, opts = {}) {
     const subscription = isSubscriptionProvider();
     if (free && S.currentProvider !== 'openrouter') return setModelStatus('Select OpenRouter and enter its API key before adding an automatic free slot.');
     if (!subscription && !platformCatalog && !baseUrl) return setModelStatus('Please enter a Base URL');
-    if (!subscription && !platformCatalog && !apiKey) return setModelStatus('Please enter an API Key');
+    if (!subscription && !platformCatalog && !isRelayProvider() && !apiKey) return setModelStatus('Please enter an API Key');
     if (!free && !S.selectedModel) return setModelStatus('Please select a model');
     if (subscription && !matchingSubscriptionRow()?.credential_configured) return setModelStatus('Connect ChatGPT before adding a model.');
     let savedRow = null;
@@ -3194,7 +3199,7 @@ export function mountModelTable(host, opts = {}) {
     if (isSubscriptionProvider() && !activeSubscriptionVerification()
         && !matchingSubscriptionRow()?.credential_configured) startSubscriptionLogin();
     // Offer this provider's saved API keys; typing a new key remains available.
-    if (!isSubscriptionProvider() && !isBridgeProvider()) showCredentialPicker({ quiet: true });
+    if (!isSubscriptionProvider() && !isBridgeProvider() && !isRelayProvider()) showCredentialPicker({ quiet: true });
     // A bridge's link secret is never typed or shown: generate it with the provider choice.
     if (isBridgeProvider()) generateLinkBtn.click();
     renderBridgeClients();

@@ -34,6 +34,9 @@ pub enum ProviderId {
     /// Capacity tests: the server itself answers from the user message's script (`TOOL` and
     /// `REPLY` lines). No network, no cost; only an administrator can create its connections.
     Loadtest,
+    /// Self-hosted decision models on the private network, reached through the host's local
+    /// models relay socket; no key in the app and no network endpoint of its own.
+    Local,
 }
 
 impl ProviderId {
@@ -69,7 +72,8 @@ impl ProviderId {
             | Self::CodexBridge
             | Self::AntigravityBridge
             | Self::GeminiBridge
-            | Self::Loadtest => None,
+            | Self::Loadtest
+            | Self::Local => None,
             Self::Deepseek => Some("https://api.deepseek.com/chat/completions"),
             Self::OpenaiApi => Some("https://api.openai.com/v1/chat/completions"),
             Self::Openrouter => Some("https://openrouter.ai/api/v1/chat/completions"),

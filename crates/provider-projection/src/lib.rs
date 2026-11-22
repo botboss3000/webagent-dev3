@@ -130,6 +130,7 @@ mod tests {
             ProviderIdV1::AntigravityBridge,
             ProviderIdV1::GeminiBridge,
             ProviderIdV1::Loadtest,
+            ProviderIdV1::Local,
         ] {
             let result = project(&RequestV1::Profile {
                 version: 1,
@@ -151,6 +152,10 @@ mod tests {
                 ProviderIdV1::Deepseek => {
                     assert_eq!(profile.instruction_role, InstructionRoleV1::System);
                     assert_eq!(profile.cache_control, CacheControlV1::ImplicitPrefix);
+                }
+                // Decision models have no chat transport; chat calls to them are refused.
+                ProviderIdV1::Typesafe | ProviderIdV1::Local => {
+                    assert_eq!(profile.transport, TransportV1::Decision);
                 }
                 _ => {}
             }

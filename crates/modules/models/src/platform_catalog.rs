@@ -41,6 +41,9 @@ impl Roster {
                     || e.display_name.len()>200 || !valid_model(&e.upstream_model)
                     // A bridge link answers only its owner's chats, so it cannot be published to others.
                     || e.transport.provider_id().is_bridge()
+                    // Local models answer decision requests only, until a chat route exists.
+                    || (e.transport == Transport::Local
+                        && e.capabilities != BTreeSet::from(["decision".to_owned()]))
                     || e.capabilities.iter().any(|c|!matches!(c.as_str(),"text"|"decision"|"vision"|"image"|"voice"|"video"))
                 {
                     bail!("Invalid platform model metadata");
@@ -143,6 +146,24 @@ mod tests {
         assert!(!roster.draft["jev"].capabilities.contains("text"));
     }
     #[test]
+    fn local_entries_are_keyless_decision_models_only() {
+        assert!(!Transport::Local.uses_api_key());
+        let mut roster = roster();
+        let entry = |capabilities: &[&str]| Entry {
+            id: "laya".into(),
+            display_name: "Laya".into(),
+            upstream_model: "laya".into(),
+            transport: Transport::Local,
+            capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
+        };
+        roster.draft.insert("laya".into(), entry(&["decision"]));
+        roster.validate().unwrap();
+        for capabilities in [&["text"][..], &["decision", "text"][..]] {
+            roster.draft.insert("laya".into(), entry(capabilities));
+            assert!(roster.validate().is_err());
+        }
+    }
+    #[test]
     fn secrets_and_roles_are_rejected_and_namespaced_models_validate() {
         assert!(valid_model("organization/model-name"));
         assert!(!valid_model("model\n"));
@@ -238,6 +259,9 @@ mod persistence_tests {
     use super::*;
 }
 
+/// The fixed credential generation of keyless local entries.
+const LOCAL_GENERATION: &str = "local";
+
 /// Private current credential state. Never serialized into publication metadata.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -319,6 +343,10 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         if !webagent_access::valid_id(&entry.id) {
             bail!("Invalid credential identity");
         }
+        // Local models need no key: the host relay holds theirs.
+        if entry.transport == Transport::Local {
+            return Ok(LOCAL_GENERATION.to_owned());
+        }
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
             .bind(format!("platform_credential:v1:{}", entry.id))
             .fetch_optional(self.app_pool)
@@ -342,6 +370,12 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         if !webagent_access::valid_id(&entry.id) {
             bail!("Invalid credential identity");
         }
+        if entry.transport == Transport::Local {
+            if generation != LOCAL_GENERATION {
+                bail!("Pinned credential revoked or replaced");
+            }
+            return Ok(serde_json::json!({}));
+        }
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
             .bind(format!("platform_credential:v1:{}", entry.id))
             .fetch_optional(self.app_pool)
@@ -362,6 +396,9 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         use sqlx::Row;
         if !webagent_access::valid_id(&entry.id) {
             bail!("Invalid credential identity");
+        }
+        if entry.transport == Transport::Local {
+            return Ok(true);
         }
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
             .bind(format!("platform_credential:v1:{}", entry.id))

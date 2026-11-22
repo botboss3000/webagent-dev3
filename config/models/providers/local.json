@@ -1,0 +1,7 @@
+{
+  "provider": "local",
+  "name": "Local models",
+  "base_url": "relay://local-models",
+  "validated": true,
+  "models": []
+}

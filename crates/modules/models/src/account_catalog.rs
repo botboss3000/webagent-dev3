@@ -497,31 +497,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         };
         let (source, source_connection) = match resolved {
             ResolvedSource::Byo { entry, connection } => (entry, connection),
-            ResolvedSource::Platform { entry, .. } => {
-                let id = platform_id(&entry.id);
-                (
-                    crate::model_selection::ModelEntry {
-                        id: id.clone(),
-                        owner_id: "platform_catalog".into(),
-                        connection_id: id.clone(),
-                        upstream_model: entry.upstream_model,
-                        display_name: entry.display_name,
-                        capabilities: entry.capabilities,
-                        allowed_agents: BTreeSet::new(),
-                        bridge_clients: Vec::new(),
-                        revision: 1,
-                    },
-                    crate::model_selection::Connection {
-                        id: id.clone(),
-                        owner_id: "platform_catalog".into(),
-                        transport: entry.transport,
-                        credential_ref: format!("platform_key:{}", entry.id),
-                        allowed_agents: BTreeSet::new(),
-                        revision: 1,
-                        revoked: false,
-                    },
-                )
-            }
+            ResolvedSource::Platform { entry, .. } => adopted_records(entry),
         };
         let receipt_key = format!(
             "receipt:model-adoption:{user}:{agent}:{}",
@@ -744,6 +720,155 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             .await
     }
 }
+/// The entry and connection an adopted platform entry gets in the agent catalog.
+fn adopted_records(
+    entry: crate::platform_catalog::Entry,
+) -> (
+    crate::model_selection::ModelEntry,
+    crate::model_selection::Connection,
+) {
+    let id = platform_id(&entry.id);
+    (
+        crate::model_selection::ModelEntry {
+            id: id.clone(),
+            owner_id: "platform_catalog".into(),
+            connection_id: id.clone(),
+            upstream_model: entry.upstream_model,
+            display_name: entry.display_name,
+            capabilities: entry.capabilities,
+            allowed_agents: BTreeSet::new(),
+            bridge_clients: Vec::new(),
+            revision: 1,
+        },
+        crate::model_selection::Connection {
+            id: id.clone(),
+            owner_id: "platform_catalog".into(),
+            transport: entry.transport,
+            credential_ref: format!("platform_key:{}", entry.id),
+            allowed_agents: BTreeSet::new(),
+            revision: 1,
+            revoked: false,
+        },
+    )
+}
+
+impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
+    /// Published local models are offered to every agent with no adoption step: add each one
+    /// `agent` does not have yet to `catalog`, as an adopted platform entry would look, for the
+    /// agent's Models page and its roster save. Nothing is stored here; a saved roster that
+    /// uses one keeps it (see [`drop_local_sources`]).
+    pub async fn with_local_sources(
+        &self,
+        user: &str,
+        agent: &str,
+        catalog: &mut crate::model_selection::Catalog,
+    ) -> Result<()> {
+        let Some(snapshot) = self
+            .platform_roster()
+            .await?
+            .and_then(|roster| roster.published().cloned())
+        else {
+            return Ok(());
+        };
+        let local = crate::model_selection::Transport::Local;
+        for entry in snapshot
+            .entries
+            .into_values()
+            .filter(|e| e.transport == local)
+        {
+            let id = platform_id(&entry.id);
+            if catalog
+                .entries
+                .get(&id)
+                .is_some_and(|e| e.allowed_agents.contains(agent))
+            {
+                continue;
+            }
+            let source = Source {
+                origin: Origin::Platform,
+                entry_id: id.clone(),
+            };
+            let Ok(pin) = self.pin_platform_source(user, &source).await else {
+                continue;
+            };
+            let (model, connection) = adopted_records(entry);
+            for granted in [
+                &mut catalog
+                    .entries
+                    .entry(id.clone())
+                    .or_insert(model)
+                    .allowed_agents,
+                &mut catalog
+                    .connections
+                    .entry(id.clone())
+                    .or_insert(connection)
+                    .allowed_agents,
+            ] {
+                granted.insert(agent.into());
+            }
+            catalog.platform_sources.entry(id).or_insert(pin);
+        }
+        Ok(())
+    }
+}
+
+/// Whether `roster` uses entry `id`: listed, appointed to a role or mode, or a backup.
+pub fn roster_uses(roster: Option<&crate::model_selection::AgentModels>, id: &str) -> bool {
+    roster.is_some_and(|r| {
+        r.entry_ids.iter().any(|e| e == id)
+            || r.roles.values().any(|role| role.entry_id == id)
+            || r.mode_models.values().any(|m| m == id)
+            || r.aliases
+                .iter()
+                .any(|(entry, backups)| entry == id || backups.iter().any(|b| b == id))
+    })
+}
+
+/// Undo [`Repository::with_local_sources`] in `next` for each local entry `keep` rejects, so
+/// saving a roster stores only the local models it uses. `stored` is the saved catalog.
+pub fn drop_local_sources(
+    stored: &crate::model_selection::Catalog,
+    next: &mut crate::model_selection::Catalog,
+    agent: &str,
+    keep: impl Fn(&str) -> bool,
+) {
+    let added: Vec<String> = next
+        .entries
+        .iter()
+        .filter(|(id, entry)| {
+            entry.allowed_agents.contains(agent)
+                && stored
+                    .entries
+                    .get(*id)
+                    .is_none_or(|e| !e.allowed_agents.contains(agent))
+                && next.platform_sources.contains_key(*id)
+        })
+        .map(|(id, _)| id.clone())
+        .filter(|id| !keep(id))
+        .collect();
+    for id in added {
+        match stored.entries.get(&id) {
+            Some(entry) => {
+                next.entries.insert(id.clone(), entry.clone());
+            }
+            None => {
+                next.entries.remove(&id);
+            }
+        }
+        match stored.connections.get(&id) {
+            Some(connection) => {
+                next.connections.insert(id.clone(), connection.clone());
+            }
+            None => {
+                next.connections.remove(&id);
+            }
+        }
+        if !stored.platform_sources.contains_key(&id) {
+            next.platform_sources.remove(&id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod platform_pin_tests {
     use super::*;

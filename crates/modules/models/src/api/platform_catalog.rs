@@ -82,6 +82,18 @@ pub async fn read<C: RuntimeStorage>(app: &Runtime<'_, C>, identity: Value) -> A
     let roster = app.store.platform_roster().await?;
     Ok(Json(json!({"roster":roster})))
 }
+/// The models the host's local models relay serves, with whether each answers, for the
+/// catalog's add form. Their addresses and keys stay on the host.
+pub async fn local_models<C: RuntimeStorage>(app: &Runtime<'_, C>, identity: Value) -> Api {
+    super::administrator(&app, &identity).await?;
+    let models = crate::decision::local_models().await.map_err(|_| {
+        ApiError(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Local models relay unavailable".into(),
+        )
+    })?;
+    Ok(Json(json!({ "models": models })))
+}
 pub async fn history<C: RuntimeStorage>(app: &Runtime<'_, C>, identity: Value) -> Api {
     super::administrator(&app, &identity).await?;
     let roster = app.store.platform_roster().await?.ok_or_else(|| {

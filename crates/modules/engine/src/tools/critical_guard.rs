@@ -8,6 +8,7 @@ use anyhow::{bail, Result};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use webagent_abilities::tool_definitions::Guard;
+use webagent_models::decision::Question;
 
 /// The universal rule every critical call is judged by; a tool's `guard.check` adds to it.
 pub const RULE: &str = "Decide only from the user's own messages. The action is requested when a \
@@ -253,7 +254,7 @@ pub fn recent(messages: &[Message], policy: &Policy) -> Vec<Message> {
 
 /// The two choice questions: whether the user asked, and which message.
 #[must_use]
-pub fn questions(messages: &[Message]) -> BTreeMap<String, Map<String, Value>> {
+pub fn questions(messages: &[Message]) -> BTreeMap<String, Question> {
     let mut asked = Map::new();
     asked.insert(
         "requested".into(),
@@ -272,7 +273,50 @@ pub fn questions(messages: &[Message]) -> BTreeMap<String, Map<String, Value>> {
         which.insert(message.label.clone(), Value::Null);
     }
     which.insert(NONE.into(), json!("No message asks for this action"));
-    BTreeMap::from([(ASKED.to_owned(), asked), (MESSAGE.to_owned(), which)])
+    BTreeMap::from([
+        (
+            ASKED.to_owned(),
+            Question {
+                instructions: "Did a user message ask for this exact action?".into(),
+                options: asked,
+            },
+        ),
+        (
+            MESSAGE.to_owned(),
+            Question {
+                instructions: "Which user message asks for this action?".into(),
+                options: which,
+            },
+        ),
+    ])
+}
+
+/// The newest of `messages` whose whole decision request still fits a model that reads
+/// `max_input_tokens` (about four characters a token), and `state` showing only those.
+/// Older messages are left out first; with none left, no message can be found asking.
+#[must_use]
+pub fn fit(state: &Value, messages: &[Message], max_input_tokens: usize) -> (Value, Vec<Message>) {
+    let budget = max_input_tokens.saturating_mul(4);
+    let shown = |kept: &[Message]| {
+        let mut state = state.clone();
+        state["user_messages"] = kept
+            .iter()
+            .map(|m| (m.label.clone(), json!(m.text)))
+            .collect::<Map<String, Value>>()
+            .into();
+        state
+    };
+    let mut kept = messages.len();
+    while kept > 0 {
+        let candidate = &messages[messages.len() - kept..];
+        let body = webagent_models::decision::request("", shown(candidate), &questions(candidate));
+        if body.to_string().len() <= budget {
+            break;
+        }
+        kept -= 1;
+    }
+    let kept = messages[messages.len() - kept..].to_vec();
+    (shown(&kept), kept)
 }
 
 /// The verdict from a decision model's choices.
@@ -430,11 +474,39 @@ mod tests {
     }
 
     #[test]
+    fn fit_keeps_the_newest_messages_that_fit_the_model() {
+        let long: Vec<Message> = (1..=12)
+            .map(|n| Message {
+                label: format!("u{n}"),
+                text: "x".repeat(300),
+            })
+            .collect();
+        let state = state("send_email", json!({"to":"a@example.test"}), None, &long);
+        let (all, kept) = fit(&state, &long, 100_000);
+        assert_eq!((kept.len(), &all), (12, &state));
+        let (small, kept) = fit(&state, &long, 512);
+        assert!(!kept.is_empty() && kept.len() < 12);
+        assert_eq!(kept.last().unwrap().label, "u12");
+        let size = webagent_models::decision::request("", small.clone(), &questions(&kept))
+            .to_string()
+            .len();
+        assert!(size <= 512 * 4);
+        assert_eq!(
+            small["user_messages"].as_object().unwrap().len(),
+            kept.len()
+        );
+        let (none, kept) = fit(&state, &long, 10);
+        assert!(kept.is_empty());
+        assert!(none["user_messages"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
     fn questions_offer_every_message_and_none() {
         let questions = questions(&messages());
-        let labels: Vec<&String> = questions[MESSAGE].keys().collect();
+        let labels: Vec<&String> = questions[MESSAGE].options.keys().collect();
         assert_eq!(labels, ["none", "u1", "u2", "u3"]);
-        assert_eq!(questions[ASKED].len(), 3);
+        assert_eq!(questions[ASKED].options.len(), 3);
+        assert!(!questions[ASKED].instructions.is_empty());
         let recent = recent(
             &messages(),
             &Policy {

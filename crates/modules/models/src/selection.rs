@@ -400,6 +400,7 @@ pub enum Transport {
     AntigravityBridge,
     GeminiBridge,
     Loadtest,
+    Local,
 }
 
 impl Transport {
@@ -431,6 +432,7 @@ impl Transport {
             Self::AntigravityBridge => crate::provider::ProviderId::AntigravityBridge,
             Self::GeminiBridge => crate::provider::ProviderId::GeminiBridge,
             Self::Loadtest => crate::provider::ProviderId::Loadtest,
+            Self::Local => crate::provider::ProviderId::Local,
         }
     }
 }

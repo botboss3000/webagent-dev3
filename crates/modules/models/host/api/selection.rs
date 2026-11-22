@@ -520,6 +520,136 @@ mod tests {
         .await
         .is_err());
     }
+    // LOCAL-MODELS: a published local model is offered to every agent with no adoption step,
+    // stored only when a saved roster uses it, and refused at dispatch once unpublished.
+    #[tokio::test]
+    async fn published_local_models_are_offered_and_kept_only_when_used() {
+        use crate::model_selection::{ModelRole, RoleAssignment, Transport};
+        use crate::platform_catalog::{Entry, Mutation};
+        use std::collections::{BTreeMap, BTreeSet};
+        let (_root, app) = fixture().await;
+        selection_fixture(&app).await;
+        let admin = json!({"_user_id":"admin"});
+        let id = "platform:laya";
+        let entry = Entry {
+            id: "laya".into(),
+            display_name: "Laya".into(),
+            upstream_model: "laya".into(),
+            transport: Transport::Local,
+            capabilities: BTreeSet::from(["decision".into()]),
+        };
+        let publish = |entries: BTreeMap<String, Entry>, expected: u64| {
+            let app = app.clone();
+            async move {
+                let store = &app.store;
+                store
+                    .mutate_platform_roster(expected, Mutation::Draft { entries }, "admin")
+                    .await
+                    .unwrap();
+                store
+                    .mutate_platform_roster(
+                        expected + 1,
+                        Mutation::Publish { rollback: None },
+                        "admin",
+                    )
+                    .await
+                    .unwrap();
+            }
+        };
+        let view = |agent: &'static str| {
+            let (app, admin) = (app.clone(), admin.clone());
+            async move {
+                read(State(app), Extension(admin), agent_query(agent))
+                    .await
+                    .unwrap()
+                    .0
+            }
+        };
+        let store = |input: Catalog, agent: &'static str| {
+            let (app, admin) = (app.clone(), admin.clone());
+            async move {
+                save(
+                    State(app),
+                    Extension(admin),
+                    agent_query(agent),
+                    Json(input),
+                )
+                .await
+                .unwrap();
+            }
+        };
+        let offered = |view: &Value| {
+            view["available_entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e == id)
+        };
+        publish(BTreeMap::from([("laya".into(), entry)]), 0).await;
+        let first = view("agent-a").await;
+        assert!(offered(&first));
+        assert!(!app
+            .store
+            .model_catalog()
+            .await
+            .unwrap()
+            .entries
+            .contains_key(id));
+        // Saving a roster that does not use it stores nothing.
+        store(
+            serde_json::from_value(first["catalog"].clone()).unwrap(),
+            "agent-a",
+        )
+        .await;
+        assert!(!app
+            .store
+            .model_catalog()
+            .await
+            .unwrap()
+            .entries
+            .contains_key(id));
+        // Appointed as the Decision model, it is stored for that agent.
+        let mut input: Catalog =
+            serde_json::from_value(view("agent-a").await["catalog"].clone()).unwrap();
+        let roster = input.agent_models.get_mut("agent-a").unwrap();
+        roster.entry_ids.push(id.into());
+        roster
+            .roles
+            .insert(ModelRole::Decision, RoleAssignment::new(id));
+        store(input, "agent-a").await;
+        // As a backup of another agent's model, it is stored for that agent too.
+        let mut input: Catalog =
+            serde_json::from_value(view("shared_default").await["catalog"].clone()).unwrap();
+        let roster = input.agent_models.get_mut("shared_default").unwrap();
+        roster.entry_ids.push(id.into());
+        roster
+            .aliases
+            .entry("one".into())
+            .or_default()
+            .push(id.into());
+        store(input, "shared_default").await;
+        let stored = app.store.model_catalog().await.unwrap();
+        assert_eq!(
+            stored.entries[id].allowed_agents,
+            BTreeSet::from(["agent-a".to_owned(), "shared_default".to_owned()])
+        );
+        let pin = stored.platform_sources[id].clone();
+        assert_eq!(
+            app.store
+                .platform_dispatch_tokens("admin", "agent-a", &pin)
+                .await
+                .unwrap(),
+            json!({})
+        );
+        // Unpublished, it is no longer available and dispatch refuses it.
+        publish(BTreeMap::new(), 2).await;
+        assert!(!offered(&view("agent-a").await));
+        assert!(app
+            .store
+            .platform_dispatch_tokens("admin", "agent-a", &pin)
+            .await
+            .is_err());
+    }
     #[tokio::test]
     async fn only_administrators_create_loadtest_connections() {
         let (_root, app) = fixture().await;

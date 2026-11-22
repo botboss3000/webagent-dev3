@@ -1,13 +1,18 @@
 //! System One decision requests: questions with fixed options answered with probabilities,
 //! no generated text. TypeSafe's Jev serves `POST {base_url}/v1/systemone`; self-hosted
 //! servers with the same request shape (Laya, Kev) can stand in for it. The base URL comes
-//! from the provider's file, the key from the caller's credential. Failures carry a
-//! [`FailureKind`] so a caller can move on to its next model.
+//! from the provider's file, the key from the caller's credential. Self-hosted models of the
+//! `local` provider are asked through the host's local models relay instead
+//! (`build-service/local_models_relay.py`), which holds their addresses and keys. Failures
+//! carry a [`FailureKind`] so a caller can move on to its next model.
 use crate::model_selection::FailureKind;
 use crate::transport::typed_failure;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
-use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+use std::{collections::BTreeMap, sync::Mutex, sync::OnceLock, time::Duration};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 const MAX_REQUEST: usize = 64 * 1024;
 const MAX_RESPONSE: usize = 512 * 1024;
@@ -19,19 +24,24 @@ pub struct Choice {
     pub confidence: f64,
 }
 
+/// One choice question: what to answer, and its options (option name to description, or null).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Question {
+    pub instructions: String,
+    pub options: Map<String, Value>,
+}
+
 /// The request body: `state` is what the model judges, `questions` maps each question name
-/// to its options (option name to description, or null).
-pub fn request(
-    model: &str,
-    state: Value,
-    questions: &BTreeMap<String, Map<String, Value>>,
-) -> Value {
+/// to its question. Every question carries its instructions; some servers (Laya) refuse one
+/// without them.
+pub fn request(model: &str, state: Value, questions: &BTreeMap<String, Question>) -> Value {
     let questions: Map<String, Value> = questions
         .iter()
-        .map(|(name, options)| {
+        .map(|(name, question)| {
             (
                 name.clone(),
-                json!({"type":"choice","criteria":Value::Object(options.clone())}),
+                json!({"type":"choice","instructions":question.instructions,
+                    "criteria":Value::Object(question.options.clone())}),
             )
         })
         .collect();
@@ -192,6 +202,144 @@ pub async fn ask(
         .map_err(|error| typed_failure(FailureKind::Protocol, true, error.to_string()))
 }
 
+/// The local models relay's socket, in the runtime folder the app's containers mount.
+fn relay_socket() -> PathBuf {
+    webagent_configuration::paths::runtime().join("local-models/relay.sock")
+}
+
+/// One request to the relay at `socket` and its reply, within `limit`. The relay answers one
+/// JSON line per request; a reply larger than an answer plus its envelope is refused.
+async fn relay_at(socket: &Path, request: &Value, limit: Duration) -> Result<Value> {
+    let unavailable =
+        |detail: &str| typed_failure(FailureKind::Transient, false, detail.to_owned());
+    let exchange = async {
+        let mut stream = tokio::net::UnixStream::connect(socket)
+            .await
+            .map_err(|_| unavailable("Local models relay unavailable"))?;
+        let mut line = serde_json::to_vec(request)?;
+        line.push(b'\n');
+        stream
+            .write_all(&line)
+            .await
+            .map_err(|_| unavailable("Local models relay unavailable"))?;
+        let mut reply = Vec::new();
+        tokio::io::BufReader::new(stream)
+            .take((MAX_RESPONSE + 4096) as u64)
+            .read_until(b'\n', &mut reply)
+            .await
+            .map_err(|_| unavailable("Local models relay cut off"))?;
+        serde_json::from_slice::<Value>(&reply).map_err(|_| {
+            typed_failure(
+                FailureKind::Protocol,
+                true,
+                "Invalid local models relay reply",
+            )
+        })
+    };
+    tokio::time::timeout(limit, exchange)
+        .await
+        .map_err(|_| unavailable("Local model timed out"))?
+}
+
+/// A relay failure reply as a typed failure, so the caller can move on to its next model.
+fn relay_failure(reply: &Value) -> anyhow::Error {
+    let detail = reply["error"].as_str().unwrap_or("Local model failed");
+    match reply["kind"].as_str() {
+        Some("rejected") => failure(reply["status"].as_u64().unwrap_or(0) as u16),
+        Some("unknown_model") => {
+            typed_failure(FailureKind::ModelUnavailable, false, detail.to_owned())
+        }
+        Some("invalid") => typed_failure(FailureKind::MalformedRequest, false, detail.to_owned()),
+        Some("too_large") => typed_failure(FailureKind::Protocol, true, detail.to_owned()),
+        _ => typed_failure(FailureKind::Transient, false, detail.to_owned()),
+    }
+}
+
+async fn ask_local_at(
+    socket: &Path,
+    model: &str,
+    body: &Value,
+    limit: Duration,
+) -> Result<BTreeMap<String, Choice>> {
+    if serde_json::to_vec(body)?.len() > MAX_REQUEST {
+        return Err(typed_failure(
+            FailureKind::MalformedRequest,
+            false,
+            "Decision request exceeds 64 KiB",
+        ));
+    }
+    let reply = relay_at(
+        socket,
+        &json!({"op":"decide","model":model,"body":body}),
+        limit,
+    )
+    .await?;
+    if reply["ok"] != true {
+        return Err(relay_failure(&reply));
+    }
+    choices(body, &reply["answer"])
+        .map_err(|error| typed_failure(FailureKind::Protocol, true, error.to_string()))
+}
+
+/// Ask the local model `model` (its id in the relay's registry) through the relay and return
+/// its checked choices, within `limit`.
+pub async fn ask_local(
+    model: &str,
+    body: &Value,
+    limit: Duration,
+) -> Result<BTreeMap<String, Choice>> {
+    ask_local_at(&relay_socket(), model, body, limit).await
+}
+
+async fn local_models_at(socket: &Path) -> Result<Vec<Value>> {
+    let reply = relay_at(socket, &json!({"op":"models"}), Duration::from_secs(10)).await?;
+    if reply["ok"] != true {
+        return Err(relay_failure(&reply));
+    }
+    reply["models"]
+        .as_array()
+        .cloned()
+        .context("Local models relay sent no model list")
+}
+
+/// The models the relay serves: id, name, capabilities, api, max_input_tokens,
+/// needs_instructions and whether each answers its health check (`up`).
+pub async fn local_models() -> Result<Vec<Value>> {
+    local_models_at(&relay_socket()).await
+}
+
+/// How many input tokens the local model `model` reads. The relay's list is kept for five
+/// minutes, since listing it waits on every model's health check.
+pub async fn local_input_limit(model: &str) -> Result<usize> {
+    static LIST: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
+    let cached = LIST
+        .lock()
+        .expect("Local model list lock")
+        .as_ref()
+        .filter(|(at, _)| at.elapsed() < Duration::from_secs(300))
+        .map(|(_, models)| models.clone());
+    let models = match cached {
+        Some(models) => models,
+        None => {
+            let models = local_models().await?;
+            *LIST.lock().expect("Local model list lock") = Some((Instant::now(), models.clone()));
+            models
+        }
+    };
+    models
+        .iter()
+        .find(|m| m["id"] == model)
+        .and_then(|m| m["max_input_tokens"].as_u64())
+        .map(|limit| limit as usize)
+        .ok_or_else(|| {
+            typed_failure(
+                FailureKind::ModelUnavailable,
+                false,
+                "Local model not in the relay registry",
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,7 +349,13 @@ mod tests {
         let mut options = Map::new();
         options.insert("requested".into(), json!("asked for"));
         options.insert("unclear".into(), Value::Null);
-        questions.insert("asked".to_owned(), options);
+        questions.insert(
+            "asked".to_owned(),
+            Question {
+                instructions: "Did the user ask?".into(),
+                options,
+            },
+        );
         request("jev-latest", json!({"x":1}), &questions)
     }
 
@@ -210,6 +364,10 @@ mod tests {
         let body = body();
         assert_eq!(body["model"], "jev-latest");
         assert_eq!(body["questions"]["asked"]["type"], "choice");
+        assert_eq!(
+            body["questions"]["asked"]["instructions"],
+            "Did the user ask?"
+        );
         assert_eq!(
             body["questions"]["asked"]["criteria"]["unclear"],
             Value::Null
@@ -267,5 +425,119 @@ mod tests {
         assert_eq!(kind(401), Some(FailureKind::InvalidCredentials));
         assert_eq!(kind(429), Some(FailureKind::QuotaExhausted));
         assert_eq!(kind(503), Some(FailureKind::Transient));
+    }
+
+    /// A fake relay on a temporary socket: answers each connection with the next reply and
+    /// records the request lines it read.
+    fn fake_relay(
+        replies: Vec<Value>,
+    ) -> (
+        tempfile::TempDir,
+        PathBuf,
+        tokio::task::JoinHandle<Vec<Value>>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("relay.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let task = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for reply in replies {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = stream.into_split();
+                let mut line = String::new();
+                tokio::io::BufReader::new(read)
+                    .read_line(&mut line)
+                    .await
+                    .unwrap();
+                seen.push(serde_json::from_str(&line).unwrap());
+                write
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+            seen
+        });
+        (dir, socket, task)
+    }
+
+    fn kind_of(error: &anyhow::Error) -> Option<FailureKind> {
+        error
+            .downcast_ref::<crate::transport::ProviderFailure>()
+            .map(|f| f.kind)
+    }
+
+    #[tokio::test]
+    async fn local_decisions_go_through_the_relay_and_are_checked() {
+        let answer = json!({"answers":{"asked":{"choice":"requested","confidence":0.8}}});
+        let (_dir, socket, task) = fake_relay(vec![
+            json!({"ok":true,"answer":answer}),
+            json!({"ok":true,"answer":{"answers":{"asked":{"choice":"maybe","confidence":0.8}}}}),
+        ]);
+        let limit = Duration::from_secs(5);
+        let choices = ask_local_at(&socket, "laya", &body(), limit).await.unwrap();
+        assert_eq!(choices["asked"].choice, "requested");
+        let error = ask_local_at(&socket, "laya", &body(), limit)
+            .await
+            .unwrap_err();
+        assert_eq!(kind_of(&error), Some(FailureKind::Protocol));
+        let seen = task.await.unwrap();
+        assert_eq!(seen[0]["op"], "decide");
+        assert_eq!(seen[0]["model"], "laya");
+        assert_eq!(seen[0]["body"], body());
+    }
+
+    #[tokio::test]
+    async fn relay_failures_map_to_failover_kinds() {
+        let cases = [
+            (
+                json!({"ok":false,"kind":"unavailable","error":"down"}),
+                FailureKind::Transient,
+            ),
+            (
+                json!({"ok":false,"kind":"timeout","error":"slow"}),
+                FailureKind::Transient,
+            ),
+            (
+                json!({"ok":false,"kind":"unknown_model","error":"x"}),
+                FailureKind::ModelUnavailable,
+            ),
+            (
+                json!({"ok":false,"kind":"rejected","status":401,"error":"x"}),
+                FailureKind::InvalidCredentials,
+            ),
+            (
+                json!({"ok":false,"kind":"rejected","status":422,"error":"x"}),
+                FailureKind::MalformedRequest,
+            ),
+        ];
+        let (_dir, socket, _task) =
+            fake_relay(cases.iter().map(|(reply, _)| reply.clone()).collect());
+        for (_, expected) in cases {
+            let error = ask_local_at(&socket, "laya", &body(), Duration::from_secs(5))
+                .await
+                .unwrap_err();
+            assert_eq!(kind_of(&error), Some(expected));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_relay_is_transient_and_models_are_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = ask_local_at(
+            &dir.path().join("none.sock"),
+            "laya",
+            &body(),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(kind_of(&error), Some(FailureKind::Transient));
+        let listed = json!([{"id":"laya","max_input_tokens":512,"up":true}]);
+        let (_dir, socket, task) = fake_relay(vec![json!({"ok":true,"models":listed})]);
+        assert_eq!(
+            Value::Array(local_models_at(&socket).await.unwrap()),
+            listed
+        );
+        assert_eq!(task.await.unwrap()[0], json!({"op":"models"}));
     }
 }

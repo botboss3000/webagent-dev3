@@ -14,6 +14,11 @@ async fn read(State(app): State<App>, Extension(identity): Extension<Value>) -> 
         .await
         .map_err(Into::into)
 }
+async fn local_models(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
+    webagent_models::api::platform_catalog::local_models(&app.models_runtime(), identity)
+        .await
+        .map_err(Into::into)
+}
 async fn history(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
     webagent_models::api::platform_catalog::history(&app.models_runtime(), identity)
         .await
@@ -78,6 +83,7 @@ pub fn router() -> Router<App> {
     Router::new()
         .route("/", get(read).put(draft))
         .route("/history", get(history))
+        .route("/local-models", get(local_models))
         .route("/validate", post(validate))
         .route("/preview", post(preview))
         .route(

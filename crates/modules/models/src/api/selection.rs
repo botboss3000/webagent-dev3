@@ -42,6 +42,14 @@ pub async fn response<C: RuntimeStorage>(
 ) -> Api {
     let rights = authority(app, identity, agent, false).await?;
     let caller = principal(app, identity).await?;
+    // Whoever manages the agent is offered every published local model to assign.
+    let mut offered = catalog.clone();
+    if rights["can_manage"] == true {
+        app.store
+            .with_local_sources(&caller.user_id, agent, &mut offered)
+            .await?;
+    }
+    let catalog = &offered;
     let mut view = scoped(catalog, &caller.user_id, agent);
     let access = app.store.live_access(&caller.user_id, agent).await.ok();
     let mut available = Vec::new();
@@ -104,7 +112,7 @@ pub async fn response<C: RuntimeStorage>(
     Ok(Json(
         json!({"adoptions":adoptions,"catalog":view,"caller_id":caller.user_id,"can_manage":rights["can_manage"],
         "can_create_agent":caller.role != webagent_access::Role::Guest,"agent_owner_id":rights["owner_id"],
-        "available_entries":available,"supported_transports":["typesafe","openai_subscription","deepseek","openai_api","openrouter","abacus","gemini","groq","together","mistral","fireworks","xai","perplexity","deepinfra"]}),
+        "available_entries":available,"supported_transports":["typesafe","local","openai_subscription","deepseek","openai_api","openrouter","abacus","gemini","groq","together","mistral","fireworks","xai","perplexity","deepinfra"]}),
     ))
 }
 pub fn scoped(catalog: &Catalog, caller: &str, agent: &str) -> Catalog {
@@ -201,7 +209,15 @@ pub async fn save<C: RuntimeStorage>(
     let _guard = app.gate.lock().await;
     let rights = authority(&app, &identity, agent, true).await?;
     let caller = principal(&app, &identity).await?;
-    let old = app.store.model_catalog().await?;
+    let stored = app.store.model_catalog().await?;
+    // The published local models this page was offered and sent back count as adopted.
+    let mut old = stored.clone();
+    app.store
+        .with_local_sources(&caller.user_id, agent, &mut old)
+        .await?;
+    crate::account_catalog::drop_local_sources(&stored, &mut old, agent, |id| {
+        input.entries.contains_key(id)
+    });
     if old.revision != input.revision {
         return Err(super::conflict(
             "Model catalog revision changed; reload before saving",
@@ -379,6 +395,11 @@ pub async fn save<C: RuntimeStorage>(
     } else if view.agent_models.contains_key(agent) {
         return Err(super::bad("Clear roles explicitly"));
     }
+    // Keep only the offered local models the saved roster uses.
+    let roster = next.agent_models.get(agent).cloned();
+    crate::account_catalog::drop_local_sources(&stored, &mut next, agent, |id| {
+        crate::account_catalog::roster_uses(roster.as_ref(), id)
+    });
     let saved = app
         .store
         .save_model_catalog(&next, input.revision)

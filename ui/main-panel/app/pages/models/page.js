@@ -66,7 +66,10 @@ export async function mountAppModels(host) {
       }
       staged=structuredClone(next);dirty=true;update();return{providers:next};
     },
-    fetchModels:async({provider,api_key})=>request('/models/discovery','POST',{provider,api_key}),
+    // Local models come from the server's relay, each marked with whether it answers now.
+    fetchModels:async({provider,api_key})=>provider==='local'
+      ?{models:(await request(path+'/local-models')).models.map(m=>({id:m.id,name:m.name+(m.up?'':' (not answering)'),decision_capable:m.capabilities.includes('decision'),text_capable:m.capabilities.includes('text')}))}
+      :request('/models/discovery','POST',{provider,api_key}),
     fetchModelInfo:async()=>({}),fetchModelUsage:async args=>request('/admin/usage/models/totals?'+usageQuery(args)).catch(()=>null),
     saveDefaultEntryId:async()=>{throw Error('Defaults belong to user accounts, not app publication');},
     subscriptionRequest:unavailable,

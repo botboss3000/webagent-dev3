@@ -32,6 +32,7 @@ pub enum ProviderIdV1 {
     AntigravityBridge,
     GeminiBridge,
     Loadtest,
+    Local,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -179,7 +180,7 @@ pub fn profile_for(provider: ProviderIdV1) -> ProfileV1 {
             reasoning_replay: ReasoningReplayV1::DeepseekContent,
             cache_control: CacheControlV1::ImplicitPrefix,
         },
-        ProviderIdV1::Typesafe => ProfileV1 {
+        ProviderIdV1::Typesafe | ProviderIdV1::Local => ProfileV1 {
             instruction_role: InstructionRoleV1::System,
             transport: TransportV1::Decision,
             reasoning_replay: ReasoningReplayV1::None,

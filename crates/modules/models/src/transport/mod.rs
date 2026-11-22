@@ -55,6 +55,7 @@ pub fn projection_id(provider: ProviderId) -> webagent_provider_contracts::Provi
         ProviderId::AntigravityBridge => P::AntigravityBridge,
         ProviderId::GeminiBridge => P::GeminiBridge,
         ProviderId::Loadtest => P::Loadtest,
+        ProviderId::Local => P::Local,
     }
 }
 /// Sanitized transport error; no provider payload, token or user input escapes.
