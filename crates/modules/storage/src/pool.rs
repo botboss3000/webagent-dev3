@@ -41,13 +41,19 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Full)
         .busy_timeout(std::time::Duration::from_secs(5));
+    // The application plane (events without runs: app.db) is shared by every account's
+    // sign-in, directory, scan and relay access, so it gets twice the connections, keeps one
+    // open and closes idle ones after 60 s; user and agent planes keep 4.
+    let application = events && !runs;
+    let idle = std::time::Duration::from_secs(if application { 60 } else { 5 });
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         // IDLE-POOL-BOUND: release idle connections without closing pools that
-        // active Store clones still use. Each connection holds an OS thread, so idle
-        // ones go quickly; reconnection remains transparent.
-        .min_connections(0)
-        .idle_timeout(std::time::Duration::from_secs(5))
-        .max_connections(4)
+        // active Store clones still use. Each connection holds an OS thread, and scans visit
+        // every account every 30 s, so user and agent connections must close within 5 s: at
+        // 60 s the loop held one thread per account and passed the container's 1024-task limit.
+        .min_connections(u32::from(application))
+        .idle_timeout(idle)
+        .max_connections(if application { 8 } else { 4 })
         .connect_with(options)
         .await?;
     std::fs::set_permissions(
@@ -60,6 +66,7 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
     if events {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, kind TEXT NOT NULL, payload BLOB NOT NULL);
             CREATE INDEX IF NOT EXISTS events_session ON events(session_id,seq);
+            CREATE INDEX IF NOT EXISTS events_session_kind ON events(session_id,kind,seq);
             CREATE TABLE IF NOT EXISTS legacy_event_map(legacy_seq INTEGER PRIMARY KEY,new_seq INTEGER NOT NULL UNIQUE);")
             .execute(&pool).await?;
         let event_columns = sqlx::query("PRAGMA table_info(events)")
@@ -103,6 +110,7 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
             CREATE INDEX IF NOT EXISTS chat_session ON chat(session_id,seq);
             CREATE TABLE IF NOT EXISTS loop_commands(seq INTEGER PRIMARY KEY AUTOINCREMENT,command_id TEXT NOT NULL UNIQUE,run_id TEXT NOT NULL,schema_version INTEGER NOT NULL CHECK(schema_version=1),kind TEXT NOT NULL,payload BLOB NOT NULL,created_at INTEGER NOT NULL,acknowledged_at INTEGER);
             CREATE INDEX IF NOT EXISTS loop_commands_run ON loop_commands(run_id,seq);
+            CREATE INDEX IF NOT EXISTS loop_commands_open ON loop_commands(seq) WHERE acknowledged_at IS NULL;
             CREATE TABLE IF NOT EXISTS loop_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL,schema_version INTEGER NOT NULL CHECK(schema_version=1),kind TEXT NOT NULL,payload BLOB NOT NULL,created_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS loop_events_run ON loop_events(run_id,seq);
             CREATE TRIGGER IF NOT EXISTS loop_events_newest_run_status AFTER INSERT ON loop_events
@@ -149,6 +157,12 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
                 .await?;
         }
         sqlx::query("UPDATE run_index SET enqueue_seq=rowid WHERE enqueue_seq IS NULL")
+            .execute(&pool)
+            .await?;
+        // Unfinished runs only (covering for the scans' existence test), so scans skip the never-pruned
+        // finished rows.
+        // Queries must repeat this exact predicate for SQLite to use the index.
+        sqlx::query("CREATE INDEX IF NOT EXISTS run_index_open ON run_index(enqueue_seq,status) WHERE status NOT IN ('completed','cancelled','failed')")
             .execute(&pool)
             .await?;
         widen_chat_roles(&pool).await?;

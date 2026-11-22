@@ -241,7 +241,9 @@ impl Store {
         if !access::valid_id(user_id) {
             return Err(anyhow!("Invalid account identity"));
         }
-        if self.account_by_id(user_id).await?.is_none() {
+        // The deleted-account fence; scans call this for every account each tick, so it
+        // checks the row without decrypting the record.
+        if !self.accounts_repository().account_exists(user_id).await? {
             return Err(anyhow!("Account not found"));
         }
         let existing = self.user_states.read().await.get(user_id).cloned();

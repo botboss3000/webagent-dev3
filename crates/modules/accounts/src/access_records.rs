@@ -34,6 +34,15 @@ impl<C: RecordCodec> Repository<'_, C> {
     pub async fn account_state(&self, id: &str) -> Result<Option<Value>> {
         Ok(self.account_by_id(id).await?.as_ref().map(state))
     }
+    /// Whether the account exists: a primary-key lookup without decrypting its record.
+    pub async fn account_exists(&self, id: &str) -> Result<bool> {
+        Ok(
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_accounts WHERE user_id=?)")
+                .bind(id)
+                .fetch_one(self.app_pool)
+                .await?,
+        )
+    }
     pub async fn all_user_ids(&self) -> Result<Vec<String>> {
         Ok(
             sqlx::query_scalar("SELECT user_id FROM user_accounts ORDER BY user_id")

@@ -762,14 +762,14 @@ hydrates a previous run. Active snapshots and provider payloads still own copies
 verified benefit is avoiding unchanged history decryption, encryption and database rewrites;
 no overall CPU, allocation, RSS or latency speedup is inferred from this change.
 
-Each Store family shares one document LRU and one context LRU across all its user handles.
+Each Store family shares one context LRU across all its user handles.
 Context keys include the account identity, and invalidation affects only that account/session.
-Reconfiguration resets these shared caches for existing and future handles. Runtime JSON
-`document_budget_bytes` and `context_budget_bytes` therefore bound estimated retained cache
-weight per process, not per user. Document caching remains disabled for cross-process runtime
-authority reads. API and loop processes have separate caches; pools, live request copies,
+Reconfiguration resets this shared cache for existing and future handles. Runtime JSON
+`context_budget_bytes` therefore bounds estimated retained cache weight per process, not per
+user. There is no document cache: the old one never stored anything and is now an empty no-op,
+so `document_budget_bytes` has no effect. API and loop processes have separate caches; pools, live request copies,
 streaming buffers and allocator overhead are outside these limits. Independent Store roots
-also have independent budgets. Idle connections expire after 60 seconds. At 64 registered user handles, idle entries are pruned; active handles retain their shared synchronization gate. This is not a hard cap on active users or all process memory.
+also have independent budgets. The application database (`app.db`) has up to 8 connections, keeps one open and closes idle ones after 60 seconds; user and agent databases have up to 4 and close idle ones after 5 seconds, because scans visit every account and each connection holds a thread. At 64 registered user handles, idle entries are pruned; active handles retain their shared synchronization gate. This is not a hard cap on active users or all process memory.
 
 Rollout requires a rebuilt API and loop using the same format. Older binaries cannot hydrate
 split run records: stop old writers before rollout and back up the state root. Do not downgrade

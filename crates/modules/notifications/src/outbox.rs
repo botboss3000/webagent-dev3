@@ -148,6 +148,13 @@ where
 /// Move up to 200 committed staging rows of `user_id` from `user_pool` into the outbox in
 /// `app_pool`, prune the outbox, then acknowledge the moved rows. Returns the rows moved.
 pub async fn relay(app_pool: &SqlitePool, user_pool: &SqlitePool, user_id: &str) -> Result<usize> {
+    // Most accounts have nothing staged; skip the app.db write transaction (and its fsync) for them.
+    let staged: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notification_stage)")
+        .fetch_one(user_pool)
+        .await?;
+    if !staged {
+        return Ok(0);
+    }
     let mut tx = app_pool.begin().await?;
     sqlx::query("INSERT OR IGNORE INTO notification_relay VALUES(?,0)")
         .bind(user_id)
