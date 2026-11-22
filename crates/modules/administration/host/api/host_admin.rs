@@ -200,6 +200,7 @@ pub(crate) async fn production_watch(app: App) {
 }
 
 /// The broker's production release list, read with the Builds page's administrator identity.
+#[cfg(feature = "administrator")]
 async fn production_list(app: &App) -> anyhow::Result<Value> {
     if !webagent_administration::tools::installed() {
         anyhow::bail!("Administrator pack not installed");
@@ -212,6 +213,12 @@ async fn production_list(app: &App) -> anyhow::Result<Value> {
     webagent_administration_host::dashboard::production(&crate::tools::administrator::Host(&caller))
         .await
         .map_err(|error| anyhow::anyhow!(error.1))
+}
+
+/// Builds without the Administrator pack have no broker to read.
+#[cfg(not(feature = "administrator"))]
+async fn production_list(_app: &App) -> anyhow::Result<Value> {
+    anyhow::bail!("Administrator pack not installed")
 }
 
 /// One production release event as a background notice to the requesting chat (none for
