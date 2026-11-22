@@ -17,10 +17,13 @@ use webagent_configuration::digest;
 const CALLS: &str = "browser_call:";
 /// `{id, name, created, secret, last_seen}` per linked device, under its user.
 const DEVICES: &str = "browser_device:";
-/// `{user, device}` keyed by a device secret's digest: the extension endpoints' admission.
+/// `{user, device, source, generation}` keyed by a device secret's digest: the extension
+/// endpoints' admission. `source` is the sign-in that linked the device: it ends with it.
 const SECRETS: &str = "browser_secret:";
-/// `{user, expires}` per unused link code, keyed by the code's digest.
+/// `{user, expires, source, generation}` per unused link code, keyed by the code's digest.
 const LINKS: &str = "browser_link:";
+/// Unexpired link codes one user may hold; issuing another drops their oldest.
+const LIVE_CODES: usize = 3;
 /// How often a waiting side re-reads the call document.
 const TICK: Duration = Duration::from_millis(250);
 
@@ -39,7 +42,8 @@ fn signed_in(identity: &Value) -> Result<&str, ApiError> {
 
 /// Issue a one-time code that links the caller's browser extension to this account. The
 /// chat panel asks for one whenever the extension reports a different (or no) account, so
-/// linking follows whoever is signed in to the widget. `linked_user` is only that report.
+/// linking follows whoever is signed in. `linked_user` is only that report. Only a browser
+/// sign-in may issue one, and the device it links lasts only as long as that sign-in.
 pub(crate) async fn link_code(
     State(app): State<App>,
     Extension(identity): Extension<Value>,
@@ -49,11 +53,38 @@ pub(crate) async fn link_code(
     if input["linked_user"] == user {
         return Ok(Json(json!({"linked":true})));
     }
+    let source = identity["_auth_key"]
+        .as_str()
+        .filter(|key| key.starts_with("auth:"))
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::FORBIDDEN,
+                "Link the browser extension from a signed-in WebAgent page".into(),
+            )
+        })?;
+    let at = now();
+    let _guard = app.gate.lock().await;
+    // Expired codes go, and the user keeps at most `LIVE_CODES` codes counting this one.
+    let mut own = Vec::new();
+    for doc in app.store.list(LINKS).await? {
+        let key = doc["key"].as_str().unwrap_or_default().to_owned();
+        if doc["expires"].as_u64().unwrap_or(0) < at {
+            app.store.delete(&key).await?;
+        } else if doc["user"] == user {
+            own.push((doc["expires"].as_u64().unwrap_or(0), key));
+        }
+    }
+    own.sort();
+    for (_, key) in own.iter().take((own.len() + 1).saturating_sub(LIVE_CODES)) {
+        app.store.delete(key).await?;
+    }
     let code = rules::link_code();
+    let key = format!("{LINKS}{}", digest(&json!(code)));
     app.store
         .put(
-            &format!("{LINKS}{}", digest(&json!(code))),
-            &json!({"user":user,"expires":now() + rules::LINK_SECS}),
+            &key,
+            &json!({"key":key,"user":user,"expires":at + rules::LINK_SECS,"source":source,
+                "generation":identity["generation"]}),
         )
         .await?;
     Ok(Json(json!({"code":code})))
@@ -97,7 +128,8 @@ pub(crate) async fn link(
     app.store
         .put(
             &format!("{SECRETS}{secret_key}"),
-            &json!({"user":user,"device":device}),
+            &json!({"user":user,"device":device,"source":pending["source"],
+                "generation":pending["generation"]}),
         )
         .await?;
     app.store
@@ -118,7 +150,10 @@ struct Device {
     secret_key: String,
 }
 
-async fn admit(store: &Store, headers: &HeaderMap) -> Result<Device, ApiError> {
+/// Admits a device by its secret while the sign-in that linked it is live: signing out,
+/// changing the password or losing the account ends the device, which is then forgotten.
+async fn admit(app: &App, headers: &HeaderMap) -> Result<Device, ApiError> {
+    let store = &app.store;
     let unauthorized = |message: &str| ApiError(StatusCode::UNAUTHORIZED, message.into());
     let secret = headers
         .get("authorization")
@@ -131,11 +166,28 @@ async fn admit(store: &Store, headers: &HeaderMap) -> Result<Device, ApiError> {
         .get(&format!("{SECRETS}{secret_key}"))
         .await?
         .ok_or_else(|| unauthorized("Unknown or revoked device; link this browser again"))?;
-    Ok(Device {
+    let device = Device {
         user: admission["user"].as_str().unwrap_or("").to_owned(),
         id: admission["device"].as_str().unwrap_or("").to_owned(),
         secret_key,
-    })
+    };
+    let live = match admission["source"].as_str() {
+        Some(source) => {
+            store
+                .accounts_repository()
+                .session_reference_live(source, &device.user, &admission["generation"], now())
+                .await?
+        }
+        None => false,
+    };
+    if !live {
+        let _guard = app.gate.lock().await;
+        forget(store, &device.user, &device.id, &device.secret_key).await?;
+        return Err(unauthorized(
+            "This browser's sign-in ended; link this browser again",
+        ));
+    }
+    Ok(device)
 }
 
 async fn forget(store: &Store, user: &str, device: &str, secret_key: &str) -> Result<()> {
@@ -158,7 +210,7 @@ pub(crate) async fn unlink(
     State(app): State<App>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let device = admit(&app.store, &headers).await?;
+    let device = admit(&app, &headers).await?;
     let _guard = app.gate.lock().await;
     forget(&app.store, &device.user, &device.id, &device.secret_key).await?;
     Ok(Json(json!({"unlinked":true})))
@@ -170,7 +222,7 @@ pub(crate) async fn next(
     State(app): State<App>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let device = admit(&app.store, &headers).await?;
+    let device = admit(&app, &headers).await?;
     let deadline = now() + rules::POLL_SECS;
     let device_key = format!("{DEVICES}{}:{}", device.user, device.id);
     loop {
@@ -222,7 +274,7 @@ pub(crate) async fn ack(
     headers: HeaderMap,
     Json(input): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let device = admit(&app.store, &headers).await?;
+    let device = admit(&app, &headers).await?;
     let key = format!("{CALLS}{}:{}", device.user, call_id(&input)?);
     let _guard = app.gate.lock().await;
     let mut call = app
@@ -251,7 +303,7 @@ pub(crate) async fn result(
     headers: HeaderMap,
     Json(input): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let device = admit(&app.store, &headers).await?;
+    let device = admit(&app, &headers).await?;
     let id = call_id(&input)?;
     let outcome = match input["error"].as_str() {
         Some(error) => json!({
@@ -845,4 +897,115 @@ async fn withdraw(store: &Store, key: &str) -> Result<()> {
         store.delete(key).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A browser sign-in for the fixture administrator and the identity its requests carry.
+    async fn sign_in(app: &App) -> (String, Value) {
+        let key = format!("auth:{}", digest(&json!(Uuid::new_v4().to_string())));
+        app.store
+            .put(
+                &key,
+                &json!({"generation":"fixture-generation","expires":now() + 3600}),
+            )
+            .await
+            .unwrap();
+        let identity =
+            json!({"_user_id":"admin","generation":"fixture-generation","_auth_key":key});
+        (key, identity)
+    }
+
+    async fn linked_device(app: &App, identity: &Value) -> HeaderMap {
+        let code = link_code(
+            State(app.clone()),
+            Extension(identity.clone()),
+            Json(json!({})),
+        )
+        .await
+        .unwrap()
+        .0;
+        let linked = link(State(app.clone()), Json(json!({"code":code["code"]})))
+            .await
+            .unwrap()
+            .0;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            format!("Bearer {}", linked["secret"].as_str().unwrap())
+                .parse()
+                .unwrap(),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn a_device_lasts_only_as_long_as_the_sign_in_that_linked_it() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let (key, identity) = sign_in(&app).await;
+        let device = linked_device(&app, &identity).await;
+        assert!(admit(&app, &device).await.is_ok());
+        assert_eq!(device_list(&app.store, "admin").await.unwrap().len(), 1);
+        // Signing out deletes the sign-in: the device is refused and forgotten.
+        app.store.delete(&key).await.unwrap();
+        let refused = admit(&app, &device).await.err().unwrap();
+        assert_eq!(refused.0, StatusCode::UNAUTHORIZED);
+        assert!(device_list(&app.store, "admin").await.unwrap().is_empty());
+        // A password change moves the account to a new generation.
+        let (key, identity) = sign_in(&app).await;
+        let device = linked_device(&app, &identity).await;
+        assert!(admit(&app, &device).await.is_ok());
+        app.store
+            .put(
+                &key,
+                &json!({"generation":"before-password-change","expires":now() + 3600}),
+            )
+            .await
+            .unwrap();
+        assert!(admit(&app, &device).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn only_a_browser_sign_in_gets_link_codes_and_they_stay_few() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        // A chat widget's credential is not a browser sign-in.
+        let widget = json!({"_user_id":"admin","_auth_key":"embed:credential:fixture"});
+        let refused = link_code(State(app.clone()), Extension(widget), Json(json!({})))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.0, StatusCode::FORBIDDEN);
+        app.store
+            .put(
+                &format!("{LINKS}expired"),
+                &json!({"key":format!("{LINKS}expired"),"user":"someone","expires":1}),
+            )
+            .await
+            .unwrap();
+        let (_, identity) = sign_in(&app).await;
+        let mut codes = Vec::new();
+        for _ in 0..5 {
+            let issued = link_code(
+                State(app.clone()),
+                Extension(identity.clone()),
+                Json(json!({})),
+            )
+            .await
+            .unwrap()
+            .0;
+            codes.push(issued["code"].as_str().unwrap().to_owned());
+        }
+        let live = app.store.list(LINKS).await.unwrap();
+        assert_eq!(live.len(), LIVE_CODES);
+        assert!(live.iter().all(|doc| doc["user"] == "admin"));
+        // The newest code still links; the oldest was dropped.
+        assert!(link(State(app.clone()), Json(json!({"code":codes[4]})))
+            .await
+            .is_ok());
+        assert!(link(State(app.clone()), Json(json!({"code":codes[0]})))
+            .await
+            .is_err());
+    }
 }

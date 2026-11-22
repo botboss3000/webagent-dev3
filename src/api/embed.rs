@@ -570,7 +570,6 @@ fn scope_path(path: &str) -> bool {
             | "/sessions/stats"
             | "/user/status"
             | "/chat-invitations/redeem"
-            | "/browser/link-code"
     ) || path.starts_with("/sessions/")
         || path.starts_with("/runs/")
         || path.starts_with("/approvals/")
@@ -767,7 +766,6 @@ mod tests {
             "/auth/me",
             "/api/v3/wiki/articles/lessons",
             "/wiki/search",
-            "/browser/link-code",
         ] {
             assert!(scope_path(p));
         }
@@ -779,6 +777,7 @@ mod tests {
             "/messages",
             "/sessions-other",
             "/wikis",
+            "/browser/link-code",
         ] {
             assert!(!scope_path(p));
         }
