@@ -1,0 +1,15 @@
+{
+  "provider": "antigravity_bridge",
+  "name": "Antigravity Bridge",
+  "base_url": "bridge://antigravity",
+  "validated": true,
+  "efforts": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "default_effort": "medium",
+  "models": []
+}

@@ -72,7 +72,7 @@ Two consequences:
 - The System model (used for summaries and session names) keeps its own separate backup state and
   does not stay on a backup between runs.
 
-## 2. Bridge models (Claude Bridge, OpenCode Bridge, Muse Bridge)
+## 2. Bridge models (Claude, OpenCode, Muse, Codex and Antigravity Bridges)
 
 A bridge model's calls are answered by `harness-bridge.py`, a script running on a paired computer
 that uses the local `claude` or `opencode` command-line tool (no desktop app needed). WebAgent

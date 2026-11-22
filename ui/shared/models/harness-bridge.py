@@ -2,8 +2,8 @@
 # ============================================================================================
 # SETUP GUIDE — for the person or coding agent (for example Claude Code) installing this file
 # ============================================================================================
-# What it is: the client for a WebAgent "bridge" model (Claude Bridge, OpenCode Bridge, Muse
-# Bridge). WebAgent queues each model call for this bridge; this script fetches it, runs it on
+# What it is: the client for a WebAgent "bridge" model (Claude, OpenCode, Muse, Codex and
+# Antigravity Bridges). WebAgent queues each model call for this bridge; this script fetches it, runs it on
 # this computer with the matching local CLI harness, and posts the answer back. It never runs
 # WebAgent's tools itself: it only returns the model's reply and requested tool calls.
 #
@@ -12,6 +12,9 @@
 #   - Claude Bridge: the `claude` CLI on PATH and signed in (`claude` once interactively, or
 #     `claude login`). Calls run as `claude -p` with no CLAUDE.md, settings, hooks or skills.
 #   - OpenCode Bridge: the `opencode` CLI installed and signed in.
+#   - Codex Bridge (prototype): the `codex` CLI installed and signed in (`codex login`).
+#   - Antigravity Bridge (prototype): the `agy` CLI installed and signed in (run `agy` once). It keeps
+#     its sign-in in the system keyring, so the service needs a user session whose keyring is unlocked.
 #   - Muse Bridge: no CLI. A Muse agent on this computer must answer handoff files: for each
 #     work/harness-bridge/sessions/<chat>/muse-inbox/<call>.request.json it writes the reply JSON
 #     to the handoff's reply_file within 25 minutes (Muse's queue watcher wakes the agent).
@@ -102,7 +105,7 @@
 # ============================================================================================
 """Harness bridge client: answer WebAgent v3 model calls for one paired bridge provider.
 
-Common to every bridge provider (Claude Bridge, OpenCode Bridge, Muse Bridge).
+Common to every bridge provider (Claude, OpenCode, Muse, Codex and Antigravity Bridges).
 Download it from a bridge provider on the Models page and run it on the
 computer that answers the calls (Python 3 standard library only), then pair it.
 Every call is acknowledged before it runs, so any number of clients may serve one
@@ -122,6 +125,10 @@ harness (HARNESSES below).
                                   and are hidden for paid ones.
                                   muse_bridge: hands each turn to a live Muse agent through files in the
                                   chat's muse-inbox/ (see answer_muse).
+                                  codex_bridge (prototype): `codex exec --json`, resumed per chat; own
+                                  shell read-only; user config, rules and AGENTS.md ignored.
+                                  antigravity_bridge (prototype): `agy --print`, resumed per chat with
+                                  --conversation; its own tools are refused (no reviewer); no forks.
     stats [HOURS]                 summarize auto-mode call timing (work/harness-bridge/timing.jsonl), default 24 h
 
 Session forks (auto mode, Claude and OpenCode only): when the CLI can fork a session (Claude Code's
@@ -223,6 +230,8 @@ def fork_support():
         version = re.search(r"(\d+)\.(\d+)\.(\d+)", output([OPENCODE, "--version"]))
         if version and tuple(map(int, version.groups())) >= (2, 0, 32) and "--fork" in output([OPENCODE, "run", "--help"]):
             found.append("opencode_bridge")
+        if "fork" in output([CODEX, "exec", "--help"]).split("Options:")[0]:
+            found.append("codex_bridge")
         FORK_SUPPORT = found
     return FORK_SUPPORT
 
@@ -1692,11 +1701,190 @@ def answer_muse(call, folder, state, delta):
     print(f"{call['id']}: answered chat {call.get('session')} with {body.get('model')} "
           f"({'fresh' if fresh else 'resumed'} session {state['muse_session']})")
 
+# ChatGPT Codex Bridge (prototype). `codex exec` answers each call headlessly, resumed per chat with
+# `codex exec resume <thread>`. WebAgent's tools come from this script's MCP stub, configured per run
+# with -c (user config, rules and AGENTS.md files are ignored). Its own shell runs read-only.
+CODEX = shutil.which("codex") or str(Path.home() / ".local" / "bin" / "codex")
+CODEX_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
+    "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
+    "the tools of the MCP server named webagent. Calling one hands it to WebAgent, which runs it and sends the "
+    "result in your next message, so after your tool calls end your turn without waiting. Never run shell "
+    "commands or read files on this computer: it is not the agent's workspace. Your final message is the "
+    "agent's reply.")
+
+
+def toml_value(value):
+    """A -c value for codex: JSON strings and arrays are valid TOML."""
+    return json.dumps(value)
+
+
+def codex_command(body, stub, then):
+    """`codex exec` options for one call, then `then` (["-"], ["resume", T, "-"] or ["fork", T, "-"]);
+    the prompt comes on stdin."""
+    command = [CODEX, "exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
+               "-s", "read-only", "-m", body.get("model", ""),
+               "-c", "developer_instructions=" + toml_value(CODEX_PROMPT),
+               "-c", "mcp_servers.webagent.command=" + toml_value(sys.executable),
+               "-c", "mcp_servers.webagent.args=" + toml_value(["-B", str(Path(__file__).resolve()), "mcp", str(stub)])]
+    if body.get("reasoning_effort"):
+        command += ["-c", "model_reasoning_effort=" + toml_value(body["reasoning_effort"])]
+    return command + then
+
+
+def run_codex(command, prompt, folder):
+    """Run one `codex exec --json`; return (thread id, final text, usage). Its events are JSON lines:
+    thread.started, item.completed (agent_message), turn.completed (usage), turn.failed and error."""
+    # Images go in as attachments (as --image=PATH: the bare flag takes several values and would eat the next).
+    command = command[:2] + [f"--image={image}" for image in re.findall(r"\[image: (/[^\]]+)\]", prompt)] + command[2:]
+    process = start_harness(command, cwd=folder)
+    try:
+        stdout, stderr = process.communicate(prompt, timeout=HARNESS_SECS)
+    except subprocess.TimeoutExpired:
+        interrupt(process)
+        stdout, stderr = process.communicate()
+    check_stopped()
+    thread, texts, usage, errors = None, [], {}, []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        kind = event.get("type")
+        if kind == "thread.started":
+            thread = event.get("thread_id") or thread
+        elif kind == "item.completed" and (event.get("item") or {}).get("type") == "agent_message":
+            texts.append(event["item"].get("text") or "")
+        elif kind == "turn.completed":
+            usage = event.get("usage") or {}
+        elif kind in ("turn.failed", "error"):
+            errors.append((event.get("error") or {}).get("message") or event.get("message") or str(event)[:300])
+    if errors or process.returncode:
+        detail = f"codex failed ({process.returncode}): {errors or stderr[-300:]}"
+        upstream = next(filter(None, map(classify, errors or [stderr])), None)
+        raise HarnessFailure(detail, "upstream", *upstream) if upstream else HarnessFailure(detail)
+    prompt_tokens, cached = usage.get("input_tokens", 0), usage.get("cached_input_tokens", 0)
+    completion = usage.get("output_tokens", 0)
+    return thread, "\n\n".join(t for t in texts if t.strip()), {
+        "prompt_tokens": prompt_tokens, "completion_tokens": completion, "total_tokens": prompt_tokens + completion,
+        "prompt_tokens_details": {"cached_tokens": min(cached, prompt_tokens)}}
+
+
+def answer_codex(call, folder, state, delta):
+    body = call["body"]
+    fresh = not resumable(state, "codex_session", delta)
+    (folder / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    (folder / "calls.jsonl").unlink(missing_ok=True)
+    prompt = prompt_for(call, delta, fresh, listed=False)
+    then = ["-"] if fresh else ["resume", state["codex_session"], "-"]
+    started = time.time()
+    thread, text, usage = run_codex(codex_command(body, folder, then), prompt, folder)
+    ended = time.time()
+    message = parse_reply(json.dumps({"content": text, "tool_calls": stub_calls(folder)}), body)
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": usage})
+    record(call, state, delta, started, ended)
+    state["codex_session"] = thread or state.get("codex_session")
+    save_state(folder, state)
+    print(f"{call['id']}: answered chat {call.get('session')} ({'fresh' if fresh else 'resumed'} thread {state['codex_session']})")
+
+
+def fork_codex(call):
+    """Answer a fork call from `codex exec fork <thread>`; the chat's thread and files stay as they are."""
+    folder, state, delta = fork_delta(call)
+    body = call["body"]
+    session = state.get("codex_session")
+    delta = fork_plan(state, delta, body, session)
+    stub = folder / "forks" / call["id"]
+    stub.mkdir(parents=True, exist_ok=True)
+    try:
+        (stub / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+        forked, text, usage = run_codex(codex_command(body, stub, ["fork", session, "-"]),
+                                        prompt_for(call, delta, False, listed=False), folder)
+        calls = stub_calls(stub)
+    finally:
+        shutil.rmtree(stub, ignore_errors=True)
+    message = parse_reply(json.dumps({"content": text, "tool_calls": calls}), body)
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": usage})
+    print(f"{call['id']}: answered a fork of chat {call.get('session')} (thread {session} -> {forked})")
+    if forked and forked != session:
+        subprocess.run([CODEX, "delete", forked], capture_output=True, timeout=60)
+
+
+# Antigravity Bridge (prototype). `agy --print` answers each call headlessly, resumed per chat with
+# --conversation. It has no system-prompt flag, so a fresh conversation starts with ANTIGRAVITY_PROMPT.
+# WebAgent's tools come from this script's MCP stub through the chat folder's .agents/mcp_config.json
+# (the folder is the run's workspace). Its own tools need review, which nobody gives headlessly, so
+# they are refused; --sandbox also restricts its terminal. Antigravity cannot fork a conversation.
+AGY = shutil.which("agy") or str(Path.home() / ".local" / "bin" / "agy")
+ANTIGRAVITY_PROMPT = CODEX_PROMPT
+ANTIGRAVITY_SETTINGS = {"toolPermission": "request-review"}
+
+
+def run_antigravity(command, prompt, folder):
+    """Run one `agy --print`; the prompt goes on stdin as one stream-json user message. Returns
+    (conversation id, final text, usage) from the closing result event."""
+    process = start_harness(command, cwd=folder)
+    message = json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
+    try:
+        stdout, stderr = process.communicate(message, timeout=HARNESS_SECS)
+    except subprocess.TimeoutExpired:
+        interrupt(process)
+        stdout, stderr = process.communicate()
+    check_stopped()
+    result = {}
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("event") == "result":
+            result = event.get("result") or {}
+    if result.get("status") != "SUCCESS":
+        error = result.get("error") or stderr[-300:] or f"exit {process.returncode}"
+        detail = f"antigravity failed ({result.get('status') or process.returncode}): {error}"
+        upstream = classify(error)
+        raise HarnessFailure(detail, "upstream", *upstream) if upstream else HarnessFailure(detail)
+    u = result.get("usage") or {}
+    prompt_tokens, cached = u.get("input_tokens", 0), u.get("cache_read_tokens", 0)
+    completion = u.get("output_tokens", 0) + u.get("thinking_tokens", 0)
+    return result.get("conversation_id"), result.get("response") or "", {
+        "prompt_tokens": prompt_tokens, "completion_tokens": completion, "total_tokens": prompt_tokens + completion,
+        "prompt_tokens_details": {"cached_tokens": min(cached, prompt_tokens)}}
+
+
+def answer_antigravity(call, folder, state, delta):
+    body = call["body"]
+    fresh = not resumable(state, "antigravity_session", delta)
+    (folder / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    (folder / "calls.jsonl").unlink(missing_ok=True)
+    (folder / ".agents").mkdir(exist_ok=True)
+    (folder / ".agents" / "mcp_config.json").write_text(json.dumps({"mcpServers": {"webagent": {
+        "command": sys.executable, "args": ["-B", str(Path(__file__).resolve()), "mcp", str(folder)]}}}))
+    prompt = prompt_for(call, delta, fresh, listed=False)
+    if fresh:
+        prompt = ANTIGRAVITY_PROMPT + "\n\n" + prompt
+    command = [AGY, "--print", "", "--input-format", "stream-json", "--output-format", "stream-json",
+               "--disable-slash-commands", "--sandbox", "--model", body.get("model", ""),
+               "--settings", json.dumps(ANTIGRAVITY_SETTINGS)]
+    if body.get("reasoning_effort"):
+        command += ["--effort", body["reasoning_effort"]]
+    if not fresh:
+        command += ["--conversation", state["antigravity_session"]]
+    started = time.time()
+    conversation, text, usage = run_antigravity(command, prompt, folder)
+    ended = time.time()
+    message = parse_reply(json.dumps({"content": text, "tool_calls": stub_calls(folder)}), body)
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": usage})
+    record(call, state, delta, started, ended)
+    state["antigravity_session"] = conversation or state.get("antigravity_session")
+    save_state(folder, state)
+    print(f"{call['id']}: answered chat {call.get('session')} ({'fresh' if fresh else 'resumed'} conversation {state['antigravity_session']})")
+
 
 # Bridge provider -> harness that answers its calls. Each takes (call, folder, state, delta).
-HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode, "muse_bridge": answer_muse}
-# Bridge provider -> fork harness. Each takes (call); Muse cannot fork.
-FORKERS = {"claude_bridge": fork_claude, "opencode_bridge": fork_opencode}
+HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode, "muse_bridge": answer_muse,
+             "codex_bridge": answer_codex, "antigravity_bridge": answer_antigravity}
+# Bridge provider -> fork harness. Each takes (call); Muse and Antigravity cannot fork.
+FORKERS = {"claude_bridge": fork_claude, "opencode_bridge": fork_opencode, "codex_bridge": fork_codex}
 
 
 def cmd_auto(session):

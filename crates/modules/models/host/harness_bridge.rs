@@ -305,7 +305,7 @@ async fn admit(store: &Store, headers: &HeaderMap, input: &Value) -> Result<Call
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .filter(|name| matches!(*name, "claude_bridge" | "opencode_bridge"))
+        .filter(|name| matches!(*name, "claude_bridge" | "opencode_bridge" | "codex_bridge"))
         .map(str::to_owned)
         .collect();
     Ok(Caller {

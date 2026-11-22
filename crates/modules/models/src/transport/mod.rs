@@ -51,6 +51,8 @@ pub fn projection_id(provider: ProviderId) -> webagent_provider_contracts::Provi
         ProviderId::ClaudeBridge => P::ClaudeBridge,
         ProviderId::OpencodeBridge => P::OpencodeBridge,
         ProviderId::MuseBridge => P::MuseBridge,
+        ProviderId::CodexBridge => P::CodexBridge,
+        ProviderId::AntigravityBridge => P::AntigravityBridge,
         ProviderId::Loadtest => P::Loadtest,
     }
 }

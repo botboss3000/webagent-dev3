@@ -28,6 +28,8 @@ pub enum ProviderIdV1 {
     ClaudeBridge,
     OpencodeBridge,
     MuseBridge,
+    CodexBridge,
+    AntigravityBridge,
     Loadtest,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,0 +1,121 @@
+{
+  "provider": "codex_bridge",
+  "name": "Codex Bridge",
+  "base_url": "bridge://codex",
+  "validated": true,
+  "efforts": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "default_effort": "medium",
+  "models": [
+    {
+      "id": "gpt-6.2-sol",
+      "name": "GPT-6.2 Sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 500000
+    },
+    {
+      "id": "gpt-6.2-astra",
+      "name": "GPT-6.2 Astra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 272000
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 500000
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "name": "GPT-6.1 Terra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 500000
+    },
+    {
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 272000
+    },
+    {
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 272000
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 272000
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "name": "GPT-5.6 Sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 272000
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "name": "GPT-5.6 Terra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 272000
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 272000
+    },
+    {
+      "id": "gpt-5.5",
+      "name": "GPT-5.5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "context": 272000,
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    }
+  ]
+}

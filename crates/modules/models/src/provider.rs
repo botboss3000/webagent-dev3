@@ -25,6 +25,10 @@ pub enum ProviderId {
     OpencodeBridge,
     /// A linked Muse harness answers each call; no network endpoint.
     MuseBridge,
+    /// A linked ChatGPT Codex CLI answers each call; no network endpoint.
+    CodexBridge,
+    /// A linked Antigravity CLI answers each call; no network endpoint.
+    AntigravityBridge,
     /// Capacity tests: the server itself answers from the user message's script (`TOOL` and
     /// `REPLY` lines). No network, no cost; only an administrator can create its connections.
     Loadtest,
@@ -35,13 +39,21 @@ impl ProviderId {
     pub fn is_bridge(self) -> bool {
         matches!(
             self,
-            Self::ClaudeBridge | Self::OpencodeBridge | Self::MuseBridge | Self::Loadtest
+            Self::ClaudeBridge
+                | Self::OpencodeBridge
+                | Self::MuseBridge
+                | Self::CodexBridge
+                | Self::AntigravityBridge
+                | Self::Loadtest
         )
     }
     /// Bridges whose harness can fork a chat's session, so a summary reuses its cached prefix.
     /// A call still reaches only clients that report fork support for the provider.
     pub fn bridge_forks(self) -> bool {
-        matches!(self, Self::ClaudeBridge | Self::OpencodeBridge)
+        matches!(
+            self,
+            Self::ClaudeBridge | Self::OpencodeBridge | Self::CodexBridge
+        )
     }
     /// Installation-owned endpoints only. Client catalog payloads cannot override these.
     pub fn chat_endpoint(self) -> Option<&'static str> {
@@ -51,6 +63,8 @@ impl ProviderId {
             | Self::ClaudeBridge
             | Self::OpencodeBridge
             | Self::MuseBridge
+            | Self::CodexBridge
+            | Self::AntigravityBridge
             | Self::Loadtest => None,
             Self::Deepseek => Some("https://api.deepseek.com/chat/completions"),
             Self::OpenaiApi => Some("https://api.openai.com/v1/chat/completions"),
