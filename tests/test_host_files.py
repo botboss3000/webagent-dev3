@@ -225,6 +225,17 @@ class TerminalTests(unittest.TestCase):
     def grant(self, admin="admin"):
         (self.state / "terminal-grants.json").write_text(json.dumps({admin: self.now + 3600}))
 
+    def test_shells_drop_the_docker_group_by_default(self):
+        import grp
+        from unittest import mock
+        self.assertEqual(["docker"], files_module.DEFAULTS["terminal_drop_groups"])
+        docker = type("G", (), {"gr_gid": 4113})()
+        with mock.patch.object(files_module.grp, "getgrnam", lambda name: docker if name == "docker" else grp.getgrnam(name)), \
+                mock.patch.object(files_module.os, "getgrouplist", lambda name, gid: [gid, 27, 4113]):
+            _, groups = self.files.shell_identity()
+        self.assertNotIn(4113, groups)
+        self.assertIn(27, groups)  # sudo stays: it asks for the password
+
     def test_terminals_need_their_own_grant(self):
         (self.state / "file-grants.json").write_text(json.dumps({"admin": self.now + 3600}))
         self.assertEqual("authorization_required", self.call("terminal_open").get("code"))

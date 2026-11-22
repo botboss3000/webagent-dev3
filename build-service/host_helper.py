@@ -97,7 +97,8 @@ ACTIONS = {
     # revoked. It is root-equivalent while live, so it always needs the host approval
     # passphrase and no allow-all window covers it.
     "files_grant": {"read": False, "undo": "exact", "boot_disk": False, "passphrase": True},
-    # The same for a terminal in the File Manager: a shell as the operator account (no sudo or docker group).
+    # The same for a terminal in the File Manager: a shell as the operator account without the
+    # docker group (sudo asks for its password).
     "terminal_grant": {"read": False, "undo": "exact", "boot_disk": False, "passphrase": True},
 }
 SUPERVISED = ("broker_install", "supervisor_update")

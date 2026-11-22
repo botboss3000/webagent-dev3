@@ -5,7 +5,8 @@ Only the app's uid may call it, and every file operation needs a live grant for 
 administrator. Grants are written only by the host helper after a Host Admin approval with
 the host approval passphrase; they last the time set at approval and Host Admin can revoke them.
 Each file operation runs first in a child process as the operator account (with its usual
-groups, like a login), so it can read and change what that account can; new files are created
+groups except terminal_drop_groups, docker by default: the docker group is root without the
+sudo password), so it can read and change what that account can; new files are created
 ar:ar 600 (folders 700). When that is denied, the operation needs sudo, as in a terminal: it
 runs as root once the account's sudo password is confirmed (by running sudo as that account),
 then for the next 15 minutes without asking, or straight away while the account has
@@ -15,7 +16,7 @@ sudo windows and the log stay with the root parent.
 The checkout itself stays with the worker (/live-checkout). Every change is logged.
 
 Terminals (FILES-3) need their own grant (terminal_grant). Each runs a login shell on a
-pseudo-terminal as the operator account with its usual groups, like a login on the computer
+pseudo-terminal as the operator account with the same groups, like a login on the computer
 (sudo asks for the password in the shell). They outlive a page reload and close when the grant ends,
 after 30 idle minutes, or on request; only their opening and closing are logged.
 """
@@ -47,7 +48,7 @@ DEFAULTS = {"state": "/var/lib/webagent-host", "app_uid": 1100,
             "files_socket": "/home/ar/webagent-dev3/runtime/files/files.sock",
             "files_checkout": "/home/ar/webagent-dev3/code",
             "files_locked": ["/home/ar/webagent-dev3/state", "/home/ar/webagent-dev3/runtime", "/proc", "/sys", "/dev"],
-            "operator_account": "ar", "terminal_drop_groups": [], "sudo_window_seconds": 900, "terminal_idle_seconds": 1800,
+            "operator_account": "ar", "terminal_drop_groups": ["docker"], "sudo_window_seconds": 900, "terminal_idle_seconds": 1800,
             "terminal_max": 4}
 TERMINAL_BUFFER = 262144
 TERMINAL_WAIT = 20
@@ -225,7 +226,7 @@ class Files:
 
     # Terminals ---------------------------------------------------------------------------
     def shell_identity(self):
-        """The operator account and its groups minus the dropped ones (no sudo, no docker)."""
+        """The operator account and its groups minus the dropped ones (docker by default)."""
         account = pwd.getpwnam(self.profile["operator_account"])
         dropped = set()
         for name in self.profile["terminal_drop_groups"]:
@@ -550,8 +551,8 @@ class Files:
         return self.delete(admin, message.get("path"))
 
     def as_operator(self, admin, op, message):
-        """Run one file operation in a child that has become the operator account (no sudo or
-        docker group); its result, refusal or error and its log lines come back over a pipe."""
+        """Run one file operation in a child that has become the operator account (without the
+        dropped groups); its result, refusal or error and its log lines come back over a pipe."""
         account, groups = self.shell_identity()
         reader, writer = os.pipe()
         pid = os.fork()
