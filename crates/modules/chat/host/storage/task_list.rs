@@ -150,7 +150,9 @@ impl Store {
     ) -> Result<TaskGate> {
         let receipt_key = format!("receipt:base:{sid}:{rid}:{pending_id}:gate_tasks");
         let _guard = self.context_gate.write().await;
-        let mut tx = self.pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&receipt_key)
             .fetch_optional(&mut *tx)
@@ -278,7 +280,9 @@ impl Store {
         let receipt_key = format!("receipt:base:{sid}:{rid}:{pending_id}:{receipt}");
         let fingerprint = crate::digest(&json!([expected_revision, list, changes, marks]));
         let _guard = self.context_gate.write().await;
-        let mut tx = self.pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&receipt_key)
             .fetch_optional(&mut *tx)
@@ -338,7 +342,9 @@ impl Store {
         let receipt_key = format!("receipt:base:{sid}:user:{request_id}:tasks");
         let fingerprint = crate::digest(&json!([expected_revision, list, changes, marks]));
         let _guard = self.context_gate.write().await;
-        let mut tx = self.pool.begin().await?;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&receipt_key)
             .fetch_optional(&mut *tx)
@@ -1027,5 +1033,51 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// A task list write that reads before it writes must wait for a concurrent writer, not
+    /// fail with "database is locked" when that writer commits between its read and write.
+    #[tokio::test]
+    async fn writes_wait_for_concurrent_writers_instead_of_failing() {
+        let (_root, app) = crate::runtime_tests::fixture_uninitialized().await;
+        let store = &app.store;
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active","created_at":1}),
+            )
+            .await
+            .unwrap();
+        let list = |revision: u64| json!({"revision":revision,"sections":[],"next_section":0});
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let noise = async {
+            let mut n = 0u64;
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                store
+                    .put("session_usage:noise", &json!({"n":n}))
+                    .await
+                    .unwrap();
+                n += 1;
+                tokio::task::yield_now().await;
+            }
+        };
+        let edits = async {
+            for revision in 0..60u64 {
+                let request = format!("edit-{revision}");
+                store
+                    .task_list_user_write(
+                        "s",
+                        &request,
+                        revision,
+                        &list(revision + 1),
+                        &json!(["s1 added: Work"]),
+                        &json!({}),
+                    )
+                    .await
+                    .unwrap();
+            }
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
+        };
+        tokio::join!(noise, edits);
     }
 }
