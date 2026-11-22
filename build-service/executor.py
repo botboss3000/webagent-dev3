@@ -38,7 +38,11 @@ TEST_THREADS=8
 CARGO_BUILD_JOBS="10"
 SIDEKICK_PROTOCOL=4  # sidekick.py VERSION this broker requires
 SUITE_MARK="@@sidekick-step-passed "
-COMPILE_TEST_ARGV=["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --exclude webagent-v3 --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"]
+# The Core tier (desktop and phone installers, crates/app-shell/package.py) builds the root without the
+# Administrator pack or the local worker. Checking it in every Rust release keeps those feature gates from
+# breaking unseen; the log line gives its cost.
+CORE_CHECK="started=$(date +%s)\ncargo check --locked --offline -p webagent-v3 --bin webagent-v3 --no-default-features --features linked-context,stable-abilities\necho \"Core features check: $(( $(date +%s) - started )) s\""
+COMPILE_TEST_ARGV=["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --exclude webagent-v3 --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json\n"+CORE_CHECK]
 # Compiled-dependency snapshots: stub compiles mirror the engine profiles exactly.
 SNAPSHOT_RECIPE="compiled-dependencies-v2"
 SNAPSHOT_COMPILES="set -e\ncargo test --workspace --locked --offline --no-run\ncargo build --workspace --locked --offline --bins\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"

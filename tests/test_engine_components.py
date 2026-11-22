@@ -374,7 +374,10 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             self.assertEqual((job["optimized_mode_equivalence"]["status"],job["optimized_mode_equivalence"]["linked_profile"]),("passed","debug"))
             # compile_test never builds the root app binary; only hookless sources fall back to it.
             compile_test=[argv for name,argv in calls if name=="compile_test"][0][-1]
-            self.assertIn("--exclude webagent-v3",compile_test.splitlines()[-1])
+            builds=[line for line in compile_test.splitlines()if line.startswith("cargo build")]
+            self.assertEqual(len(builds),1);self.assertIn("--exclude webagent-v3",builds[0])
+            # The Core tier's features are only type-checked (no binary).
+            self.assertIn("cargo check --locked --offline -p webagent-v3 --bin webagent-v3 --no-default-features --features linked-context,stable-abilities",compile_test.splitlines())
             # A dev job builds the live release without the stable feature (the stable/ folder is not a flag).
             release=[argv for name,argv in calls if name=="compile_release"][0][-1]
             self.assertIn("--features webagent-v3/live-context\n",release+"\n");self.assertNotIn("stable-abilities",release)
