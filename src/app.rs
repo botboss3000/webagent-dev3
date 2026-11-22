@@ -1218,17 +1218,13 @@ async fn serve_api(app: App, close_pools: bool, stop: CancellationToken) -> Resu
     tokio::spawn(api::host_admin::watch(app.clone()));
     tokio::spawn(api::host_admin::production_watch(app.clone()));
     let shutdown = app.clone();
-    axum::serve(
-        listener,
-        router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(async move {
+    serve_http(listener, router(app.clone()), async move {
         let mut signal = webagent_platform::signal::terminate().expect("signal handler");
         tokio::select! {_=signal.recv()=>{},_=tokio::signal::ctrl_c()=>{},_=stop.cancelled()=>{}}
         shutdown.ready.store(false, Ordering::Release);
         shutdown.stop.cancel();
     })
-    .await?;
+    .await;
     app.stop.cancel();
     #[cfg(feature = "administrator")]
     let _ = administrator_watch.await;
@@ -1239,6 +1235,66 @@ async fn serve_api(app: App, close_pools: bool, stop: CancellationToken) -> Resu
         app.store.app_pool.close().await;
     }
     Ok(())
+}
+
+/// How long a connection may take to send a request head, and how long an idle keep-alive
+/// connection stays open: hyper runs this timer whenever it waits for the next request head.
+const HTTP_HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Connections served at once; further clients wait in the listen backlog until one closes.
+const HTTP_MAX_CONNECTIONS: usize = 4096;
+
+/// Serve the API like `axum::serve` (HTTP/1, `ConnectInfo`; no route upgrades a connection)
+/// plus what it lacks: a header-read and keep-alive idle timeout and a connection cap, so slow or idle
+/// clients cannot hold descriptors forever. Request bodies have their own timeout
+/// (`api::router`). After `shutdown`, open connections finish their current requests.
+async fn serve_http(
+    listener: tokio::net::TcpListener,
+    router: axum::Router,
+    shutdown: impl std::future::Future<Output = ()>,
+) {
+    use hyper_util::rt::{TokioIo, TokioTimer};
+    use tower::ServiceExt;
+    let mut builder = hyper::server::conn::http1::Builder::new();
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(HTTP_HEADER_READ_TIMEOUT);
+    let graceful = hyper_util::server::graceful::GracefulShutdown::new();
+    let permits = Arc::new(Semaphore::new(HTTP_MAX_CONNECTIONS));
+    tokio::pin!(shutdown);
+    loop {
+        let permit = tokio::select! {
+            permit = permits.clone().acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_) => break,
+            },
+            () = &mut shutdown => break,
+        };
+        let (stream, remote) = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                // Out of descriptors or a reset handshake: wait as axum::serve does, then retry.
+                Err(_) => {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            },
+            () = &mut shutdown => break,
+        };
+        let router = router.clone();
+        let service = hyper::service::service_fn(move |mut request: hyper::Request<_>| {
+            request
+                .extensions_mut()
+                .insert(axum::extract::ConnectInfo(remote));
+            router.clone().oneshot(request)
+        });
+        let connection = graceful.watch(builder.serve_connection(TokioIo::new(stream), service));
+        tokio::spawn(async move {
+            let _ = connection.await;
+            drop(permit);
+        });
+    }
+    drop(listener);
+    graceful.shutdown().await;
 }
 
 struct ModelSessionAuthority<'a>(&'a Store);

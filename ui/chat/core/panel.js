@@ -263,8 +263,8 @@ const pausedBar=document.createElement('button');pausedBar.type='button';pausedB
 $('chat-input-area').prepend(pausedBar);
 let pausedSession='';
 const idlePause=watchIdlePause({getConfig:currentChatProfile,
-  onPause(){pausedSession=session;client.disconnect();activity.disconnect();pausedBar.hidden=false;},
-  onResume(){pausedBar.hidden=true;const id=pausedSession;pausedSession='';if(id&&id===session)void open(id,'replace');}});
+  onPause(){pausedSession=session;client.disconnect();activity.disconnect();mainNotes?.pause();pausedBar.hidden=false;},
+  onResume(){pausedBar.hidden=true;mainNotes?.resume();const id=pausedSession;pausedSession='';if(id&&id===session)void open(id,'replace');}});
 /** Removes transcript rows already drawn for a panel's answer message. */
 function hidePanelAnswers(){for(const node of [...$('chat-messages-inner').children])if(node.classList.contains('user')&&panelAnswerRuns.has(node.dataset.turnId))node.remove();}
 /** Inserts or updates a public message row and repaints activity. */

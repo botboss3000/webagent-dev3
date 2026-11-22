@@ -15,7 +15,7 @@ export function createMainNotes({request,agentId=null,EventSourceClass=EventSour
   element.append(glyph,label,meta,badge);
   const card=node('div',undefined,'sub-chip-menu broker-card main-notes-card wa-scroll-gutter');card.id='main-notes-card';card.tabIndex=-1;card.setAttribute('role','dialog');card.setAttribute('aria-label','Main Notes');
   const body=node('div',undefined,'main-notes-body');const notice=node('p','','main-notes-notice');notice.setAttribute('role','status');card.append(notice,body);
-  let state=null,disposed=false,epoch=0,loading=false,again=false,editing=false,writing=false,shown=false,opened=false,source=null,sourceId=null;
+  let state=null,disposed=false,epoch=0,loading=false,again=false,editing=false,writing=false,shown=false,opened=false,source=null,sourceId=null,paused=false;
   const endpoint=()=>'/models/agents/'+encodeURIComponent(agentId)+'/main-notes';
   const receipts=new Map(),abort=new AbortController();
   /** The session-tabs row shared with Spawns and Broker; the chip lives in its scroller. */
@@ -37,8 +37,8 @@ export function createMainNotes({request,agentId=null,EventSourceClass=EventSour
   function button(text,fn){const b=node('button',text,'ac-btn ac-btn-ghost');b.type='button';b.addEventListener('click',fn);return b;}
   /** Release the private event stream and its bound session ID. */
   function closeStream(){source?.close();source=null;sourceId=null;}
-  /** Subscribe once to Main Chat revisions; identity epochs reject stale callbacks. */
-  function watch(){const id=state?.session_id;if(!id||!state.settings.enabled){closeStream();return;}if(sourceId===id)return;closeStream();sourceId=id;const generation=epoch;source=new EventSourceClass('/api/v3/sessions/'+encodeURIComponent(id)+'/events');source.addEventListener('open',()=>{if(!disposed&&generation===epoch)void refresh();});source.addEventListener('session_updated',event=>{if(disposed||generation!==epoch)return;try{const data=JSON.parse(event.data);if(data.main_notes_revision!==undefined&&data.main_notes_revision!==state?.revision)void refresh();}catch{void refresh();}});source.addEventListener('error',()=>{if(!disposed&&generation===epoch){notice.textContent='Checking access after a live update interruption…';void refresh();}});}
+  /** Subscribe once to Main Chat revisions (not while the chat is idle-paused); identity epochs reject stale callbacks. */
+  function watch(){const id=state?.session_id;if(paused||!id||!state.settings.enabled){closeStream();return;}if(sourceId===id)return;closeStream();sourceId=id;const generation=epoch;source=new EventSourceClass('/api/v3/sessions/'+encodeURIComponent(id)+'/events');source.addEventListener('open',()=>{if(!disposed&&generation===epoch)void refresh();});source.addEventListener('session_updated',event=>{if(disposed||generation!==epoch)return;try{const data=JSON.parse(event.data);if(data.main_notes_revision!==undefined&&data.main_notes_revision!==state?.revision)void refresh();}catch{void refresh();}});source.addEventListener('error',()=>{if(!disposed&&generation===epoch){notice.textContent='Checking access after a live update interruption…';void refresh();}});}
   /** Coalesce reads, preserve dirty edits and clear private content on access failure. */
   async function refresh(){if(disposed||!agentId)return;if(loading){again=true;return;}loading=true;const generation=epoch;try{const data=await request(endpoint());if(disposed||generation!==epoch)return;if(data.agent_id!==agentId)throw Error('Notes agent mismatch');const changed=state&&state.revision!==data.revision;state=data;shown=true;const topics=Object.values(data.topics).length,pending=Object.values(data.proposals).filter(p=>p.status==='pending').length;
       label.textContent=data.settings.notes_name;meta.textContent=topics?topics+' topic'+(topics===1?'':'s'):'';badge.hidden=!pending;badge.textContent=pending?String(pending):'';
@@ -87,5 +87,8 @@ export function createMainNotes({request,agentId=null,EventSourceClass=EventSour
   window.addEventListener('v3-identity-changed',()=>setAgent(null),{signal:abort.signal});
   void refresh();
   // destroy aborts listeners, invalidates asynchronous callbacks and removes private content.
-  return {element,refresh,setAgent,destroy(){disposed=true;epoch++;abort.abort();closeStream();receipts.clear();close();body.replaceChildren();element.remove();card.remove();tabs()?.removeAttribute('data-notes');}};
+  // The chat's idle pause (chat/core/idle-pause.js) closes this stream with its own; resume catches up.
+  function pause(){paused=true;closeStream();}
+  function resume(){if(!paused)return;paused=false;void refresh();}
+  return {element,refresh,setAgent,pause,resume,destroy(){disposed=true;epoch++;abort.abort();closeStream();receipts.clear();close();body.replaceChildren();element.remove();card.remove();tabs()?.removeAttribute('data-notes');}};
 }

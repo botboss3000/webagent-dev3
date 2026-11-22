@@ -95,6 +95,10 @@ webagent-model-discovery = {path="crates/model-discovery",optional=true}
 webagent-module-service = {path="crates/module-service"}
 anyhow = "1"
 axum = "0.8"
+# The API server loop (src/app.rs serve_http): axum::serve sets no hyper timer or connection cap.
+# HTTP/1 only, as axum::serve serves it here (no http2 feature).
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["http1", "server-graceful", "tokio"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }
@@ -114,7 +118,7 @@ fs2 = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["fs", "limit", "set-header"] }
+tower-http = { version = "0.6", features = ["fs", "limit", "set-header", "timeout"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"

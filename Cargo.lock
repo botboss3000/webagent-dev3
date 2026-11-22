@@ -3092,6 +3092,8 @@ dependencies = [
  "futures-util",
  "hex",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "rand 0.8.8",
  "reqwest",
  "serde",

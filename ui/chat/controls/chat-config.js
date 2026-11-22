@@ -39,8 +39,9 @@ let configAgent = null, configProvided = false, liveOptions = null;
 function uiConfigUrl() { return '/api/v3/auth/ui-config' + (configAgent ? '?agent_id=' + encodeURIComponent(configAgent) : ''); }
 /** Reads the agent-scoped configuration, falling back to the base when that agent is not usable here. */
 async function fetchUiConfig(signal) {
-  let response = await fetch(uiConfigUrl(), { credentials: 'same-origin', cache: 'no-store', signal });
-  if (!response.ok && configAgent) response = await fetch('/api/v3/auth/ui-config', { credentials: 'same-origin', cache: 'no-store', signal });
+  // no-cache revalidates with the stored ETag: an unchanged document returns 304 with no body.
+  let response = await fetch(uiConfigUrl(), { credentials: 'same-origin', cache: 'no-cache', signal });
+  if (!response.ok && configAgent) response = await fetch('/api/v3/auth/ui-config', { credentials: 'same-origin', cache: 'no-cache', signal });
   return response.ok ? response.json() : null;
 }
 /** Adopts one UI response: the effective chat document and the session-dropdown overlay. */

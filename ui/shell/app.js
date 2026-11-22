@@ -990,7 +990,7 @@ function setupHeaderPullRefresh(){
     if(configLoading||document.hidden||document.body.classList.contains('app-restricted'))return;
     configLoading=true;
     try{
-      const response=await fetch('/api/v3/auth/ui-config',{credentials:'same-origin',cache:'no-store'});
+      const response=await fetch('/api/v3/auth/ui-config',{credentials:'same-origin',cache:'no-cache'});// revalidates by ETag
       if(!response.ok)return;
       const appUi=(await response.json()).app_ui;
       const value=appUi?.pull_to_refresh?.start_zone_px;

@@ -205,6 +205,41 @@ pub(crate) async fn chat_ui_config(
     }
     Ok(Json(value))
 }
+/// `chat_ui_config` with an ETag of its exact bytes: tabs poll it every few seconds, so an
+/// unchanged document answers 304 with no body. The response is per caller (agent overlays),
+/// so it is `private, no-cache` (set by the router layer for responses with an ETag).
+pub(crate) async fn chat_ui_config_revalidated(
+    State(app): State<App>,
+    query: Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> std::result::Result<Response, ApiError> {
+    use sha2::Digest;
+    let Json(value) = chat_ui_config(State(app), query).await?;
+    let body = serde_json::to_vec(&value)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    let digest = sha2::Sha256::digest(&body);
+    let etag = format!("\"{}\"", hex::encode(&digest[..16]));
+    let matched = headers
+        .get("if-none-match")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|tags| {
+            tags.split(',')
+                .map(|tag| tag.trim().trim_start_matches("W/"))
+                .any(|tag| tag == etag || tag == "*")
+        });
+    let etag = HeaderValue::from_str(&etag).expect("hex ETag is a valid header value");
+    if matched {
+        return Ok((StatusCode::NOT_MODIFIED, [("etag", etag)]).into_response());
+    }
+    Ok((
+        [
+            ("etag", etag),
+            ("content-type", HeaderValue::from_static("application/json")),
+        ],
+        body,
+    )
+        .into_response())
+}
 pub(crate) async fn ui_config_value(app: &App) -> std::result::Result<Value, ApiError> {
     webagent_webapp::configuration::ui_config(
         &app.chat_ui_config_path,
@@ -222,6 +257,35 @@ pub(crate) async fn ui_config_value(app: &App) -> std::result::Result<Value, Api
 #[cfg(test)]
 mod webapp_adapter_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ui_config_answers_not_modified_for_its_own_etag() {
+        let (root, mut app) = crate::runtime_tests::fixture().await;
+        app.chat_ui_config_path = root.path().join("etag-chat-ui.json");
+        std::fs::write(&app.chat_ui_config_path, br#"{"chat_common":{}}"#).unwrap();
+        let get = |tag: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(tag) = tag {
+                headers.insert("if-none-match", HeaderValue::from_str(tag).unwrap());
+            }
+            chat_ui_config_revalidated(State(app.clone()), Query(HashMap::new()), headers)
+        };
+        let first = get(None).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let etag = first.headers()["etag"].to_str().unwrap().to_owned();
+        assert_eq!(
+            get(Some(&etag)).await.unwrap().status(),
+            StatusCode::NOT_MODIFIED
+        );
+        assert_eq!(
+            get(Some("\"other\"")).await.unwrap().status(),
+            StatusCode::OK
+        );
+        std::fs::write(&app.chat_ui_config_path, br#"{"chat_common":{"x":1}}"#).unwrap();
+        let changed = get(Some(&etag)).await.unwrap();
+        assert_eq!(changed.status(), StatusCode::OK);
+        assert_ne!(changed.headers()["etag"], etag.as_str());
+    }
 
     #[tokio::test]
     async fn ui_config_adapter_delegates_and_preserves_error_status() {

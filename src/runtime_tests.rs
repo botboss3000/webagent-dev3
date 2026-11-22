@@ -419,6 +419,9 @@ async fn chat_ui_config_reads_data_config_on_each_request_and_requires_auth() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        // Per-caller JSON with an ETag: the browser may keep it but must revalidate each use.
+        assert_eq!(response.headers()["cache-control"], "private, no-cache");
+        assert!(response.headers().contains_key("etag"));
         let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
             .await
             .unwrap();
