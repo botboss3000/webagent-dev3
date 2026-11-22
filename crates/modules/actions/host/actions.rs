@@ -407,6 +407,9 @@ pub(crate) async fn prepare_on(
     {
         return Ok(None);
     }
+    let (link, requests) = base.action_requests(sid, &candidate["origin"]).await?;
+    candidate["request_link"] = link.into();
+    candidate["requests"] = requests.into();
     Ok(Some(
         store
             .action_prepare(
@@ -632,6 +635,8 @@ fn panel_row(action: &Value) -> Value {
         "critical",
         "resolved_by",
         "requester",
+        "request_link",
+        "requests",
     ] {
         row[key] = action[key].clone();
     }

@@ -38,5 +38,6 @@
       "ability on",
       "ability off"
     ]
-  }
+  },
+  "critical": true
 }

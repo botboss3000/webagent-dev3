@@ -32,5 +32,6 @@
     "keywords": [
       "cancel automation"
     ]
-  }
+  },
+  "critical": true
 }

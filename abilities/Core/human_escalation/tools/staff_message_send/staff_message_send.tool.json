@@ -54,5 +54,6 @@
       "leave message",
       "callback"
     ]
-  }
+  },
+  "critical": true
 }

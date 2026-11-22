@@ -38,5 +38,6 @@
     "keywords": [
       "run now"
     ]
-  }
+  },
+  "critical": true
 }

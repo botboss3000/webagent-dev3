@@ -39,12 +39,8 @@
   },
   "effect": "write",
   "task": "exempt",
-  "retention": {
-    "drop_input_fields": [
-      "instructions"
-    ]
-  },
   "default_policy": {
     "operator": "require_approval"
-  }
+  },
+  "critical": true
 }

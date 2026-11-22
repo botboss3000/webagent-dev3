@@ -1,8 +1,9 @@
 //! Trim stored tool calls to each tool's `retention` (`tool.json`) once the conversation has
 //! moved past them: rows behind the compaction fold, and every row of a session idle for the
 //! storage policy's `trim_idle_days`. A read whose path a later call in the same pass wrote is
-//! stale and trimmed as disposable. Model context ahead of the fold is never changed; an idle
-//! session's next run rebuilds from the trimmed rows. `retention_marks` records how far each
+//! stale and trimmed as disposable. Model context ahead of the fold is never changed, and calls
+//! the compacted conversation still carries keep their stored rows; an idle session's next run
+//! rebuilds from the trimmed rows. `retention_marks` records how far each
 //! session is trimmed, so a pass only reads new rows.
 use super::*;
 use std::collections::{HashMap, HashSet};
@@ -22,6 +23,17 @@ const DAY_SECONDS: i64 = 86_400;
 fn last_sweeps() -> &'static Mutex<HashMap<String, Instant>> {
     static SWEEPS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
     SWEEPS.get_or_init(Default::default)
+}
+
+/// Tool calls the session's compacted conversation still carries: a fold keeps recent
+/// exchanges word for word, and their stored rows stay their originals.
+fn checkpoint_calls(session: &Value) -> HashSet<String> {
+    session["checkpoint_input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["call_id"].as_str().map(str::to_owned))
+        .collect()
 }
 
 /// A tool call seen in the rows: its tool and the path a read or write names.
@@ -69,16 +81,17 @@ impl Store {
             let sid: String = row.get("sid");
             let mut mark: i64 = row.get("mark");
             let idle = row.get::<i64, _>("active") <= idle_before;
+            let Some(session) = self.get(&format!("session:{sid}")).await? else {
+                continue;
+            };
             let target = if idle {
                 row.get::<i64, _>("last")
             } else {
-                match self.get(&format!("session:{sid}")).await? {
-                    Some(session) => session["checkpoint_through"].as_i64().unwrap_or(0),
-                    None => continue,
-                }
+                session["checkpoint_through"].as_i64().unwrap_or(0)
             };
+            let in_context = checkpoint_calls(&session);
             while mark < target {
-                let (rows, through) = self.trim_rows(&sid, mark, target).await?;
+                let (rows, through) = self.trim_rows(&sid, mark, target, &in_context).await?;
                 trimmed += rows;
                 mark = through;
             }
@@ -93,8 +106,15 @@ impl Store {
     }
 
     /// Trim up to `ROWS_PER_PASS` rows after `mark` through `target` in one transaction and
-    /// move the mark; returns the rows changed and the new mark.
-    async fn trim_rows(&self, sid: &str, mark: i64, target: i64) -> Result<(u64, i64)> {
+    /// move the mark; returns the rows changed and the new mark. Calls in `in_context` are
+    /// left whole.
+    async fn trim_rows(
+        &self,
+        sid: &str,
+        mark: i64,
+        target: i64,
+        in_context: &HashSet<String>,
+    ) -> Result<(u64, i64)> {
         // Read then write: take the write lock first, as the other cleanups do.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let rows = sqlx::query(
@@ -150,6 +170,9 @@ impl Store {
             let Some(id) = item["call_id"].as_str().map(str::to_owned) else {
                 continue;
             };
+            if in_context.contains(&id) {
+                continue;
+            }
             let replaced = match item["type"].as_str() {
                 Some("function_call") => {
                     let retention = calls
@@ -338,10 +361,52 @@ mod tests {
             1
         );
         let saved = items(&store).await;
-        assert!(saved[5]["output"].as_str().unwrap().len() < 200);
+        assert!(saved[5]["output"].as_str().unwrap().len() < 400);
         assert_eq!(
             store.trim_history(7, now + 8 * DAY_SECONDS).await.unwrap(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn calls_the_compacted_conversation_still_carries_stay_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let long = "line\n".repeat(400);
+        for (run, id) in [("r1", "c1"), ("r1", "c2")] {
+            insert(
+                &store,
+                run,
+                &format!("{id}a"),
+                call(id, "file_list", json!({"path":"/code"})),
+            )
+            .await;
+            insert(
+                &store,
+                run,
+                &format!("{id}b"),
+                output(id, json!({"status":"ok","output":long})),
+            )
+            .await;
+        }
+        // A background fold applied after c2 ran: the fold point passes c2, but the
+        // compacted conversation still carries c2 word for word.
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","checkpoint_through":4,
+                    "checkpoint_input":[call("c2","file_list",json!({"path":"/code"})),
+                        output("c2",json!({"status":"ok","output":long}))]}),
+            )
+            .await
+            .unwrap();
+        let now = webagent_host_core::now() as i64;
+        assert_eq!(store.trim_history(7, now).await.unwrap(), 1);
+        let saved = items(&store).await;
+        assert!(saved[1]["output"]
+            .as_str()
+            .unwrap()
+            .contains("original_sha256"));
+        assert!(saved[3]["output"].as_str().unwrap().len() > 2_000);
     }
 }

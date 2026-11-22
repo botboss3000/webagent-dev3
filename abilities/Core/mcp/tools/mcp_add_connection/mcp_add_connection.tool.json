@@ -52,5 +52,6 @@
       "mcp",
       "connect server"
     ]
-  }
+  },
+  "critical": true
 }

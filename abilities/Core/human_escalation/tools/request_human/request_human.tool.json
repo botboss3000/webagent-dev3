@@ -31,5 +31,6 @@
       "staff",
       "escalate"
     ]
-  }
+  },
+  "critical": true
 }

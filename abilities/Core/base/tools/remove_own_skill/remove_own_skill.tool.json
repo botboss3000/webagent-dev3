@@ -25,5 +25,6 @@
   "task": "exempt",
   "default_policy": {
     "operator": "require_approval"
-  }
+  },
+  "critical": true
 }

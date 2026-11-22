@@ -353,6 +353,29 @@
       "bounds": "validator"
     },
     {
+      "id": "ledger.request_text_max_chars",
+      "description": "Most characters of each user request copied into an action ledger record, so a recorded critical action still shows what was asked after its chat is deleted. Longer requests are cut and marked as cut.",
+      "type": "integer",
+      "pointer": "/ledger/request_text_max_chars",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "keep more of the request in the action ledger",
+        "shorter request text in recorded actions",
+        "how much of my message does the ledger keep"
+      ],
+      "areas": [
+        "actions",
+        "storage",
+        "limits"
+      ],
+      "unit": "characters",
+      "min": 1,
+      "max": 20000,
+      "bounds": "validator"
+    },
+    {
       "id": "storage.compression.mode",
       "description": "Whether saved chat text and files are compressed to save space.",
       "type": "enum",

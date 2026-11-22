@@ -8,6 +8,7 @@
 //! Root-bound adapters (App/Store glue, the Engine port implementation) live in `host/` and are
 //! compiled by the root binary.
 pub mod intent;
+pub mod links;
 pub mod outcome;
 pub mod receipts;
 pub mod repository;

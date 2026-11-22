@@ -73,6 +73,8 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("session_scripts:")
         || key.starts_with("saved_scripts:")
         || key.starts_with("action:")
+        // The session's newest request linked to an action ledger record.
+        || key.starts_with("action_link:")
         || key.starts_with("background_task:")
         || key.starts_with("run:")
         || key.starts_with("run_view:")

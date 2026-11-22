@@ -29,9 +29,15 @@ export function renderActions(box, actions, {resolve, changed = () => {}, showSe
   list.update(sortActions(actions).map(action => ({
     id: action.id || String(action.created_at), title: action.tool || 'tool', status: STATUS[action.state] || 'pending',
     icon: action.critical ? 'ShieldAlert' : null, pill: STATE[action.state] || action.state || false,
-    badges: [action.critical ? 'Critical' : '', when(action.updated_at || action.created_at)].filter(Boolean),
+    badges: [action.critical ? 'Critical' : '', action.request_link === 'none' ? 'No request' : '', when(action.updated_at || action.created_at)].filter(Boolean),
     description: [showUser && action.requester ? 'User ' + action.requester : '', action.attempt ? 'Attempt ' + action.attempt : '', showSession && action.session_id ? 'Chat ' + String(action.session_id).slice(0, 8) : '', action.resolved_by ? 'Marked by ' + action.resolved_by : ''].filter(Boolean).join(' · '),
     content: host => {
+      // The user requests the action answers; flagged when none could be linked.
+      if (action.request_link === 'none') host.append(el('p', 'actions-hint', 'No user request was linked to this action.'));
+      for (const request of Array.isArray(action.requests) ? action.requests : []) {
+        const label = `Request ${request.label || ''}${action.request_link === 'inferred' ? ' (inferred)' : ''}`;
+        host.append(el('small', 'actions-label', label), el('p', 'actions-request', (request.text || '') + (request.cut ? ' …' : '')));
+      }
       if (action.arguments && typeof action.arguments === 'object') host.append(el('small', 'actions-label', 'Arguments'), el('pre', 'actions-args-body', JSON.stringify(action.arguments, null, 2).slice(0, 4000)));
       if (action.state !== 'uncertain') return;
       host.append(el('p', 'actions-hint', 'This may or may not have taken effect. Check the real outcome, then mark it.'));

@@ -43,5 +43,6 @@
       "message session",
       "steer"
     ]
-  }
+  },
+  "critical": true
 }

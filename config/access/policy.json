@@ -23,6 +23,9 @@
       "host-admin": "admin"
     }
   },
+  "ledger": {
+    "request_text_max_chars": 1000
+  },
   "registration": "open",
   "request_limits": {
     "new_accounts_per_day": 50,

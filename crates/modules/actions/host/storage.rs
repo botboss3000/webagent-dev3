@@ -6,6 +6,7 @@ use anyhow::Result;
 use serde_json::Value;
 use sqlx::Row;
 use webagent_actions::intent;
+use webagent_actions::links;
 use webagent_actions::receipts;
 use webagent_actions::repository::Ledger;
 
@@ -107,6 +108,69 @@ impl Store {
                 )
             })
             .unwrap_or(Value::Null))
+    }
+    /// The user requests run `rid`'s action answers, for its ledger record: `(link, requests)`
+    /// as `webagent_actions::links` finds them, each with its message text cut to the policy
+    /// limit. A run no user message started (an automation, another agent) links `automated`.
+    /// Moves the session's mark so the next record infers only newer requests.
+    pub(crate) async fn action_requests(
+        &self,
+        sid: &str,
+        origin: &Value,
+    ) -> Result<(String, Vec<Value>)> {
+        if origin.is_null() {
+            return Ok(("automated".into(), Vec::new()));
+        }
+        let requests = self.task_requests(sid).await?;
+        let list = self
+            .task_list_current(sid)
+            .await?
+            .and_then(|document| serde_json::from_value(document["list"].clone()).ok());
+        let mark_key = format!("action_link:{sid}");
+        let after = self
+            .get(&mark_key)
+            .await?
+            .and_then(|mark| mark["after"].as_u64())
+            .and_then(|n| u32::try_from(n).ok())
+            // A session's first record infers only its newest request.
+            .unwrap_or_else(|| {
+                requests
+                    .items
+                    .iter()
+                    .filter_map(|request| links::label_number(&request.id))
+                    .max()
+                    .map_or(0, |newest| newest.saturating_sub(1))
+            });
+        let (kind, found) = links::linked(list.as_ref(), &requests, after);
+        let max = links::LedgerPolicy::live().request_text_max_chars;
+        let mut entries = Vec::with_capacity(found.len());
+        for request in found {
+            let stored: Option<Vec<u8>> =
+                sqlx::query_scalar("SELECT content FROM chat WHERE id=? AND session_id=?")
+                    .bind(&request.message)
+                    .bind(sid)
+                    .fetch_optional(&self.pool)
+                    .await?;
+            let text = match stored {
+                Some(raw) => self.unseal(&raw)?.as_str().map(str::to_owned),
+                None => None,
+            };
+            entries.push(links::request_entry(
+                request,
+                text.as_deref().unwrap_or(&request.text),
+                max,
+            ));
+        }
+        if let Some(newest) = requests
+            .items
+            .iter()
+            .filter_map(|request| links::label_number(&request.id))
+            .max()
+        {
+            self.put(&mark_key, &serde_json::json!({"after":newest}))
+                .await?;
+        }
+        Ok((kind.as_str().into(), entries))
     }
     /// See [`Ledger::get`].
     pub(crate) async fn action_get(&self, id: &str) -> Result<Option<Value>> {

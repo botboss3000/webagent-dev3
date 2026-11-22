@@ -125,7 +125,7 @@ pub struct ToolDefinition {
     #[serde(default)]
     pub duplicate_protection: Option<DuplicateProtection>,
     /// The ledger records every call and reports uncertain outcomes, whatever the
-    /// repeat protection setting says.
+    /// repeat protection setting says; stored calls are never trimmed.
     #[serde(default)]
     pub critical: bool,
     /// The task gate: `required` calls run only once every user request is cited or set
@@ -220,6 +220,9 @@ impl ToolDefinition {
         self.retention.validate(&self.parameters, folder)?;
         if (self.duplicate_protection.is_some() || self.critical) && self.is_read() {
             bail!("A read tool cannot use the action ledger: {folder}");
+        }
+        if self.critical && !self.retention.keeps_everything() {
+            bail!("A critical tool keeps its calls whole: no retention level or drop_input_fields: {folder}");
         }
         if let Some(protection) = &self.duplicate_protection {
             let properties = self.parameters["properties"].as_object();
@@ -648,6 +651,8 @@ mod tests {
             json!({"duplicate_protection":{"key":[],"window":"forever"}}),
             json!({"duplicate_protection":{"key":["q"],"window":{"seconds":0}}}),
             json!({"duplicate_protection":{"key":["q"],"window":"daily"}}),
+            json!({"critical":true,"retention":{"output":"log"}}),
+            json!({"critical":true,"retention":{"drop_input_fields":["q"]}}),
         ] {
             assert!(parse(bad).is_err());
         }

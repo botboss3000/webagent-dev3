@@ -110,5 +110,6 @@
     "keywords": [
       "update automation"
     ]
-  }
+  },
+  "critical": true
 }

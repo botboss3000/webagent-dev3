@@ -48,5 +48,6 @@
       "my settings",
       "preference"
     ]
-  }
+  },
+  "critical": true
 }

@@ -54,5 +54,6 @@
     "keywords": [
       "agent skills"
     ]
-  }
+  },
+  "critical": true
 }

@@ -122,5 +122,6 @@
       "cron",
       "recurring"
     ]
-  }
+  },
+  "critical": true
 }

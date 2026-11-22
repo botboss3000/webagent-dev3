@@ -694,6 +694,10 @@ impl Store {
             if candidate == key {
                 continue;
             }
+            // Action ledger records outlive their session: they document what was done.
+            if candidate.starts_with("action:") {
+                continue;
+            }
             let record = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
             let owned = record["session_id"] == sid
                 || record["session"]["id"] == sid
@@ -710,6 +714,7 @@ impl Store {
                     "administrator_host",
                     "administrator_browser",
                     "administrator_notice",
+                    "action_link",
                 ]
                 .iter()
                 .any(|prefix| candidate == format!("{prefix}:{sid}"))

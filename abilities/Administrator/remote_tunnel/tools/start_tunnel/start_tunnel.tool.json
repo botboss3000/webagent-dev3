@@ -35,5 +35,6 @@
       "tunnel",
       "preview"
     ]
-  }
+  },
+  "critical": true
 }

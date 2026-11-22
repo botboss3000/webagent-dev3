@@ -153,9 +153,9 @@ mod action_settings_tests {
     #[test]
     fn retired_ledger_settings_are_ignored_not_fatal() {
         // These tools now use the repeat guard; settings saved for the old ledger are dropped.
-        let off = json!({"tool_execution":{"edit_own_prompt":{"mode":"foreground",
+        let off = json!({"tool_execution":{"file_write":{"mode":"foreground",
             "max_concurrency":1,"duplicate_protection":"off"}}});
-        assert!(resolve(&off, "edit_own_prompt")
+        assert!(resolve(&off, "file_write")
             .unwrap()
             .duplicate_protection
             .is_none());
@@ -166,8 +166,8 @@ mod action_settings_tests {
             Some(crate::actions::Protection::On)
         );
         let mut bad = off;
-        bad["tool_execution"]["edit_own_prompt"]["duplicate_protection"] = json!("ignore");
-        assert!(resolve(&bad, "edit_own_prompt").is_err());
+        bad["tool_execution"]["file_write"]["duplicate_protection"] = json!("ignore");
+        assert!(resolve(&bad, "file_write").is_err());
         assert!(resolve(&json!({}), "shell")
             .unwrap()
             .duplicate_protection

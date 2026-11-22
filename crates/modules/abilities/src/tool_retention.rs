@@ -5,6 +5,7 @@
 use anyhow::{bail, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 /// Fields a trimmed output always keeps: they say how the call ended.
 const OUTCOME_FIELDS: [&str; 5] = [
@@ -24,6 +25,9 @@ const MAX_TAIL_LINES: u32 = 1000;
 const TAIL_LINE_BYTES: usize = 400;
 /// Marks a trimmed output so a later pass leaves it alone.
 const MARKER: &str = "retention";
+/// A trimmed output's fingerprint of the output it replaced, so it stays checkable.
+pub const ORIGINAL_SHA256: &str = "original_sha256";
+const ORIGINAL_BYTES: &str = "original_bytes";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -96,12 +100,12 @@ pub fn trimmed_output(retention: &Retention, level: OutputLevel, output: &Value)
         return None;
     }
     let text = output.as_str()?;
-    let trimmed = match serde_json::from_str::<Value>(text) {
+    let mut trimmed = match serde_json::from_str::<Value>(text) {
         Ok(Value::Object(fields)) => {
             if fields.contains_key(MARKER) {
                 return None;
             }
-            Value::Object(trimmed_fields(retention, level, fields))
+            trimmed_fields(retention, level, fields)
         }
         // Plain text: a log keeps its tail, anything else only the marker.
         _ => {
@@ -110,9 +114,14 @@ pub fn trimmed_output(retention: &Retention, level: OutputLevel, output: &Value)
                 kept.insert("output".into(), json!(tail(text, lines)));
             }
             kept.insert(MARKER.into(), json!(note(level)));
-            Value::Object(kept)
+            kept
         }
     };
+    trimmed.insert(
+        ORIGINAL_SHA256.into(),
+        json!(hex::encode(Sha256::digest(text.as_bytes()))),
+    );
+    trimmed.insert(ORIGINAL_BYTES.into(), json!(text.len()));
     let trimmed = serde_json::to_string(&trimmed).ok()?;
     (trimmed.len() < text.len()).then(|| json!(trimmed))
 }
@@ -215,6 +224,12 @@ mod tests {
         assert_eq!(fields["status"], "ok");
         assert!(fields.get("output").is_none() && fields.get("offset").is_none());
         assert!(fields[MARKER].is_string());
+        let original = output.as_str().unwrap();
+        assert_eq!(
+            fields[ORIGINAL_SHA256],
+            hex::encode(Sha256::digest(original.as_bytes()))
+        );
+        assert_eq!(fields[ORIGINAL_BYTES], original.len());
         assert_eq!(
             trimmed_output(&rule, OutputLevel::Disposable, &trimmed),
             None

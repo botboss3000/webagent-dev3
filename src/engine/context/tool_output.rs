@@ -115,6 +115,84 @@ mod dedup_tests {
         assert_eq!(output("long-load_skill"), bodies[0]);
         assert!(output("long-get_time").len() < bodies[1].len());
     }
+    /// Overwrite call `id`'s stored result as history retention does.
+    async fn store_trim(app: &crate::App, sid: &str, rid: &str, id: &str, output: Value) {
+        let item = json!({"type":"function_call_output","call_id":id,"output":output});
+        sqlx::query("UPDATE interactions SET item=? WHERE session_id=? AND run_id=? AND step=?")
+            .bind(app.store.encode_user_record(&item).unwrap())
+            .bind(sid)
+            .bind(rid)
+            .bind(format!("tool:{id}"))
+            .execute(&app.store.pool)
+            .await
+            .unwrap();
+    }
+    /// History retention trims a stored original the conversation may still show as a preview:
+    /// the preview stands in when the trim records this original's fingerprint (or predates
+    /// fingerprints), and a trim of some other output still fails verification.
+    #[tokio::test]
+    async fn trimmed_originals_keep_their_preview_and_mismatched_trims_still_pause() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let rid = crate::runtime_tests::queued(&app, &sid).await;
+        let mut run = app.run(&rid).await.unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        dedup_prepare(&app, &mut run, 8192, &cancel).await.unwrap();
+        run["turns"] = json!(1);
+        let id = "trimmed-call";
+        let call = json!({"type":"function_call","call_id":id,"name":"get_time","arguments":"{}"});
+        run["input"].as_array_mut().unwrap().push(call.clone());
+        app.store
+            .save_run(&mut run, "model_output", &json!({"output":[call]}))
+            .await
+            .unwrap();
+        run["pending"] = json!({"call_id":id});
+        let result = json!({"status":"ok","output":"tick\n".repeat(4000)});
+        let body = result.to_string();
+        record(&mut run, &result).unwrap();
+        run["input"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"function_call_output","call_id":id,"output":body}));
+        app.store
+            .save_run(&mut run, "tool_result", &json!({}))
+            .await
+            .unwrap();
+        dedup_prepare(&app, &mut run, 8192, &cancel).await.unwrap();
+        // The conversation now carries a shortened copy and retention trimmed the original.
+        let preview = "[preview of the clock output]";
+        for item in run["input"].as_array_mut().unwrap() {
+            if item["type"] == "function_call_output" && item["call_id"] == id {
+                item["output"] = json!(preview);
+            }
+        }
+        let rule = webagent_abilities::tool_retention::Retention::default();
+        let trimmed = webagent_abilities::tool_retention::trimmed_output(
+            &rule,
+            webagent_abilities::tool_retention::OutputLevel::Disposable,
+            &json!(body),
+        )
+        .unwrap();
+        let paused = run.clone();
+        let mut forged: Value = serde_json::from_str(trimmed.as_str().unwrap()).unwrap();
+        forged["original_sha256"] = json!("0".repeat(64));
+        store_trim(&app, &sid, &rid, id, json!(forged.to_string())).await;
+        assert!(dedup_prepare(&app, &mut run, 8192, &cancel).await.is_err());
+        run = paused;
+        store_trim(&app, &sid, &rid, id, trimmed).await;
+        let projected = dedup_prepare(&app, &mut run, 8192, &cancel).await.unwrap();
+        let shown = projected
+            .iter()
+            .find(|item| item["type"] == "function_call_output" && item["call_id"] == id)
+            .unwrap();
+        assert_eq!(shown["output"], preview);
+        assert_eq!(
+            run["tool_result_projection"]["origins"][id]["previewed"],
+            true
+        );
+        // The origin now fingerprints the preview, so the next call needs no stored original.
+        dedup_prepare(&app, &mut run, 8192, &cancel).await.unwrap();
+    }
     /// Native control pending state has no name; retain exact identity and recover old paused runs safely.
     #[tokio::test]
     async fn native_control_provenance_uses_recorded_calls_and_recovers_null_names() {

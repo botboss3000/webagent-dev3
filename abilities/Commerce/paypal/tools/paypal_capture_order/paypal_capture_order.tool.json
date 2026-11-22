@@ -7,5 +7,6 @@
     "required": [],
     "additionalProperties": false
   },
-  "effect": "write"
+  "effect": "write",
+  "critical": true
 }

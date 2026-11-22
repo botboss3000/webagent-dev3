@@ -32,5 +32,6 @@
     "keywords": [
       "update agent"
     ]
-  }
+  },
+  "critical": true
 }

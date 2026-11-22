@@ -85,5 +85,6 @@
       "subscribe",
       "trigger"
     ]
-  }
+  },
+  "critical": true
 }

@@ -364,6 +364,22 @@ fn workspace_relative(root: &str, path: &str) -> Option<String> {
     (!components.is_empty()).then(|| components.join("/"))
 }
 
+/// The fingerprint a stored output trimmed by history retention records of the output it
+/// replaced: `Some(None)` for rows trimmed before fingerprints were kept, `None` when the
+/// output was not trimmed. The marker and field are `webagent_abilities::tool_retention`'s.
+fn trimmed_original(text: &str) -> Option<Option<String>> {
+    let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(text) else {
+        return None;
+    };
+    fields.get("retention")?.as_str()?;
+    Some(
+        fields
+            .get("original_sha256")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+}
+
 fn hash_output(output: &Value) -> String {
     hex::encode(Sha256::digest(output_text(output).as_bytes()))
 }
@@ -1061,7 +1077,7 @@ pub async fn dedup_prepare(
         document["origins"] = json!({});
     }
     let seed = document["initialized"] != true;
-    let state: contract::State = match document.get("planner") {
+    let mut state: contract::State = match document.get("planner") {
         Some(v) => serde_json::from_value(v.clone())?,
         None => contract::State::default(),
     };
@@ -1101,6 +1117,8 @@ pub async fn dedup_prepare(
             continue;
         };
         let origin = document["origins"].get(id).cloned();
+        // Set when history retention trimmed the stored original: the context copy stands in.
+        let mut trimmed = false;
         let (source_run, raw) = if let Some(origin) = &origin {
             let source = origin["run_id"]
                 .as_str()
@@ -1112,22 +1130,32 @@ pub async fn dedup_prepare(
                     .tool_result(&sid, source, id)
                     .await?
                     .context("Original tool output unavailable")?;
-                (
-                    source.to_owned(),
-                    result["output"]
-                        .as_str()
-                        .context("Original result text missing")?
-                        .to_owned(),
-                )
+                let stored = result["output"]
+                    .as_str()
+                    .context("Original result text missing")?;
+                match trimmed_original(stored) {
+                    // Trimmed before fingerprints were kept, or a trim of this very original.
+                    Some(recorded)
+                        if recorded
+                            .as_deref()
+                            .is_none_or(|sha| origin["sha256"] == sha) =>
+                    {
+                        trimmed = true;
+                        (source.to_owned(), output_text(&item["output"]))
+                    }
+                    _ => (source.to_owned(), stored.to_owned()),
+                }
             }
         } else if let Some((source, result)) = journal.tool_result_origin(&sid, id).await? {
-            (
-                source,
-                result["output"]
-                    .as_str()
-                    .context("Original result text missing")?
-                    .to_owned(),
-            )
+            let stored = result["output"]
+                .as_str()
+                .context("Original result text missing")?;
+            if trimmed_original(stored).is_some() {
+                trimmed = true;
+                (source, output_text(&item["output"]))
+            } else {
+                (source, stored.to_owned())
+            }
         } else {
             if is_compacted_preview(&item["output"], id) {
                 bail!("Original tool output unavailable for preview reconstruction");
@@ -1156,11 +1184,17 @@ pub async fn dedup_prepare(
             scope
         };
         let sha = contract::fingerprint(&raw);
+        if trimmed {
+            // The planner fingerprinted the trimmed original; its stand-in is this copy.
+            if let Some(assignment) = state.assignments.get_mut(id) {
+                assignment.output_sha256 = sha.clone();
+            }
+        }
         let scope = origin
             .as_ref()
             .map(|value| value["scope"].clone())
             .unwrap_or(source_scope);
-        if let Some(origin) = &origin {
+        if let Some(origin) = origin.as_ref().filter(|_| !trimmed) {
             if origin["sha256"] != sha {
                 bail!("Original tool output failed provenance verification");
             }
@@ -1177,9 +1211,10 @@ pub async fn dedup_prepare(
                 }
             }
         }
-        let old_preview = origin
-            .as_ref()
-            .is_some_and(|value| value["previewed"] == true)
+        let old_preview = trimmed
+            || origin
+                .as_ref()
+                .is_some_and(|value| value["previewed"] == true)
             || (seed && output_text(&item["output"]) != raw);
         document["origins"][id] = json!({"run_id":source_run,"tool":name,"scope":scope,"sha256":sha,"previewed":old_preview});
         observations.push(contract::Observation {
@@ -1319,7 +1354,13 @@ pub async fn dedup_summary_source(
             // A missing original never reappears, so failing here would stall the run on every
             // retry; summarize the shortened output already in the source instead.
             if let Some(result) = journal.tool_result(sid, origin, id).await? {
-                item["output"] = result["output"].clone();
+                // A trimmed original holds less than the copy already in the source.
+                if !result["output"]
+                    .as_str()
+                    .is_some_and(|text| trimmed_original(text).is_some())
+                {
+                    item["output"] = result["output"].clone();
+                }
             }
         }
     }

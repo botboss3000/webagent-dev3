@@ -61,7 +61,12 @@ it, naming exactly its tool folders. `<tool>.tool.json` holds:
   fields stay), `log` (outcome, short fields, `keep_fields`, and long text cut to its last
   `tail_lines` lines) or `record` (kept whole; the default). `drop_input_fields` names
   arguments replaced by their size, such as a written file's content. A read whose `path` a
-  later call in the same pass wrote is trimmed as disposable whatever its level.
+  later call in the same pass wrote is trimmed as disposable whatever its level. A trimmed
+  output records `original_sha256` and `original_bytes` of what it replaced.
+- `critical` (optional, default false): the action ledger records every call with the user
+  requests it answers, and the record outlives its session; stored calls are never trimmed,
+  so a critical tool takes no `retention` level or `drop_input_fields`. Only writes may set
+  it. See [tool-policy.md](tool-policy.md) section 7.
 
 `<tool>.skill.md` is its optional guidance. The handler stays compiled Rust and lists the
 tool in its adapter's `TOOLS`. At startup every listed handler must have a valid folder

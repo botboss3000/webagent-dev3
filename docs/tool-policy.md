@@ -82,5 +82,44 @@ after an approval the step runs again and passes every check a second time.
 
 `effect` (`read` or `write`) never decides access. It drives recovery (an interrupted
 write is uncertain and never rerun; a read is retried), parallel batches, background work,
-history retention of old results, the repeat guard's default and, absent a `task` value,
-the task gate.
+which stale reads history retention drops (section 7), the repeat guard's default and,
+absent a `task` value, the task gate.
+
+## 7. History retention and the action ledger
+
+Every call's full arguments and result are saved in the session's history. Once the
+conversation has moved past a call (behind the compaction point, or in a session idle for
+`storage.trim_idle_days` in `config/access/policy.json`), the cleanup
+(`crates/modules/files/host/storage/history_retention.rs`) trims the stored row to the
+tool's `retention` level in its `tool.json`:
+
+| Level | Tools | What the stored row keeps |
+| --- | --- | --- |
+| `disposable` | reads and lookups | the outcome fields only |
+| `log` | commands and edits | the outcome, short fields and the end of long text; listed inputs become their size |
+| none (`record`) | everything else, and every critical tool | the whole call |
+
+- A trimmed row records the fingerprint and size of what it replaced
+  (`original_sha256`, `original_bytes`), so it stays checkable.
+- Calls the compacted conversation still carries word for word (`checkpoint_input`) are
+  never trimmed, even behind the compaction point: a background compaction can finish after
+  calls that its summary does not cover.
+- The duplicate-result check (`dedup_prepare`, see context-assembly.md) uses the
+  conversation's copy when the stored original was trimmed and the trim's fingerprint matches
+  it (or predates fingerprints); any other mismatch still pauses the run.
+
+`critical: true` marks significant actions: payments and store changes, messages sent,
+infrastructure and access changes, and settings and agent changes. A critical call is never
+trimmed and always goes through the action ledger (section 5). Its ledger record keeps the
+full arguments, the result, and the user requests it answers (`requests`, `request_link`):
+
+- `cited`: the requests the in-progress task step cites (its section's when the step cites
+  none). Request labels (`u1`, `u2`, ...) are counted whatever the task gate setting.
+- `inferred`: no step cites one, so every request labelled since the session's previous
+  ledger record (`action_link:{sid}`).
+- `none`: no request to link; the Actions panel flags the record.
+- `automated`: the run was started by an automation or another agent, not a user message.
+
+Each request's text is cut to `ledger.request_text_max_chars` (default 1000) in
+`config/access/policy.json`. Ledger records (`action:{id}`) are kept when their session is
+deleted.

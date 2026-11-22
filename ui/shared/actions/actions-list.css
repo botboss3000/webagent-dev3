@@ -2,6 +2,8 @@
 /* Actions list (actions-list.js): rows of recorded actions, uncertain ones first. */
 .actions-label { display: block; color: var(--fg-2); font-size: 12px; margin-top: 2px; }
 .actions-args-body { margin: 4px 0 0; padding: 6px; max-height: 200px; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: color-mix(in oklab, var(--fg-1) 5%, transparent); border-radius: 6px; }
+/* A linked user request's text, wrapped so long requests never widen the panel. */
+.actions-request { margin: 2px 0 6px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
 .actions-hint, .actions-error, .actions-empty { margin: 6px 0 0; font-size: 13px; color: var(--fg-2); }
 .actions-error { color: var(--danger, #f7768e); }
 .actions-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

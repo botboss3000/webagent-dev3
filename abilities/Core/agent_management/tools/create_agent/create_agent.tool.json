@@ -28,5 +28,6 @@
       "new agent",
       "create agent"
     ]
-  }
+  },
+  "critical": true
 }
