@@ -1,0 +1,7 @@
+{
+  "_instructions": "Resource limits for every workspace command and terminal (shell, python, terminal_open and the previews they serve), read live by the tool worker when each one starts. Each limit counts the command's whole process tree together, not each process alone. memory_mb: private memory of all its processes together. processes: processes and threads running at once. cpu_seconds: CPU time of all its processes together, ended ones included. A command past a limit is stopped and its output says which. Sandbox ability commands use their own limits (abilities/Core/sandbox/limits.json), counted the same way.",
+  "schema_version": 1,
+  "memory_mb": 1024,
+  "processes": 256,
+  "cpu_seconds": 1800
+}

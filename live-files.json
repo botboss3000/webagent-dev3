@@ -49,6 +49,8 @@
     "config/ui/chat/controls/session-dropdown/*.json",
     "config/webapp/*.settings.json",
     "config/webapp/app-settings.json",
+    "config/worker/*.settings.json",
+    "config/worker/command-limits.json",
     "docs/*.md",
     "docs/*/*.json",
     "docs/*/*.md",

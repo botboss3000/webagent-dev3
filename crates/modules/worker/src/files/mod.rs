@@ -100,6 +100,8 @@ pub struct Roots {
     pub context_config: PathBuf,
     /// Workspace preview-port claims, shared with the Python worker's terminals.
     pub port_claims: PathBuf,
+    /// The live command limits ([`crate::limits::CommandLimits`]).
+    pub command_limits: PathBuf,
 }
 
 impl Roots {
@@ -111,6 +113,7 @@ impl Roots {
         Self {
             workspaces: webagent_configuration::paths::workspaces(),
             context_config: live_checkout.join("config/context/context-compaction.json"),
+            command_limits: live_checkout.join(crate::limits::LIVE_LIMITS),
             live_checkout,
             control: runtime.join("control"),
             port_claims: runtime.join("worker/port-claims"),

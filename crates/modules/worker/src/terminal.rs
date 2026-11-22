@@ -227,6 +227,8 @@ struct Inner {
 pub struct Launch {
     pub supervisor: Vec<String>,
     pub ports: Vec<u16>,
+    /// What the terminal's whole process tree may use.
+    pub limits: crate::limits::CommandLimits,
 }
 
 impl Terminals {
@@ -424,6 +426,7 @@ impl Terminals {
             .env("CARGO_HOME", base.join(".cargo"))
             .env("CARGO_BUILD_JOBS", "1")
             .env("V3_ALLOWED_LISTEN_PORTS", listen)
+            .env("V3_COMMAND_LIMITS", launch.limits.to_env())
             .current_dir(base)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -606,6 +609,10 @@ fn supervised(spec: &str) -> std::io::Result<i32> {
     let read_paths = crate::runner::command_read_paths(true);
     let read_paths: Vec<&Path> = read_paths.iter().map(PathBuf::as_path).collect();
     let sandbox = crate::sandbox::prepare(Path::new(base), &read_paths, &ports, true)?;
+    // The workspace command limits, counted over the whole terminal, as for `shell`.
+    let limits =
+        crate::limits::CommandLimits::from_env(std::env::var("V3_COMMAND_LIMITS").ok().as_deref());
+    let rlimits = crate::runner::resource_limits(None, limits.processes)?;
     let bash = CString::new("/bin/bash")?;
     let argv: Vec<CString> = ["bash", "--noprofile", "--norc", "-c", command]
         .into_iter()
@@ -683,9 +690,10 @@ fn supervised(spec: &str) -> std::io::Result<i32> {
             if slave > 2 {
                 libc::close(slave);
             }
-            // The boundary is applied in the child only: the supervisor must still signal
-            // and reap the command outside it.
-            if sandbox.apply().is_err() {
+            // The limits and the boundary are applied in the child only: the supervisor
+            // must still signal and reap the command outside them.
+            crate::runner::first_to_kill();
+            if crate::runner::set_limits(&rlimits).is_err() || sandbox.apply().is_err() {
                 let message = b"terminal sandbox failed\r\n";
                 libc::write(2, message.as_ptr().cast(), message.len());
                 libc::_exit(126);
@@ -697,7 +705,7 @@ fn supervised(spec: &str) -> std::io::Result<i32> {
         }
         libc::close(slave);
         let master = OwnedFd::from_raw_fd(master);
-        let status = relay(master.as_raw_fd(), child);
+        let status = relay(master.as_raw_fd(), child, &limits);
         Ok(status.clamp(0, 255))
     }
 }
@@ -711,8 +719,9 @@ fn nonblocking(fd: i32) {
 }
 
 /// The supervisor's relay loop, then the cleanup of every descendant; returns the
-/// command's exit code (minus the signal when one ended it).
-fn relay(master: i32, child: i32) -> i32 {
+/// command's exit code (minus the signal when one ended it). A tree past `limits` is killed
+/// and its output ends with the reason.
+fn relay(master: i32, child: i32, limits: &crate::limits::CommandLimits) -> i32 {
     nonblocking(master);
     nonblocking(1);
     let started = Instant::now();
@@ -723,6 +732,8 @@ fn relay(master: i32, child: i32) -> i32 {
     let mut pending_output: Vec<u8> = Vec::new();
     let mut eof = false;
     let mut buffer = vec![0u8; 16384];
+    let mut metered = Instant::now();
+    let mut stopped = false;
     let code = |raw: i32| {
         if libc::WIFEXITED(raw) {
             libc::WEXITSTATUS(raw)
@@ -807,6 +818,21 @@ fn relay(master: i32, child: i32) -> i32 {
             }
             if read > 0 {
                 pending_input.extend_from_slice(&buffer[..read as usize]);
+            }
+        }
+        if !stopped && metered.elapsed() >= crate::runner::METER {
+            metered = Instant::now();
+            if let Some((_, reason)) = crate::runner::exceeded(limits, &crate::runner::usage()) {
+                stopped = true;
+                pending_output.extend_from_slice(
+                    format!("\r\nTerminal: {reason}, so it was stopped\r\n").as_bytes(),
+                );
+                for pid in crate::runner::descendants() {
+                    // SAFETY: kill takes plain integers; a vanished pid is ignored.
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
             }
         }
         if let Some(pid) = child {

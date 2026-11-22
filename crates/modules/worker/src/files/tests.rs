@@ -23,6 +23,7 @@ fn fixture() -> Fixture {
         control,
         context_config: dir.path().join("absent-context.json"),
         port_claims: dir.path().join("port-claims"),
+        command_limits: dir.path().join("absent-limits.json"),
     };
     Fixture {
         workspace: std::fs::canonicalize(&workspaces)

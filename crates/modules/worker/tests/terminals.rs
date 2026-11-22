@@ -43,6 +43,7 @@ async fn worker() -> Worker {
             control,
             context_config: dir.path().join("absent-context.json"),
             port_claims: dir.path().join("port-claims"),
+            command_limits: dir.path().join("command-limits.json"),
         },
         runner: harness::runner(),
         plugin_runner: harness::plugin_runner(),
@@ -232,6 +233,27 @@ async fn a_preview_needs_a_port_a_workspace_terminal_listens_on() {
     assert_eq!(status["output"]["status"], "absent", "{status}");
 }
 
+async fn a_terminal_past_its_memory_limit_is_stopped() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    std::fs::write(
+        worker.dir.path().join("command-limits.json"),
+        r#"{"schema_version":1,"memory_mb":128,"processes":16,"cpu_seconds":10}"#,
+    )
+    .expect("limits file");
+    let id = worker
+        .open("echo UP; python3 -c \"b = b'x' * (300 * 1024 * 1024); import time; time.sleep(60)\"")
+        .await;
+    let read = worker.until(&id, "so it was stopped").await;
+    let output = read["output"]["output"].as_str().unwrap_or_default();
+    assert!(
+        output.contains("Terminal: the command used more than 128 MB of memory"),
+        "{read}"
+    );
+}
+
 async fn terminal_arguments_are_checked() {
     let worker = worker().await;
     for (name, arguments) in [
@@ -260,6 +282,9 @@ fn main() {
             "a_preview_needs_a_port_a_workspace_terminal_listens_on",
             || Box::pin(a_preview_needs_a_port_a_workspace_terminal_listens_on()),
         ),
+        ("a_terminal_past_its_memory_limit_is_stopped", || {
+            Box::pin(a_terminal_past_its_memory_limit_is_stopped())
+        }),
         ("terminal_arguments_are_checked", || {
             Box::pin(terminal_arguments_are_checked())
         }),

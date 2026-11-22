@@ -4,6 +4,7 @@
 //! workspace as home and temporary directory, its claimed preview ports, merged output
 //! capped at 1 MiB and a timeout of 1–600 seconds.
 use crate::files::{self, Roots};
+use crate::limits::CommandLimits;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -72,7 +73,18 @@ pub async fn call(roots: &Roots, runner: &[String], request: &Value) -> Value {
         Err(_) => return json!({"status":"failed","output":"Port claim failed"}),
     };
     let checkout = files::checkout_granted(request);
-    match run(runner, &argv, &base, &ports, timeout as u64, checkout, None).await {
+    let limits = Confined::Workspace(CommandLimits::read(&roots.command_limits));
+    match run(
+        runner,
+        &argv,
+        &base,
+        &ports,
+        timeout as u64,
+        checkout,
+        limits,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(error) => json!({"status":"failed","output":error.to_string()}),
     }
@@ -227,8 +239,15 @@ pub(crate) fn stop_in_background(mut child: tokio::process::Child, group: i32) {
     }
 }
 
-/// Runs `argv` under its supervisor in `base`. `confinement` (a Sandbox ability command's
-/// [`crate::sandbox_tools::Confinement`]) selects the strict sandbox instead.
+/// What a command runs under: the workspace sandbox with the live command limits, or a
+/// Sandbox ability command's strict confinement
+/// ([`crate::sandbox_tools::Confinement`], as JSON).
+pub(crate) enum Confined<'a> {
+    Workspace(CommandLimits),
+    Sandbox(&'a str),
+}
+
+/// Runs `argv` under its supervisor in `base`, confined as `confined` says.
 pub(crate) async fn run(
     runner: &[String],
     argv: &[String],
@@ -236,7 +255,7 @@ pub(crate) async fn run(
     ports: &[u16],
     timeout: u64,
     checkout: bool,
-    confinement: Option<&str>,
+    confined: Confined<'_>,
 ) -> io::Result<Value> {
     let (reader, writer) = std::io::pipe()?;
     let ports: Vec<String> = ports.iter().map(u16::to_string).collect();
@@ -263,9 +282,10 @@ pub(crate) async fn run(
         .stdin(Stdio::null())
         .stdout(Stdio::from(writer.try_clone()?))
         .stderr(Stdio::from(writer));
-    if let Some(confinement) = confinement {
-        command.env("V3_SANDBOX_CONFINEMENT", confinement);
-    }
+    match confined {
+        Confined::Workspace(limits) => command.env("V3_COMMAND_LIMITS", limits.to_env()),
+        Confined::Sandbox(confinement) => command.env("V3_SANDBOX_CONFINEMENT", confinement),
+    };
     // SAFETY: setsid is async-signal-safe and touches no memory.
     unsafe {
         command.as_std_mut().pre_exec(|| {

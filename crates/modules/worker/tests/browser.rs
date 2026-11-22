@@ -34,6 +34,7 @@ async fn worker(origin: &str) -> Worker {
             control,
             context_config: dir.path().join("absent-context.json"),
             port_claims: dir.path().join("port-claims"),
+            command_limits: dir.path().join("absent-limits.json"),
         },
         runner: harness::runner(),
         plugin_runner: harness::plugin_runner(),

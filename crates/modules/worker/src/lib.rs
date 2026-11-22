@@ -7,6 +7,7 @@ pub mod commands;
 pub mod files;
 pub mod git;
 pub mod launch;
+pub mod limits;
 pub mod manager;
 pub mod plugins;
 pub mod runner;
@@ -704,8 +705,13 @@ async fn persistent_call(config: &Config, persistent: &Persistent, request: &Val
         .into_iter()
         .chain(["--terminal-supervisor".to_owned()])
         .collect();
+    let limits_path = config.files.command_limits.clone();
     let launch = move || match ports {
-        Ok(Ok(ports)) => Ok(terminal::Launch { supervisor, ports }),
+        Ok(Ok(ports)) => Ok(terminal::Launch {
+            supervisor,
+            ports,
+            limits: limits::CommandLimits::read(&limits_path),
+        }),
         Ok(Err(error)) => Err(error.to_string()),
         Err(_) => Err("Port claim failed".to_owned()),
     };
@@ -800,6 +806,7 @@ mod tests {
                 control,
                 context_config: dir.path().join("absent-context.json"),
                 port_claims: dir.path().join("port-claims"),
+                command_limits: dir.path().join("absent-limits.json"),
             },
             runner: vec!["/nonexistent-runner".into()],
             plugin_runner: vec!["/nonexistent-runner".into()],

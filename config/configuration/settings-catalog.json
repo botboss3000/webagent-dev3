@@ -50,6 +50,10 @@
       "descriptors": "config/browser/browser-limits.settings.json"
     },
     {
+      "config": "config/worker/command-limits.json",
+      "descriptors": "config/worker/command-limits.settings.json"
+    },
+    {
       "config": "config/notifications/admin-alerts.json",
       "descriptors": "config/notifications/admin-alerts.settings.json"
     },
@@ -85,6 +89,7 @@
     "config/models/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
     "config/notifications/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
     "config/webapp/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
+    "config/worker/*.settings.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
     "config/configuration/settings/*.json": "Setting descriptors; changed together with the settings they describe, never offered by the composer.",
     "config/configuration/settings-catalog.json": "The settings index itself; changed with the descriptors it lists.",
     "config/inference/value-words.json": "Vocabulary data for value detection, not a setting.",

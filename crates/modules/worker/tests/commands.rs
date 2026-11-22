@@ -43,6 +43,7 @@ async fn worker() -> Worker {
             control,
             context_config: dir.path().join("absent-context.json"),
             port_claims: dir.path().join("port-claims"),
+            command_limits: dir.path().join("command-limits.json"),
         },
         runner: harness::runner(),
         plugin_runner: harness::plugin_runner(),
@@ -98,6 +99,15 @@ impl Worker {
         let reply: Value = serde_json::from_slice(&line).expect("reply is JSON");
         reply["result"].clone()
     }
+}
+
+/// Tight command limits in the worker's live limits file, read by the next command.
+fn tight_limits(worker: &Worker) {
+    std::fs::write(
+        worker.dir.path().join("command-limits.json"),
+        r#"{"schema_version":1,"memory_mb":128,"processes":16,"cpu_seconds":10}"#,
+    )
+    .expect("limits file");
 }
 
 async fn a_shell_command_runs_in_its_workspace_with_merged_output() {
@@ -639,8 +649,81 @@ async fn saved_elements_are_read_only_in_the_sandbox() {
     assert_eq!(proposed["output"]["html"], "<p>draft</p>", "{proposed}");
 }
 
+async fn commands_are_stopped_past_their_whole_trees_limits() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    tight_limits(&worker);
+    let ordinary = worker
+        .call("shell", json!({"command":"echo fine"}), 30)
+        .await;
+    assert_eq!(ordinary["output"], "fine\n", "{ordinary}");
+    // Four processes of 60 MB each stay under 128 MB alone but not together.
+    let memory = worker
+        .call(
+            "shell",
+            json!({"command":"for i in 1 2 3 4; do python3 -c \"b = b'x' * (60 * 1024 * 1024); import time; time.sleep(30)\" & done; wait"}),
+            60,
+        )
+        .await;
+    assert_eq!(memory["exit_code"], 137, "{memory}");
+    assert!(
+        memory["output"]
+            .as_str()
+            .expect("text")
+            .contains("more than 128 MB of memory"),
+        "{memory}"
+    );
+    // Two busy processes pass 10 CPU seconds together in about five seconds.
+    let started = Instant::now();
+    let cpu = worker
+        .call(
+            "shell",
+            json!({"command":"python3 -c 'while 1: pass' & python3 -c 'while 1: pass'"}),
+            60,
+        )
+        .await;
+    assert_eq!(cpu["exit_code"], 152, "{cpu}");
+    assert!(cpu["output"]
+        .as_str()
+        .expect("text")
+        .contains("more than 10 seconds of CPU time"));
+    assert!(started.elapsed() < Duration::from_secs(30), "{cpu}");
+    let forks = worker
+        .call(
+            "python",
+            json!({"code":"import os, time\npids = []\ntry:\n for i in range(100):\n  pid = os.fork()\n  if pid == 0:\n   time.sleep(5)\n   os._exit(0)\n  pids.append(pid)\n print('uncapped')\nexcept OSError as e:\n print('capped', len(pids), e.errno)\nfor pid in pids:\n os.kill(pid, 9)"}),
+            60,
+        )
+        .await;
+    // The kernel limit refuses the fork (errno 11) where it can apply; otherwise the
+    // supervisor stops the command once it passes its allowance.
+    let output = forks["output"].as_str().expect("text");
+    match output.strip_prefix("capped ") {
+        Some(rest) => {
+            let started: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|count| count.parse().ok())
+                .unwrap_or_else(|| panic!("{forks}"));
+            assert!(
+                started <= 16 && output.trim_end().ends_with(" 11"),
+                "{forks}"
+            );
+        }
+        None => {
+            assert_eq!(forks["exit_code"], 126, "{forks}");
+            assert!(output.contains("more than 16 processes"), "{forks}");
+        }
+    }
+}
+
 fn main() {
     harness::main(&[
+        ("commands_are_stopped_past_their_whole_trees_limits", || {
+            Box::pin(commands_are_stopped_past_their_whole_trees_limits())
+        }),
         ("saved_elements_are_read_only_in_the_sandbox", || {
             Box::pin(saved_elements_are_read_only_in_the_sandbox())
         }),

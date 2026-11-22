@@ -7,6 +7,7 @@
 
 Pass `command`, and optionally `timeout_seconds` (default and maximum: the ability's run-time limit). The result gives `status` (`success`, `failed` or `timeout`), `exit_code`, the merged output (`output`, cut at 1 MiB with `truncated`) and `sandbox_bytes`, the folder's size afterwards.
 
+- Memory, processes and CPU time count all the command's processes together; past one, the command is stopped with exit code 137 (memory), 126 (processes) or 152 (CPU time) and a last line saying which.
 - Exit code 125 with "passed its size limit" means the folder grew past its limit and the command was stopped. "Sandbox folder is full" means no command runs until you delete files.
 - "Cannot fork" or "Resource temporarily unavailable" means the process limit; run fewer processes at once.
 - Programs that need the network, `/proc` or files outside the sandbox fail with "Permission denied" or "Operation not permitted". That is the sandbox working, not a fault to work around.

@@ -160,6 +160,7 @@ async fn one_frame_reaches_the_plugin_and_its_reply_comes_back() {
             control,
             context_config: fixture.dir.path().join("absent-context.json"),
             port_claims: fixture.dir.path().join("port-claims"),
+            command_limits: fixture.dir.path().join("absent-limits.json"),
         },
         runner: harness::runner(),
         plugin_runner: harness::plugin_runner(),

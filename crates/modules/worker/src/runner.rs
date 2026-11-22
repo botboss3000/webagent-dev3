@@ -4,6 +4,7 @@
 //! supervisor stays outside the sandbox so it can always reap: it becomes a child
 //! subreaper, so double-forked descendants reparent to it, runs the child confined by
 //! [`crate::sandbox`], and on exit or SIGTERM ends every descendant.
+use crate::limits::CommandLimits;
 use std::io;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
@@ -26,6 +27,8 @@ struct Spec {
     command: bool,
     /// A Sandbox ability command: the strict sandbox, resource limits and a folder cap.
     strict: Option<crate::sandbox_tools::Confinement>,
+    /// What the whole process tree may use; plugins are not metered.
+    limits: Option<CommandLimits>,
 }
 
 fn invalid(error: impl std::fmt::Display) -> io::Error {
@@ -57,6 +60,14 @@ pub fn supervise(argv_json: &str) -> i32 {
                 command_read_paths(std::env::var("V3_CHECKOUT_READ").is_ok_and(|v| v == "1"))
             },
             command: true,
+            limits: Some(match strict {
+                Some(strict) => CommandLimits {
+                    memory_bytes: strict.memory_bytes,
+                    processes: strict.processes,
+                    cpu_seconds: strict.cpu_seconds,
+                },
+                None => CommandLimits::from_env(std::env::var("V3_COMMAND_LIMITS").ok().as_deref()),
+            }),
             strict,
         })
     });
@@ -79,6 +90,7 @@ pub fn supervise_plugin(spec_json: &str) -> i32 {
                 read_paths: strings("read")?.into_iter().map(PathBuf::from).collect(),
                 command: false,
                 strict: None,
+                limits: None,
             })
         });
     finish(spec.and_then(run), false)
@@ -187,26 +199,23 @@ fn run(spec: Spec) -> io::Result<i32> {
         Some(_) => crate::sandbox::prepare_strict(&base, &read_paths)?,
         None => crate::sandbox::prepare(&base, &read_paths, &ports, spec.command)?,
     };
-    let limits = spec.strict.map(resource_limits).transpose()?;
+    let rlimits = match spec.limits {
+        Some(limits) => resource_limits(spec.strict, limits.processes)?,
+        None => Vec::new(),
+    };
+    let metered = spec.limits.is_some();
     let mut command = Command::new(program);
     command.args(args);
     if spec.command {
         command.stdin(Stdio::null());
     }
-    // SAFETY: setrlimit and `apply` only make raw system calls on memory prepared before
-    // the fork.
+    // SAFETY: setrlimit, `first_to_kill` and `apply` only make raw system calls on memory
+    // prepared before the fork.
     unsafe {
         command.pre_exec(move || {
-            if let Some(limits) = &limits {
-                for (resource, value) in limits {
-                    let limit = libc::rlimit {
-                        rlim_cur: *value,
-                        rlim_max: *value,
-                    };
-                    if libc::setrlimit(*resource, &limit) != 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                }
+            set_limits(&rlimits)?;
+            if metered {
+                first_to_kill();
             }
             sandbox.apply()
         });
@@ -214,6 +223,11 @@ fn run(spec: Spec) -> io::Result<i32> {
     let mut child = command.spawn()?;
     let mut pause = Duration::from_millis(1);
     let mut measured = Instant::now();
+    let who = if spec.strict.is_some() {
+        "Sandbox"
+    } else {
+        "Command"
+    };
     let status = loop {
         if TERMINATED.load(Ordering::SeqCst) {
             clean_descendants(graceful);
@@ -222,17 +236,16 @@ fn run(spec: Spec) -> io::Result<i32> {
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if let Some(strict) = spec.strict {
-            // Processes and threads beyond the allowance stop the whole command.
-            let tasks: u64 = descendants().iter().map(|pid| task_count(*pid)).sum();
-            if tasks > strict.processes {
-                eprintln!(
-                    "Sandbox: the command started more than {} processes, so it was stopped",
-                    strict.processes
-                );
+        // Measured on every pass (1 ms apart at first, then up to 50 ms), so a burst of
+        // short-lived forks is seen even where the kernel's process limit cannot apply.
+        if let Some(limits) = spec.limits {
+            if let Some((code, reason)) = exceeded(&limits, &usage()) {
+                eprintln!("{who}: {reason}, so it was stopped");
                 clean_descendants(false);
-                return Ok(126);
+                return Ok(code);
             }
+        }
+        if let Some(strict) = spec.strict {
             if measured.elapsed() >= FOLDER_CHECK {
                 measured = Instant::now();
                 if crate::sandbox_tools::folder_bytes(&base) > strict.folder_cap_bytes {
@@ -255,27 +268,163 @@ fn run(spec: Spec) -> io::Result<i32> {
 
 /// How often a Sandbox command's folder is measured against its cap.
 const FOLDER_CHECK: Duration = Duration::from_millis(500);
+/// How often a terminal's process tree is measured against its limits.
+pub(crate) const METER: Duration = Duration::from_millis(100);
+
+/// What one command's process tree uses at a moment.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Usage {
+    /// Processes and threads now running.
+    tasks: u64,
+    /// Private (anonymous) resident memory of all its processes together.
+    memory_bytes: u64,
+    /// CPU time of all its processes, ended ones included.
+    cpu_seconds: u64,
+}
+
+/// Measures this supervisor's descendants from `/proc`: their threads, private memory and
+/// CPU time, plus the CPU time of ended descendants already counted into a live parent or
+/// reaped by this supervisor.
+pub(crate) fn usage() -> Usage {
+    // SAFETY: sysconf and getrusage write only into the struct passed by pointer.
+    let (page, ticks, reaped) = unsafe {
+        let mut own: libc::rusage = std::mem::zeroed();
+        libc::getrusage(libc::RUSAGE_CHILDREN, &mut own);
+        (
+            u64::try_from(libc::sysconf(libc::_SC_PAGESIZE)).unwrap_or(4096),
+            u64::try_from(libc::sysconf(libc::_SC_CLK_TCK))
+                .unwrap_or(100)
+                .max(1),
+            u64::try_from(own.ru_utime.tv_sec + own.ru_stime.tv_sec).unwrap_or(0),
+        )
+    };
+    let mut usage = Usage {
+        cpu_seconds: reaped,
+        ..Usage::default()
+    };
+    let mut cpu_ticks = 0u64;
+    for pid in descendants() {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        // Fields after the command name: state is 0, utime 11, stime 12, cutime 13,
+        // cstime 14 and num_threads 17.
+        let fields: Vec<u64> = stat
+            .rfind(')')
+            .map(|at| &stat[at + 2..])
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(|field| field.parse().unwrap_or(0))
+            .collect();
+        let field = |index: usize| fields.get(index).copied().unwrap_or(0);
+        cpu_ticks += field(11) + field(12) + field(13) + field(14);
+        usage.tasks += field(17).max(1);
+        // statm: total, resident and shared (file and shared memory) pages.
+        if let Ok(statm) = std::fs::read_to_string(format!("/proc/{pid}/statm")) {
+            let pages: Vec<u64> = statm
+                .split_whitespace()
+                .map(|value| value.parse().unwrap_or(0))
+                .collect();
+            if let (Some(resident), Some(shared)) = (pages.get(1), pages.get(2)) {
+                usage.memory_bytes += resident.saturating_sub(*shared) * page;
+            }
+        }
+    }
+    usage.cpu_seconds += cpu_ticks / ticks;
+    usage
+}
+
+/// The limit a command's tree has passed: the exit code the command reports and the reason
+/// its output ends with.
+pub(crate) fn exceeded(limits: &CommandLimits, usage: &Usage) -> Option<(i32, String)> {
+    const MIB: u64 = 1024 * 1024;
+    if usage.tasks > limits.processes {
+        return Some((
+            126,
+            format!(
+                "the command started more than {} processes",
+                limits.processes
+            ),
+        ));
+    }
+    if usage.memory_bytes > limits.memory_bytes {
+        return Some((
+            137,
+            format!(
+                "the command used more than {} MB of memory",
+                limits.memory_bytes / MIB
+            ),
+        ));
+    }
+    if usage.cpu_seconds > limits.cpu_seconds {
+        return Some((
+            152,
+            format!(
+                "the command used more than {} seconds of CPU time",
+                limits.cpu_seconds
+            ),
+        ));
+    }
+    None
+}
+
+/// Applies `limits` to the calling process. Only raw system calls, so it is safe between
+/// fork and exec.
+pub(crate) fn set_limits(limits: &[(Resource, libc::rlim_t)]) -> io::Result<()> {
+    for (resource, value) in limits {
+        let limit = libc::rlimit {
+            rlim_cur: *value,
+            rlim_max: *value,
+        };
+        // SAFETY: setrlimit reads the struct passed by pointer.
+        if unsafe { libc::setrlimit(*resource, &limit) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Makes the calling process, and everything it starts, the kernel's first choice when the
+/// container runs out of memory, so a runaway command dies before the app does. Only raw
+/// system calls, so it is safe between fork and exec; a failure leaves the score unchanged.
+pub(crate) fn first_to_kill() {
+    const PATH: &[u8] = b"/proc/self/oom_score_adj\0";
+    // SAFETY: open, write and close on a NUL-terminated constant path and a constant buffer.
+    unsafe {
+        let fd = libc::open(PATH.as_ptr().cast(), libc::O_WRONLY | libc::O_CLOEXEC);
+        if fd >= 0 {
+            libc::write(fd, b"1000".as_ptr().cast(), 4);
+            libc::close(fd);
+        }
+    }
+}
 
 #[cfg(target_env = "gnu")]
-type Resource = libc::__rlimit_resource_t;
+pub(crate) type Resource = libc::__rlimit_resource_t;
 #[cfg(not(target_env = "gnu"))]
-type Resource = libc::c_int;
+pub(crate) type Resource = libc::c_int;
 
-/// The resource limits of a Sandbox command. The kernel's process limit counts every task
-/// of this user on the host, which a container's `/proc` may not show, so it is applied
-/// (the user's visible count plus the command's allowance) only when a probe child can
-/// still fork under it. The supervisor also counts the command's processes either way.
-fn resource_limits(
-    strict: crate::sandbox_tools::Confinement,
+/// The kernel limits of a command: a Sandbox command's per-process limits, and for every
+/// command the process limit, so a fork bomb is refused at once rather than at the next
+/// measurement. The kernel's process limit counts every task of this user on the host,
+/// which a container's `/proc` may not show, so it is applied (the user's visible count
+/// plus the command's allowance) only when a probe child can still fork under it. The
+/// supervisor also counts the command's processes either way.
+pub(crate) fn resource_limits(
+    strict: Option<crate::sandbox_tools::Confinement>,
+    processes: u64,
 ) -> io::Result<Vec<(Resource, libc::rlim_t)>> {
-    let mut limits = vec![
-        (libc::RLIMIT_CPU, strict.cpu_seconds),
-        (libc::RLIMIT_AS, strict.memory_bytes),
-        (libc::RLIMIT_FSIZE, strict.file_bytes),
-        (libc::RLIMIT_NOFILE, strict.open_files),
-        (libc::RLIMIT_CORE, 0),
-    ];
-    let processes = user_tasks()?.saturating_add(strict.processes);
+    let mut limits = match strict {
+        Some(strict) => vec![
+            (libc::RLIMIT_CPU, strict.cpu_seconds),
+            (libc::RLIMIT_AS, strict.memory_bytes),
+            (libc::RLIMIT_FSIZE, strict.file_bytes),
+            (libc::RLIMIT_NOFILE, strict.open_files),
+            (libc::RLIMIT_CORE, 0),
+        ],
+        None => Vec::new(),
+    };
+    let processes = user_tasks()?.saturating_add(processes);
     if forks_under(processes) {
         limits.push((libc::RLIMIT_NPROC, processes));
     }
@@ -316,11 +465,6 @@ fn forks_under(limit: libc::rlim_t) -> bool {
             && libc::WIFEXITED(status)
             && libc::WEXITSTATUS(status) == 0
     }
-}
-
-/// Tasks (threads included) of process `pid`; 1 when it has gone or is unreadable.
-fn task_count(pid: i32) -> u64 {
-    std::fs::read_dir(format!("/proc/{pid}/task")).map_or(1, |tasks| tasks.count() as u64)
 }
 
 /// The tasks (threads included) this process's user runs, from `/proc`.

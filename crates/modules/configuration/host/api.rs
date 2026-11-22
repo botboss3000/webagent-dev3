@@ -5,7 +5,7 @@ use super::{
 };
 use anyhow::Context;
 use webagent_configuration::{digest, read};
-const IDS: [&str; 16] = [
+const IDS: [&str; 17] = [
     "app_settings",
     "app_ui",
     "chat",
@@ -22,6 +22,7 @@ const IDS: [&str; 16] = [
     "find_ranking",
     "models_runtime",
     "model_backup",
+    "command_limits",
 ];
 /// Live files (checkout-relative, listed in `live-files.json`) for configuration edited in place.
 pub(crate) fn live(id: &str) -> Option<&'static str> {
@@ -37,6 +38,8 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
         "admin_alerts" => webagent_notifications::alerts::LIVE_CONFIG,
         "models_runtime" => webagent_models::settings::LIVE,
         "model_backup" => webagent_models::backup_policy::LIVE,
+        #[cfg(feature = "local-worker")]
+        "command_limits" => webagent_worker::limits::LIVE_LIMITS,
         #[cfg(feature = "administrator")]
         "find_ranking" => webagent_administration::find_ranking::LIVE_RANKING,
         _ => return None,
@@ -118,6 +121,10 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         }
         "model_backup" => {
             webagent_models::backup_policy::BackupPolicy::parse(&serde_json::to_vec(value)?)?;
+        }
+        #[cfg(feature = "local-worker")]
+        "command_limits" => {
+            webagent_worker::limits::CommandLimits::parse(&serde_json::to_vec(value)?)?;
         }
         #[cfg(feature = "administrator")]
         "find_ranking" => {

@@ -397,7 +397,7 @@ async fn command(
         &[],
         timeout,
         false,
-        Some(&confinement),
+        crate::commands::Confined::Sandbox(&confinement),
     )
     .await
     .unwrap_or_else(|error| json!({"status":"failed","output":error.to_string()}))

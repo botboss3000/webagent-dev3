@@ -1,0 +1,77 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see config/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "worker.command_limits.memory_mb",
+      "description": "Megabytes of memory one workspace command or terminal may use across all the processes it starts; past it the command is stopped.",
+      "type": "integer",
+      "pointer": "/memory_mb",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let shell commands use 2 GB of memory",
+        "my cargo build gets stopped for memory",
+        "limit how much memory a terminal can take"
+      ],
+      "areas": [
+        "commands",
+        "memory",
+        "limits"
+      ],
+      "unit": "MB",
+      "min": 64,
+      "max": 16384,
+      "bounds": "validator"
+    },
+    {
+      "id": "worker.command_limits.processes",
+      "description": "Processes and threads one workspace command or terminal may run at once; more are refused or the command is stopped.",
+      "type": "integer",
+      "pointer": "/processes",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow commands to start 512 processes",
+        "stop fork bombs sooner",
+        "a build fails with cannot fork"
+      ],
+      "areas": [
+        "commands",
+        "processes",
+        "limits"
+      ],
+      "unit": "processes",
+      "min": 8,
+      "max": 4096,
+      "bounds": "validator"
+    },
+    {
+      "id": "worker.command_limits.cpu_seconds",
+      "description": "Seconds of CPU time one workspace command or terminal may use across all its processes, ended ones included; past it the command is stopped.",
+      "type": "integer",
+      "pointer": "/cpu_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "give terminals an hour of CPU time",
+        "long builds get stopped for CPU time",
+        "cap how much processor a command can burn"
+      ],
+      "areas": [
+        "commands",
+        "cpu",
+        "limits"
+      ],
+      "unit": "s",
+      "min": 10,
+      "max": 36000,
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {
+    "/schema_version": "File format version."
+  }
+}
