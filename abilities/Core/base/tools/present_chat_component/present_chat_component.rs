@@ -324,9 +324,6 @@ pub fn answer_text(spec: &Value, answer: &Value) -> Result<String> {
             }
             _ => bail!("Invalid answer for {label}"),
         };
-        if field["required"] == true && picked.iter().all(|text| text.trim().is_empty()) {
-            bail!("{label} is required");
-        }
         for text in &picked {
             let limit = if kind == "textarea" { 8000 } else { 2000 };
             if text.chars().count() > limit {
@@ -469,9 +466,13 @@ mod tests {
             answer_text(&form, &answer).unwrap(),
             "Setup\nPick: A, B\nPick — comment: both\nSize: 3"
         );
+        // Any question may be left empty, even one marked required; it reads "skipped".
+        assert_eq!(
+            answer_text(&form, &json!({"values":{"pick":[]}})).unwrap(),
+            "Setup\nPick: skipped\nSize: skipped"
+        );
         for bad in [
             json!({"values":{"pick":["C"],"size":"3"}}),
-            json!({"values":{"pick":[]}}),
             json!({"values":{"size":"three"}}),
             json!({"values":{"size":"3","extra":"x"}}),
             json!({"values":{"size":"3"},"comments":{"size":"no comment box"}}),
