@@ -65,7 +65,14 @@ export function start(mount) {
   }
 
   // `shown` takes the error text when `button` cannot (a checkbox); a failed checkbox flips back.
+  // A request that needs the passphrase is never sent with an empty one: the helper counts
+  // every wrong entry towards its 15-minute lock.
   async function post(path, body, button, shown) {
+    if ('passphrase' in body && !body.passphrase) {
+      if (button.type === 'checkbox') button.checked = !button.checked;
+      (shown || button).textContent = 'Type the host approval passphrase first';
+      return;
+    }
     button.disabled = true;
     try {
       const response = await fetch(path, {
