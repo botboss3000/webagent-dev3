@@ -1,5 +1,5 @@
 // File Manager terminals: xterm.js panes on shells the root host file service runs as the
-// operator account (no sudo or docker group). Output arrives by long-polling terminal_read;
+// operator account without the docker group (sudo asks for its password). Output arrives by long-polling terminal_read;
 // keystrokes go out in order through terminal_send. Needs a terminal grant from Host Admin.
 const VENDOR = '/ui/main-panel/app/pages/file-manager/vendor/';
 let library = null;
