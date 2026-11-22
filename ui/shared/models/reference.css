@@ -75,3 +75,4 @@
 .ac-model-alias-btn:disabled { opacity: .35; cursor: not-allowed; border-style: dashed; }
 .ac-model-alias-add-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ac-model-alias-select { flex: 1; min-width: 0; max-width: 320px; }
+.ac-model-alias-warning { color: var(--warning); overflow-wrap: anywhere; }

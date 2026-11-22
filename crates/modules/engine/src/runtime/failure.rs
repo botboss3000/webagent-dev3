@@ -81,8 +81,11 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     } else {
         NextAction::Terminal
     };
-    let resumable =
-        kind == FailureKind::Transient && !state.response_started && !state.uncertain_tool_effect;
+    // A provider whose own client is offline (a bridge) took nothing, so it resumes like a
+    // temporary error once no alias is left.
+    let resumable = (kind == FailureKind::Transient || failure.is_some_and(|e| e.offline))
+        && !state.response_started
+        && !state.uncertain_tool_effect;
     // Once the retries and aliases run out on a run that is safe to resume, resume it
     // automatically after `auto_resume_after_seconds`, at most `auto_resume_attempts` times per
     // run, with a fresh retry budget. It stays queued, so Stop cancels it like any queued retry.
@@ -150,6 +153,91 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     Ok(())
 }
 pub use webagent_models::backup_policy::response_start_seconds as response_start;
+
+/// BACKUP STICK. A session stays on the alias that last answered for it, so that model's
+/// provider cache keeps serving: `model_backup:{sid}` holds `{from, to}` (entry ids of the
+/// plan's first model and that alias). The next major reorder, when no cache is left to lose,
+/// tries the first model again.
+pub fn stick_key(session: &str) -> String {
+    format!("model_backup:{session}")
+}
+
+/// Start a run on the alias its session's stick names, when the stick fits the run's plan.
+pub fn apply_stick(run: &mut Value, stick: &Value) -> bool {
+    let Some(plan) = plan_of(run) else {
+        return false;
+    };
+    let at = |entry: &Value| {
+        plan.candidates
+            .iter()
+            .position(|c| entry.as_str() == Some(c.entry_id.as_str()))
+    };
+    match at(&stick["to"]) {
+        Some(index)
+            if index > 0
+                && at(&stick["from"]) == Some(0)
+                && run["failover_state"]["candidate_index"] == 0 =>
+        {
+            move_to(run, &plan, index, "backup_in_use");
+            run["backup_stick"] = json!(index);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// At a major reorder: move a run on an alias back to the plan's first model, once per run.
+/// The caller clears the session's stick.
+pub fn first_model_again(run: &mut Value) -> bool {
+    let on_alias = run["failover_state"]["candidate_index"]
+        .as_u64()
+        .is_some_and(|index| index > 0);
+    let Some(plan) = plan_of(run).filter(|_| on_alias && run["first_model_retried"] != true) else {
+        return false;
+    };
+    move_to(run, &plan, 0, "first_model_again");
+    run["first_model_retried"] = json!(true);
+    run["backup_stick"] = Value::Null;
+    true
+}
+
+/// After a reply: the stick to save when an alias answered and the session's stick is older.
+pub fn stick_to_save(run: &mut Value) -> Option<Value> {
+    let index = run["failover_state"]["candidate_index"]
+        .as_u64()
+        .filter(|index| *index > 0 && run["backup_stick"] != json!(index))?;
+    let candidates = &run["selection_plan"]["candidates"];
+    let stick =
+        json!({"from":candidates[0]["entry_id"],"to":candidates[index as usize]["entry_id"]});
+    run["backup_stick"] = json!(index);
+    Some(stick)
+}
+
+fn plan_of(run: &Value) -> Option<SelectionPlan> {
+    serde_json::from_value(run["selection_plan"].clone()).ok()
+}
+
+/// Point the run at candidate `index` with a fresh retry budget and an activity row.
+fn move_to(run: &mut Value, plan: &SelectionPlan, index: usize, reason: &str) {
+    let from = run["failover_state"]["candidate_index"]
+        .as_u64()
+        .and_then(|current| plan.candidates.get(current as usize))
+        .map(|c| c.upstream_model.clone());
+    let to = &plan.candidates[index];
+    run["failover_state"]["candidate_index"] = json!(index);
+    run["failover_state"]["retries"] = json!(0);
+    run["provider_selection"] = provider::ProviderSelection {
+        provider: to.transport.provider_id(),
+        model: to.upstream_model.clone(),
+    }
+    .value();
+    run["attempt"] = json!(0);
+    retry_activity(
+        run,
+        json!({"type":"retry_scheduled","wait_seconds":0,"backup":true,"auto_resume":false,
+            "from_model":from,"to_model":to.upstream_model,"reason":reason}),
+    );
+}
 /// Record an activity-only row for a scheduled retry; context assembly skips `retry:` steps.
 fn retry_activity(run: &mut Value, item: Value) {
     let count = run["retry_rows"].as_u64().unwrap_or(0) + 1;

@@ -181,7 +181,7 @@
     },
     {
       "id": "chat.model_backup.switch_on.model_unavailable",
-      "description": "Switch to the next alias at once when the provider says the model is unavailable.",
+      "description": "Switch to the next alias at once when the provider says the model is unavailable, or when a bridge model has no paired client running. The session then stays on that alias until its context is next reordered (cache timeout or changed tools), which tries the first model again.",
       "type": "boolean",
       "pointer": "/switch_on/model_unavailable",
       "layers": [
@@ -199,7 +199,7 @@
     },
     {
       "id": "chat.model_backup.auto_resume_after_seconds",
-      "description": "After every alias has failed on a run that is safe to resume, how long to wait before resuming it automatically.",
+      "description": "After every alias has failed on a run that is safe to resume (a temporary provider error, or a bridge model whose paired client is offline), how long to wait before resuming it automatically.",
       "type": "integer",
       "pointer": "/auto_resume_after_seconds",
       "layers": [

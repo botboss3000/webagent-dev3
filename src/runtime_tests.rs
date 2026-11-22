@@ -10465,6 +10465,79 @@ async fn transient_retries_back_off_and_honor_retry_after() {
     assert!((29..=30).contains(&wait(&run)));
 }
 
+/// A bridge with no client online took nothing: with no alias left the run resumes by itself
+/// once, then stops as resumable instead of failing.
+#[tokio::test]
+async fn offline_provider_resumes_once_then_stops_resumable() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let mut run = app.run(&id).await.unwrap();
+    let error = webagent_models::transport::offline_failure("Bridge client offline");
+    model_failure(&mut run, &error).unwrap();
+    assert_eq!(run["status"], "queued");
+    assert_eq!(run["auto_resumes"], 1);
+    model_failure(&mut run, &error).unwrap();
+    assert_eq!(run["status"], "stopped");
+    assert_eq!(run["provider_recovery"]["safe_to_resume"], true);
+    // The same failure kind from a provider that is running stays a plain failure.
+    let mut run = app.run(&id).await.unwrap();
+    let gone = provider::typed_failure(
+        model_selection::FailureKind::ModelUnavailable,
+        false,
+        "model removed",
+    );
+    model_failure(&mut run, &gone).unwrap();
+    assert_eq!(run["status"], "failed");
+}
+
+/// A session stays on the alias that answered; the next major reorder tries the first model.
+#[tokio::test]
+async fn backup_stick_starts_on_the_alias_and_a_reorder_returns_to_the_first_model() {
+    use webagent_engine::runtime::failure::{apply_stick, first_model_again, stick_to_save};
+    let (_root, app) = fixture().await;
+    selection_fixture(&app).await;
+    let Json(session) = create_session(
+        State(app.clone()),
+        Json(json!({"client_request_id":uuid(),"agent_id":"agent-a"})),
+    )
+    .await
+    .unwrap();
+    let (_, Json(accepted)) = send(
+        State(app.clone()),
+        Path(session["id"].as_str().unwrap().into()),
+        Json(json!({"client_message_id":uuid(),"text":"hello","model_entry_id":"one"})),
+    )
+    .await
+    .unwrap();
+    let mut run = app.run(accepted["run_id"].as_str().unwrap()).await.unwrap();
+    // Nothing to save or return from while the first model serves.
+    assert!(stick_to_save(&mut run).is_none());
+    assert!(!first_model_again(&mut run));
+    assert!(!apply_stick(&mut run, &Value::Null));
+    assert!(!apply_stick(&mut run, &json!({"from":"two","to":"one"})));
+    assert!(apply_stick(&mut run, &json!({"from":"one","to":"two"})));
+    assert_eq!(run["failover_state"]["candidate_index"], 1);
+    assert_eq!(run["provider_selection"]["model"], "model-two");
+    // The applied stick is already saved; a fresh switch is saved once.
+    assert!(stick_to_save(&mut run).is_none());
+    run["backup_stick"] = Value::Null;
+    assert_eq!(
+        stick_to_save(&mut run),
+        Some(json!({"from":"one","to":"two"}))
+    );
+    assert!(stick_to_save(&mut run).is_none());
+    assert!(first_model_again(&mut run));
+    assert_eq!(run["failover_state"]["candidate_index"], 0);
+    assert_eq!(run["provider_selection"]["model"], "model-one");
+    // Once per run: a second reorder leaves a run that fell back again on its alias.
+    run["failover_state"]["candidate_index"] = json!(1);
+    assert!(!first_model_again(&mut run));
+    let rows = run["_activity_items"].as_array().unwrap();
+    assert_eq!(rows[0]["item"]["reason"], "backup_in_use");
+    assert_eq!(rows[1]["item"]["reason"], "first_model_again");
+}
+
 #[tokio::test]
 async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent() {
     let (root, app) = fixture().await;

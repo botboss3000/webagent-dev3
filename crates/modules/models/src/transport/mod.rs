@@ -64,6 +64,9 @@ pub struct ProviderFailure {
     pub http_status: Option<u16>,
     /// Seconds the provider asked to wait before retrying (HTTP Retry-After or its error text).
     pub retry_after: Option<u64>,
+    /// The provider's own client is not running (a bridge with no paired client online). Nothing
+    /// was sent, so the run may resume by itself later, like after a temporary error.
+    pub offline: bool,
 }
 impl std::fmt::Display for ProviderFailure {
     /// Expose only the sanitized failure label through the standard error display.
@@ -85,6 +88,20 @@ pub fn typed_failure(
         transport: None,
         http_status: None,
         retry_after: None,
+        offline: false,
+    }
+    .into()
+}
+/// The model's provider has no client running: unavailable now, safe to resume once one returns.
+pub fn offline_failure(detail: impl Into<String>) -> anyhow::Error {
+    ProviderFailure {
+        kind: crate::model_selection::FailureKind::ModelUnavailable,
+        response_started: false,
+        detail: detail.into(),
+        transport: None,
+        http_status: None,
+        retry_after: None,
+        offline: true,
     }
     .into()
 }
@@ -102,6 +119,7 @@ pub fn typed_failure_after(
         transport: None,
         http_status: None,
         retry_after,
+        offline: false,
     }
     .into()
 }
@@ -143,6 +161,7 @@ fn transport_failure(error: reqwest::Error, started: bool, detail: &str) -> anyh
             io_kind,
         }),
         retry_after: None,
+        offline: false,
     }
     .into()
 }
@@ -361,6 +380,7 @@ async fn response_failure(
         transport: None,
         http_status: Some(status),
         retry_after,
+        offline: false,
     }
     .into()
 }
@@ -885,6 +905,7 @@ impl Provider {
                             transport: None,
                             http_status: Some(http_status),
                             retry_after: None,
+                            offline: false,
                         }
                         .into())
                     }

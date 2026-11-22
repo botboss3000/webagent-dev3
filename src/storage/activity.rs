@@ -154,7 +154,8 @@ fn event(
         "retry_scheduled" => (
             "retry_scheduled",
             json!({"attempt":item["attempt"],"of":item["of"],"wait_seconds":item["wait_seconds"],
-                "error":item["error"],"backup":item["backup"],"auto_resume":item["auto_resume"]}),
+                "error":item["error"],"backup":item["backup"],"auto_resume":item["auto_resume"],
+                "from_model":item["from_model"],"to_model":item["to_model"],"reason":item["reason"]}),
         ),
         _ => ("diagnostic", item),
     };

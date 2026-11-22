@@ -3,19 +3,19 @@
     "answer_seconds": 1800,
     "client": {
       "harness_seconds": 1680,
-      "heartbeat_seconds": 20,
+      "heartbeat_seconds": 5,
       "probe_seconds": 30,
       "server_idle_seconds": 900,
       "stall_seconds": 120,
       "stop_grace_seconds": 5
     },
     "client_online_seconds": 120,
-    "heartbeat_timeout_seconds": 60,
-    "offer_lease_seconds": 60,
+    "heartbeat_timeout_seconds": 15,
+    "offer_lease_seconds": 15,
     "pairing_code_seconds": 600,
-    "poll_hold_seconds": 25,
+    "poll_hold_seconds": 10,
     "store_poll_ms": 250,
-    "unclaimed_call_seconds": 60
+    "unclaimed_call_seconds": 15
   },
   "schema_version": 1,
   "streaming": {

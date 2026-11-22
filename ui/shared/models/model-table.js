@@ -2964,6 +2964,13 @@ export function mountModelTable(host, opts = {}) {
     hint.className = 'ac-hint';
     hint.textContent = 'When a call on this model fails, it moves down this list to the next model able to do that call, under the agent\'s backup policy.';
     section.append(list, addRow, hint);
+    // A bridge model answers only while its paired client runs, so one without a backup can stop a run.
+    if (p.provider?.endsWith('_bridge') && !aliases.length) {
+      const warning = document.createElement('div');
+      warning.className = 'ac-hint ac-model-alias-warning';
+      warning.textContent = 'No backup model. While no paired bridge client is running, a run on this model waits, tries once more and then stops. Add a model above to switch to it instead.';
+      section.appendChild(warning);
+    }
     body.querySelector('.ac-model-meta-list').appendChild(section);
   }
 

@@ -14,7 +14,7 @@ use webagent_configuration::digest;
 use webagent_models::settings::{Bridge, Settings};
 use webagent_models::{
     model_selection::FailureKind,
-    transport::{typed_failure, typed_failure_after, BridgeCall, BridgeQueue},
+    transport::{offline_failure, typed_failure, typed_failure_after, BridgeCall, BridgeQueue},
 };
 
 const CALLS: &str = "harness_bridge_call:";
@@ -43,6 +43,12 @@ use webagent_models::transport::bridge_link_id as link_id;
 
 fn recently_seen(seen: Option<u64>, at: u64, b: &Bridge) -> bool {
     seen.is_some_and(|seen| at <= seen + b.client_online_seconds)
+}
+
+/// Whether some process polled the link after `since`. A running client always has a poll open,
+/// so a timeout with no poll since means no client runs, not that one is busy.
+fn polled_since(seen: Option<u64>, since: u64) -> bool {
+    seen.is_some_and(|seen| seen > since)
 }
 
 /// Whether a process polling this link recently reported that it can fork `provider`'s
@@ -101,13 +107,8 @@ impl BridgeQueue for Queue {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
         Box::pin(async move {
             let link = link_id(&call.link);
-            let offline = || {
-                typed_failure(
-                    FailureKind::ModelUnavailable,
-                    false,
-                    "Bridge client offline; start a paired client for this model",
-                )
-            };
+            let offline =
+                || offline_failure("Bridge client offline; start a paired client for this model");
             let seen = self
                 .0
                 .get(&format!("{SEEN}{link}"))
@@ -155,28 +156,32 @@ impl BridgeQueue for Queue {
                         _ = tokio::time::sleep(Duration::from_millis(b.store_poll_ms)) => {}
                     }
                     let Some(doc) = self.0.get(&key).await? else { return Err(offline()) };
-                    match doc["state"].as_str() {
+                    // A timed-out step: when it began, and the retryable failure if clients still poll.
+                    let since = |field: &str| doc[field].as_u64().unwrap_or(0);
+                    let lapse = match doc["state"].as_str() {
                         Some("replied") => return Ok(doc["reply"].clone()),
                         Some("failed") => return Err(failure_of(&doc)),
-                        Some("pending") if now() > doc["created"].as_u64().unwrap_or(0) + b.unclaimed_call_seconds => {
-                            let seen = self.0.get(&format!("{SEEN}{link}")).await?.and_then(|v| v["at"].as_u64());
-                            return Err(if recently_seen(seen, now(), &b) {
-                                typed_failure(FailureKind::Transient, false, "Bridge call not picked up; the client polled recently, retrying")
-                            } else {
-                                offline()
-                            });
-                        }
+                        Some("pending") if now() > since("created") + b.unclaimed_call_seconds =>
+                            (since("created"), "Bridge call not picked up; a client polled since, retrying".to_owned()),
                         Some("offered") if stale(&doc, now(), &b) =>
-                            return Err(typed_failure(FailureKind::Transient, false, "Bridge call was never acknowledged by a client")),
+                            (since("offered"), "Bridge call was never acknowledged by a client".to_owned()),
                         // A heartbeating client must keep beating; one that never beats gets the
                         // whole answer window.
                         Some("claimed") if doc["progress"].as_u64().is_some_and(|beat| now() > beat + b.heartbeat_timeout_seconds) =>
-                            return Err(typed_failure(FailureKind::Transient, false, format!(
-                                "Bridge client stopped responding (no heartbeat for {} s)", b.heartbeat_timeout_seconds))),
-                        Some("claimed") if doc["progress"].is_null() && now() > doc["claimed"].as_u64().unwrap_or(0) + b.answer_seconds =>
+                            (since("progress"), format!(
+                                "Bridge client stopped responding (no heartbeat for {} s)", b.heartbeat_timeout_seconds)),
+                        Some("claimed") if doc["progress"].is_null() && now() > since("claimed") + b.answer_seconds =>
                             return Err(typed_failure(FailureKind::Transient, false, "Bridge reply timed out")),
-                        _ => {}
-                    }
+                        _ => continue,
+                    };
+                    // No poll since the step began: the clients are gone, so the call moves to
+                    // the model's next alias at once instead of retrying into an empty queue.
+                    let seen = self.0.get(&format!("{SEEN}{link}")).await?.and_then(|v| v["at"].as_u64());
+                    return Err(if polled_since(seen, lapse.0) {
+                        typed_failure(FailureKind::Transient, false, lapse.1)
+                    } else {
+                        offline()
+                    });
                 }
             }.await;
             guard.armed = false;
@@ -465,8 +470,8 @@ pub async fn ack(
 }
 
 /// Heartbeat from the process running an acknowledged call. Once a client beats, silence longer
-/// than `heartbeat_timeout_seconds` fails the call, so a crashed client is noticed in about a
-/// minute instead of the whole answer window.
+/// than `heartbeat_timeout_seconds` fails the call, so a crashed client is noticed in seconds
+/// instead of the whole answer window.
 pub async fn progress(
     State(app): State<App>,
     headers: HeaderMap,
@@ -772,7 +777,14 @@ mod tests {
     }
 
     #[test]
-    fn unclaimed_call_is_retryable_only_on_a_recently_seen_link() {
+    fn a_lapsed_call_is_retryable_only_when_a_client_polled_since() {
+        assert!(super::polled_since(Some(1001), 1000));
+        assert!(!super::polled_since(Some(1000), 1000));
+        assert!(!super::polled_since(None, 1000));
+    }
+
+    #[test]
+    fn a_link_is_online_only_while_recently_seen() {
         let b = webagent_models::settings::Settings::default().harness_bridge;
         assert!(super::recently_seen(
             Some(1000),

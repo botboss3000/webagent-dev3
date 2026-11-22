@@ -67,16 +67,16 @@ impl Default for Settings {
             schema_version: 1,
             streaming: Streaming { stall_seconds: 120 },
             harness_bridge: Bridge {
-                unclaimed_call_seconds: 60,
+                unclaimed_call_seconds: 15,
                 client_online_seconds: 120,
-                offer_lease_seconds: 60,
+                offer_lease_seconds: 15,
                 answer_seconds: 1800,
-                poll_hold_seconds: 25,
+                poll_hold_seconds: 10,
                 pairing_code_seconds: 600,
                 store_poll_ms: 250,
-                heartbeat_timeout_seconds: 60,
+                heartbeat_timeout_seconds: 15,
                 client: BridgeClient {
-                    heartbeat_seconds: 20,
+                    heartbeat_seconds: 5,
                     stall_seconds: 120,
                     probe_seconds: 30,
                     server_idle_seconds: 900,
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn invalid_ranges_are_rejected() {
         let mut settings = Settings::default();
-        settings.harness_bridge.heartbeat_timeout_seconds = 30;
+        settings.harness_bridge.heartbeat_timeout_seconds = 9;
         assert!(settings.validate().is_err());
         let mut settings = Settings::default();
         settings.harness_bridge.client.harness_seconds = 1800;

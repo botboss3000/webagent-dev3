@@ -120,9 +120,10 @@ export function activityRows(events) {
       const wait=p.wait_seconds>=120?Math.round(p.wait_seconds/60)+' min':(p.wait_seconds??0)+' s';
       // A switch names both models and why; older rows carry no model names.
       const reason={transient:'temporary error',quota_exhausted:'quota used up',invalid_credentials:'key rejected',
-        model_unavailable:'model unavailable'}[p.reason]||'';
+        model_unavailable:'model unavailable',backup_in_use:'backup still in use',
+        first_model_again:'trying the first model again'}[p.reason]||'';
       const label=p.auto_resume?'Retries used up · resuming automatically in '+wait
-        :p.backup&&p.to_model?'Switched from '+(p.from_model||'the model')+' to '+p.to_model+(reason?' ('+reason+')':'')+' · in '+wait
+        :p.backup&&p.to_model?'Switched from '+(p.from_model||'the model')+' to '+p.to_model+(reason?' ('+reason+')':'')+(p.wait_seconds?' · in '+wait:'')
         :p.backup?'Switching to the next model in '+wait
         :'Retrying connection in '+wait+' · attempt '+p.attempt+' of '+p.of;
       rows.push({id:event.event_id,category:'retries',retry:true,autoResume:!!p.auto_resume,label,

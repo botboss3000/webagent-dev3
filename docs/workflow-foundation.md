@@ -27,7 +27,7 @@ Each agent's roster lists its models, its role appointments (the Standard role
 is shown as Text), an optional text model per execution mode (`mode_models`,
 falling back to Text) and, per model, an ordered list of aliases: other roster models a call falls back to under the
 model backup policy (`config/chat/model-backup.json`, with a per-agent
-overlay). An explicit empty role map stays empty. User-owned run documents pin
+overlay; the whole recovery behaviour is in `docs/recovery-policy.md`). An explicit empty role map stays empty. User-owned run documents pin
 the chat plan and independent System plan and failover cursor. Role changes
 affect new runs, while live revocation and account ceilings still stop dispatch.
 No session database inspection or alternate state access path is introduced.

@@ -2156,6 +2156,14 @@ impl<
                 if app.background_collect(&mut run).await? {
                     context_accounting.reset();
                 }
+                // BACKUP STICK: start on the alias this session's last run ended on.
+                if run["backup_stick_checked"] != json!(true) {
+                    run["backup_stick_checked"] = json!(true);
+                    let stick = app.store.get(&super::failure::stick_key(&sid)).await?;
+                    if super::failure::apply_stick(&mut run, &stick.unwrap_or(Value::Null)) {
+                        app.save(&mut run).await?;
+                    }
+                }
                 // Older runs had no selection; bind once before any model dispatch.
                 let selection = match run.get("provider_selection") {
                     Some(value) => provider::ProviderSelection::parse(value, X::default_model()),
@@ -3835,6 +3843,12 @@ impl<
                     context_accounting.reset();
                     super::cache_estimate::forget(&sid);
                     super::cache_estimate::log_reorder(&sid, &id, reason);
+                    // No cache is left to lose, so a run on an alias tries its first model again.
+                    if super::failure::first_model_again(&mut run) {
+                        app.store
+                            .put(&super::failure::stick_key(&sid), &Value::Null)
+                            .await?;
+                    }
                     app.store
                         .save_run_observed(
                             &mut run,
@@ -4171,6 +4185,12 @@ impl<
                             run["failover_state"]["retries"] = json!(0);
                             run["failover_state"]["response_started"] = json!(false);
                             run["failover_state"]["uncertain_tool_effect"] = json!(false);
+                        }
+                        // The session stays on an alias that answered until its next reorder.
+                        if let Some(stick) = super::failure::stick_to_save(&mut run) {
+                            app.store
+                                .put(&super::failure::stick_key(&sid), &stick)
+                                .await?;
                         }
                         let mut output = response["output"]
                             .as_array()
