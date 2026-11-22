@@ -96,7 +96,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     if auto_resume {
         state.retries = 0;
         // A fresh budget includes the per-call attempt limit (`workflow.max_attempts`), as for a
-        // backup switch; otherwise the resumed dispatch pauses at once with "Run limit reached".
+        // backup switch; otherwise the resumed dispatch pauses at once at the attempt limit.
         run["attempt"] = json!(0);
         run["auto_resumes"] = json!(resumes + 1);
         action = NextAction::Retry;
@@ -106,8 +106,10 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     } else {
         retry_delay(&policy, &state, failure.and_then(|f| f.retry_after))
     };
+    let detail: String = error.to_string().chars().take(300).collect();
+    // Kept for the operator's "model unreachable" row if a later limit stops this call.
+    run["last_model_error"] = json!(detail);
     if action != NextAction::Terminal {
-        let detail: String = error.to_string().chars().take(300).collect();
         let mut item = json!({"type":"retry_scheduled","attempt":state.retries,
             "of":policy.same_model_retries,"wait_seconds":wait,"error":detail,
             "backup":action == NextAction::Backup,"auto_resume":auto_resume});
@@ -142,15 +144,60 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         NextAction::Retry => json!(format!(
             "Transient provider failure; bounded retry: {error}"
         )),
-        NextAction::Backup => Value::Null,
-        NextAction::Terminal if resumable => json!(format!(
-            "Provider recovery budget exhausted; resume to try again: {error}"
-        )),
-        NextAction::Terminal => json!(format!(
-            "Provider request failed; no safe retry or eligible alias remains: {error}"
-        )),
+        NextAction::Backup | NextAction::Terminal => Value::Null,
     };
+    if action == NextAction::Terminal {
+        model_unreachable(
+            run,
+            if resumable {
+                "retries, backup models and automatic resumes used up"
+            } else {
+                "no safe retry or eligible backup model remains"
+            },
+        );
+    }
     Ok(())
+}
+
+/// The chat notice for a model that cannot be reached. It names no model, provider or
+/// recovery detail; those go to the operator row below.
+pub const MODEL_UNREACHABLE: &str = "The model is unreachable";
+pub const MODEL_UNREACHABLE_GUIDANCE: &str =
+    "Use a different session to resume, or contact the administrator.";
+
+/// Stop a call whose model could not be reached: the chat shows only `MODEL_UNREACHABLE`,
+/// and an activity row (run logs, administrators only) records the model, provider, what
+/// recovery was tried and the last error.
+pub fn model_unreachable(run: &mut Value, stopped_by: &str) {
+    let plan: Option<SelectionPlan> = serde_json::from_value(run["selection_plan"].clone()).ok();
+    let policy = plan
+        .as_ref()
+        .map_or_else(BackupPolicy::live, SelectionPlan::policy);
+    let backups = plan
+        .as_ref()
+        .map_or(0, |plan| plan.candidates.len().saturating_sub(1));
+    let state = &run["failover_state"];
+    let model = run["provider_selection"]["model"]
+        .as_str()
+        .unwrap_or("unknown");
+    let provider = run["provider_selection"]["provider"]
+        .as_str()
+        .unwrap_or("unknown");
+    let detail = format!(
+        "Model {model} on provider {provider}. Recovery tried: {retries} of {retry_limit} \
+         same-model retries, backup models {used} of {backups}, automatic resumes {resumes} of \
+         {resume_limit}. Stopped: {stopped_by}. Last error: {error}",
+        retries = state["retries"].as_u64().unwrap_or(0),
+        retry_limit = policy.same_model_retries,
+        used = state["candidate_index"].as_u64().unwrap_or(0),
+        resumes = run["auto_resumes"].as_u64().unwrap_or(0),
+        resume_limit = policy.auto_resume_attempts,
+        error = run["last_model_error"].as_str().unwrap_or("none recorded"),
+    );
+    let item = json!({"type":"model_unreachable","model":model,"provider":provider,
+        "detail":detail});
+    run["error"] = json!(MODEL_UNREACHABLE);
+    retry_activity(run, item);
 }
 pub use webagent_models::backup_policy::response_start_seconds as response_start;
 

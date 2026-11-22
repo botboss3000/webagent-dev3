@@ -223,6 +223,11 @@ impl<
                 if run["context_remedy"].is_object() {
                     content["remedy"] = run["context_remedy"].clone();
                 }
+                // An unreachable model needs a different next step than "write a new message".
+                if error == Some(crate::runtime::failure::MODEL_UNREACHABLE) {
+                    content["guidance"] =
+                        json!(crate::runtime::failure::MODEL_UNREACHABLE_GUIDANCE);
+                }
                 crate::send_future(sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,?,?,'notice',?,strftime('%s','now')) ON CONFLICT(id) DO UPDATE SET content=excluded.content")
                     .bind(id.clone()).bind(run["session_id"].as_str().unwrap_or("").to_owned()).bind(rid.to_owned())
                     .bind(self.records.encode_user_record(&content)?).execute(&mut **tx)).await?;

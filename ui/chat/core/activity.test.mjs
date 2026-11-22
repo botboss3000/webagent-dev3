@@ -72,6 +72,13 @@ test('a scheduled retry is its own counted row, labelled by attempt, model switc
   assert.equal(rows[0].text,'Bridge provider overloaded: busy');
 });
 
+test('an unreachable model gets an operator row naming the model, provider and recovery',()=>{
+  const rows=activityRows([{kind:'model_unreachable',event_id:'e1',run_id:'r1',seq:1,
+    payload:{model:'model-a',provider:'bridge',detail:'Recovery tried: 2 of 2 same-model retries'}}]);
+  assert.deepEqual(rows.map(r=>[r.category,r.retry,r.label]),[['retries',true,'Model unreachable: model-a on bridge']]);
+  assert.equal(rows[0].text,'Recovery tried: 2 of 2 same-model retries');
+});
+
 test('messages shown in chat and the publish control stay out of activity rows',()=>{
   const rows=activityRows([
     {kind:'agent_step_end',event_id:'m1',payload:{asst_id:'a1',content:'private note',in_chat:false}},

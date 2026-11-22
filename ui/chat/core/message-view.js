@@ -66,8 +66,10 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
   if(item.role==='notice'){
     const notice=item.content&&typeof item.content==='object'?item.content:{};
     const row=document.createElement('article');row.className='v3-message system';row.dataset.publicId=item.id;row.dataset.seq=String(item.seq);row.dataset.noticeRunId=item.run_id;
-    const title=(notice.status==='failed'?'Run failed':'Stopped')+(notice.error?' — '+notice.error:'');
-    row.append(remedyAction(title,notice,item,{client,getSession,getAccess,note})||createChatAction({title,message:'To continue, write a new message in the chat.'}));return row;
+    const title=({failed:'Run failed',paused:'Paused'}[notice.status]||'Stopped')+(notice.error?' — '+notice.error:'');
+    // The server sends its own next step when a new message would not help (unreachable model).
+    const message=typeof notice.guidance==='string'&&notice.guidance?notice.guidance:'To continue, write a new message in the chat.';
+    row.append(remedyAction(title,notice,item,{client,getSession,getAccess,note})||createChatAction({title,message}));return row;
   }
   // Background notices (sub-agents, broker builds, background tool calls) show as compact activity rows, not user bubbles.
   const notices=item.message_kind==='agent_message'&&Array.isArray(item.platform_notice?.notices)?item.platform_notice.notices.slice(0,20):null;

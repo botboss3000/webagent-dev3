@@ -268,6 +268,10 @@ fn event(
                 "error":item["error"],"backup":item["backup"],"auto_resume":item["auto_resume"],
                 "from_model":item["from_model"],"to_model":item["to_model"],"reason":item["reason"]}),
         ),
+        "model_unreachable" => (
+            "model_unreachable",
+            json!({"model":item["model"],"provider":item["provider"],"detail":item["detail"]}),
+        ),
         _ => ("diagnostic", item),
     };
     let execution_metadata = row
@@ -487,7 +491,7 @@ impl Store {
                     }
                     "message" => updates += 1,
                     "compaction_result" => compactions += 1,
-                    "retry_scheduled" => retries += 1,
+                    "retry_scheduled" | "model_unreachable" => retries += 1,
                     "model_usage" => {
                         models += 1;
                         input += item["input_tokens"].as_u64().unwrap_or(0);

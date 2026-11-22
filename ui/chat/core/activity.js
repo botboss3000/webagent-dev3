@@ -128,6 +128,12 @@ export function activityRows(events) {
         :'Retrying connection in '+wait+' · attempt '+p.attempt+' of '+p.of;
       rows.push({id:event.event_id,category:'retries',retry:true,autoResume:!!p.auto_resume,label,
         text:p.error||'',events:[event]});
+    } else if (kind === 'model_unreachable') {
+      // Administrators only (run logs): the model, provider and recovery behind the chat's
+      // plain "The model is unreachable" notice.
+      rows.push({id:event.event_id,category:'retries',retry:true,
+        label:'Model unreachable: '+(p.model||'model')+' on '+(p.provider||'provider'),
+        text:p.detail||'',events:[event]});
     } else if (kind === 'model_usage') {
       // One row per model call: how much of its input the provider read from cache, beside our estimate.
       rows.push({id:event.event_id,category:'models',modelCall:true,label:modelCallLabel(p),text:modelCallText(p),events:[event]});

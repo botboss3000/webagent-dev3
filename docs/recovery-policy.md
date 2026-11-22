@@ -49,8 +49,8 @@ Other limits on model calls:
 | --- | --- | --- | --- |
 | `response_start_seconds` | 60 | `config/chat/model-backup.json` | A provider that has not started answering by then counts as a temporary failure |
 | `streaming.stall_seconds` | 120 | `config/models/models-runtime.json` | A stream with no new data for this long counts as a temporary failure |
-| `workflow.max_attempts` | 3 | `config/engine/loop-runtime.json` | Model calls allowed within one turn; reaching it pauses the run with "Run limit reached; explicit continuation required" |
-| `workflow.max_turns` | 80 | `config/engine/loop-runtime.json` | Turns allowed in one run (0 = no limit); same pause |
+| `workflow.max_attempts` | 3 | `config/engine/loop-runtime.json` | Model calls allowed within one turn; reaching it pauses the run: after failed calls the chat shows "The model is unreachable" and administrators get a `model_unreachable` activity row with the model, provider, recovery tried and last error |
+| `workflow.max_turns` | 80 | `config/engine/loop-runtime.json` | Turns allowed in one run (0 = no limit); reaching it pauses the run with "This run reached its limit of N steps" |
 
 ### Staying on the backup model, and switching back
 

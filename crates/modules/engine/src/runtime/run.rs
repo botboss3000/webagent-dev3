@@ -2245,13 +2245,34 @@ impl<
                 .await?;
                 // max_turns 0 means no limit.
                 let turn_limit = workflow_policy.max_turns;
-                if (turn_limit != 0
-                    && run["turns"].as_u64().expect("run counters are numbers") >= turn_limit)
-                    || run["attempt"].as_u64().expect("run counters are numbers")
-                        >= workflow_policy.max_attempts
+                let attempts = run["attempt"].as_u64().expect("run counters are numbers");
+                if turn_limit != 0
+                    && run["turns"].as_u64().expect("run counters are numbers") >= turn_limit
                 {
                     run["status"] = json!("paused");
-                    run["error"] = json!("Run limit reached; explicit continuation required");
+                    run["error"] =
+                        json!(format!("This run reached its limit of {turn_limit} steps"));
+                    app.save(&mut run).await?;
+                    return Ok(());
+                }
+                if attempts >= workflow_policy.max_attempts {
+                    run["status"] = json!("paused");
+                    // Retries are reset by a completed reply, so any left mean this call's
+                    // model kept failing.
+                    if run["failover_state"]["retries"].as_u64().unwrap_or(0) > 0 {
+                        super::failure::model_unreachable(
+                            &mut run,
+                            &format!(
+                                "{attempts} of {} model calls for this step used \
+                                 (workflow.max_attempts)",
+                                workflow_policy.max_attempts
+                            ),
+                        );
+                    } else {
+                        run["error"] = json!(format!(
+                            "The model used all {attempts} calls for this step without a usable reply"
+                        ));
+                    }
                     app.save(&mut run).await?;
                     return Ok(());
                 }

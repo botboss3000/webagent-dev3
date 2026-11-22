@@ -5797,10 +5797,21 @@ async fn model_selection_failover_is_ordered_durable_and_revocation_is_live() {
     assert!(app.run_candidate(&restored).await.is_err());
     model_failure(&mut restored, &failure).unwrap();
     assert_eq!(restored["status"], "failed");
-    assert!(restored["error"]
-        .as_str()
+    // The chat notice names no model or provider; the operator row carries them.
+    assert_eq!(
+        restored["error"],
+        webagent_engine::runtime::failure::MODEL_UNREACHABLE
+    );
+    let row = &restored["_activity_items"]
+        .as_array()
         .unwrap()
-        .contains("no safe retry or eligible alias"));
+        .last()
+        .unwrap()["item"];
+    assert_eq!(row["type"], "model_unreachable");
+    assert_eq!(row["model"], restored["provider_selection"]["model"]);
+    let detail = row["detail"].as_str().unwrap();
+    assert!(detail.contains("no safe retry or eligible backup model remains"));
+    assert!(detail.contains("Last error: Model unavailable"));
 }
 
 #[tokio::test]
@@ -10593,7 +10604,12 @@ async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent
     model_failure(&mut run, &error).unwrap();
     assert_eq!(run["status"], "stopped");
     assert_eq!(run["provider_recovery"]["safe_to_resume"], true);
-    assert_eq!(run["retry_rows"], 2 * settings.same_model_retries + 1);
+    assert_eq!(
+        run["error"],
+        webagent_engine::runtime::failure::MODEL_UNREACHABLE
+    );
+    // Each scheduled retry, plus the operator's "model unreachable" row.
+    assert_eq!(run["retry_rows"], 2 * settings.same_model_retries + 2);
     app.save(&mut run).await.unwrap();
     let mut reopened = app.clone();
     reopened.store = Store::open(root.path()).await.unwrap();
