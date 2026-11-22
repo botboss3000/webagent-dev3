@@ -147,11 +147,12 @@ pub(crate) fn client_from(
 pub(crate) async fn per_address(State(app): State<App>, request: Request, next: Next) -> Response {
     if request.uri().path().starts_with("/api/") {
         if let Some(client) = proven_client(&app, &request) {
+            let group = webagent_accounts::client_group(client);
             let (limits, _) = current(&app);
             if request.uri().path() == "/api/v3/harness-bridge/pair" {
                 if let Some(refused) = count(
                     &app,
-                    format!("address:pairing:{client}"),
+                    format!("address:pairing:{group}"),
                     limits.per_address_per_minute.pairing,
                     "pairing attempts",
                 )
@@ -162,7 +163,7 @@ pub(crate) async fn per_address(State(app): State<App>, request: Request, next: 
             }
             if let Some(refused) = count(
                 &app,
-                format!("address:api:{client}"),
+                format!("address:api:{group}"),
                 limits.per_address_per_minute.api,
                 "requests",
             )
@@ -179,7 +180,10 @@ pub(crate) async fn per_address(State(app): State<App>, request: Request, next: 
 /// times that, so one sender cannot lock pairing for everyone. Unknown clients share one key.
 const PAIRING_GLOBAL_FACTOR: u32 = 10;
 fn pairing_keys(client: Option<std::net::IpAddr>) -> [String; 2] {
-    let client = client.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string());
+    let client = client.map_or_else(
+        || "unknown".to_owned(),
+        |ip| webagent_accounts::client_group(ip).to_string(),
+    );
     [
         format!("pairing:failures:{client}"),
         "pairing:failures".to_owned(),
@@ -204,7 +208,7 @@ pub(crate) async fn pairing_wait(app: &App, client: Option<std::net::IpAddr>) ->
 pub(crate) async fn new_account_admitted(app: &App) -> bool {
     let (limits, _) = current(app);
     app.login_attempts
-        .hit(
+        .hit_shared(
             "new_accounts".into(),
             limits.new_accounts_per_day,
             86_400,
@@ -221,7 +225,7 @@ pub(crate) async fn pairing_failed(app: &App, client: Option<std::net::IpAddr>) 
     let now = now();
     app.login_attempts.hit(own, cap, 60, now).await;
     app.login_attempts
-        .hit(all, cap.saturating_mul(PAIRING_GLOBAL_FACTOR), 60, now)
+        .hit_shared(all, cap.saturating_mul(PAIRING_GLOBAL_FACTOR), 60, now)
         .await;
 }
 

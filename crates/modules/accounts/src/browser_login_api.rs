@@ -52,7 +52,7 @@ pub async fn login<C: RecordCodec, H: Host>(
         &body.caller_id,
         headers.contains_key("origin"),
     ) {
-        attempts.hit(FAILURES.into(), cap, 60, now).await;
+        attempts.hit_shared(FAILURES.into(), cap, 60, now).await;
         return Err(denied());
     }
     let _guard = host.gate().lock().await;

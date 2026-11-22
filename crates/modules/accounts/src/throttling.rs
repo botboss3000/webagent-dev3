@@ -12,8 +12,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    collections::{HashMap, VecDeque},
+    hash::Hash,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -236,7 +237,144 @@ pub enum LoginGate {
 }
 
 const KEY_LIMIT: usize = 16384;
-type Windows = HashMap<(Admission, IpAddr, String), Vec<u64>>;
+/// Keys a full [`Recent`] table evicts at once: its least recently counted sixteenth, so the
+/// scan that finds them runs once per that many new keys.
+const EVICT_BATCH: usize = KEY_LIMIT / 16;
+
+/// Event times under one key inside its window, oldest first.
+struct Events {
+    span: u64,
+    times: VecDeque<u64>,
+    /// A shared counter (a daily or app-wide cap) that eviction never drops.
+    pinned: bool,
+}
+impl Events {
+    fn prune(&mut self, now: u64) {
+        while self
+            .times
+            .front()
+            .is_some_and(|t| now.saturating_sub(*t) >= self.span)
+        {
+            self.times.pop_front();
+        }
+    }
+}
+
+/// Event counts per key, each in its own sliding window, bounded at `KEY_LIMIT` keys. A call
+/// prunes only its own key; every key is swept for expired events at most once a second.
+/// A full table evicts its least recently counted keys rather than refusing a new one, so a
+/// flood of addresses cannot lock newcomers out. Pinned keys are never evicted. Eviction only
+/// resets the evicted keys' counts: to win back a throttled budget a caller needs as many
+/// fresh keys (addresses) as the table holds, which would already give it that many budgets.
+pub struct Recent<K> {
+    keys: HashMap<K, Events>,
+    swept: u64,
+}
+impl<K> Default for Recent<K> {
+    fn default() -> Self {
+        Self {
+            keys: HashMap::new(),
+            swept: 0,
+        }
+    }
+}
+impl<K: Clone + Eq + Hash> Recent<K> {
+    fn sweep(&mut self, now: u64) {
+        if self.swept == now {
+            return;
+        }
+        self.swept = now;
+        self.keys.retain(|_, events| {
+            events.prune(now);
+            !events.times.is_empty()
+        });
+    }
+    /// Events under `key` inside its window.
+    pub fn count(&mut self, key: &K, now: u64) -> usize {
+        self.sweep(now);
+        self.keys.get_mut(key).map_or(0, |events| {
+            events.prune(now);
+            events.times.len()
+        })
+    }
+    /// Counts one event under `key` unless `cap` events already fall inside its last `span`
+    /// seconds; false, counting nothing, when they do.
+    pub fn hit(&mut self, key: K, cap: usize, span: u64, now: u64) -> bool {
+        self.insert(key, cap, span, now, false)
+    }
+    /// [`Self::hit`] for a shared counter that a full table never evicts.
+    pub fn hit_pinned(&mut self, key: K, cap: usize, span: u64, now: u64) -> bool {
+        self.insert(key, cap, span, now, true)
+    }
+    fn insert(&mut self, key: K, cap: usize, span: u64, now: u64, pinned: bool) -> bool {
+        self.sweep(now);
+        if !self.keys.contains_key(&key) {
+            self.make_room();
+        }
+        let events = self.keys.entry(key).or_insert_with(|| Events {
+            span,
+            times: VecDeque::new(),
+            pinned,
+        });
+        events.span = span;
+        events.pinned |= pinned;
+        events.prune(now);
+        if events.times.len() >= cap {
+            return false;
+        }
+        events.times.push_back(now);
+        true
+    }
+    /// Evicts the least recently counted unpinned keys when the table is full.
+    fn make_room(&mut self) {
+        if self.keys.len() < KEY_LIMIT {
+            return;
+        }
+        let mut ages: Vec<(u64, K)> = self
+            .keys
+            .iter()
+            .filter(|(_, events)| !events.pinned)
+            .map(|(key, events)| (events.times.back().copied().unwrap_or(0), key.clone()))
+            .collect();
+        let batch = EVICT_BATCH.min(ages.len());
+        if batch == 0 {
+            return;
+        }
+        if batch < ages.len() {
+            ages.select_nth_unstable_by_key(batch - 1, |(newest, _)| *newest);
+        }
+        for (_, key) in ages.into_iter().take(batch) {
+            self.keys.remove(&key);
+        }
+    }
+    /// Seconds until a hit on `key` could pass again; zero when it would pass now.
+    pub fn retry_after(&self, key: &K, cap: usize, now: u64) -> u64 {
+        self.keys.get(key).map_or(0, |events| {
+            // Only events still inside the window count; expired ones wait for the next
+            // hit to prune them, so a caller that only asks is never refused forever.
+            let live = || {
+                events
+                    .times
+                    .iter()
+                    .filter(|t| now.saturating_sub(**t) < events.span)
+            };
+            if live().count() < cap {
+                return 0;
+            }
+            live()
+                .next()
+                .map_or(0, |first| (first + events.span).saturating_sub(now).max(1))
+        })
+    }
+    /// Forgets `key`'s events.
+    pub fn remove(&mut self, key: &K) {
+        self.keys.remove(key);
+    }
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
 /// Recent failure times, capped at the threshold: only "at least `failures`" matters.
 #[derive(Default)]
 struct Failures(Vec<u64>);
@@ -272,11 +410,11 @@ struct AccountState {
 }
 #[derive(Default)]
 struct State {
-    windows: Windows,
+    windows: Recent<(Admission, IpAddr, String)>,
     pairs: HashMap<(IpAddr, String), PairState>,
     accounts: HashMap<String, AccountState>,
     /// Named counters (`hit`): per user, per token, per address or global, each with its window.
-    counters: HashMap<String, (u64, Vec<u64>)>,
+    counters: Recent<String>,
 }
 impl State {
     fn prune(&mut self, protection: &LoginProtection, now: u64) {
@@ -318,13 +456,9 @@ impl LoginAttempts {
         username: &str,
         now: u64,
     ) -> bool {
+        let client = client_group(client);
         let mut state = self.0.lock().await;
         let windows = &mut state.windows;
-
-        windows.retain(|_, times| {
-            times.retain(|t| now.saturating_sub(*t) < 60);
-            !times.is_empty()
-        });
         let lane = (
             kind,
             client,
@@ -343,57 +477,34 @@ impl LoginAttempts {
             Admission::PasswordChange => caps.password_change,
         } as usize;
         let per_account = kind == Admission::Login && !client.is_unspecified();
-        if windows.get(&lane).is_some_and(|v| v.len() >= cap)
-            || (per_account && windows.get(&account).is_some_and(|v| v.len() >= 5))
-        {
+        if windows.count(&lane, now) >= cap || (per_account && windows.count(&account, now) >= 5) {
             return false;
         }
-        let new_keys = usize::from(!windows.contains_key(&lane))
-            + usize::from(per_account && account != lane && !windows.contains_key(&account));
-        // Never evict active counters: random account names must not reset a throttled window.
-        if windows.len() + new_keys > KEY_LIMIT {
-            return false;
-        }
-        windows.entry(lane).or_default().push(now);
+        windows.hit(lane, usize::MAX, 60, now);
         if per_account && !username.is_empty() {
-            windows.entry(account).or_default().push(now);
+            windows.hit(account, usize::MAX, 60, now);
         }
         true
     }
-    /// Count one event under `key`; false, counting nothing, when `cap` events already fall
-    /// inside the last `window` seconds. New keys are refused once the table is full, so a
-    /// flood of names cannot reset an active counter.
+    /// Count one event under a per-client, per-user or per-token `key`; false, counting
+    /// nothing, when `cap` events already fall inside the last `window` seconds. A full table
+    /// evicts its least recently counted keys ([`Recent`]).
     pub async fn hit(&self, key: String, cap: u32, window: u64, now: u64) -> bool {
         let mut state = self.0.lock().await;
-        state.counters.retain(|_, (span, times)| {
-            times.retain(|t| now.saturating_sub(*t) < *span);
-            !times.is_empty()
-        });
-        if !state.counters.contains_key(&key) && state.counters.len() >= KEY_LIMIT {
-            return false;
-        }
-        let (span, times) = state.counters.entry(key).or_insert((window, Vec::new()));
-        *span = window;
-        if times.len() >= cap as usize {
-            return false;
-        }
-        times.push(now);
-        true
+        state.counters.hit(key, cap as usize, window, now)
+    }
+    /// [`Self::hit`] for a shared counter (a daily or app-wide cap), which eviction never
+    /// resets.
+    pub async fn hit_shared(&self, key: String, cap: u32, window: u64, now: u64) -> bool {
+        let mut state = self.0.lock().await;
+        state.counters.hit_pinned(key, cap as usize, window, now)
     }
     /// Seconds until a `hit` on `key` could pass again; zero when it would pass now.
     pub async fn retry_after(&self, key: &str, cap: u32, now: u64) -> u64 {
         let state = self.0.lock().await;
-        state.counters.get(key).map_or(0, |(span, times)| {
-            // Only events still inside the window count; expired ones wait for the next `hit`
-            // to prune them, so a caller that only asks is never refused forever.
-            let live = || times.iter().filter(|t| now.saturating_sub(**t) < *span);
-            if live().count() < cap as usize {
-                return 0;
-            }
-            live()
-                .min()
-                .map_or(0, |first| (first + span).saturating_sub(now).max(1))
-        })
+        state
+            .counters
+            .retry_after(&key.to_owned(), cap as usize, now)
     }
     /// Apply the failed-login block and slowdown before any password check.
     /// Unknown usernames are tracked exactly like real ones.
@@ -404,6 +515,7 @@ impl LoginAttempts {
         username: &str,
         now: u64,
     ) -> LoginGate {
+        let client = client_group(client);
         let mut state = self.0.lock().await;
         state.prune(protection, now);
         let pair_key = (client, username.to_owned());
@@ -449,6 +561,7 @@ impl LoginAttempts {
         username: &str,
         now: u64,
     ) {
+        let client = client_group(client);
         let mut state = self.0.lock().await;
         let address = protection.address;
         if !client.is_unspecified() {
@@ -480,6 +593,7 @@ impl LoginAttempts {
     }
     /// A correct password clears the pair's minute window, its block and the account slowdown.
     pub async fn successful_login(&self, client: IpAddr, username: &str) {
+        let client = client_group(client);
         let mut state = self.0.lock().await;
         state
             .windows
@@ -571,6 +685,16 @@ pub fn client_ip(
         return Ok(normalize(first.to_str()?.parse()?));
     }
     Ok(peer)
+}
+/// The address a throttle counts a client under: IPv4 as it is, IPv6 by its /64 network,
+/// which one subscriber or server usually holds whole, so rotating addresses inside it gains
+/// no extra budget.
+#[must_use]
+pub fn client_group(ip: IpAddr) -> IpAddr {
+    match normalize(ip) {
+        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & !u128::from(u64::MAX))),
+        v4 => v4,
+    }
 }
 fn normalize(ip: IpAddr) -> IpAddr {
     match ip {
@@ -868,6 +992,76 @@ mod tests {
         assert_eq!(attempts.retry_after("user:chat_send:u1", 3, 110).await, 50);
         assert!(attempts.hit("user:chat_send:u2".into(), 3, 60, 110).await);
         assert!(attempts.hit("user:chat_send:u1".into(), 3, 60, 160).await);
+    }
+    #[tokio::test]
+    async fn a_full_counter_table_admits_newcomers_by_evicting_its_oldest_keys() {
+        let attempts = LoginAttempts::default();
+        // A shared daily cap counted first, so it is the oldest key of all.
+        assert!(
+            attempts
+                .hit_shared("new_accounts".into(), 1, 86_400, 100)
+                .await
+        );
+        for n in 0..KEY_LIMIT - 2 {
+            assert!(attempts.hit(format!("address:api:{n}"), 3, 60, 101).await);
+        }
+        // A throttled client counted most recently.
+        for _ in 0..3 {
+            assert!(attempts.hit("address:api:busy".into(), 3, 60, 102).await);
+        }
+        assert_eq!(attempts.0.lock().await.counters.keys.len(), KEY_LIMIT);
+        // Before: a new key at the cap was refused for everyone. Now it is admitted.
+        assert!(attempts.hit("address:api:new".into(), 3, 60, 103).await);
+        let state = attempts.0.lock().await;
+        assert_eq!(state.counters.keys.len(), KEY_LIMIT - EVICT_BATCH + 1);
+        drop(state);
+        // The cap still holds where it matters: the recent throttled key, and the pinned
+        // daily cap, survive the eviction.
+        assert!(!attempts.hit("address:api:busy".into(), 3, 60, 103).await);
+        assert_eq!(attempts.retry_after("address:api:busy", 3, 103).await, 59);
+        assert!(
+            !attempts
+                .hit_shared("new_accounts".into(), 1, 86_400, 103)
+                .await
+        );
+    }
+    #[tokio::test]
+    async fn a_full_admission_table_admits_newcomers_and_keeps_recent_limits() {
+        let b = LoginAttempts::default();
+        let throttled = IpAddr::from([198, 51, 100, 1]);
+        for n in 0..(KEY_LIMIT - 1) as u32 {
+            let ip = IpAddr::from((0xC000_0000u32 + n).to_be_bytes());
+            assert!(b.admit(Admission::Registration, ip, "", 10).await);
+        }
+        let cap = RequestLimits::default().per_address_per_minute.registration;
+        for _ in 0..cap {
+            assert!(b.admit(Admission::Registration, throttled, "", 11).await);
+        }
+        assert!(!b.admit(Admission::Registration, throttled, "", 11).await);
+        let newcomer = IpAddr::from([203, 0, 113, 9]);
+        assert!(b.admit(Admission::Registration, newcomer, "", 12).await);
+        assert!(!b.admit(Admission::Registration, throttled, "", 12).await);
+    }
+    #[tokio::test]
+    async fn ipv6_clients_count_by_their_64_network() {
+        let b = LoginAttempts::default();
+        let cap = RequestLimits::default().per_address_per_minute.registration;
+        for n in 0..cap {
+            let ip = IpAddr::from([0x2001, 0xdb8, 0, 1, 0, 0, 0, n as u16 + 1]);
+            assert!(b.admit(Admission::Registration, ip, "", 10).await);
+        }
+        let same_64 = IpAddr::from([0x2001, 0xdb8, 0, 1, 0xffff, 1, 2, 3]);
+        assert!(!b.admit(Admission::Registration, same_64, "", 10).await);
+        let next_64 = IpAddr::from([0x2001, 0xdb8, 0, 2, 0, 0, 0, 1]);
+        assert!(b.admit(Admission::Registration, next_64, "", 10).await);
+        assert_eq!(
+            client_group(same_64),
+            IpAddr::from([0x2001, 0xdb8, 0, 1, 0, 0, 0, 0])
+        );
+        let v4 = IpAddr::from([192, 0, 2, 7]);
+        assert_eq!(client_group(v4), v4);
+        let mapped = IpAddr::from(std::net::Ipv4Addr::new(192, 0, 2, 7).to_ipv6_mapped());
+        assert_eq!(client_group(mapped), v4);
     }
     #[test]
     fn request_limits_default_and_reject_out_of_range_values() {

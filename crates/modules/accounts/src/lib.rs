@@ -137,8 +137,8 @@ mod proxy_trust;
 pub use proxy_trust::{trust_settings, LIVE_AUTHENTICATION, PROOF_HASH};
 mod throttling;
 pub use throttling::{
-    client_ip, AccountSlowdown, AddressBackoff, AddressLimits, Admission, AdmissionContext,
-    LoginAttempts, LoginGate, LoginProtection, RequestLimits, UserLimits,
+    client_group, client_ip, AccountSlowdown, AddressBackoff, AddressLimits, Admission,
+    AdmissionContext, LoginAttempts, LoginGate, LoginProtection, Recent, RequestLimits, UserLimits,
 };
 
 /// Apply one minimum to every password-creation path; the byte cap bounds hashing input.

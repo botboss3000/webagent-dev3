@@ -95,7 +95,7 @@ pub async fn register<C: RecordCodec, H: Host>(
         ));
     }
     if !attempts
-        .hit(
+        .hit_shared(
             "new_accounts".into(),
             limits.new_accounts_per_day,
             86_400,
@@ -208,7 +208,7 @@ pub async fn guest_login<C: RecordCodec, H: Host>(
             ));
         }
         if !attempts
-            .hit(
+            .hit_shared(
                 "new_accounts".into(),
                 limits.new_accounts_per_day,
                 86_400,

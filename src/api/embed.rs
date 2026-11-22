@@ -186,7 +186,7 @@ pub(super) async fn page(
 /// Live embed challenges or credentials one client address may hold for one agent.
 const CHALLENGES_PER_CLIENT: usize = 16;
 static EMBED_ATTEMPTS: std::sync::OnceLock<
-    Mutex<HashMap<(PathBuf, String, std::net::IpAddr, &'static str), Vec<u64>>>,
+    Mutex<webagent_accounts::Recent<(PathBuf, String, std::net::IpAddr, &'static str)>>,
 > = std::sync::OnceLock::new();
 async fn rate(
     app: &App,
@@ -195,30 +195,23 @@ async fn rate(
     lane: &'static str,
 ) -> std::result::Result<(), ApiError> {
     // Independent agent/client/operation windows cannot consume native login admission.
-    let key = (app.store.root.clone(), agent.to_owned(), client, lane);
-    let mut roots = EMBED_ATTEMPTS
-        .get_or_init(|| Mutex::new(HashMap::new()))
+    let key = (
+        app.store.root.clone(),
+        agent.to_owned(),
+        webagent_accounts::client_group(client),
+        lane,
+    );
+    let admitted = EMBED_ATTEMPTS
+        .get_or_init(|| Mutex::new(webagent_accounts::Recent::default()))
         .lock()
-        .await;
-    roots.retain(|_, attempts| {
-        attempts.retain(|t| now().saturating_sub(*t) < 60);
-        !attempts.is_empty()
-    });
-    if roots.len() >= 16384 && !roots.contains_key(&key) {
+        .await
+        .hit(key, 30, 60, now());
+    if !admitted {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "Try again in one minute".into(),
         ));
     }
-    let attempts = roots.entry(key).or_default();
-    if attempts.len() >= 30 {
-        return Err(ApiError(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Try again in one minute".into(),
-        ));
-    }
-    attempts.push(now());
-    drop(roots);
     let client = client.to_string();
     // These credentials/challenges are transient, bounded encrypted app records.
     for (prefix, limit) in [
