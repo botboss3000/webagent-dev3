@@ -54,6 +54,54 @@ pub async fn checkpoint_when_idle(pool: SqlitePool, wal: std::path::PathBuf) {
 /// `events` adds the event log (user and application planes); `runs` adds the user-plane run schema.
 /// Notification staging tables are added by their owner after this returns.
 pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePool> {
+    set_up_schema(connect_pool(path, events, runs).await?, events, runs).await
+}
+
+/// C7: the identity of a database file whose schema set-up this process completed: its path,
+/// device, inode and creation time. A replaced or restored file has another inode or creation
+/// time, so it is set up again; a file whose creation time is unreadable is never remembered.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SetUpKey {
+    path: std::path::PathBuf,
+    device: u64,
+    inode: u64,
+    born: std::time::SystemTime,
+}
+
+/// Files set up in this process. Evicting an account's pool (the connected-account bound)
+/// forgot that its set-up had run, so every reopen repeated about 30 schema statements and the
+/// one-time migration checks; this is kept apart from the pool registry and only ever grows by
+/// one small entry per database file.
+static SET_UP: std::sync::LazyLock<Mutex<std::collections::HashSet<SetUpKey>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The file's set-up identity now; `None` when it does not exist or cannot be identified.
+pub fn set_up_key(path: &Path) -> Option<SetUpKey> {
+    use webagent_platform::fs::MetadataExt;
+    let meta = std::fs::metadata(path).ok()?;
+    Some(SetUpKey {
+        path: path.to_path_buf(),
+        device: meta.dev(),
+        inode: meta.ino(),
+        born: meta.created().ok()?,
+    })
+}
+
+/// Whether this process already completed the set-up of exactly this file.
+pub fn is_set_up(key: &SetUpKey) -> bool {
+    SET_UP.lock().is_ok_and(|set| set.contains(key))
+}
+
+/// Record that the set-up of this file (schema and every owner's one-time checks) completed.
+pub fn mark_set_up(key: SetUpKey) {
+    if let Ok(mut set) = SET_UP.lock() {
+        set.insert(key);
+    }
+}
+
+/// Connect to a database without its schema set-up: only for a file [`is_set_up`] says this
+/// process already set up. Same options, permissions and pool bounds as [`open_pool`].
+pub async fn connect_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePool> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("Database path has no parent"))?;
@@ -98,6 +146,11 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
         path,
         std::fs::Permissions::from_mode(if private_profile { 0o600 } else { 0o660 }),
     )?;
+    Ok(pool)
+}
+
+/// The tables, indexes and column upgrades `open_pool` guarantees.
+async fn set_up_schema(pool: SqlitePool, events: bool, runs: bool) -> Result<SqlitePool> {
     sqlx::query("CREATE TABLE IF NOT EXISTS docs (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
         .execute(&pool)
         .await?;
@@ -434,6 +487,39 @@ mod registry_tests {
         }
         drop(in_use);
         drop(removed);
+    }
+
+    #[tokio::test]
+    async fn a_set_up_file_is_remembered_and_a_replaced_one_is_set_up_again() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("user_data/u1/u1.db");
+        let pool = open_pool(&path, true, true).await.unwrap();
+        // A file system without creation times is never remembered: every open sets up.
+        let Some(key) = set_up_key(&path) else {
+            return;
+        };
+        assert!(!is_set_up(&key));
+        mark_set_up(key.clone());
+        assert!(is_set_up(&key));
+        pool.close().await;
+        // Reconnecting a remembered file keeps its schema without running the set-up.
+        let again = connect_pool(&path, true, true).await.unwrap();
+        let open: i64 = sqlx::query_scalar("SELECT count(*) FROM run_index")
+            .fetch_one(&again)
+            .await
+            .unwrap();
+        assert_eq!(open, 0);
+        again.close().await;
+        // A replaced or restored file is another file: it is set up again.
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let fresh = open_pool(&path, true, true).await.unwrap();
+        let replaced = set_up_key(&path).unwrap();
+        assert_ne!(replaced, key);
+        assert!(!is_set_up(&replaced));
+        fresh.close().await;
     }
 
     #[test]

@@ -52,6 +52,7 @@ mod requester_quota;
 pub(crate) use requester_quota::{limit_refusal, AGENT_USERS_BUSY, AGENT_USERS_FULL};
 mod review;
 mod scan;
+pub(crate) use scan::WriteMarks;
 #[path = "../../crates/modules/chat/host/storage/shared_chat.rs"]
 pub(crate) mod shared_chat;
 #[path = "../../crates/modules/files/host/storage/storage_limits.rs"]
@@ -282,7 +283,21 @@ impl Store {
                         .join("user_data")
                         .join(user_id)
                         .join(format!("{user_id}.db"));
-                    let mut state = UserPlane::new(open_pool(&path, true, true).await?);
+                    // C7: a file this process already set up (schema, notification tables,
+                    // one-time migrations) only reconnects after its plane was evicted.
+                    let known = webagent_storage::pool::set_up_key(&path)
+                        .is_some_and(|key| webagent_storage::pool::is_set_up(&key));
+                    let pool = if known {
+                        webagent_storage::pool::connect_pool(&path, true, true).await?
+                    } else {
+                        open_pool(&path, true, true).await?
+                    };
+                    let mut state = UserPlane::new(pool);
+                    if known {
+                        state
+                            .migrated
+                            .store(true, std::sync::atomic::Ordering::Release);
+                    }
                     // Every user shares one retained-cache budget per Store family.
                     // User-qualified context keys prevent cross-account collisions.
                     state.context_cache = self.context_cache.clone();
@@ -329,6 +344,14 @@ impl Store {
             handle.migrate_archived_status().await?;
             handle.pin_conversation_privacy().await?;
             migrated.store(true, std::sync::atomic::Ordering::Release);
+            let path = self
+                .root
+                .join("user_data")
+                .join(user_id)
+                .join(format!("{user_id}.db"));
+            if let Some(key) = webagent_storage::pool::set_up_key(&path) {
+                webagent_storage::pool::mark_set_up(key);
+            }
         }
         Ok(handle)
     }
@@ -505,6 +528,10 @@ impl Store {
         self.ability_controls()
             .save_agent_abilities(value, expected_revision)
             .await
+    }
+    /// C7: whether the selected agent's settings opt into repository notices (plain flag).
+    pub async fn repository_notices_opted_in(&self) -> Result<bool> {
+        self.ability_controls().repository_notices_opted_in().await
     }
     fn ability_controls(&self) -> webagent_abilities::controls::Repository<'_, Self> {
         webagent_abilities::controls::Repository::new(

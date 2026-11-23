@@ -110,12 +110,27 @@ async fn watching(host: &dyn AdministrationHost, sid: &str) -> Result<Option<Str
 /// repository snapshot changed.
 pub async fn repository_notices(host: &dyn AdministrationHost) -> Result<()> {
     let store = host.store();
+    // C7: the opt-in is an agent's ability setting, kept as a plain flag beside it. With no
+    // agent opted in nothing is read or decrypted; otherwise only sessions of opted-in agents
+    // are checked, each with its full access below. A failed read looks at every session.
+    let agents = host.repository_notice_agents().await.unwrap_or(None);
+    if agents
+        .as_ref()
+        .is_some_and(std::collections::HashSet::is_empty)
+    {
+        return Ok(());
+    }
     let mut sessions = store.list("session:").await?;
     sessions.sort_by_key(|session| std::cmp::Reverse(session["created_at"].as_u64().unwrap_or(0)));
     let empty = json!({});
     for session in sessions
         .into_iter()
         .filter(|s| s["status"] == "active")
+        .filter(|s| {
+            agents.as_ref().is_none_or(|agents| {
+                agents.contains(s["agent_id"].as_str().unwrap_or("shared_default"))
+            })
+        })
         .take(32)
     {
         let Some(sid) = session["id"]

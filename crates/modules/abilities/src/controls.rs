@@ -136,9 +136,84 @@ impl<'a, C: RecordCodec> Repository<'a, C> {
             .bind(self.codec.seal_agent_for(self.agent_id,&metadata)?).bind(self.agent_id)
             .bind(row.get::<i64,_>("revision"))
             .execute(&mut *tx).await?;
+        // C7: the repository-notice opt-in as a plain flag, stamped with the agent epoch this
+        // commit leaves (the epoch trigger has already moved it). Without an epoch table no
+        // flag is written and readers decrypt as before; a failure here changes no saved setting.
+        if sqlx::query(OPT_IN_TABLE).execute(&mut *tx).await.is_ok() {
+            let _ = sqlx::query(OPT_IN_WRITE)
+                .bind(self.agent_id)
+                .bind(i64::from(repository_notices(&metadata["ability_settings"])))
+                .execute(&mut *tx)
+                .await;
+        }
         tx.commit().await?;
         Ok(())
     }
+    /// C7: whether this agent's settings opt into repository notices, without decrypting the
+    /// agent record while the plain flag was written at the agent database's current epoch
+    /// (every change of the agent row moves the epoch, so any other writer of the settings
+    /// makes the flag stale, never wrong). A stale or missing flag is read from the record and
+    /// stored at that epoch for the next reader.
+    pub async fn repository_notices_opted_in(&self) -> Result<bool> {
+        let fresh: Option<i64> = sqlx::query_scalar(
+            "SELECT o.opted_in FROM repository_notice_optin o, agent_epoch e
+            WHERE o.agent_id=? AND e.singleton=1 AND o.checked=e.epoch",
+        )
+        .bind(self.agent_id)
+        .fetch_optional(self.agent_pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some(opted_in) = fresh {
+            return Ok(opted_in != 0);
+        }
+        let mut tx = self.agent_pool.begin().await?;
+        let epoch: i64 = sqlx::query_scalar("SELECT epoch FROM agent_epoch WHERE singleton=1")
+            .fetch_one(&mut *tx)
+            .await?;
+        let metadata: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
+                .bind(self.agent_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        tx.commit().await?;
+        let opted_in = match metadata {
+            Some(blob) => repository_notices(
+                &self.codec.unseal_agent_for(self.agent_id, &blob)?["ability_settings"],
+            ),
+            None => false,
+        };
+        // Best effort: a failed write only means the next reader decrypts again.
+        if sqlx::query(OPT_IN_TABLE)
+            .execute(self.agent_pool)
+            .await
+            .is_ok()
+        {
+            let _ = sqlx::query(
+                "INSERT INTO repository_notice_optin(agent_id,checked,opted_in) VALUES(?,?,?)
+                ON CONFLICT(agent_id) DO UPDATE SET checked=excluded.checked,
+                opted_in=excluded.opted_in WHERE excluded.checked>repository_notice_optin.checked",
+            )
+            .bind(self.agent_id)
+            .bind(epoch)
+            .bind(i64::from(opted_in))
+            .execute(self.agent_pool)
+            .await;
+        }
+        Ok(opted_in)
+    }
+}
+
+/// The plain repository-notice flag per agent and the agent epoch it was read at.
+const OPT_IN_TABLE: &str = "CREATE TABLE IF NOT EXISTS repository_notice_optin(
+    agent_id TEXT PRIMARY KEY, checked INTEGER NOT NULL, opted_in INTEGER NOT NULL)";
+const OPT_IN_WRITE: &str = "INSERT INTO repository_notice_optin(agent_id,checked,opted_in)
+    SELECT ?1,epoch,?2 FROM agent_epoch WHERE singleton=1
+    ON CONFLICT(agent_id) DO UPDATE SET checked=excluded.checked,opted_in=excluded.opted_in";
+
+/// Whether ability settings opt into repository-change notices (Git Control).
+pub fn repository_notices(settings: &Value) -> bool {
+    settings["git_control"]["notify_repo_changes"] == true
 }
 
 pub fn tool_result_overrides(metadata: &Value) -> Result<Value> {

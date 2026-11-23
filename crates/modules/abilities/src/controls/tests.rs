@@ -139,6 +139,55 @@ async fn encrypted_controls_cas_scope_and_audit_survive_reopen() -> Result<()> {
 }
 
 #[tokio::test]
+async fn the_repository_notice_flag_follows_every_writer_of_the_agent_record() -> Result<()> {
+    let f = Fixture::new().await?;
+    // The agent database's epoch, moved by every change of the agent row (as installed by
+    // the storage revisions).
+    sqlx::raw_sql(
+        "CREATE TABLE agent_epoch(singleton INTEGER PRIMARY KEY,epoch INTEGER NOT NULL);
+        INSERT INTO agent_epoch VALUES(1,0);
+        CREATE TRIGGER agents_epoch AFTER UPDATE ON agents BEGIN
+        UPDATE agent_epoch SET epoch=epoch+1 WHERE singleton=1; END;",
+    )
+    .execute(&f.pool)
+    .await?;
+    let epoch = || async {
+        sqlx::query_scalar::<_, i64>("SELECT epoch FROM agent_epoch")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    };
+    let flag = || async {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT checked,opted_in FROM repository_notice_optin WHERE agent_id='agent_a'",
+        )
+        .fetch_optional(&f.pool)
+        .await
+        .unwrap()
+    };
+    // No flag yet: read from the record and stored at the current epoch.
+    assert!(!f.repo().repository_notices_opted_in().await?);
+    assert_eq!(flag().await, Some((0, 0)));
+    // The opt-in writes the flag in its own transaction, at the epoch it leaves.
+    let mut on = controls();
+    on["settings"]["git_control"] = json!({"notify_repo_changes":true});
+    f.repo().save_agent_abilities(&on, 0).await?;
+    assert_eq!(flag().await, Some((epoch().await, 1)));
+    assert!(f.repo().repository_notices_opted_in().await?);
+    // Another writer of the agent record moves the epoch: the flag is stale, never trusted.
+    let (mut metadata, _) = f.metadata().await?;
+    metadata["ability_settings"]["git_control"]["notify_repo_changes"] = json!(false);
+    sqlx::query("UPDATE agents SET metadata=? WHERE id='agent_a'")
+        .bind(f.codec.seal(&metadata)?)
+        .execute(&f.pool)
+        .await?;
+    assert!(!f.repo().repository_notices_opted_in().await?);
+    assert_eq!(flag().await, Some((epoch().await, 0)));
+    f.pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn late_invalid_settings_roll_back_connections_metadata_and_audit() -> Result<()> {
     let f = Fixture::new().await?;
     let before = f.metadata().await?;

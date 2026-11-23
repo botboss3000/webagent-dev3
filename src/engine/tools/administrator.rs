@@ -476,6 +476,33 @@ impl AdministrationHost for Host<'_> {
     fn stopping(&self) -> CancellationToken {
         self.0.stop.child_token()
     }
+    fn repository_notice_agents(
+        &self,
+    ) -> Pending<'_, Result<Option<std::collections::HashSet<String>>>> {
+        Box::pin(async move {
+            let app = self.0;
+            let mut agents: Vec<String> = sqlx::query_scalar("SELECT id FROM agent_directory")
+                .fetch_all(&app.store.app_pool)
+                .await?;
+            if !agents.iter().any(|agent| agent == "shared_default") {
+                agents.push("shared_default".to_owned());
+            }
+            let mut opted_in = std::collections::HashSet::new();
+            for agent in agents {
+                // Any agent that cannot be read makes the whole answer unknown (look at all).
+                if app
+                    .store
+                    .for_agent(&agent)
+                    .await?
+                    .repository_notices_opted_in()
+                    .await?
+                {
+                    opted_in.insert(agent);
+                }
+            }
+            Ok(Some(opted_in))
+        })
+    }
 }
 
 /// Run a workspace operation on the broker under a renewed lease.

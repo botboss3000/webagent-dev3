@@ -314,6 +314,9 @@ impl<
             let mut seen_pauses = super::components::COMPONENT_PAUSES.load(Ordering::Acquire);
             // The requester whose run the loop started last; the next pass starts after it.
             let mut last_served: Option<String> = None;
+            // C7: each account's own work as the last full pass left it (see `OwnWork`).
+            let mut own_work: std::collections::HashMap<String, OwnWork<Self>> =
+                std::collections::HashMap::new();
             loop {
                 if app.stop.is_cancelled() {
                     break;
@@ -406,7 +409,33 @@ impl<
                     // Queued runs of every account, claimed after all accounts' own work. Each
                     // account is opened in turn and let go (only queued runs keep a view).
                     let mut candidates = Vec::new();
+                    // C7: an account unchanged since its last full pass less than `OWN_WORK`
+                    // ago offers its remembered queued runs without being opened; a run its
+                    // last claim refused waits for a run to end (a slot release) instead of
+                    // being tried on every pass. Component trouble or shutoff forgets all.
+                    let releases = RELEASES.load(Ordering::Acquire);
+                    if restore_sweep {
+                        own_work.clear();
+                    }
+                    own_work.retain(|user, _| users.contains(user));
                     for user in users {
+                        let mark = app.store.contents_mark(&user);
+                        if let Some(known) = own_work.get(&user).filter(|known| known.fresh(mark)) {
+                            for queued in &known.queued {
+                                if known.refused.get(&queued.id) != Some(&releases) {
+                                    candidates.push((
+                                        queued.requester.clone(),
+                                        (
+                                            queued.view.clone(),
+                                            queued.id.clone(),
+                                            queued.run.clone(),
+                                        ),
+                                    ));
+                                }
+                            }
+                            continue;
+                        }
+                        own_work.remove(&user);
                         let user_app = match crate::send_future(app.for_user_view(&user)).await {
                             Ok(view) => view,
                             Err(error) => {
@@ -414,6 +443,10 @@ impl<
                                 continue;
                             }
                         };
+                        // Taken after opening and before reading: a write meanwhile moves it.
+                        let mark = app.store.contents_mark(&user);
+                        let mut queued_here = Vec::new();
+                        let mut complete = true;
                         progress.at(Stage::DispatchGate);
                         let _account_gate = crate::send_future(app.handles.gate.lock()).await;
                         progress.at(Stage::Commands);
@@ -428,17 +461,20 @@ impl<
                         )
                         .await
                         {
+                            complete = false;
                             tracing::warn!("Followup queue reconciliation deferred: {error}");
                         }
                         if let Err(error) =
                             crate::send_future(user_app.store.drain_message_queues()).await
                         {
+                            complete = false;
                             tracing::warn!("Message queue drain deferred: {error}");
                         }
                         progress.at(Stage::RunScan);
                         // The plain run index (no window, no decrypt) names the runs to act on.
-                        if let Ok(runs) = crate::send_future(user_app.store.scheduler_runs()).await
-                        {
+                        let runs = crate::send_future(user_app.store.scheduler_runs()).await;
+                        complete &= runs.is_ok();
+                        if let Ok(runs) = runs {
                             // The account's earliest approval expiry, stored after the pass
                             // so an account with only approval waits rests until then.
                             let mut expires: Option<u64> = None;
@@ -448,6 +484,7 @@ impl<
                                     if let Err(_) =
                                         crate::send_future(user_app.component_restore(&id)).await
                                     {
+                                        complete = false;
                                         tracing::warn!("Engine component restoration deferred");
                                     }
                                     continue;
@@ -475,6 +512,7 @@ impl<
                                 if !crate::components::available(crate::ports::AgentMetadata::root(
                                     user_app.store.records(),
                                 )) {
+                                    complete = false;
                                     if let Ok(mut run) = crate::send_future(user_app.run(&id)).await
                                     {
                                         let _ =
@@ -485,7 +523,10 @@ impl<
                                 }
                                 let mut run = match crate::send_future(user_app.run(&id)).await {
                                     Ok(r) => r,
-                                    Err(_) => continue,
+                                    Err(_) => {
+                                        complete = false;
+                                        continue;
+                                    }
                                 };
                                 // A full account starts no new run; runs already going finish.
                                 if run["calls"].as_array().is_none_or(Vec::is_empty)
@@ -505,6 +546,12 @@ impl<
                                     .as_str()
                                     .unwrap_or(user_app.store.current_user_id())
                                     .to_owned();
+                                queued_here.push(Queued {
+                                    requester: requester.clone(),
+                                    view: user_app.clone(),
+                                    id: id.clone(),
+                                    run: run.clone(),
+                                });
                                 candidates.push((requester, (user_app.clone(), id, run)));
                             }
                             // A failed reconciliation leaves the expiry due now: the account
@@ -518,8 +565,22 @@ impl<
                             ))
                             .await
                             {
+                                complete = false;
                                 tracing::warn!("Approval expiry not stored: {error}");
                             }
+                        }
+                        // Only a pass that finished every step is remembered; a deferred step
+                        // is tried again on the next pass.
+                        if complete && mark.is_some() {
+                            own_work.insert(
+                                user,
+                                OwnWork {
+                                    mark,
+                                    at: std::time::Instant::now(),
+                                    queued: queued_here,
+                                    refused: std::collections::HashMap::new(),
+                                },
+                            );
                         }
                     }
                     // C5 fair admission: queued runs start in turn over requesters, starting
@@ -608,6 +669,12 @@ impl<
                             // The requester's later runs wait behind this one (their places in
                             // line are later), so they are not tried again in this pass.
                             waiting.insert(requester_key);
+                            // Nor in later passes, until a run ends or its account changes.
+                            if let Some(known) = own_work.get_mut(
+                                crate::ports::Records::current_user_id(user_app.store.records()),
+                            ) {
+                                known.refused.insert(id.clone(), releases);
+                            }
                             continue;
                         }
                         *last_served = Some(requester_key.clone());
@@ -685,6 +752,8 @@ impl<
                             watcher.abort();
                             crate::send_future(cloned.active.lock()).await.remove(&id);
                             drop(permit);
+                            // A run slot is free: runs waiting on a refused claim try again.
+                            RELEASES.fetch_add(1, Ordering::AcqRel);
                             crate::send_future(crate::wake::notify_account(
                                 &cloned.control_dir,
                                 crate::ports::Records::current_user_id(cloned.store.records()),
@@ -746,6 +815,41 @@ pub fn fair_order<T>(items: Vec<(String, T)>, last: Option<&str>) -> Vec<(String
         if !any {
             return ordered;
         }
+    }
+}
+
+/// C7: how long an unchanged account's own work (commands, follow-ups, queue drain, approval
+/// expiries, component restores and its queued runs' readiness) is taken as it was. The same
+/// as the scheduler's slow fallback, so time-based steps (an approval expiry, a review past
+/// its deadline) wait no longer than they did when nothing woke the loop.
+const OWN_WORK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs this loop has ended (each gives back a run slot); a refused claim is tried again
+/// once this moves.
+static RELEASES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// One queued run an account offered: its requester, the account's view, id and record.
+struct Queued<V> {
+    requester: String,
+    view: V,
+    id: String,
+    run: Value,
+}
+
+/// An account's own work as a full scheduler pass left it.
+struct OwnWork<V> {
+    /// The account's `contents_mark` taken before that pass read it.
+    mark: Option<u64>,
+    at: std::time::Instant,
+    queued: Vec<Queued<V>>,
+    /// Runs whose claim was refused, with [`RELEASES`] at that pass.
+    refused: std::collections::HashMap<String, u64>,
+}
+
+impl<V> OwnWork<V> {
+    /// Still as that pass left it: nothing written since (same known mark) and recent.
+    fn fresh(&self, mark: Option<u64>) -> bool {
+        self.mark.is_some() && self.mark == mark && self.at.elapsed() < OWN_WORK
     }
 }
 

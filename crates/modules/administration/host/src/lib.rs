@@ -174,6 +174,13 @@ pub trait AdministrationHost: Sync {
     }
     /// A token cancelled when the application stops.
     fn stopping(&self) -> CancellationToken;
+    /// C7: the agents whose ability settings opt into repository notices, read from their
+    /// plain flags. `None` means unknown: every active session is looked at.
+    fn repository_notice_agents(
+        &self,
+    ) -> Pending<'_, Result<Option<std::collections::HashSet<String>>>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 /// The trusted identity block the broker checks on every request. `administrator` is the

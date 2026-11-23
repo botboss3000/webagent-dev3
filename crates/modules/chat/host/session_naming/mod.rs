@@ -288,14 +288,35 @@ pub(crate) async fn service(app: App) {
             next_recovery = now() + 60;
         }
         let mut recovered = 0;
-        if let Ok(users) = agent_loop::scanned_user_ids(&app, None).await {
-            for user in users {
+        // C7: on a hint only the accounts written since this service last finished them (and
+        // any not looked at for the fallback period); the minute's lease recovery, which is
+        // time-based, looks at every scanned account.
+        let users = if recovery {
+            agent_loop::scanned_user_ids(&app, None).await.map(|users| {
+                users
+                    .into_iter()
+                    .map(|user| {
+                        let marks = app.store.write_marks(&user);
+                        (user, marks)
+                    })
+                    .collect::<Vec<_>>()
+            })
+        } else {
+            app.store
+                .scan_user_ids_for("session_naming", Duration::from_secs(5))
+                .await
+        };
+        if let Ok(users) = users {
+            for (user, marks) in users {
                 let Some(user) = agent_loop::user_app(&app, &user).await else {
                     continue;
                 };
                 if let Ok(ids) = user.store.naming_candidates(recovery).await {
+                    // A job left for a free worker keeps the account to be looked at again.
+                    let mut finished = true;
                     for sid in ids {
                         if workers.len() >= 2 || (recovery && recovered >= 10) {
+                            finished = false;
                             break;
                         }
                         let id = format!("{}:{sid}", user.store.current_user_id());
@@ -312,6 +333,13 @@ pub(crate) async fn service(app: App) {
                         if recovery {
                             recovered += 1;
                         }
+                    }
+                    if finished {
+                        crate::store::Store::looked(
+                            "session_naming",
+                            user.store.current_user_id().to_owned(),
+                            marks,
+                        );
                     }
                 }
             }

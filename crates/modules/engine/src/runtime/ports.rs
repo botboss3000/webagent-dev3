@@ -15,6 +15,12 @@ pub trait ScopedStorage:
     fn all_user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
     /// Accounts a periodic scan must visit now; idle, unchanged accounts are left closed.
     fn scan_user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
+    /// C7: a mark of `user`'s stored contents read without opening the account (its database
+    /// file and log), equal while nothing was written or checkpointed. `None`: unknown, which
+    /// always counts as changed.
+    fn contents_mark(&self, _user: &str) -> Option<u64> {
+        None
+    }
     fn get<'a>(&'a self, key: &'a str) -> impl Future<Output = Result<Option<Value>>> + Send + 'a;
     fn put<'a>(
         &'a self,

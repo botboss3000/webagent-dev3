@@ -6254,6 +6254,35 @@ async fn single_slot_blocks_queue_without_hydration() {
     assert_eq!(app.slots.available_permits(), 1);
 }
 #[tokio::test]
+async fn a_waiting_run_starts_as_soon_as_a_slot_frees() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let slot = app.slots.clone().acquire_owned().await.unwrap();
+    let task = tokio::spawn(scheduler(app.clone()));
+    // Passes while the only run slot is taken: the run waits and its account stays unchanged,
+    // so later passes offer it from what the first pass found.
+    for _ in 0..3 {
+        crate::wake::notify(&app).await;
+        tokio::time::sleep(Duration::from_millis(120)).await;
+    }
+    assert_eq!(status(&app.run(&id).await.unwrap()), "queued");
+    // A run ends elsewhere: its slot is given back and its end sends a hint. The waiting run
+    // starts on that hint, well before the 5 s fallback pass.
+    drop(slot);
+    crate::wake::notify(&app).await;
+    let freed = std::time::Instant::now();
+    while status(&app.run(&id).await.unwrap()) == "queued" {
+        assert!(
+            freed.elapsed() < Duration::from_millis(2500),
+            "the waiting run did not start when the slot freed"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    app.stop.cancel();
+    task.await.unwrap();
+}
+#[tokio::test]
 async fn phase3_http_isolation_and_membership_revocation() {
     let (_root, app) = fixture().await;
     let account = app

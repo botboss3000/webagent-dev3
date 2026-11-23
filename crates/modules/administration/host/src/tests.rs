@@ -38,6 +38,8 @@ struct Fake {
     checkout: bool,
     broker_reply: fn(&str, &Value) -> Value,
     events: Mutex<Vec<(String, String)>>,
+    /// The agents opted into repository notices (`None`: unknown).
+    notice_agents: Option<std::collections::HashSet<String>>,
 }
 
 impl Fake {
@@ -53,6 +55,7 @@ impl Fake {
             checkout: false,
             broker_reply: |_, _| json!({"status":"success","output":{"status":"success"}}),
             events: Mutex::new(Vec::new()),
+            notice_agents: None,
         }
     }
     fn sent(&self) -> Vec<Sent> {
@@ -205,6 +208,11 @@ impl AdministrationHost for Fake {
     }
     fn stopping(&self) -> CancellationToken {
         CancellationToken::new()
+    }
+    fn repository_notice_agents(
+        &self,
+    ) -> Pending<'_, Result<Option<std::collections::HashSet<String>>>> {
+        Box::pin(async { Ok(self.notice_agents.clone()) })
     }
 }
 
@@ -401,6 +409,48 @@ async fn notices_follow_current_tool_access() {
     assert_eq!(review.0.as_u16(), 403);
     let missing = notices::read(&host, "33333333-3333-4333-8333-333333333333").await;
     assert_eq!(missing.unwrap_err().0.as_u16(), 404);
+}
+
+#[tokio::test]
+async fn repository_notices_look_only_at_sessions_of_opted_in_agents() {
+    let dir = root();
+    let mut host = Fake::new(dir.path()).await;
+    host.settings = json!({"git_control":{"notify_repo_changes":true}});
+    host.store
+        .put(
+            &format!("session:{SID}"),
+            &json!({"id":SID,"status":"active","agent_id":"shared_default","created_at":1}),
+        )
+        .await
+        .unwrap();
+    let watched = |host: &Fake| {
+        host.sent()
+            .iter()
+            .filter(|sent| sent.name == "administrator_git_watch")
+            .count()
+    };
+    host.notice_agents = Some(std::collections::HashSet::new());
+    watch::repository_notices(&host).await.unwrap();
+    assert_eq!(watched(&host), 0, "no agent opted in: nothing is watched");
+    host.notice_agents = Some(["other_agent".to_owned()].into());
+    watch::repository_notices(&host).await.unwrap();
+    assert_eq!(
+        watched(&host),
+        0,
+        "another agent's opt-in does not cover this session"
+    );
+    host.notice_agents = Some(["shared_default".to_owned()].into());
+    watch::repository_notices(&host).await.unwrap();
+    assert_eq!(watched(&host), 1);
+    // Unknown (the plain flags could not be read): every active session, as before.
+    host.notice_agents = None;
+    watch::repository_notices(&host).await.unwrap();
+    assert_eq!(watched(&host), 2);
+    // An opted-in agent whose Git tool needs approval is still not watched.
+    host.notice_agents = Some(["shared_default".to_owned()].into());
+    host.permission = Permission::Ask;
+    watch::repository_notices(&host).await.unwrap();
+    assert_eq!(watched(&host), 2);
 }
 
 #[tokio::test]

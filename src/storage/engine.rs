@@ -337,6 +337,13 @@ impl webagent_engine::runtime::ports::ScopedStorage for Store {
     fn scan_user_ids(&self) -> impl std::future::Future<Output = Result<Vec<String>>> + Send {
         Store::scan_user_ids(self)
     }
+    fn contents_mark(&self, user: &str) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let marks = self.write_marks(user);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        marks.hash(&mut hasher);
+        Some(hasher.finish())
+    }
     fn get<'a>(
         &'a self,
         key: &'a str,

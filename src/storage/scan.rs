@@ -7,9 +7,13 @@
 //! `app.db` (`account_due`: approval expiry, the automation schedule) bring an account back
 //! when they pass. An account not written since it was found idle is skipped; one written
 //! since stays visible to every scanner for a short window. As the fallback for anything
-//! missed, every idle account is evaluated again once every 10 minutes, each at its own point
-//! in the interval so the accounts never come back together; it is visited only if that finds
-//! work. One result is shared by all of a process's scanners for up to a second, and
+//! missed, every idle account is looked at again once every 10 minutes, each at its own point
+//! in the interval so the accounts never come back together: it is opened and evaluated only
+//! if its database file, its write-ahead log or its stored deadline kinds changed since it was
+//! found idle (whether it has work is decided by its contents and those kinds alone, and any
+//! write changes one of the two files, a checkpoint included), and visited only if that finds
+//! work. An account found busy stays busy without being opened again until one of those
+//! changes. One result is shared by all of a process's scanners for up to a second, and
 //! recomputed after any wake hint.
 use super::Store;
 use anyhow::{anyhow, Result};
@@ -135,8 +139,27 @@ fn record_pending(key: &str, value: &Value) -> Need {
 /// is absent or empty. Any commit changes it; a checkpoint only removes or empties it.
 pub(crate) type WalMark = Option<(u64, SystemTime)>;
 
+/// An account's database file and write-ahead log as last seen. Any commit changes the log
+/// and any checkpoint the file, so equal marks mean unchanged contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct WriteMarks {
+    pub(crate) wal: WalMark,
+    pub(crate) db: WalMark,
+}
+
+/// The deadline kinds stored for an account, as flags (they change what counts as work).
+fn kind_flags(kinds: Option<&HashSet<&str>>) -> u8 {
+    kinds.map_or(0, |kinds| {
+        u8::from(kinds.contains(due::APPROVAL)) | (u8::from(kinds.contains(due::AUTOMATION)) << 1)
+    })
+}
+
 struct Idle {
     mark: WalMark,
+    /// C7: the database file and the deadline kinds when the account was found idle; while
+    /// both and the log are unchanged its recheck answers "still idle" without opening it.
+    db: WalMark,
+    kinds: u8,
     recheck_at: Instant,
     /// A write that left no work keeps the account visible until then.
     written_until: Option<Instant>,
@@ -154,7 +177,15 @@ enum Decision {
 }
 
 static IDLE: LazyLock<Mutex<HashMap<String, Idle>>> = LazyLock::new(Default::default);
+/// C7: accounts found to have work, with their marks and deadline kinds at that evaluation.
+/// While all three are unchanged the account still has work and is visited without being
+/// opened again. A busy account is never skipped, so a stale entry costs a visit, never work.
+static BUSY: LazyLock<Mutex<HashMap<String, (WriteMarks, u8)>>> = LazyLock::new(Default::default);
 static SEEN: LazyLock<Mutex<HashMap<(&'static str, String), WalMark>>> =
+    LazyLock::new(Default::default);
+/// C7: when each hint-driven scanner last finished each account, with the account's marks
+/// taken before it looked.
+static LOOKED: LazyLock<Mutex<HashMap<(&'static str, String), (WriteMarks, Instant)>>> =
     LazyLock::new(Default::default);
 
 /// The account list of one state root and the `(count, max rowid)` of `user_accounts` it was
@@ -252,15 +283,27 @@ fn moved(recorded: &WalMark, current: &WalMark) -> bool {
 
 impl Store {
     pub(crate) fn wal_mark(&self, user: &str) -> WalMark {
-        let wal = self
+        self.file_mark(user, "db-wal")
+    }
+
+    fn file_mark(&self, user: &str, suffix: &str) -> WalMark {
+        let file = self
             .root
             .join("user_data")
             .join(user)
-            .join(format!("{user}.db-wal"));
-        std::fs::metadata(wal)
+            .join(format!("{user}.{suffix}"));
+        std::fs::metadata(file)
             .ok()
             .filter(|m| m.len() > 0)
             .and_then(|m| Some((m.len(), m.modified().ok()?)))
+    }
+
+    /// The account's database file and log marks now (no database access).
+    pub(crate) fn write_marks(&self, user: &str) -> WriteMarks {
+        WriteMarks {
+            wal: self.wal_mark(user),
+            db: self.file_mark(user, "db"),
+        }
     }
 
     /// Every account id, read again only when `user_accounts` gained a row (one counting
@@ -371,11 +414,45 @@ impl Store {
                 visits.push(user);
                 continue;
             }
-            let decision = decide(
-                IDLE.lock().map_err(registry_error)?.get_mut(&user),
-                |mark| moved(mark, &self.wal_mark(&user)),
-                now,
-            );
+            let flags = kind_flags(kinds.get(user.as_str()));
+            let marks = self.write_marks(&user);
+            if BUSY
+                .lock()
+                .map_err(registry_error)?
+                .get(&user)
+                .is_some_and(|busy| *busy == (marks, flags))
+            {
+                visits.push(user);
+                continue;
+            }
+            let decision = {
+                let mut idle = IDLE.lock().map_err(registry_error)?;
+                let entry = idle.get_mut(&user);
+                match decide(entry, |mark| moved(mark, &marks.wal), now) {
+                    // The recheck of an account whose file, log and deadline kinds are all as
+                    // they were when it was found idle: still idle, without opening it.
+                    Decision::Evaluate {
+                        visit: false,
+                        written: false,
+                    } if idle
+                        .get(&user)
+                        .is_some_and(|i| i.db == marks.db && i.kinds == flags) =>
+                    {
+                        if let Some(entry) = idle.get_mut(&user) {
+                            entry.recheck_at = next_recheck(&user, now, unix_now());
+                        }
+                        Decision::Skip
+                    }
+                    // Changed deadline kinds change what counts as work: evaluate now.
+                    Decision::Skip if idle.get(&user).is_some_and(|i| i.kinds != flags) => {
+                        Decision::Evaluate {
+                            visit: false,
+                            written: false,
+                        }
+                    }
+                    decision => decision,
+                }
+            };
             let visit = match decision {
                 Decision::Skip => false,
                 Decision::Visit => true,
@@ -383,20 +460,31 @@ impl Store {
                     let account = self.for_user(&user).await?;
                     // Taken after opening (its schema writes are not "new") and before reading,
                     // so a write during the read moves the mark and is evaluated next time.
-                    let mark = self.wal_mark(&user);
+                    let marks = self.write_marks(&user);
+                    let mark = marks.wal;
                     let scheduled = kinds.get(user.as_str()).unwrap_or(&none);
                     // An unreadable account counts as busy rather than silently skipped.
-                    let pending = account.pending_work(scheduled).await.unwrap_or(true);
+                    let pending = account.pending_work(scheduled).await;
                     let mut idle = IDLE.lock().map_err(registry_error)?;
-                    if pending {
+                    let mut busy = BUSY.lock().map_err(registry_error)?;
+                    if pending.as_ref().map_or(true, |pending| *pending) {
                         idle.remove(&user);
+                        // Only a read that succeeded is remembered; a failed one is tried again.
+                        if pending.is_ok() {
+                            busy.insert(user.clone(), (marks, flags));
+                        } else {
+                            busy.remove(&user);
+                        }
                         true
                     } else {
+                        busy.remove(&user);
                         let recheck_at = next_recheck(&user, now, unix_now());
                         idle.insert(
                             user.clone(),
                             Idle {
                                 mark,
+                                db: marks.db,
+                                kinds: flags,
                                 recheck_at,
                                 // Every scanner sees a written account once, whichever
                                 // of them happened to evaluate it.
@@ -413,6 +501,37 @@ impl Store {
         }
         let deadlines = rows.into_iter().map(|(user, _, at)| (user, at)).collect();
         Ok((visits, deadlines))
+    }
+
+    /// C7: the shared scan's accounts `scanner` must look at now, each with its marks: those
+    /// written or checkpointed since the scanner last finished them ([`Store::looked`]), and
+    /// any it finished `fallback` ago or more (its own time-based work). A wake hint then costs
+    /// each scanner a visit of the accounts that changed, not of every busy account.
+    pub(crate) async fn scan_user_ids_for(
+        &self,
+        scanner: &'static str,
+        fallback: Duration,
+    ) -> Result<Vec<(String, WriteMarks)>> {
+        let users = self.scan_user_ids().await?;
+        let looked = LOOKED.lock().map_err(registry_error)?;
+        Ok(users
+            .into_iter()
+            .filter_map(|user| {
+                let marks = self.write_marks(&user);
+                let unchanged = looked
+                    .get(&(scanner, user.clone()))
+                    .is_some_and(|(seen, at)| *seen == marks && at.elapsed() < fallback);
+                (!unchanged).then_some((user, marks))
+            })
+            .collect())
+    }
+
+    /// Record that `scanner` finished `user` as of `marks` (from [`Store::scan_user_ids_for`]).
+    /// Call it only when nothing was left for later (a worker limit reached, a step deferred).
+    pub(crate) fn looked(scanner: &'static str, user: String, marks: WriteMarks) {
+        if let Ok(mut looked) = LOOKED.lock() {
+            looked.insert((scanner, user), (marks, Instant::now()));
+        }
     }
 
     /// Accounts written since `scan` last applied them, each with its log mark now. A caller
@@ -454,6 +573,8 @@ mod tests {
     fn idle(mark: WalMark, recheck_at: Instant) -> Idle {
         Idle {
             mark,
+            db: None,
+            kinds: 0,
             recheck_at,
             written_until: None,
         }
@@ -723,6 +844,78 @@ mod tests {
         assert!(store.account_ids().await.unwrap().contains(&id));
     }
 
+    /// Let go of the account's database (as the connected-account bound or the idle timeout
+    /// does) and bring its recheck round now.
+    async fn close_and_recheck(store: &Store, id: &str) {
+        drop(store.user_states.write().await.remove(id));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if let Some(entry) = IDLE.lock().unwrap().get_mut(id) {
+            entry.recheck_at = Instant::now();
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_idle_account_is_rechecked_without_opening_it() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let guest = store.create_guest_account().await.unwrap();
+        let id = guest["user_id"].as_str().unwrap().to_owned();
+        assert!(store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        assert!(!store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        // The first close may checkpoint the account's set-up into its file, which counts as
+        // a change; after that an unchanged account is answered without opening it.
+        close_and_recheck(&store, &id).await;
+        assert!(!store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        close_and_recheck(&store, &id).await;
+        assert!(!store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        assert!(
+            !store.user_states.read().await.contains_key(&id),
+            "an unchanged idle account is not opened for its recheck"
+        );
+        // Work written meanwhile is found at once (the log moved) ...
+        let user = store.for_user(&id).await.unwrap();
+        user.put("session_naming:s1", &json!({"session_id":"s1"}))
+            .await
+            .unwrap();
+        assert!(store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        // ... and a busy account stays visited without being evaluated again.
+        assert!(BUSY.lock().unwrap().contains_key(&id));
+        assert!(store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        user.delete("session_naming:s1").await.unwrap();
+        assert!(store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        tokio::time::sleep(WRITTEN_WINDOW + Duration::from_millis(50)).await;
+        assert!(!store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        assert!(!BUSY.lock().unwrap().contains_key(&id));
+    }
+
+    #[tokio::test]
+    async fn a_write_checkpointed_before_the_scan_is_found_at_the_recheck() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let guest = store.create_guest_account().await.unwrap();
+        let id = guest["user_id"].as_str().unwrap().to_owned();
+        store.scan_user_ids_now().await.unwrap();
+        close_and_recheck(&store, &id).await;
+        store.scan_user_ids_now().await.unwrap();
+        // Work written and checkpointed into the file between two scans (its log is gone, so
+        // the per-scan log check cannot see it) and no hint: the recheck sees the file change.
+        let user = store.for_user(&id).await.unwrap();
+        user.put("session_naming:s1", &json!({"session_id":"s1"}))
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&user.pool)
+            .await
+            .unwrap();
+        drop(user);
+        if let Some(entry) = IDLE.lock().unwrap().get_mut(&id) {
+            entry.recheck_at = Instant::now() + Duration::from_secs(RECHECK);
+        }
+        assert!(!store.scan_user_ids_now().await.unwrap().0.contains(&id));
+        close_and_recheck(&store, &id).await;
+        assert!(store.scan_user_ids_now().await.unwrap().0.contains(&id));
+    }
+
     #[tokio::test]
     async fn shared_scan_sees_new_work_after_a_wake_hint() {
         let share = Duration::from_secs(60);
@@ -733,7 +926,13 @@ mod tests {
         assert!(store.shared_scan(share).await.unwrap().contains(&id));
         store.scan_user_ids_now().await.unwrap();
         assert!(!store.scan_user_ids_now().await.unwrap().0.contains(&id));
-        // A shared result taken while the account rests.
+        // A shared result taken while the account rests (taken afresh: the first one above is
+        // still shared, and only another test's scan used to replace it).
+        assert!(!store
+            .shared_scan(Duration::ZERO)
+            .await
+            .unwrap()
+            .contains(&id));
         assert!(!store.shared_scan(share).await.unwrap().contains(&id));
         let user = store.for_user(&id).await.unwrap();
         user.put("session_naming:s1", &json!({"session_id":"s1"}))

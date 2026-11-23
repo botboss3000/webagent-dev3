@@ -87,24 +87,21 @@ impl Store {
             }
         }
     }
-    /// Bytes in the private browser folders and Sandbox ability folders of this user's
-    /// sessions, as the worker publishes them. The rest of `/workspaces` is not counted:
-    /// only administrator app-development tools write there, and that work is not the
-    /// user's own storage.
-    async fn worker_used(&self) -> Result<u64> {
-        Ok(self
-            .folder_bytes()
-            .await?
-            .values()
-            .fold(0, |total, bytes| total.saturating_add(*bytes)))
-    }
     /// Bytes of each of this user's sessions' browser and Sandbox folders, as the worker
-    /// publishes them.
+    /// publishes them. The rest of `/workspaces` is not counted: only administrator
+    /// app-development tools write there, and that work is not the user's own storage.
     pub(crate) async fn folder_bytes(&self) -> Result<std::collections::HashMap<String, u64>> {
-        let ids: Vec<String> =
+        Self::folder_bytes_of(self.session_keys().await?).await
+    }
+    async fn session_keys(&self) -> Result<Vec<String>> {
+        Ok(
             sqlx::query_scalar("SELECT key FROM docs WHERE key LIKE 'session:%'")
                 .fetch_all(&self.pool)
-                .await?;
+                .await?,
+        )
+    }
+    /// Bytes of the given sessions' (`session:<id>` keys) folders, from the worker's files.
+    async fn folder_bytes_of(ids: Vec<String>) -> Result<std::collections::HashMap<String, u64>> {
         let published = |variable: &str, file: &str| {
             std::env::var_os(variable).map_or_else(
                 || {
@@ -141,25 +138,43 @@ impl Store {
     /// Bytes this user stores: the database and its journal, attachment files, browser
     /// folders, Sandbox folders and saved UI elements.
     pub(crate) async fn storage_used(&self) -> Result<u64> {
+        let (files, ids) = self.storage_inputs().await?;
+        Self::storage_used_from(&self.root, &self.user_id, files, ids).await
+    }
+    /// C7: what [`Self::storage_used`] reads from the account database: the attachment
+    /// quota's bytes and the session keys whose folders count.
+    pub(crate) async fn storage_inputs(&self) -> Result<(u64, Vec<String>)> {
         let files = self
             .get(webagent_files::QUOTA_KEY)
             .await?
             .and_then(|quota| quota["bytes"].as_u64())
             .unwrap_or(0);
-        let dir = self.root.join("user_data").join(&self.user_id);
+        Ok((files, self.session_keys().await?))
+    }
+    /// [`Self::storage_used`] from inputs read earlier and the files on disk; reads no
+    /// database, so the storage-limit pass can check an unchanged account without opening it.
+    pub(crate) async fn storage_used_from(
+        root: &std::path::Path,
+        user: &str,
+        files: u64,
+        ids: Vec<String>,
+    ) -> Result<u64> {
+        let dir = root.join("user_data").join(user);
         let mut database = 0u64;
         for suffix in ["db", "db-wal"] {
-            if let Ok(meta) =
-                tokio::fs::metadata(dir.join(format!("{}.{suffix}", self.user_id))).await
-            {
+            if let Ok(meta) = tokio::fs::metadata(dir.join(format!("{user}.{suffix}"))).await {
                 database = database.saturating_add(meta.len());
             }
         }
+        let folders = Self::folder_bytes_of(ids)
+            .await?
+            .values()
+            .fold(0u64, |total, bytes| total.saturating_add(*bytes));
         Ok(files
             .saturating_add(database)
-            .saturating_add(self.worker_used().await?)
+            .saturating_add(folders)
             .saturating_add({
-                let (root, user) = (self.root.clone(), self.user_id.clone());
+                let (root, user) = (root.to_path_buf(), user.to_owned());
                 tokio::task::spawn_blocking(move || {
                     webagent_native_tools::sandbox::elements::user_bytes(&root, &user)
                 })

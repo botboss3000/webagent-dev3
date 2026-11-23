@@ -493,8 +493,39 @@ pub(crate) async fn policy_put(app: &App, body: &Value) -> Api {
 
 /// Check every account's usage: every ten minutes, or every minute once past the critical
 /// share, and right after start.
+/// C7: an account the last check found below every level, with its database marks then and
+/// the usage inputs read from its database. While the marks are unchanged those inputs are
+/// too, so its check needs only the files on disk and the account's level row.
+struct Quiet {
+    marks: crate::store::WriteMarks,
+    files: u64,
+    ids: Vec<String>,
+}
+
+/// Whether a quiet account is still below every level (`None`: unknown, open and check it).
+async fn still_below(app: &App, user: &str, quiet: &Quiet) -> Option<bool> {
+    let account = app.store.account_by_id(user).await.ok()??;
+    let tier = crate::access::Principal::from_account(&account)
+        .ok()?
+        .tier_id;
+    let policy = live_policy().ok()?;
+    let Some(limit) = policy.user_limit(&tier) else {
+        return Some(true);
+    };
+    let used = crate::store::Store::storage_used_from(
+        &app.store.root,
+        user,
+        quiet.files,
+        quiet.ids.clone(),
+    )
+    .await
+    .ok()?;
+    Some(percent(used, limit) < u64::from(policy.warning_percent))
+}
+
 pub(crate) async fn service(app: App) {
     let mut checked: HashMap<String, u64> = HashMap::new();
+    let mut quiet: HashMap<String, Quiet> = HashMap::new();
     loop {
         // The cached account list: one counting statement unless an account was added.
         if let Ok(users) = app.store.account_ids().await {
@@ -512,9 +543,25 @@ pub(crate) async fn service(app: App) {
                         continue;
                     }
                 }
+                // C7: unchanged since it was found below every level, and still below them
+                // by its files on disk: checked without opening its database.
+                if known_level(&user) == Some(false) {
+                    if let Some(entry) = quiet
+                        .get(&user)
+                        .filter(|entry| entry.marks == app.store.write_marks(&user))
+                    {
+                        if still_below(&app, &user, entry).await == Some(true) {
+                            checked.insert(user.clone(), now());
+                            continue;
+                        }
+                    }
+                }
+                quiet.remove(&user);
                 let Ok(store) = app.store.for_user(&user).await else {
                     continue;
                 };
+                // Taken after opening and before reading: a write meanwhile moves them.
+                let marks = app.store.write_marks(&user);
                 let critical = store
                     .get(STATE_KEY)
                     .await
@@ -538,6 +585,10 @@ pub(crate) async fn service(app: App) {
                 scoped.store = store;
                 if evaluate(&scoped, true).await.is_err() {
                     tracing::warn!("Storage limit check deferred");
+                } else if known_level(&user) == Some(false) {
+                    if let Ok((files, ids)) = scoped.store.storage_inputs().await {
+                        quiet.insert(user.clone(), Quiet { marks, files, ids });
+                    }
                 }
             }
         }
