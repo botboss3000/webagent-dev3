@@ -649,6 +649,24 @@ async fn each_credential_kind_has_its_refused_and_allowed_side() {
         browser("GET", "/api/v3/admin/events", Value::Null).await,
         StatusCode::FORBIDDEN
     );
+    // It reads only routes marked readable (credential_routes.rs): never stored sign-ins or
+    // credentials, though the same person's own sign-in reads them.
+    for uri in [
+        "/api/v3/auth/sessions",
+        "/api/v3/browser/sites",
+        "/api/v3/browser/devices",
+    ] {
+        assert_eq!(
+            browser("GET", uri, Value::Null).await,
+            StatusCode::FORBIDDEN,
+            "{uri}"
+        );
+        assert_eq!(
+            call(&app, "GET", uri, &person, Value::Null).await,
+            StatusCode::OK,
+            "{uri}"
+        );
+    }
     // A sign-in made before records had a kind is recognised by its label.
     let legacy = uuid();
     app.store

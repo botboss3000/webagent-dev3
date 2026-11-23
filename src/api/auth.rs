@@ -184,6 +184,21 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
     if let Some(refused) = identity.kind.refuses_method(method.as_str()) {
         return ApiError(StatusCode::FORBIDDEN, refused.into()).into_response();
     }
+    // An agent browser reads only the routes marked readable (credential_routes.rs).
+    if identity.kind == access::identity::CredentialKind::AgentBrowser
+        && !super::credential_routes::agent_browser_may_read(
+            request
+                .extensions()
+                .get::<axum::extract::MatchedPath>()
+                .map(|matched| matched.as_str()),
+        )
+    {
+        return ApiError(
+            StatusCode::FORBIDDEN,
+            "This sign-in cannot read this page".into(),
+        )
+        .into_response();
+    }
     // A test account only through its test sign-in, and that sign-in only while the
     // administrator run that made it is still going (checked on every request).
     if !identity.kind_matches_account()

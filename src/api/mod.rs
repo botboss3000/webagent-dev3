@@ -8,6 +8,7 @@ mod auth;
 pub(crate) mod chat_sessions;
 #[path = "../../crates/modules/chat/host/api/conversation_history.rs"]
 pub(crate) mod conversation_history;
+pub(crate) mod credential_routes;
 pub(crate) mod embed;
 pub(crate) mod sessions;
 pub(crate) use conversation_history::*;

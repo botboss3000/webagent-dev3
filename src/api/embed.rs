@@ -23,6 +23,13 @@ struct Config {
 fn denied() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, "Embedded chat unavailable".into())
 }
+/// A route that is not on the widget allowlist (`credential_routes.rs`).
+fn route_refused() -> ApiError {
+    ApiError(
+        StatusCode::FORBIDDEN,
+        "Not available in the embedded chat".into(),
+    )
+}
 fn unauthorized() -> ApiError {
     ApiError(
         StatusCode::UNAUTHORIZED,
@@ -563,44 +570,12 @@ pub(crate) async fn credential_valid(app: &App, doc: &Value) -> bool {
             .ok()
             .is_some_and(|p| registration::page_allowed(&p, "main", "chat", &principal))
 }
-fn scope_path(path: &str) -> bool {
-    let path = path.strip_prefix("/api/v3").unwrap_or(path);
-    matches!(
-        path,
-        "/auth/me"
-            | "/auth/ui-config"
-            | "/sessions"
-            | "/sessions/search"
-            | "/sessions/stats"
-            | "/user/status"
-            | "/chat-invitations/redeem"
-    ) || path.starts_with("/sessions/")
-        || path.starts_with("/runs/")
-        || path.starts_with("/approvals/")
-        || wiki_path(path)
-}
-/// The Wiki reader opens articles the agent linked; the visitor's own access applies.
-fn wiki_path(path: &str) -> bool {
-    path == "/wiki" || path.starts_with("/wiki/")
-}
 /// Widget credentials never carry administrator power (AUTH-9): one refusal for the whole class.
 fn administrators_refused() -> ApiError {
     ApiError(
         StatusCode::FORBIDDEN,
         "Administrators use the app, not the embedded chat".into(),
     )
-}
-/// Session routes that change settings or permissions; a widget may read them, never change
-/// them. Answering the visitor's own approval prompts stays allowed.
-fn changes_settings(path: &str) -> bool {
-    let parts: Vec<_> = path.trim_matches('/').split('/').collect();
-    match parts.as_slice() {
-        ["sessions", _, "model" | "mode" | "abilities" | "messaging-routes" | "build-tasks", ..] => {
-            true
-        }
-        ["sessions", _, "actions", _, "resolve"] => true,
-        _ => false,
-    }
 }
 async fn bound_run_session(
     app: &App,
@@ -652,22 +627,9 @@ async fn scope_request(
         .strip_prefix("/api/v3")
         .unwrap_or(request.uri().path())
         .to_owned();
-    // The panel reads the bound agent's privacy mode before a widget's first message.
-    let summary = path == format!("/agents/{agent}/access-summary");
-    if !(scope_path(&path) || summary)
-        || path.contains("/promotions")
-        || path.ends_with("/source-review")
-        || path.ends_with("/state-inspect")
-        // Embedded chats only read the Wiki; changes go through the agent's tools.
-        || (wiki_path(&path) && request.method() != axum::http::Method::GET)
-        || (changes_settings(&path)
-            && !matches!(
-                *request.method(),
-                axum::http::Method::GET | axum::http::Method::HEAD
-            ))
-        // Previews and administrator views are never for widgets, not even to read.
-        || path.split('/').any(|part| part == "ui-preview" || part == "administrator")
-    {
+    // The route itself was checked against the widget allowlist (`credential_routes`).
+    // The only agent route on it is the panel's read of the bound agent's privacy mode.
+    if path.starts_with("/agents/") && path != format!("/agents/{agent}/access-summary") {
         return Err(denied());
     }
     // A widget's credential remains bound to one agent, even when the canonical
@@ -694,25 +656,6 @@ async fn scope_request(
         if access.agent_id != agent {
             return Err(denied());
         }
-    }
-    if path == "/chat-invitations/redeem" {
-        let body = std::mem::take(request.body_mut());
-        let bytes = axum::body::to_bytes(body, 2 * 1024 * 1024)
-            .await
-            .map_err(|_| bad("Invalid invitation request"))?;
-        let value: Value =
-            serde_json::from_slice(&bytes).map_err(|_| bad("Invalid invitation request"))?;
-        let token = value["token"].as_str().ok_or_else(denied)?;
-        let sid = app
-            .store
-            .shared_invite_session_for(token, actor)
-            .await?
-            .ok_or_else(denied)?;
-        let directory = app.store.shared_directory(&sid).await?.ok_or_else(denied)?;
-        if directory["agent_id"] != agent {
-            return Err(denied());
-        }
-        *request.body_mut() = axum::body::Body::from(bytes);
     }
     if path == "/sessions" && request.method() == axum::http::Method::POST {
         let body = std::mem::take(request.body_mut());
@@ -743,6 +686,14 @@ pub(crate) async fn bearer(app: &App, request: &mut Request) -> std::result::Res
     let mut doc = app.store.get(&auth_key).await?.ok_or_else(unauthorized)?;
     if !credential_valid(app, &doc).await {
         return Err(unauthorized());
+    }
+    // Default deny: only the routes the embedded chat calls (credential_routes.rs).
+    let matched = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|matched| matched.as_str());
+    if !super::credential_routes::widget_may(request.method(), matched) {
+        return Err(route_refused());
     }
     let user = doc["user_id"].as_str().ok_or_else(unauthorized)?.to_owned();
     let mut caller = app.clone();
@@ -806,32 +757,6 @@ mod tests {
             "javascript:alert(1)",
         ] {
             assert!(!origin_valid(value), "{value}");
-        }
-    }
-    #[test]
-    fn embed_is_chat_scoped() {
-        for p in [
-            "/api/v3/sessions",
-            "/sessions/a/events",
-            "/runs/a/cancel",
-            "/approvals/a/decision",
-            "/auth/me",
-            "/api/v3/wiki/articles/lessons",
-            "/wiki/search",
-        ] {
-            assert!(scope_path(p));
-        }
-        for p in [
-            "/admin/access",
-            "/agents/a/model",
-            "/auth/logout",
-            "/models/me/catalog",
-            "/messages",
-            "/sessions-other",
-            "/wikis",
-            "/browser/link-code",
-        ] {
-            assert!(!scope_path(p));
         }
     }
     #[tokio::test]
@@ -1107,7 +1032,7 @@ mod tests {
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::OK
+            StatusCode::FORBIDDEN
         );
         config_put(State(app.clone()),Extension(admin.clone()),Path("shared_default".into()),Json(json!({"expected_revision":1,"config":{"enabled":false,"allowed_origins":["https://example.com"]}}))).await.unwrap();
         assert_eq!(
@@ -1212,7 +1137,7 @@ mod tests {
             .unwrap();
         let me = || {
             Request::builder()
-                .uri("/api/v3/auth/me")
+                .uri("/api/v3/user/status")
                 .header("authorization", format!("Bearer {token}"))
                 .body(axum::body::Body::empty())
                 .unwrap()
@@ -1303,7 +1228,7 @@ mod tests {
             async move { router(app).oneshot(request).await.unwrap().status() }
         };
         assert_eq!(
-            status(send("GET", "/api/v3/auth/me".into())).await,
+            status(send("GET", "/api/v3/user/status".into())).await,
             StatusCode::OK
         );
         let sid = uuid();
@@ -1353,12 +1278,7 @@ mod tests {
                 .body(axum::body::Body::empty())
                 .unwrap()
         };
-        let routes = [
-            "/api/v3/auth/me",
-            "/api/v3/wiki",
-            "/api/v3/sessions",
-            "/api/v3/user/status",
-        ];
+        let routes = ["/api/v3/sessions", "/api/v3/user/status"];
         for path in routes {
             assert_eq!(
                 router(app.clone())
@@ -1658,38 +1578,6 @@ mod shared_scope_tests {
             .body(axum::body::Body::empty())
             .unwrap();
         assert!(scope_request(&outsider, &doc, &mut request).await.is_err());
-        let invite = app
-            .store
-            .shared_invite_issue("widget-shared", "admin", "widget-invite", 86400)
-            .await
-            .unwrap();
-        let mut request = Request::builder()
-            .method("POST")
-            .uri("/api/v3/chat-invitations/redeem")
-            .body(axum::body::Body::from(
-                json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string(),
-            ))
-            .unwrap();
-        assert!(scope_request(&caller, &doc, &mut request).await.is_ok());
-        let retained = axum::body::to_bytes(request.into_body(), 1024)
-            .await
-            .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Value>(&retained).unwrap()["token"],
-            invite["token"]
-        );
-        let mut request = Request::builder()
-            .method("POST")
-            .uri("/api/v3/chat-invitations/redeem")
-            .body(axum::body::Body::from(
-                json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string(),
-            ))
-            .unwrap();
-        assert!(
-            scope_request(&caller, &json!({"agent_id":"another-agent"}), &mut request)
-                .await
-                .is_err()
-        );
         for (path, ok) in [
             ("/api/v3/agents/shared_default/access-summary", true),
             ("/api/v3/agents/another-agent/access-summary", false),
@@ -1704,6 +1592,139 @@ mod shared_scope_tests {
                 ok,
                 "{path}"
             );
+        }
+    }
+    /// The widget allowlist is enforced from the matched route before any handler runs: every
+    /// registered route and method off the list is refused, every one on it passes the route
+    /// check, and a disabled or unapproved guest is refused on every listed route.
+    #[tokio::test]
+    async fn widget_credentials_reach_only_allowlisted_routes() {
+        use crate::api::credential_routes::{tests::registered, widget_may, ROUTES};
+        use crate::api::router;
+        use tower::ServiceExt;
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        app.store.set_registration_policy("open").unwrap();
+        config_put(State(app.clone()),Extension(json!({"_user_id":"admin"})),Path("shared_default".into()),Json(json!({"expected_revision":0,"config":{"enabled":true,"guest_access":true,"allowed_origins":["https://example.com"]}}))).await.unwrap();
+        let issued = guest(
+            State(app.clone()),
+            Path("shared_default".into()),
+            None,
+            HeaderMap::new(),
+            Json(json!({"origin":"https://example.com"})),
+        )
+        .await
+        .unwrap()
+        .0;
+        let token = issued["token"].as_str().unwrap().to_owned();
+        let user = issued["user"]["user_id"].as_str().unwrap().to_owned();
+        // `{id}` → a fixture value; a run action must name a real action.
+        let concrete = |pattern: &str| {
+            pattern
+                .split('/')
+                .map(|part| match part {
+                    "{action}" => "cancel",
+                    part if part.starts_with('{') => "fixture-id",
+                    part => part,
+                })
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        let call = |method: &str, path: &str| {
+            let app = app.clone();
+            let request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from("{}"))
+                .unwrap();
+            async move { router(app).oneshot(request).await.unwrap() }
+        };
+        let route_refused = |response: axum::response::Response| async move {
+            if response.status() != StatusCode::FORBIDDEN {
+                return false;
+            }
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&body).contains("Not available in the embedded chat")
+        };
+        // Refused side: every signed-in route and registered method that is not on the list.
+        let mut refused = 0;
+        for (path, (methods, signed)) in registered() {
+            for method in methods.iter().filter(|_| signed) {
+                let method = axum::http::Method::from_bytes(method.as_bytes()).unwrap();
+                if widget_may(&method, Some(&path)) {
+                    continue;
+                }
+                let response = call(method.as_str(), &concrete(&path)).await;
+                assert!(
+                    route_refused(response).await,
+                    "{method} {path} was not refused"
+                );
+                refused += 1;
+            }
+        }
+        assert!(refused > 300, "only {refused} routes were tried");
+        for (method, path) in [("POST", "/api/v3/feedback"), ("GET", "/api/v3/auth/me")] {
+            assert!(
+                route_refused(call(method, path).await).await,
+                "{method} {path}"
+            );
+        }
+        // Allowed side: every listed route and method passes the route check (the handler or
+        // the agent binding may still answer for its own reasons), and the basics succeed.
+        let listed: Vec<(String, String)> = ROUTES
+            .iter()
+            .flat_map(|route| {
+                route
+                    .widget_methods()
+                    .map(move |method| (method.to_owned(), concrete(route.path)))
+            })
+            .collect();
+        assert_eq!(listed.len(), 34);
+        for (method, path) in &listed {
+            let response = call(method, path).await;
+            assert_ne!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {path}"
+            );
+            assert!(
+                !route_refused(response).await,
+                "{method} {path} was refused"
+            );
+        }
+        for (method, path) in [
+            ("GET", "/api/v3/user/status"),
+            ("GET", "/api/v3/sessions"),
+            ("GET", "/api/v3/agents/shared_default/access-summary"),
+        ] {
+            assert_eq!(
+                call(method, path).await.status(),
+                StatusCode::OK,
+                "{method} {path}"
+            );
+        }
+        // Unapproved (pending), then disabled: refused on every listed route.
+        for status in [
+            crate::access::AccountStatus::Pending,
+            crate::access::AccountStatus::Disabled,
+        ] {
+            let current = app.store.account_by_id(&user).await.unwrap().unwrap()["access_revision"]
+                .as_u64()
+                .unwrap();
+            app.store
+                .update_account_access(&user, current, status, crate::access::ANONYMOUS_TIER)
+                .await
+                .unwrap();
+            for (method, path) in &listed {
+                assert_eq!(
+                    call(method, path).await.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{status:?} {method} {path}"
+                );
+            }
         }
     }
 }

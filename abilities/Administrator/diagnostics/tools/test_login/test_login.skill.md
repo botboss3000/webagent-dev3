@@ -14,6 +14,8 @@ test account. Then use `browser_read` / `browser_input` on the app (`navigate` t
   its tier's limits. Administrator pages, other accounts' chats and other people's data are
   refused by the app, exactly as for a real person of that tier. A refusal there is the
   expected result of such a check, not a tool failure.
+- Never send feedback (the app's Send feedback control or `POST /api/v3/feedback`) while
+  signed in as a test account: it files a real issue in the project's feedback repository.
 - The test sign-in ends when this turn ends, when the browser navigates away from the app, or
   after the configured time (`config/accounts/test-accounts.json`, `sign_in_minutes`),
   whichever is first. Call `test_login` again in a later turn to continue; a repeat call
