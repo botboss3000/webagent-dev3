@@ -95,7 +95,12 @@ impl<
             run["error"] = Value::Null;
         }
         app.save(&mut run).await?;
-        crate::wake::notify(&app.control_dir).await;
+        crate::wake::notify_account(
+            &app.control_dir,
+            crate::ports::Records::current_user_id(app.store.records()),
+            crate::wake::Kind::Run,
+        )
+        .await;
         Ok(())
     }
 }

@@ -56,8 +56,8 @@ impl Store {
         let mut records = Vec::new();
         // Records derive only from account contents, so an account unchanged since it was
         // applied is skipped; it is marked applied only after the slot transaction commits.
-        let changed = self.changed_user_ids("requester_slots").await?;
-        for (owner, _) in &changed {
+        let mut changed = self.changed_user_ids("requester_slots").await?;
+        for (owner, mark) in &mut changed {
             let owner = owner.clone();
             let path = self
                 .root
@@ -70,6 +70,9 @@ impl Store {
             // Reuse the account's cached pool: a fresh connection per account on every admission
             // spawned a thread and reopened the database. Range bounds use the docs key index.
             let pool = self.for_user(&owner).await?.pool.clone();
+            // After opening (which can touch the log) and before reading: a write during
+            // the read moves the mark and is applied next time.
+            *mark = self.wal_mark(&owner);
             // Runs come from the plain run index (its status is saved with the run): a
             // finished run releases its unreleased slot, and only an unfinished run without a
             // slot is decrypted, to name its requester. This is what decrypting every run

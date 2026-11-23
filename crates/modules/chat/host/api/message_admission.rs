@@ -208,7 +208,7 @@ pub(crate) async fn send_message(
         .await
         .map_err(admission_error)?;
     record_admitted_turn(&app, &agent_id, &prepared.message["run_id"]).await;
-    crate::wake::notify(&app).await;
+    crate::wake::notify_account(&app, crate::wake::Kind::Run).await;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
 /// True when a typed message is only a stop phrase such as "stop", "pause" or "hold on".

@@ -1598,6 +1598,8 @@ async fn package_service(app: App, id: &'static str) {
     let mut scanned_wake = 0u64;
     let mut deferred = false;
     let schedules = webagent_engine::due::Written::default();
+    // Users named by hints whose tick has not started yet (their reducer was busy).
+    let mut pending_named = std::collections::HashSet::<String>::new();
     loop {
         if app.stop.is_cancelled() {
             break;
@@ -1653,10 +1655,20 @@ async fn package_service(app: App, id: &'static str) {
         // bounded reducers prevent a slow webhook from delaying agent schedules.
         let started = tokio::time::Instant::now();
         let hint = *wake_hints.borrow();
+        // A hint that names accounts opens only those (automation follows its users' own
+        // events and run ends); one that names none still means every user, as before.
+        let (named_through, named) = if hint == scanned_wake {
+            (hint, Some(std::collections::HashSet::new()))
+        } else {
+            crate::wake::named_since(scanned_wake)
+        };
+        let global = named.is_none();
+        let named = named.unwrap_or_default();
         let full = deferred
-            || hint != scanned_wake
+            || global
+            || (id != "automation" && !named.is_empty())
             || last_scan.is_none_or(|at| started.duration_since(at) >= MODULE_FALLBACK);
-        // Otherwise only users whose own deadline passed since the last look are opened.
+        // Otherwise only named users and users whose own deadline passed are opened.
         let due_users: std::collections::HashSet<String> = if full {
             Default::default()
         } else {
@@ -1666,13 +1678,18 @@ async fn package_service(app: App, id: &'static str) {
                     checked_until.is_none_or(|at| at < **deadline) && **deadline <= started
                 })
                 .map(|(uid, _)| uid.clone())
+                .chain(named.iter().cloned())
+                .chain(pending_named.iter().cloned())
                 .collect()
         };
         if available(id) && jobs.len() < 2 && (full || !due_users.is_empty()) {
             checked_until = Some(started);
+            scanned_wake = named_through;
+            if id == "automation" {
+                pending_named.extend(named);
+            }
             if full {
                 last_scan = Some(started);
-                scanned_wake = hint;
                 deferred = false;
             }
             let scanned = if full {
@@ -1681,6 +1698,12 @@ async fn package_service(app: App, id: &'static str) {
                 crate::agent_loop::user_apps_among(&app, &due_users).await
             };
             if let Ok(mut users) = scanned {
+                // A named user the scan does not return has nothing to tick.
+                let present: std::collections::HashSet<String> = users
+                    .iter()
+                    .map(|user| user.store.current_user_id().to_owned())
+                    .collect();
+                pending_named.retain(|uid| present.contains(uid));
                 let len = users.len();
                 if len > 0 {
                     users.rotate_left(cursor % len);
@@ -1692,10 +1715,12 @@ async fn package_service(app: App, id: &'static str) {
                     }
                     let uid = user.store.current_user_id().to_owned();
                     let wake_sequence = *wake_hints.borrow();
-                    // A wake received during an in-flight reducer stays pending for
-                    // that user. Same-second writes do not depend on polling recovery.
+                    // A hint naming this user (or naming nobody) received during an in-flight
+                    // reducer stays pending for that user. Same-second writes do not depend on
+                    // polling recovery.
                     let hinted = id == "automation"
-                        && last_dispatched_wake.get(&uid) != Some(&wake_sequence);
+                        && (pending_named.contains(&uid)
+                            || (global && last_dispatched_wake.get(&uid) != Some(&wake_sequence)));
                     if !hinted
                         && next_poll
                             .get(&uid)
@@ -1708,6 +1733,7 @@ async fn package_service(app: App, id: &'static str) {
                     }
                     let startup = !seen.contains(&uid);
                     cursor = cursor.wrapping_add(1);
+                    pending_named.remove(&uid);
                     last_dispatched_wake.insert(uid.clone(), wake_sequence);
                     jobs.spawn(futures_util::FutureExt::boxed(async move {
                         let result = tick_package(&user, id, startup).await;

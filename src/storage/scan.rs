@@ -6,9 +6,11 @@
 //! nothing (they change only when someone acts, which writes the account). Deadlines kept in
 //! `app.db` (`account_due`: approval expiry, the automation schedule) bring an account back
 //! when they pass. An account not written since it was found idle is skipped; one written
-//! since stays visible to every scanner for a short window; every idle account is still
-//! revisited every 5-10 minutes. One result is shared by all of a process's scanners for up
-//! to a second, and recomputed after any wake hint.
+//! since stays visible to every scanner for a short window. As the fallback for anything
+//! missed, every idle account is evaluated again once every 10 minutes, each at its own point
+//! in the interval so the accounts never come back together; it is visited only if that finds
+//! work. One result is shared by all of a process's scanners for up to a second, and
+//! recomputed after any wake hint.
 use super::Store;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -20,10 +22,10 @@ use std::time::{Duration, Instant, SystemTime};
 use webagent_accounts_host::AccountsStore;
 use webagent_engine::due;
 
-/// Base interval before an idle account is revisited; each account adds its own 0-5 min offset.
-const RECHECK: Duration = Duration::from_secs(300);
-/// A revisit, or a write that left no work, stays open long enough for the slowest periodic
-/// scan (10 s) to see the account.
+/// Every idle account is evaluated again once per this interval, at its own offset in it.
+const RECHECK: u64 = 600;
+/// A write that left no work stays visible long enough for the slowest periodic scan (10 s)
+/// to see the account.
 const WINDOW: Duration = Duration::from_secs(15);
 /// How long a write that left no work keeps an account visible to every scanner.
 const WRITTEN_WINDOW: Duration = if cfg!(test) {
@@ -31,8 +33,6 @@ const WRITTEN_WINDOW: Duration = if cfg!(test) {
 } else {
     WINDOW
 };
-/// File times are coarse; a write this close before a check counts as after it.
-const CLOCK_MARGIN: Duration = Duration::from_millis(50);
 /// How long one scan result serves every periodic scanner of the process. Root tests read
 /// their own writes at once without a wake hint, so they always scan afresh.
 const SHARE: Duration = if cfg!(test) {
@@ -133,12 +133,11 @@ fn record_pending(key: &str, value: &Value) -> Need {
 
 /// An account's write-ahead log as last seen: length and modification time, `None` when it
 /// is absent or empty. Any commit changes it; a checkpoint only removes or empties it.
-type WalMark = Option<(u64, SystemTime)>;
+pub(crate) type WalMark = Option<(u64, SystemTime)>;
 
 struct Idle {
     mark: WalMark,
     recheck_at: Instant,
-    open_until: Option<Instant>,
     /// A write that left no work keeps the account visible until then.
     written_until: Option<Instant>,
 }
@@ -155,7 +154,7 @@ enum Decision {
 }
 
 static IDLE: LazyLock<Mutex<HashMap<String, Idle>>> = LazyLock::new(Default::default);
-static SEEN: LazyLock<Mutex<HashMap<(&'static str, String), SystemTime>>> =
+static SEEN: LazyLock<Mutex<HashMap<(&'static str, String), WalMark>>> =
     LazyLock::new(Default::default);
 
 /// The account list of one state root and the `(count, max rowid)` of `user_accounts` it was
@@ -192,12 +191,20 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// Spread rechecks so accounts that went idle together are not reopened together.
-fn offset(user: &str) -> Duration {
+/// Each account's own point in the recheck interval, so accounts that went idle together
+/// (a restart) are not evaluated together.
+fn offset(user: &str) -> u64 {
     let hash = user.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
     });
-    Duration::from_secs(hash % 300)
+    hash % RECHECK
+}
+
+/// The account's next recheck after `now` (Unix seconds `unix`): the next time its offset
+/// comes round, at least one second away.
+fn next_recheck(user: &str, now: Instant, unix: u64) -> Instant {
+    let into = (unix + offset(user)) % RECHECK;
+    now + Duration::from_secs(RECHECK - into)
 }
 
 fn decide(entry: Option<&mut Idle>, written: impl Fn(&WalMark) -> bool, now: Instant) -> Decision {
@@ -207,11 +214,6 @@ fn decide(entry: Option<&mut Idle>, written: impl Fn(&WalMark) -> bool, now: Ins
                 Decision::Visit
             } else if now < idle.recheck_at {
                 Decision::Skip
-            } else if idle.open_until.is_none() {
-                idle.open_until = Some(now + WINDOW);
-                Decision::Visit
-            } else if idle.open_until.is_some_and(|until| now < until) {
-                Decision::Visit
             } else {
                 Decision::Evaluate {
                     visit: false,
@@ -249,7 +251,7 @@ fn moved(recorded: &WalMark, current: &WalMark) -> bool {
 }
 
 impl Store {
-    fn wal_mark(&self, user: &str) -> WalMark {
+    pub(crate) fn wal_mark(&self, user: &str) -> WalMark {
         let wal = self
             .root
             .join("user_data")
@@ -259,19 +261,6 @@ impl Store {
             .ok()
             .filter(|m| m.len() > 0)
             .and_then(|m| Some((m.len(), m.modified().ok()?)))
-    }
-
-    /// Whether the account committed a write after `since`. Commits land in the
-    /// write-ahead log; checkpoints only rewrite the main file or empty the log, so
-    /// closing an idle connection does not count as a write.
-    fn written_since(&self, user: &str, since: SystemTime) -> bool {
-        let wal = self
-            .root
-            .join("user_data")
-            .join(user)
-            .join(format!("{user}.db-wal"));
-        std::fs::metadata(wal)
-            .is_ok_and(|m| m.len() > 0 && m.modified().is_ok_and(|t| t + CLOCK_MARGIN > since))
     }
 
     /// Every account id, read again only when `user_accounts` gained a row (one counting
@@ -398,13 +387,12 @@ impl Store {
                         idle.remove(&user);
                         true
                     } else {
-                        let recheck_at = now + RECHECK + offset(&user);
+                        let recheck_at = next_recheck(&user, now, unix_now());
                         idle.insert(
                             user.clone(),
                             Idle {
                                 mark,
                                 recheck_at,
-                                open_until: None,
                                 // Every scanner sees a written account once, whichever
                                 // of them happened to evaluate it.
                                 written_until: written.then_some(now + WRITTEN_WINDOW),
@@ -422,28 +410,29 @@ impl Store {
         Ok((visits, deadlines))
     }
 
-    /// Accounts written since `scan` last applied them, with the time to pass to
-    /// [`Store::mark_seen`] once their contents have been applied.
+    /// Accounts written since `scan` last applied them, each with its log mark now. A caller
+    /// that opens the account replaces the mark with [`Store::wal_mark`] taken after opening
+    /// and before reading (opening can touch the log), then passes the list to
+    /// [`Store::mark_seen`] once the contents have been applied.
     pub(crate) async fn changed_user_ids(
         &self,
         scan: &'static str,
-    ) -> Result<Vec<(String, SystemTime)>> {
+    ) -> Result<Vec<(String, WalMark)>> {
         let users = self.account_ids().await?;
-        // Taken before reading, so a write during the read is seen next time.
-        let now = SystemTime::now();
         let seen = SEEN.lock().map_err(registry_error)?;
         Ok(users
             .into_iter()
-            .filter(|user| {
+            .filter_map(|user| {
+                let mark = self.wal_mark(&user);
                 seen.get(&(scan, user.clone()))
-                    .is_none_or(|since| self.written_since(user, *since))
+                    .is_none_or(|applied| moved(applied, &mark))
+                    .then_some((user, mark))
             })
-            .map(|user| (user, now))
             .collect())
     }
 
-    /// Record that `scan` applied these accounts' contents as of the given times.
-    pub(crate) fn mark_seen(scan: &'static str, applied: Vec<(String, SystemTime)>) -> Result<()> {
+    /// Record that `scan` applied these accounts' contents as of the given log marks.
+    pub(crate) fn mark_seen(scan: &'static str, applied: Vec<(String, WalMark)>) -> Result<()> {
         let mut seen = SEEN.lock().map_err(registry_error)?;
         for (user, since) in applied {
             seen.insert((scan, user), since);
@@ -461,7 +450,6 @@ mod tests {
         Idle {
             mark,
             recheck_at,
-            open_until: None,
             written_until: None,
         }
     }
@@ -477,7 +465,8 @@ mod tests {
                 written: false
             }
         ));
-        let mut entry = idle(None, now + RECHECK);
+        let recheck = Duration::from_secs(RECHECK);
+        let mut entry = idle(None, now + recheck);
         assert!(matches!(
             decide(Some(&mut entry), quiet, now),
             Decision::Skip
@@ -496,18 +485,9 @@ mod tests {
             Decision::Visit
         ));
         entry.written_until = None;
-        // At the revisit every scan sees the account for the window, then it is re-checked.
-        let later = now + RECHECK;
+        // At its recheck the account is evaluated, and visited only if that finds work.
         assert!(matches!(
-            decide(Some(&mut entry), quiet, later),
-            Decision::Visit
-        ));
-        assert!(matches!(
-            decide(Some(&mut entry), quiet, later + Duration::from_secs(5)),
-            Decision::Visit
-        ));
-        assert!(matches!(
-            decide(Some(&mut entry), quiet, later + WINDOW),
+            decide(Some(&mut entry), quiet, now + recheck),
             Decision::Evaluate {
                 visit: false,
                 written: false
@@ -564,11 +544,11 @@ mod tests {
             .unwrap();
         assert!(store.scan_user_ids().await.unwrap().contains(&id));
         rest(&store, &id).await;
-        tokio::time::sleep(CLOCK_MARGIN * 2).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
         let changed = store.changed_user_ids("test_scan").await.unwrap();
         assert!(changed.iter().any(|(user, _)| *user == id));
         Store::mark_seen("test_scan", changed).unwrap();
-        tokio::time::sleep(CLOCK_MARGIN * 2).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(store
             .changed_user_ids("test_scan")
             .await
@@ -700,9 +680,20 @@ mod tests {
     }
 
     #[test]
-    fn revisit_offsets_are_spread() {
-        assert!(offset("guest-a") < Duration::from_secs(300));
-        assert_ne!(offset("guest-a"), offset("guest-b"));
+    fn rechecks_are_spread_over_the_interval() {
+        assert!(offset("guest_a") < RECHECK);
+        assert_ne!(offset("guest_a"), offset("guest_b"));
+        let now = Instant::now();
+        for unix in [0, 1, 599, 600, 1_795_000_000] {
+            let next = next_recheck("guest_a", now, unix);
+            assert!(next > now && next <= now + Duration::from_secs(RECHECK));
+            // The account's point comes round at the same place in every interval.
+            let at = unix + (next - now).as_secs();
+            assert_eq!((at + offset("guest_a")) % RECHECK, 0);
+        }
+        // 400 accounts land in many different seconds of the interval.
+        let seconds: HashSet<u64> = (0..400).map(|i| offset(&format!("guest_{i}"))).collect();
+        assert!(seconds.len() > 200);
     }
 
     #[test]

@@ -179,7 +179,7 @@ pub(crate) async fn stop_session_work(
     app.store
         .event(sid, "session_stopped", &json!({"count":processes.len()}))
         .await?;
-    crate::wake::notify(app).await;
+    crate::wake::notify_account(app, crate::wake::Kind::Run).await;
     Ok((processes, still_building))
 }
 

@@ -383,6 +383,10 @@ impl<
                     progress.at(Stage::UserScan);
                     restore_sweep = !crate::send_future(Self::restore_sweep(&app)).await;
                 }
+                // The account scan and the passes over idle accounts no longer hold the loop's
+                // process-wide lock; each account's commands, follow-ups, approvals and claims
+                // run under it, so no account is handled half-locked.
+                drop(_guard);
                 if let Ok(false) = shutoff {
                     progress.at(Stage::UserScan);
                     let users = match crate::send_future(app.user_views(false)).await {
@@ -393,6 +397,8 @@ impl<
                         }
                     };
                     for user_app in users {
+                        progress.at(Stage::DispatchGate);
+                        let _account_gate = crate::send_future(app.handles.gate.lock()).await;
                         progress.at(Stage::Commands);
                         if let Err(error) =
                             crate::send_future(user_app.store.acknowledge_loop_commands()).await
@@ -631,8 +637,14 @@ impl<
                                     watcher.abort();
                                     crate::send_future(cloned.active.lock()).await.remove(&id);
                                     drop(permit);
-                                    crate::send_future(crate::wake::notify(&cloned.control_dir))
-                                        .await;
+                                    crate::send_future(crate::wake::notify_account(
+                                        &cloned.control_dir,
+                                        crate::ports::Records::current_user_id(
+                                            cloned.store.records(),
+                                        ),
+                                        crate::wake::Kind::Run,
+                                    ))
+                                    .await;
                                 });
                             }
                             // A failed reconciliation, or a pass that stopped before seeing every
@@ -652,7 +664,6 @@ impl<
                         }
                     }
                 }
-                drop(_guard);
                 progress.at(Stage::Idle);
                 let fallback = if std::env::var("V3_DISPATCH_POLL_ONLY").as_deref() == Ok("1") {
                     crate::send_future(app.runtime.read())

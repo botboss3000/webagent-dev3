@@ -101,7 +101,12 @@ impl<
                 )
                 .await?;
         }
-        crate::wake::notify(&app.control_dir).await;
+        crate::wake::notify_account(
+            &app.control_dir,
+            crate::ports::Records::current_user_id(app.store.records()),
+            crate::wake::Kind::Run,
+        )
+        .await;
         Ok(())
     }
     /// One undecided call as a running background task; None at task capacity.

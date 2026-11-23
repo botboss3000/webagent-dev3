@@ -339,7 +339,12 @@ impl<
                 }
             }
         }
-        crate::wake::notify(&app.control_dir).await;
+        crate::wake::notify_account(
+            &app.control_dir,
+            crate::ports::Records::current_user_id(app.store.records()),
+            crate::wake::Kind::Background,
+        )
+        .await;
         Ok(json!({"status":"task_start","call_id":id}))
     }
     /// Record an executing foreground call as a detached task: it keeps running in this
@@ -526,7 +531,12 @@ impl<
         record["session_id"] = json!(sid);
         record["created_at"] = json!(now());
         self.store.put(&key, &record).await?;
-        crate::wake::notify(&self.control_dir).await;
+        crate::wake::notify_account(
+            &self.control_dir,
+            crate::ports::Records::current_user_id(self.store.records()),
+            crate::wake::Kind::Background,
+        )
+        .await;
         Ok(())
     }
     pub async fn background_control(
@@ -558,7 +568,12 @@ impl<
                 if !app.store.background_cas(&task, Some(revision)).await? {
                     continue;
                 }
-                crate::wake::notify(&app.control_dir).await;
+                crate::wake::notify_account(
+                    &app.control_dir,
+                    crate::ports::Records::current_user_id(app.store.records()),
+                    crate::wake::Kind::Background,
+                )
+                .await;
             }
             return Ok(json!({"call_id":id,"status":task["status"]}));
         }
@@ -957,7 +972,12 @@ impl<
             task["completed_at_ms"] = json!(timestamp_ms());
             task["lease_until"] = json!(0);
             crate::send_future(app.store.background_cas(&task, Some(current_revision))).await?;
-            crate::send_future(crate::wake::notify(&app.control_dir)).await;
+            crate::send_future(crate::wake::notify_account(
+                &app.control_dir,
+                crate::ports::Records::current_user_id(app.store.records()),
+                crate::wake::Kind::Background,
+            ))
+            .await;
             Ok(())
         }
     }

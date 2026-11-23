@@ -128,7 +128,7 @@ pub async fn receive(
                 "Receiver rejected event; check expiry, revision, event identity and quota".into(),
             )
         })?;
-    wake::notify(&app).await;
+    wake::notify_account(&app, wake::Kind::Module).await;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
 fn html_escape(text: &str) -> String {
