@@ -987,14 +987,21 @@ impl<
         view.store = self.store.for_user(user_id).await?;
         Ok(view)
     }
+    /// Every account when `every`, otherwise only those a periodic scan must visit. A pass over
+    /// every account opens each one in turn ([`Self::for_user_view`]) and lets it go before the
+    /// next, so the storage bound on connected account databases can close the idle ones;
+    /// holding a view of every account at once kept a thread per account open.
+    pub async fn user_ids(&self, every: bool) -> Result<Vec<String>> {
+        if every {
+            self.store.all_user_ids().await
+        } else {
+            self.store.scan_user_ids().await
+        }
+    }
     /// Per-account views: every account when `every`, otherwise only those a periodic scan must visit.
     pub async fn user_views(&self, every: bool) -> Result<Vec<Self>> {
         let mut views = Vec::new();
-        let users = if every {
-            self.store.all_user_ids().await?
-        } else {
-            self.store.scan_user_ids().await?
-        };
+        let users = self.user_ids(every).await?;
         for user_id in users {
             // One unreadable account must not stop every other account's work.
             let store = match self.store.for_user(&user_id).await {

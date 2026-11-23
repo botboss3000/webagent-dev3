@@ -227,37 +227,30 @@ impl<
                     () = tokio::time::sleep(TICK) => {}
                 }
                 let pool = ScopedStorage::application_pool(app.store.records()).clone();
-                let views = if every {
-                    app.user_views(true).await
+                let users = if every {
+                    app.user_ids(true).await
                 } else {
-                    match crate::due::passed(&pool, crate::due::KEEP_ALIVE, crate::now()).await {
-                        Ok(users) => {
-                            let mut views = Vec::new();
-                            for user in users {
-                                match app.for_user_view(&user).await {
-                                    Ok(view) => views.push(view),
-                                    // A deleted or unreadable account keeps no deadline.
-                                    Err(_) => {
-                                        let _ = crate::due::set(
-                                            &pool,
-                                            &user,
-                                            crate::due::KEEP_ALIVE,
-                                            None,
-                                        )
-                                        .await;
-                                    }
-                                }
-                            }
-                            Ok(views)
-                        }
-                        Err(error) => Err(error),
-                    }
+                    crate::due::passed(&pool, crate::due::KEEP_ALIVE, crate::now()).await
                 };
-                let Ok(views) = views else {
+                let Ok(users) = users else {
                     continue;
                 };
                 let mut complete = true;
-                for view in views {
+                // One account at a time, so idle account databases can be closed meanwhile.
+                for user in users {
+                    let view = match app.for_user_view(&user).await {
+                        Ok(view) => view,
+                        // A deleted or unreadable account keeps no deadline.
+                        Err(_) if !every => {
+                            let _ =
+                                crate::due::set(&pool, &user, crate::due::KEEP_ALIVE, None).await;
+                            continue;
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "Account skipped: its storage could not be opened");
+                            continue;
+                        }
+                    };
                     if let Err(error) = view.keep_alive_tick().await {
                         complete = false;
                         tracing::warn!(error = %error, "keep-alive scan failed");

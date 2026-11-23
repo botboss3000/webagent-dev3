@@ -191,11 +191,15 @@ impl<
     /// Offer every account's paused runs to `component_restore`. True when every account was
     /// read; a failure leaves the sweep pending for the next pass.
     async fn restore_sweep(app: &Self) -> bool {
-        let Ok(users) = crate::send_future(app.user_views(true)).await else {
+        let Ok(users) = crate::send_future(app.user_ids(true)).await else {
             return false;
         };
         let mut complete = true;
         for user in users {
+            let Ok(user) = crate::send_future(app.for_user_view(&user)).await else {
+                complete = false;
+                continue;
+            };
             let Ok(runs) = crate::send_future(user.store.scheduler_runs()).await else {
                 complete = false;
                 continue;

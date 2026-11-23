@@ -354,7 +354,7 @@ impl<
         if notes.is_empty() {
             return Ok(());
         }
-        let views = app.user_views(true).await?;
+        let users = app.user_ids(true).await?;
         let now = now();
         let mut marks = Vec::new();
         let mut woken = std::collections::BTreeSet::new();
@@ -364,7 +364,11 @@ impl<
                 continue;
             };
             let mut owner = None;
-            for view in &views {
+            for user in &users {
+                // One account at a time; an unreadable one is skipped, as `user_views` does.
+                let Ok(view) = app.for_user_view(user).await else {
+                    continue;
+                };
                 if let Some(session) = view.store.get(&crate::key("session", sid)).await? {
                     owner = Some((view, session));
                     break;
@@ -807,7 +811,14 @@ impl<
                 }
             }
         };
-        for user_app in app.user_views(startup).await? {
+        for user in app.user_ids(startup).await? {
+            let user_app = match app.for_user_view(&user).await {
+                Ok(view) => view,
+                Err(error) => {
+                    tracing::warn!(%error, "Account skipped: its storage could not be opened");
+                    continue;
+                }
+            };
             for view in user_app.store.active_runs().await? {
                 let Some(id) = view["id"].as_str() else {
                     continue;
