@@ -24,6 +24,13 @@ fn stale(message: &str) -> ApiError {
     ApiError(StatusCode::CONFLICT, message.into())
 }
 pub(crate) async fn administrator(app: &App, identity: &Value) -> Result<(), ApiError> {
+    // Widgets and agent browsers never carry administrator power (AUTH-9, BROWSER-4).
+    if crate::access::identity::CredentialKind::restricted_document(identity) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrator access required".into(),
+        ));
+    }
     let id = identity["_user_id"].as_str().unwrap_or("");
     let account = app
         .store

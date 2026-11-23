@@ -180,6 +180,11 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
     {
         return ApiError(StatusCode::FORBIDDEN, "Invalid request origin".into()).into_response();
     }
+    // Rules of the credential kind, before any handler runs.
+    if let Some(refused) = identity.kind.refuses_method(method.as_str()) {
+        return ApiError(StatusCode::FORBIDDEN, refused.into()).into_response();
+    }
+    doc["_credential"] = json!(identity.kind.name());
     doc["_auth_key"] = json!(identity.credential_key);
     doc["_user_id"] = json!(user_id);
     doc["_role"] = json!(identity.effective_role());

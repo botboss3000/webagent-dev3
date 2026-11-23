@@ -72,15 +72,16 @@ pub(crate) async fn link_code(
             app.store.delete(&key).await?;
         } else if doc["user"] == user {
             own.push((
-                doc["expires"].as_u64().unwrap_or(0),
                 doc["issued"].as_u64().unwrap_or(0),
+                doc["expires"].as_u64().unwrap_or(0),
                 key,
             ));
         }
     }
-    // Codes issued in the same second share an expiry, so the issue order breaks the tie.
+    // Oldest first by the user's own issue counter, not the clock: codes issued in the same
+    // second share an expiry, and only the counter orders them every time.
     own.sort();
-    let issued = own.iter().map(|(_, n, _)| n + 1).max().unwrap_or(0);
+    let issued = own.iter().map(|(n, _, _)| n + 1).max().unwrap_or(0);
     for (_, _, key) in own.iter().take((own.len() + 1).saturating_sub(LIVE_CODES)) {
         app.store.delete(key).await?;
     }
@@ -450,6 +451,10 @@ async fn sign_in(
             now(),
             "Browser Control signed-in browser",
             rules::SIGN_IN_SECS,
+            webagent_accounts::AgentBrowserBinding {
+                agent_id: agent,
+                allowed_session_ids: &[sid.to_owned()],
+            },
         )
         .await?;
     let authority = json!({"session_id":sid,"user_id":user,"cookie":session.token,

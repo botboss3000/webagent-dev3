@@ -529,7 +529,10 @@ impl LoginAttempts {
         }
         let new_keys = usize::from(known && !state.pairs.contains_key(&pair_key))
             + usize::from(!state.accounts.contains_key(username));
-        // Never evict active state: a flood of names must not reset a block or slowdown.
+        // Never evict active state: a flood of names must not reset a block or slowdown. After
+        // pruning, every entry is lockout state (failures still inside their window, a block, or
+        // a block's remembered escalation), so evicting even the oldest would let a flood of
+        // names erase progress toward a lockout; a full table keeps refusing new names instead.
         if state.pairs.len() + state.accounts.len() + new_keys > KEY_LIMIT {
             return LoginGate::Blocked { retry_after: 60 };
         }

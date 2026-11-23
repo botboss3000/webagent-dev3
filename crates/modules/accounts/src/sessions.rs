@@ -58,6 +58,12 @@ impl<C: RecordCodec> Repository<'_, C> {
     }
 }
 
+/// What an agent-browser sign-in is bound to, recorded in its sign-in record.
+pub struct AgentBrowserBinding<'a> {
+    pub agent_id: &'a str,
+    pub allowed_session_ids: &'a [String],
+}
+
 pub struct IssuedSession {
     pub token: String,
     pub csrf: String,
@@ -84,6 +90,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             now,
             user_agent,
             duration,
+            None,
         )
         .await
     }
@@ -94,6 +101,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         now: u64,
         user_agent: &str,
         duration: u64,
+        agent_browser: Option<AgentBrowserBinding<'_>>,
     ) -> Result<IssuedSession> {
         anyhow::ensure!(
             crate::valid_id(&identity.user_id)
@@ -107,7 +115,12 @@ impl<C: RecordCodec> Repository<'_, C> {
         let expires = now
             .checked_add(duration)
             .ok_or_else(|| anyhow::anyhow!("Session expiry overflow"))?;
-        let doc = json!({"id":id,"user":identity.username,"user_id":identity.user_id,"csrf":csrf,"generation":generation,"created_at":now,"user_agent":user_agent.chars().take(256).collect::<String>(),"expires":expires});
+        let mut doc = json!({"id":id,"user":identity.username,"user_id":identity.user_id,"csrf":csrf,"generation":generation,"created_at":now,"user_agent":user_agent.chars().take(256).collect::<String>(),"expires":expires});
+        if let Some(binding) = agent_browser {
+            doc["kind"] = json!(crate::AGENT_BROWSER_KIND);
+            doc["agent_id"] = json!(binding.agent_id);
+            doc["allowed_session_ids"] = json!(binding.allowed_session_ids);
+        }
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
             .bind(auth_key(&token))
             .bind(self.seal(&doc)?)
@@ -309,6 +322,8 @@ impl RegistrationMode {
 
 impl<C: RecordCodec> Repository<'_, C> {
     /// The host supplies its inspected generation; never refresh a revoked browser authority.
+    /// The record names its kind, agent and allowed sessions, so requests made with it are
+    /// recognised as an agent browser's.
     pub async fn issue_trusted_browser_session(
         &self,
         user: &str,
@@ -316,6 +331,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         now: u64,
         user_agent: &str,
         duration: u64,
+        binding: AgentBrowserBinding<'_>,
     ) -> Result<crate::IssuedSession> {
         let account = self
             .account_by_id(user)
@@ -329,8 +345,15 @@ impl<C: RecordCodec> Repository<'_, C> {
                 && account["generation"] == expected_generation,
             "Caller unavailable"
         );
-        self.issue_versioned_session(&identity, expected_generation, now, user_agent, duration)
-            .await
+        self.issue_versioned_session(
+            &identity,
+            expected_generation,
+            now,
+            user_agent,
+            duration,
+            Some(binding),
+        )
+        .await
     }
     /// Existing one-time grant repair: Access supplies the role and target tier; identity is unchanged.
     pub async fn initialize_tier_assignment_in(

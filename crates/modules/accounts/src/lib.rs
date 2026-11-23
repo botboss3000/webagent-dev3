@@ -107,7 +107,7 @@ fn username_ok(value: &str) -> bool {
 pub use authentication::{
     hash_password, message_api_authorized, message_api_token_hash, verify_password,
 };
-pub use sessions::{session_key, IssuedSession};
+pub use sessions::{session_key, AgentBrowserBinding, IssuedSession};
 pub use sessions::{AuthenticatedSession, RegistrationMode};
 mod protection;
 pub use protection::{session_cookie, session_token, valid_csrf, valid_origin, BrowserLoginBridge};
@@ -138,6 +138,8 @@ pub mod browser_login_api;
 /// The `user_agent` recorded on sessions the diagnostics (agent) browser signs in with, so
 /// administrator-only pages can refuse them.
 pub const DIAGNOSTICS_BROWSER_AGENT: &str = "Diagnostics v3 development browser";
+/// Sign-in record `kind` of a sign-in issued to an agent's own browser (Browser Control).
+pub const AGENT_BROWSER_KIND: &str = "agent_browser";
 pub mod registration_api;
 pub mod self_service;
 pub use sessions::SessionCandidate;

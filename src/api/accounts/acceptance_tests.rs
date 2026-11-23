@@ -568,3 +568,117 @@ async fn each_identity_change_ends_a_remembered_identity_on_the_next_request() {
     assert_eq!(me_status(&app, &first).await, StatusCode::UNAUTHORIZED);
     assert_eq!(me_status(&app, &second).await, StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn each_credential_kind_has_its_refused_and_allowed_side() {
+    let (_root, app) = fixture().await;
+    let generation = app.store.account_by_id("admin").await.unwrap().unwrap()["generation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A person: the administrator's own sign-in reaches admin routes and may change things.
+    let person = sign_in_as(&app, "admin").await;
+    assert_eq!(
+        call(&app, "GET", "/api/v3/status", &person, Value::Null).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            "/api/v3/auth/session-policy",
+            &person,
+            json!({"days":7})
+        )
+        .await,
+        StatusCode::OK
+    );
+    // An agent's browser signed in as the same administrator: reads only, never admin routes.
+    let issued = app
+        .store
+        .accounts_repository()
+        .issue_trusted_browser_session(
+            "admin",
+            &generation,
+            now(),
+            "Browser Control signed-in browser",
+            600,
+            webagent_accounts::AgentBrowserBinding {
+                agent_id: "shared_default",
+                allowed_session_ids: &["s1".to_owned()],
+            },
+        )
+        .await
+        .unwrap();
+    let browser = |method: &'static str, uri: &'static str, body: Value| {
+        let app = app.clone();
+        let token = issued.token.clone();
+        let csrf = issued.csrf.clone();
+        async move {
+            router(app)
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("cookie", format!("v3_session={token}"))
+                        .header("x-csrf-token", csrf)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(
+        browser("GET", "/api/v3/auth/me", Value::Null).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        browser("GET", "/api/v3/sessions", Value::Null).await,
+        StatusCode::OK
+    );
+    for (method, uri) in [
+        ("PUT", "/api/v3/auth/session-policy"),
+        ("POST", "/api/v3/sessions"),
+        ("POST", "/api/v3/approvals/a/decision"),
+        ("PUT", "/api/v3/auth/profile"),
+    ] {
+        assert_eq!(
+            browser(method, uri, json!({"days":7})).await,
+            StatusCode::FORBIDDEN,
+            "{method} {uri}"
+        );
+    }
+    assert_eq!(
+        browser("GET", "/api/v3/status", Value::Null).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        browser("GET", "/api/v3/admin/events", Value::Null).await,
+        StatusCode::FORBIDDEN
+    );
+    // A sign-in made before records had a kind is recognised by its label.
+    let legacy = uuid();
+    app.store
+        .put(
+            &format!("auth:{}", digest(&json!(legacy))),
+            &json!({"id":uuid(),"user_id":"admin","csrf":"fixture-csrf","generation":generation,
+                "user_agent":"Browser Control signed-in browser","expires":now()+3600}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        call(&app, "GET", "/api/v3/status", &legacy, Value::Null).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "POST", "/api/v3/sessions", &legacy, json!({})).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "GET", "/api/v3/auth/me", &legacy, Value::Null).await,
+        StatusCode::OK
+    );
+}

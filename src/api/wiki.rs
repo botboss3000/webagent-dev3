@@ -56,10 +56,11 @@ async fn caller(app: &App, identity: &Value) -> std::result::Result<(String, boo
         .as_str()
         .ok_or_else(|| ApiError(StatusCode::FORBIDDEN, "Sign in to use the Wiki".into()))?;
     let account = app.store.account_by_id(user).await?;
-    let administrator = account.as_ref().is_some_and(|account| {
-        crate::access::Principal::from_account(account)
-            .is_ok_and(|p| p.active() && p.administrator())
-    });
+    let administrator = !crate::access::identity::CredentialKind::restricted_document(identity)
+        && account.as_ref().is_some_and(|account| {
+            crate::access::Principal::from_account(account)
+                .is_ok_and(|p| p.active() && p.administrator())
+        });
     Ok((user.to_owned(), administrator))
 }
 

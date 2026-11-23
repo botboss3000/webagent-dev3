@@ -23,6 +23,30 @@ pub enum CredentialKind {
 }
 
 impl CredentialKind {
+    /// The name handlers see in the identity document's `_credential` field.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Person => "person",
+            Self::AgentBrowser => AGENT_BROWSER,
+            Self::Widget => "widget",
+            Self::MessagingBearer => "messaging_bearer",
+            Self::NotificationReader => "notification_reader",
+            Self::BrowserDevice => "browser_device",
+        }
+    }
+    /// Whether an identity document (the handlers' JSON form) came from a widget or an agent
+    /// browser. Fails closed: any widget binding counts.
+    pub fn restricted_document(identity: &serde_json::Value) -> bool {
+        !identity["_embed_agent"].is_null()
+            || identity["_credential"] == AGENT_BROWSER
+            || identity["_credential"] == "widget"
+    }
+    /// The refusal for a request this credential may never make, checked before any handler:
+    /// an agent's browser is read-only (BROWSER-4).
+    pub fn refuses_method(self, method: &str) -> Option<&'static str> {
+        (self == Self::AgentBrowser && !matches!(method, "GET" | "HEAD" | "OPTIONS"))
+            .then_some("This sign-in is read-only")
+    }
     /// Agent browsers and widgets act for a person but never with administrator power.
     pub fn restricted(self) -> bool {
         matches!(self, Self::AgentBrowser | Self::Widget)
@@ -41,7 +65,7 @@ impl CredentialKind {
 }
 
 /// The sign-in record `kind` of an agent-browser sign-in.
-pub const AGENT_BROWSER: &str = "agent_browser";
+pub const AGENT_BROWSER: &str = webagent_accounts::AGENT_BROWSER_KIND;
 /// The label agent-browser sign-ins carried before records had a `kind`.
 pub const LEGACY_AGENT_BROWSER_LABEL: &str = "Browser Control signed-in browser";
 
@@ -134,6 +158,31 @@ mod tests {
         }
         assert!(!identity(Role::User, Person).admin_power());
         assert_eq!(identity(Role::Guest, Widget).effective_role(), Role::Guest);
+    }
+
+    #[test]
+    fn agent_browsers_are_read_only_and_restricted_documents_are_recognised() {
+        use CredentialKind::*;
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            assert!(AgentBrowser.refuses_method(method).is_some(), "{method}");
+            for kind in [Person, Widget, MessagingBearer] {
+                assert!(kind.refuses_method(method).is_none(), "{kind:?} {method}");
+            }
+        }
+        assert!(AgentBrowser.refuses_method("GET").is_none());
+        for document in [
+            json!({"_embed_agent":"a"}),
+            json!({"_credential":"agent_browser"}),
+            json!({"_credential":"widget"}),
+        ] {
+            assert!(CredentialKind::restricted_document(&document), "{document}");
+        }
+        assert!(!CredentialKind::restricted_document(
+            &json!({"_credential":"person"})
+        ));
+        assert!(!CredentialKind::restricted_document(
+            &json!({"_user_id":"admin"})
+        ));
     }
 
     #[test]

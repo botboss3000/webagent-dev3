@@ -230,7 +230,7 @@ pub async fn guest_login<C: RecordCodec, H: Host>(
         .ok_or_else(|| bad("Account unavailable"))?;
     let duration = 30 * 86400;
     let session = repo
-        .issue_versioned_session(&identity, generation, now, "Guest browser", duration)
+        .issue_versioned_session(&identity, generation, now, "Guest browser", duration, None)
         .await?;
     if old_token.len() == 36 {
         repo.logout(old_token).await?;

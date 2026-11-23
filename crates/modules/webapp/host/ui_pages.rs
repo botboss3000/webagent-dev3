@@ -32,6 +32,8 @@ pub(crate) async fn administrator_browser(app: &crate::App, headers: &HeaderMap)
         .is_ok_and(|principal| principal.active() && principal.administrator())
         && candidate.finish().is_some_and(|session| {
             session.document["user_agent"] != webagent_accounts::DIAGNOSTICS_BROWSER_AGENT
+                && !crate::access::identity::CredentialKind::of_sign_in(&session.document)
+                    .restricted()
         })
 }
 /// Builds without the administrator feature serve no administrator pages to anyone.

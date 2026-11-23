@@ -73,6 +73,7 @@ pub async fn login<C: RecordCodec, H: Host>(
             now,
             crate::DIAGNOSTICS_BROWSER_AGENT,
             duration,
+            None,
         )
         .await?;
     let mut response =

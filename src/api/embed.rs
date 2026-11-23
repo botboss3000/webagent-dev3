@@ -366,6 +366,9 @@ async fn issue(app: &App, doc: &Value, account: &Value) -> Api {
         return Err(denied());
     }
     let principal = access::Principal::from_account(account)?;
+    if principal.role == access::Role::Administrator {
+        return Err(administrators_refused());
+    }
     if principal.role == access::Role::Guest && config["config"]["guest_access"] != true {
         return Err(denied());
     }
@@ -580,6 +583,25 @@ fn scope_path(path: &str) -> bool {
 fn wiki_path(path: &str) -> bool {
     path == "/wiki" || path.starts_with("/wiki/")
 }
+/// Widget credentials never carry administrator power (AUTH-9): one refusal for the whole class.
+fn administrators_refused() -> ApiError {
+    ApiError(
+        StatusCode::FORBIDDEN,
+        "Administrators use the app, not the embedded chat".into(),
+    )
+}
+/// Session routes that change settings or permissions; a widget may read them, never change
+/// them. Answering the visitor's own approval prompts stays allowed.
+fn changes_settings(path: &str) -> bool {
+    let parts: Vec<_> = path.trim_matches('/').split('/').collect();
+    match parts.as_slice() {
+        ["sessions", _, "model" | "mode" | "abilities" | "messaging-routes" | "build-tasks", ..] => {
+            true
+        }
+        ["sessions", _, "actions", _, "resolve"] => true,
+        _ => false,
+    }
+}
 async fn bound_run_session(
     app: &App,
     actor: &str,
@@ -638,6 +660,13 @@ async fn scope_request(
         || path.ends_with("/state-inspect")
         // Embedded chats only read the Wiki; changes go through the agent's tools.
         || (wiki_path(&path) && request.method() != axum::http::Method::GET)
+        || (changes_settings(&path)
+            && !matches!(
+                *request.method(),
+                axum::http::Method::GET | axum::http::Method::HEAD
+            ))
+        // Previews and administrator views are never for widgets, not even to read.
+        || path.split('/').any(|part| part == "ui-preview" || part == "administrator")
     {
         return Err(denied());
     }
@@ -726,6 +755,9 @@ pub(crate) async fn bearer(app: &App, request: &mut Request) -> std::result::Res
         .ok_or_else(unauthorized)?;
     // `credential_valid` checked this account active and approved during this request.
     let principal = access::Principal::from_account(&account).map_err(|_| unauthorized())?;
+    if principal.role == access::Role::Administrator {
+        return Err(administrators_refused());
+    }
     let identity = Arc::new(access::identity::Identity {
         username: account["username"].as_str().unwrap_or_default().to_owned(),
         generation: account["generation"]
@@ -746,6 +778,7 @@ pub(crate) async fn bearer(app: &App, request: &mut Request) -> std::result::Res
     doc["_tier_id"] = account["tier_id"].clone();
     doc["_access_revision"] = account["access_revision"].clone();
     doc["_embed_agent"] = doc["agent_id"].clone();
+    doc["_credential"] = json!(identity.kind.name());
     caller.identity = Some(identity.clone());
     request.extensions_mut().insert(caller);
     request.extensions_mut().insert(identity);
@@ -806,14 +839,20 @@ mod tests {
         use axum::body::Body;
         use tower::ServiceExt;
         let (_root, app) = crate::runtime_tests::fixture().await;
+        // Widgets are for ordinary accounts: the agent's administrator sets the widget up and a
+        // member signs in to it.
+        let member = widget_member(&app, "widget-member").await;
+        let generation =
+            app.store.account_by_id(&member).await.unwrap().unwrap()["generation"].clone();
         let source_key = format!("auth:{}", digest(&json!(uuid())));
-        let source = json!({"generation":"fixture-generation","expires":now()+3600});
+        let source = json!({"user_id":member,"generation":generation,"expires":now()+3600});
         app.store.put(&source_key, &source).await.unwrap();
-        let identity = json!({"_user_id":"admin","generation":"fixture-generation","_auth_key":source_key,"expires":now()+3600});
+        let identity = json!({"_user_id":member,"generation":generation,"_auth_key":source_key,"expires":now()+3600});
+        let admin = json!({"_user_id":"admin"});
         let config = json!({"expected_revision":0,"config":{"enabled":true,"allowed_origins":["https://example.com"]}});
         config_put(
             State(app.clone()),
-            Extension(identity.clone()),
+            Extension(admin.clone()),
             Path("shared_default".into()),
             Json(config.clone()),
         )
@@ -821,7 +860,7 @@ mod tests {
         .unwrap();
         assert!(config_put(
             State(app.clone()),
-            Extension(identity.clone()),
+            Extension(admin.clone()),
             Path("shared_default".into()),
             Json(config)
         )
@@ -946,14 +985,15 @@ mod tests {
                 StatusCode::OK
             );
         }
-        app.store
+        let member_store = app.store.for_user(&member).await.unwrap();
+        member_store
             .put(
                 "session:000-foreign",
                 &json!({"id":"000-foreign","agent_id":"different","title":"Needle foreign"}),
             )
             .await
             .unwrap();
-        app.store
+        member_store
             .put(
                 "session:zzz-target",
                 &json!({"id":"zzz-target","agent_id":"shared_default","title":"Needle target"}),
@@ -1010,7 +1050,7 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
         app.store.put(&source_key, &source).await.unwrap();
-        // Even an administrator's embed credential cannot reach admin routes.
+        // A widget credential reaches no admin route.
         assert_eq!(
             router(app.clone())
                 .oneshot(request("GET", "/api/v3/status", Value::Null))
@@ -1019,7 +1059,57 @@ mod tests {
                 .status(),
             StatusCode::FORBIDDEN
         );
-        config_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(json!({"expected_revision":1,"config":{"enabled":false,"allowed_origins":["https://example.com"]}}))).await.unwrap();
+        // It may read the conversation's settings but never change them (AUTH-9).
+        for (method, path, body) in [
+            (
+                "PUT",
+                format!("/api/v3/sessions/{sid}/mode"),
+                json!({"mode":"auto"}),
+            ),
+            (
+                "PUT",
+                format!("/api/v3/sessions/{sid}/model"),
+                json!({"model":"x"}),
+            ),
+            (
+                "PUT",
+                format!("/api/v3/sessions/{sid}/abilities/web"),
+                json!({"enabled":true}),
+            ),
+            (
+                "POST",
+                format!("/api/v3/sessions/{sid}/build-tasks/clear"),
+                json!({}),
+            ),
+            (
+                "GET",
+                format!("/api/v3/sessions/{sid}/ui-preview/off"),
+                Value::Null,
+            ),
+        ] {
+            assert_eq!(
+                router(app.clone())
+                    .oneshot(request(method, &path, body))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::FORBIDDEN,
+                "{method} {path}"
+            );
+        }
+        assert_eq!(
+            router(app.clone())
+                .oneshot(request(
+                    "GET",
+                    &format!("/api/v3/sessions/{sid}/mode"),
+                    Value::Null
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        config_put(State(app.clone()),Extension(admin.clone()),Path("shared_default".into()),Json(json!({"expected_revision":1,"config":{"enabled":false,"allowed_origins":["https://example.com"]}}))).await.unwrap();
         assert_eq!(
             router(app.clone())
                 .oneshot(request(
@@ -1040,6 +1130,177 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+    /// An active ordinary account admitted to `shared_default` as a caller.
+    async fn widget_member(app: &App, name: &str) -> String {
+        let account = app
+            .store
+            .create_user_account(name, "fixture-long-password-hash")
+            .await
+            .unwrap();
+        let id = account["user_id"].as_str().unwrap().to_owned();
+        app.store
+            .update_account_access(&id, 1, crate::access::AccountStatus::Active, "free")
+            .await
+            .unwrap();
+        app.store
+            .set_agent_membership(
+                &id,
+                "shared_default",
+                crate::access::Relationship::Caller,
+                0,
+            )
+            .await
+            .unwrap();
+        id
+    }
+    #[tokio::test]
+    async fn administrators_cannot_hold_widget_credentials() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let source_key = format!("auth:{}", digest(&json!(uuid())));
+        app.store
+            .put(
+                &source_key,
+                &json!({"generation":"fixture-generation","expires":now()+3600}),
+            )
+            .await
+            .unwrap();
+        let admin = json!({"_user_id":"admin","generation":"fixture-generation","_auth_key":source_key,"expires":now()+3600});
+        config_put(State(app.clone()),Extension(admin.clone()),Path("shared_default".into()),Json(json!({"expected_revision":0,"config":{"enabled":true,"allowed_origins":["https://example.com"]}}))).await.unwrap();
+        let verifier = "fixture-verifier-abcdefghijklmnopqrstuvwxyz-0123456789";
+        let challenge=challenge(State(app.clone()),Path("shared_default".into()),None, HeaderMap::new(),Json(json!({"origin":"https://example.com","code_challenge":URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))}))).await.unwrap().0;
+        let id = challenge["challenge_id"].as_str().unwrap();
+        // The administrator may approve the request, but no credential is ever issued.
+        let _ = authorize(
+            State(app.clone()),
+            Extension(admin.clone()),
+            Json(json!({"challenge_id":id})),
+        )
+        .await;
+        let refused = redeem(
+            State(app.clone()),
+            None,
+            HeaderMap::new(),
+            Json(json!({"challenge_id":id,"code_verifier":verifier})),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.0, StatusCode::FORBIDDEN);
+        assert!(app
+            .store
+            .list("embed:credential:")
+            .await
+            .unwrap()
+            .is_empty());
+        // A credential that became an administrator's later is refused on its next request.
+        let member = widget_member(&app, "promoted-member").await;
+        let generation =
+            app.store.account_by_id(&member).await.unwrap().unwrap()["generation"].clone();
+        let token = format!("{}{}", uuid(), uuid());
+        let credential_key = format!("embed:credential:{}", digest(&json!(token)));
+        let config = allowed(&app, "shared_default", "https://example.com")
+            .await
+            .unwrap();
+        app.store
+            .put(
+                &credential_key,
+                &json!({"id":"c","credential_key":credential_key,"agent_id":"shared_default",
+                    "origin":"https://example.com","revision":config["revision"],
+                    "user_id":member,"generation":generation,"expires":now()+3600}),
+            )
+            .await
+            .unwrap();
+        let me = || {
+            Request::builder()
+                .uri("/api/v3/auth/me")
+                .header("authorization", format!("Bearer {token}"))
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        use tower::ServiceExt;
+        assert_eq!(
+            router(app.clone()).oneshot(me()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        app.store
+            .update_account_access(
+                &member,
+                2,
+                crate::access::AccountStatus::Active,
+                crate::access::ADMINISTRATOR_TIER,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            router(app.clone()).oneshot(me()).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    #[tokio::test]
+    async fn a_disabled_widget_guest_is_refused_on_every_route() {
+        use tower::ServiceExt;
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        app.store.set_registration_policy("open").unwrap();
+        config_put(State(app.clone()),Extension(json!({"_user_id":"admin"})),Path("shared_default".into()),Json(json!({"expected_revision":0,"config":{"enabled":true,"guest_access":true,"allowed_origins":["https://example.com"]}}))).await.unwrap();
+        let issued = guest(
+            State(app.clone()),
+            Path("shared_default".into()),
+            None,
+            HeaderMap::new(),
+            Json(json!({"origin":"https://example.com"})),
+        )
+        .await
+        .unwrap()
+        .0;
+        let token = issued["token"].as_str().unwrap().to_owned();
+        let user = issued["user"]["user_id"].as_str().unwrap().to_owned();
+        let call = |path: &str| {
+            Request::builder()
+                .uri(path)
+                .header("authorization", format!("Bearer {token}"))
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let routes = [
+            "/api/v3/auth/me",
+            "/api/v3/wiki",
+            "/api/v3/sessions",
+            "/api/v3/user/status",
+        ];
+        for path in routes {
+            assert_eq!(
+                router(app.clone())
+                    .oneshot(call(path))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::OK,
+                "{path}"
+            );
+        }
+        let revision = app.store.account_by_id(&user).await.unwrap().unwrap()["access_revision"]
+            .as_u64()
+            .unwrap();
+        app.store
+            .update_account_access(
+                &user,
+                revision,
+                crate::access::AccountStatus::Disabled,
+                crate::access::ANONYMOUS_TIER,
+            )
+            .await
+            .unwrap();
+        for path in routes {
+            assert_eq!(
+                router(app.clone())
+                    .oneshot(call(path))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED,
+                "{path}"
+            );
+        }
     }
     #[tokio::test]
     async fn unknown_credentials_return_authentication_failure() {

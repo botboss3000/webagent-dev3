@@ -726,7 +726,7 @@ impl Repository<'_, &Codec> {
                 .checked_mul(86400)
                 .ok_or_else(|| anyhow::anyhow!("Session duration overflow"))?
         };
-        self.issue_versioned_session(&identity, generation, now, user_agent, duration)
+        self.issue_versioned_session(&identity, generation, now, user_agent, duration, None)
             .await
     }
 }
@@ -1672,10 +1672,22 @@ async fn trusted_browser_issuance_keeps_inspected_generation_and_account_status(
     let mut account = repo.account_by_id(&id).await.unwrap().unwrap();
     let generation = account["generation"].as_str().unwrap().to_owned();
     let session = repo
-        .issue_trusted_browser_session(&id, &generation, 100, "bounded trusted browser", 600)
+        .issue_trusted_browser_session(
+            &id,
+            &generation,
+            100,
+            "bounded trusted browser",
+            600,
+            fixture_binding(),
+        )
         .await
         .unwrap();
     assert_eq!(session.expires, 700);
+    // The sign-in record names its kind and what it is bound to (S3).
+    let record = repo.auth_document(&session.token).await.unwrap().unwrap();
+    assert_eq!(record["kind"], AGENT_BROWSER_KIND);
+    assert_eq!(record["agent_id"], "shared_default");
+    assert_eq!(record["allowed_session_ids"], json!([]));
     assert!(repo
         .authenticate_session(&session.token, 100, RegistrationMode::Restricted)
         .await
@@ -1684,7 +1696,7 @@ async fn trusted_browser_issuance_keeps_inspected_generation_and_account_status(
     account["generation"] = json!("rotated-browser-generation");
     f.save(&id, &account).await;
     assert!(repo
-        .issue_trusted_browser_session(&id, &generation, 100, "browser", 600)
+        .issue_trusted_browser_session(&id, &generation, 100, "browser", 600, fixture_binding())
         .await
         .is_err());
     assert!(repo
@@ -1695,7 +1707,14 @@ async fn trusted_browser_issuance_keeps_inspected_generation_and_account_status(
     account["status"] = json!("disabled");
     f.save(&id, &account).await;
     assert!(repo
-        .issue_trusted_browser_session(&id, "rotated-browser-generation", 100, "browser", 600)
+        .issue_trusted_browser_session(
+            &id,
+            "rotated-browser-generation",
+            100,
+            "browser",
+            600,
+            fixture_binding()
+        )
         .await
         .is_err());
 }
@@ -2031,4 +2050,11 @@ async fn admin_assignment_raises_auth_epoch_and_old_databases_gain_the_column() 
     repo.initialize().await.unwrap();
     repo.initialize().await.unwrap();
     assert_eq!(repo.auth_epoch("x").await.unwrap(), Some(0));
+}
+
+fn fixture_binding() -> AgentBrowserBinding<'static> {
+    AgentBrowserBinding {
+        agent_id: "shared_default",
+        allowed_session_ids: &[],
+    }
 }
