@@ -247,6 +247,17 @@ DASHBOARD_JOBS = 50
 # Busy pages poll the dashboard and progress reads every few seconds; these run under the broker
 # lock, so repeat reads within this window reuse the last result instead of recomputing it.
 READ_CACHE_SECONDS = 4
+# Report folder the host supply-chain scanner (supply_chain_scan.py, run by its timer as the
+# checkout owner) writes beside the checkout; read only through supply_chain_scan.read_summary.
+SUPPLY_CHAIN_ROOT = SOURCE.parent / "supply-chain"
+
+
+def supply_chain_summary():
+    """The administrator projection of the newest scan summary (bounded, strict, no links)."""
+    spec = importlib.util.spec_from_file_location("v3_supply_chain_scan", _module_root / "supply_chain_scan.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.read_summary(SUPPLY_CHAIN_ROOT, CONFIG["source_uid"])
 # When each broker request arrived, so a caller's short authorization lease is judged at arrival,
 # not after it waited for the broker lock.
 _ARRIVAL = threading.local()
@@ -5263,8 +5274,8 @@ class Broker:
 
     def host_source_scope(self):
         """Broker modules and their docs/tests that the host-only lane may publish."""
-        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","engine_components.py","release.py","workspace_support.py","executor_worker.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py","reconfigure.py","operator_shell.py","host_helper.py","host_files.py","board_host.py","artifact_prune.py"}
-        allowed={"v3/tests/test_operator_identities.py","v3/tests/test_host_helper.py","v3/tests/test_host_files.py","v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_build_cache_retention.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_broker_ui_override.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","engine_components.py","release.py","workspace_support.py","executor_worker.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py","reconfigure.py","operator_shell.py","host_helper.py","host_files.py","board_host.py","artifact_prune.py","supply_chain_scan.py"}
+        allowed={"v3/tests/test_build_supply_chain.py","v3/tests/test_operator_identities.py","v3/tests/test_host_helper.py","v3/tests/test_host_files.py","v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_build_cache_retention.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_broker_ui_override.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
@@ -5875,7 +5886,7 @@ class Broker:
                         self._start_next()
                 return {**self._maintenance(),"busy":bool(self.active or self.active_ui or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
             read_actions={"heartbeat","status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview","note","notes"}
-            read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_build_progress","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
+            read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_supply_chain","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_build_progress","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
             # Isolated task work (edits, checks, finish) is admitted while drained; _start_next holds its jobs until resume.
             task_work=name in {"build_work","v3_build_work","v3_cargo_task","v3_source_prepare","v3_source_apply","v3_source_apply_prepared","file_edit","file_write"}and args.get("action")not in {"reconcile_release","reload_resource_policy","reload_memory_policy"}
             if name not in read_names and args.get("action") not in read_actions and not task_work and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
@@ -5960,6 +5971,12 @@ class Broker:
                 return {"notices": rows[:20], "total": len(rows), "policy": policy}
             if name == "v3_build_leftover_review":
                 return self._review_leftover(args, trusted, workspace)
+            if name == "v3_supply_chain":
+                # Report-only view for the administrator Dashboard card and its alerts.
+                if args or not self.administrator(trusted):
+                    raise PermissionError("administrator supply-chain report denied")
+                self._incoming_lease(trusted)
+                return supply_chain_summary()
             if name == "v3_build_dashboard":
                 if args or not self.administrator(trusted):
                     raise PermissionError("administrator build dashboard denied")

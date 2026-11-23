@@ -198,7 +198,9 @@ def install(args):
  # Release keys run a root-owned copy of the operator shell (sudoers pins its path); keep it current.
  # The root host helper is not copied here: its supervisor_update action replaces it after approval.
  for folder,name,unit,installed in (("/usr/local/lib/webagent-ops","operator_shell.py",None,"operator_shell.py"),
-                                    ("/usr/local/sbin","artifact_prune.py",None,"v3-artifact-prune")):
+                                    ("/usr/local/sbin","artifact_prune.py",None,"v3-artifact-prune"),
+                                    # Run as ar by webagent-dev-supply-chain-scan.timer (report-only).
+                                    ("/usr/local/sbin","supply_chain_scan.py",None,"v3-supply-chain-scan")):
   folder=Path(folder)
   if not folder.is_dir() or folder.is_symlink():continue
   body=(Path(value["service_dir"])/name).read_bytes();target=folder/installed
