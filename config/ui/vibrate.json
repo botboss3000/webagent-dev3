@@ -1,11 +1,5 @@
 {
   "enabled": true,
-  "impact": {
-    "duration_ms": 10,
-    "enabled": true
-  },
-  "release": {
-    "duration_ms": 30,
-    "enabled": true
-  }
+  "impact": { "enabled": true, "duration_ms": 10 },
+  "release": { "enabled": true, "duration_ms": 30 }
 }
