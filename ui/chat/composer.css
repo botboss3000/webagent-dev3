@@ -123,8 +123,8 @@
 /* ── Chat input primitives ─────────────────────────────────────────────
    `.chat-pill` provides the grid-based multi-line composer structure.
    `.chat-pill-1line` adapts the same controls to a compact single-row layout.
-   JavaScript applies `.has-text`, `.no-voice`, and `.thinking` to reflect input
-   and activity state. */
+   JavaScript applies `.thinking` while a run is active and `.dictating` while
+   the microphone is recording. */
 .chat-pill {
     /* 3×2 grid layout:
        (1,1) empty — future left-column buttons,
