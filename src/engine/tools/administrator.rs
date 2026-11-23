@@ -41,6 +41,7 @@ pub(crate) const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentT
         "repository_access",
         webagent_administration::arguments::RepositoryAccess
     ),
+    webagent_abilities::argument_type!("test_login", webagent_accounts::TestLoginArguments),
 ];
 
 /// Administrator tools the definition check counts as handled: the compiled ones when the

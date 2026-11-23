@@ -119,7 +119,10 @@ pub fn is_test_account(account: &Value) -> bool {
     account["is_test_account"] == true
 }
 mod test_accounts;
-pub use test_accounts::{test_account_id, test_username};
+pub use test_accounts::{
+    test_account_id, test_username, TestAccountLimits, TestLoginArguments, TestPersonaBinding,
+    LIVE_TEST_ACCOUNTS, TEST_PERSONA_KIND,
+};
 fn username_ok(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128

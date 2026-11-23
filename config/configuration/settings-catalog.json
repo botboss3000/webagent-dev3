@@ -67,6 +67,7 @@
     "docs/*/*.json": "Developer documentation edited in place, not app settings; the composer never offers it.",
     "docs/*/*.md": "Developer documentation edited in place, not app settings; the composer never offers it.",
     "config/browser/browser-pages.json": "Which app pages agent browsers may use and whether they may sign in as the person chatting; a security setting changed only by a reviewed source edit.",
+    "config/accounts/test-accounts.json": "Test-account limits (runs, sign-in life, chat retention) bound what an administrator's agent can do as a test account; a security setting changed only by a reviewed source edit.",
     "config/accounts/authentication.json": "Trusted proxy addresses decide whose forwarded IP is believed; a security setting changed only by a reviewed source edit.",
     "config/storage/storage-settings.json": "Admin database encryption switch; a security setting changed only on the administrator encryption page or by a reviewed source edit.",
     "config/configuration/prompts/*.json": "Prompts are never offered by the composer (Q1).",

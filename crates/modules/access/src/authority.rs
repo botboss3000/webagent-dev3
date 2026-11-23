@@ -138,8 +138,16 @@ impl LiveAccess {
     pub fn max_sessions(&self) -> u32 {
         self.tier.max_sessions
     }
+    /// The tier's limit; a test account also stays within the live test-account cap
+    /// (`config/accounts/test-accounts.json`), so a test never starves real users.
     pub fn max_active_runs(&self) -> u32 {
-        self.tier.max_active_runs
+        if self.principal.test_account {
+            self.tier
+                .max_active_runs
+                .min(webagent_accounts::TestAccountLimits::live().max_active_runs)
+        } else {
+            self.tier.max_active_runs
+        }
     }
 
     fn agent_tool_permission(&self, name: &str) -> Permission {

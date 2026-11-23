@@ -57,6 +57,16 @@ impl Store {
             .map(|policy| (policy.trim_idle_days, policy.compress_idle_days))
             .unwrap_or((7, 7));
         let now = webagent_host_core::now() as i64;
+        // A test account's chats are deleted once idle past its retention (live config).
+        if self
+            .accounts_repository()
+            .is_test_account_id(&self.user_id)
+            .await?
+        {
+            let days = webagent_accounts::TestAccountLimits::live().session_retention_days;
+            self.erase_sessions_idle_before(now - (days as i64) * 86_400)
+                .await?;
+        }
         let trimmed = self.trim_history(trim_days, now).await?;
         // Repack after trimming, so trimmed rows are packed once.
         self.compression_upkeep(compress_days, now).await?;

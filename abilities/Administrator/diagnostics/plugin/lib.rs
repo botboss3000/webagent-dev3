@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::future::Future;
 
 /// Tools this plugin runs.
-pub const TOOLS: [&str; 2] = ["read_diagnostics", "agent_review"];
+pub const TOOLS: [&str; 3] = ["read_diagnostics", "agent_review", "test_login"];
 
 /// The app, as one plugin call sees it.
 pub trait Host {
@@ -47,6 +47,7 @@ pub fn arguments(tool: &str) -> Option<&'static [&'static str]> {
             "subject_session_id",
             "release_id",
         ]),
+        "test_login" => Some(&["tier"]),
         _ => None,
     }
 }
@@ -79,6 +80,8 @@ fn route(tool: &str, arguments: &Value) -> Result<(&'static str, Value, Value), 
             };
             (name, Value::Null, arguments.clone())
         }
+        // The app signs the call's own browser in; the cookie never comes back here.
+        "test_login" => ("testing.login", Value::Null, arguments.clone()),
         _ => return Err("Unknown Diagnostics tool".into()),
     })
 }
@@ -171,6 +174,20 @@ mod tests {
             let (_, seen) = run("agent_review", arguments.clone());
             assert_eq!((seen[0].0.as_str(), &seen[0].2), (name, &arguments));
         }
+    }
+
+    #[test]
+    fn test_login_is_one_testing_login_request() {
+        let arguments = json!({"tier":"free"});
+        let (result, seen) = run("test_login", arguments.clone());
+        assert!(result.is_ok());
+        assert_eq!(
+            seen,
+            vec![("testing.login".to_owned(), Value::Null, arguments)]
+        );
+        let (result, seen) = run("test_login", json!({"tier":"free","cookie":"x"}));
+        assert!(result.is_err());
+        assert!(seen.is_empty());
     }
 
     #[test]

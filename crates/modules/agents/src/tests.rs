@@ -124,6 +124,7 @@ impl Access for Fixture {
             },
             tier_id: "member".into(),
             access_revision: 1,
+            test_account: false,
         })
     }
     async fn authority(&self, agent: &str, _write: bool) -> Result<Value> {

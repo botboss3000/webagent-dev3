@@ -301,6 +301,7 @@ impl Host<'_> {
             Kind::Watch => self.watch(&request.params, &request.body).await,
             Kind::ProviderRequest => self.provider_request(&request.params, &request.body).await,
             Kind::Review(action) => Ok(self.review(action, &request.params, &request.body).await),
+            Kind::TestLogin => Ok(self.test_login(&request.body).await),
         };
         result.map_err(|error| format!("{error:#}"))
     }
@@ -382,6 +383,36 @@ impl Host<'_> {
                 };
                 result.unwrap_or_else(|_| unavailable(failed))
             }
+        }
+    }
+
+    /// Diagnostics `test_login` for this call's own session and run, administrators only.
+    /// Every outcome is a finished tool result; none carries the sign-in cookie.
+    async fn test_login(&self, body: &Value) -> Value {
+        if !self.administrator().await.unwrap_or(false) {
+            return json!({"status":"denied","error_kind":"denied",
+                "output":"test_login is administrator-only"});
+        }
+        let arguments: webagent_accounts::TestLoginArguments =
+            match serde_json::from_value(body.clone()) {
+                Ok(arguments) => arguments,
+                Err(error) => {
+                    return json!({"status":"error","error_kind":"invalid_arguments",
+                    "output":format!("Invalid test_login arguments: {error}")})
+                }
+            };
+        match crate::browser::test_persona_sign_in(
+            self.call.app,
+            self.actor,
+            self.call.sid,
+            self.call.run_id,
+            &arguments.tier,
+        )
+        .await
+        {
+            Ok(output) => json!({"status":"success","output":output}),
+            Err(error) => json!({"status":"error","error_kind":"test_login_unavailable",
+                "output":format!("{error:#}")}),
         }
     }
 

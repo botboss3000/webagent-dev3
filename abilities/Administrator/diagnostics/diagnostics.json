@@ -3,14 +3,15 @@
   "kind": "ability",
   "icon": "activity",
   "color": "#e0af68",
-  "description": "Read sanitized V3 run diagnostics: the current session's runs, checkpoints and context assembly, without model text or credentials.",
-  "skill_summary": "Typed, sanitized run diagnostics for the current session.",
+  "description": "Read sanitized V3 run diagnostics (the current session's runs, checkpoints and context assembly, without model text or credentials) and sign the agent's browser in as a test account of one tier.",
+  "skill_summary": "Typed, sanitized run diagnostics for the current session, and test-account sign-in per tier.",
   "migration_note": "Runs as an ability plugin (plugin.json, requests_v1): the app answers its diagnostics and review requests for the calling session and checks administrator authority. Execution still requires applicable installation, account-tier, agent, membership and session grants.",
   "order": 2,
   "placeholder": false,
   "tools": [
     "read_diagnostics",
-    "agent_review"
+    "agent_review",
+    "test_login"
   ],
   "readiness": "ready",
   "config": {},

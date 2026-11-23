@@ -421,6 +421,111 @@ fn signed_key(sid: &str) -> String {
     format!("administrator_browser:{sid}")
 }
 
+/// The record of this session's test-account browser (Diagnostics `test_login`): the test
+/// account, its sign-in cookie, the run it belongs to and its end. The cookie goes only to
+/// the worker's browser; it is never returned to the model, logged or put in a run record.
+fn persona_key(sid: &str) -> String {
+    format!("test_persona_browser:{sid}")
+}
+
+/// Ends this session's test-account sign-in, if any.
+async fn end_persona(app: &App, sid: &str) -> Result<()> {
+    if let Some(old) = app.store.get(&persona_key(sid)).await? {
+        if let Some(token) = old["cookie"].as_str() {
+            app.store.accounts_repository().logout(token).await?;
+        }
+        app.store.delete(&persona_key(sid)).await?;
+    }
+    Ok(())
+}
+
+/// Diagnostics `test_login`: signs this session's Browser Control browser in as `tier`'s
+/// test account for run `run_id` of administrator `actor`. The caller (the Diagnostics
+/// request handler) has checked administrator authority. The anonymous tier gets a fresh
+/// test visitor each time. Returns what the agent may see: never the cookie.
+pub(crate) async fn test_persona_sign_in(
+    app: &App,
+    actor: &str,
+    sid: &str,
+    run_id: &str,
+    tier: &str,
+) -> Result<Value> {
+    use crate::access::Role;
+    let policy = app.store.read_access_policy()?;
+    if policy["tiers"].get(tier).is_none() {
+        let names: Vec<&String> = policy["tiers"]
+            .as_object()
+            .map(|tiers| tiers.keys().collect())
+            .unwrap_or_default();
+        anyhow::bail!("Unknown account tier {tier:?}; tiers: {names:?}");
+    }
+    let role = Role::for_tier(tier);
+    if role == Role::Administrator {
+        anyhow::bail!("Test accounts never use the administrator tier");
+    }
+    // The sign-in ends with this run, so the run must be this session's, running, in the
+    // caller's own store (an administrator's own chat).
+    let store = app.store.for_user(actor).await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM run_index WHERE id=? AND session_id=?")
+            .bind(run_id)
+            .bind(sid)
+            .fetch_optional(&store.pool)
+            .await?;
+    if !status.is_some_and(|status| !webagent_engine::runtime::failure::terminal(&status)) {
+        anyhow::bail!("test_login works only during a turn of your own chat");
+    }
+    let accounts = app.store.accounts_repository();
+    let account = if role == Role::Guest {
+        accounts
+            .create_test_guest_account(crate::access::initial_guest_access())
+            .await?
+    } else {
+        accounts
+            .ensure_test_account(tier, "user")
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                "The reserved name {} belongs to another account; no test account for this tier",
+                webagent_accounts::test_username(tier)
+            )
+            })?
+    };
+    let user = account["user_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Test account unavailable"))?
+        .to_owned();
+    let limits = webagent_accounts::TestAccountLimits::live();
+    let _guard = app.gate.lock().await;
+    end_persona(app, sid).await?;
+    let session = accounts
+        .issue_test_persona_session(
+            &user,
+            now(),
+            limits.sign_in_minutes * 60,
+            webagent_accounts::TestPersonaBinding {
+                creator_user_id: actor,
+                creator_session_id: sid,
+                creator_run_id: run_id,
+            },
+        )
+        .await?;
+    app.store
+        .put(
+            &persona_key(sid),
+            &json!({"user_id":user,"cookie":session.token,"expires_at":session.expires,
+                "generation":account["generation"],"run_id":run_id,"tier":tier}),
+        )
+        .await?;
+    Ok(json!({
+        "signed_in_as": account["username"],
+        "user_id": user,
+        "tier": tier,
+        "expires_at": session.expires,
+        "browser": "Browser Control navigations to the app now open it as this test account until this turn ends, the browser leaves the app, or the sign-in expires. The sign-in itself is never shown."
+    }))
+}
+
 /// A new signed-in browser session for the caller, signing out any earlier one.
 async fn sign_in(
     host: &tools::native_host::Host<'_>,
@@ -472,9 +577,13 @@ async fn server_authority(
     host: &tools::native_host::Host<'_>,
     app: &App,
     sid: &str,
+    run_id: &str,
     args: &Value,
 ) -> Result<Value> {
     use tools::native::NativeHost;
+    if let Some(authority) = persona_authority(host, app, sid, run_id, args).await? {
+        return Ok(authority);
+    }
     let user = host.actor().to_owned();
     let account = app
         .store
@@ -541,6 +650,53 @@ async fn server_authority(
         "allowed_session_ids": [sid],
         "sites": {"allow": list("allow_sites"), "block": list("block_sites")},
     }))
+}
+
+/// The test-account browser's authority while its sign-in belongs to this run, is unexpired
+/// and the call stays on the app; otherwise the sign-in ends here and `None` falls through
+/// to the ordinary signed-in or signed-out authority.
+async fn persona_authority(
+    host: &tools::native_host::Host<'_>,
+    app: &App,
+    sid: &str,
+    run_id: &str,
+    args: &Value,
+) -> Result<Option<Value>> {
+    use tools::native::NativeHost;
+    let Some(persona) = app.store.get(&persona_key(sid)).await? else {
+        return Ok(None);
+    };
+    let origin = webagent_webapp::pages::public_origin();
+    let first_navigate = (args["action"] == "script")
+        .then(|| {
+            args["steps"]
+                .as_array()?
+                .iter()
+                .find(|step| step["action"] == "navigate")
+                .cloned()
+        })
+        .flatten();
+    let args = first_navigate.as_ref().unwrap_or(args);
+    let stays = args["action"] != "navigate" || rules::signs_in(args, &origin, &json!(true));
+    let live = persona["run_id"] == run_id
+        && persona["expires_at"].as_u64().unwrap_or(0) > now() + 5
+        && stays;
+    if !live {
+        let _guard = app.gate.lock().await;
+        end_persona(app, sid).await?;
+        return Ok(None);
+    }
+    let end = persona["expires_at"].as_u64().unwrap_or(0);
+    Ok(Some(json!({
+        "session_id": sid,
+        "user_id": persona["user_id"],
+        "agent_id": host.session_agent_id(sid).await?,
+        "cookie": persona["cookie"],
+        "generation": persona["generation"],
+        "expires_at": end.min(now() + SERVER_LEASE_SECS),
+        "allowed_session_ids": [sid],
+        "pages": rules::pages::Pages::test_persona().authority(),
+    })))
 }
 
 /// A saved site sign-in's key in its user's store.
@@ -685,7 +841,7 @@ async fn execute_server(
     use tools::native::NativeHost;
     let host = tools::native_host::Host(app);
     host.authorize(call, name, args, &cancel).await?;
-    let authority = server_authority(&host, app, call.sid, args).await?;
+    let authority = server_authority(&host, app, call.sid, call.run_id, args).await?;
     // Signed out, the caller's own vault values and saved sign-in go to the worker for this
     // call only; the model never sees them.
     let store = app.store.for_user(host.actor()).await?;

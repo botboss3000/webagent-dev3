@@ -262,6 +262,8 @@ pub struct Principal {
     pub role: Role,
     pub tier_id: String,
     pub access_revision: u64,
+    /// A test account (Diagnostics `test_login`), from its record's flag.
+    pub test_account: bool,
 }
 impl Principal {
     /// Absent fields are allowed only for the original administrator record.
@@ -291,6 +293,7 @@ impl Principal {
             role,
             tier_id,
             access_revision,
+            test_account: webagent_accounts::is_test_account(account),
         })
     }
     pub fn active(&self) -> bool {

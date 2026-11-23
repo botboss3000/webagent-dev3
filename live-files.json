@@ -15,6 +15,7 @@
     "config/access/policy.json",
     "config/accounts/*.settings.json",
     "config/accounts/authentication.json",
+    "config/accounts/test-accounts.json",
     "config/agents/*.settings.json",
     "config/browser/*.settings.json",
     "config/browser/browser-limits.json",

@@ -108,9 +108,17 @@ pub async fn record_on(
     Ok(())
 }
 
+/// Whether a call by `principal` also counts for its agent: not for an administrator, and
+/// not for a test account, whose usage stays under the test account so a test never uses
+/// up an agent's daily allowance that real users share.
+#[must_use]
+pub fn charges_agent(principal: &webagent_access::Principal) -> bool {
+    !principal.administrator() && !principal.test_account
+}
+
 /// Add one model call made for `access` (its requester and agent) today.
 pub async fn record(pool: &SqlitePool, access: &LiveAccess, turn: Turn) -> Result<()> {
-    let agent = (!access.principal.administrator()).then_some(access.agent_id.as_str());
+    let agent = charges_agent(&access.principal).then_some(access.agent_id.as_str());
     record_on(pool, &access.principal.user_id, agent, today(), turn).await
 }
 
@@ -397,6 +405,24 @@ mod tests {
         assert_eq!(day, 1500);
         // A command adds no model turn.
         assert_eq!(used(&pool, REQUESTER, "u1", 100).await.unwrap().turns, 0);
+    }
+
+    #[test]
+    fn test_accounts_and_administrators_are_not_charged_to_the_agent() {
+        let principal = |role, test_account| webagent_access::Principal {
+            user_id: "u".into(),
+            status: webagent_access::AccountStatus::Active,
+            role,
+            tier_id: "free".into(),
+            access_revision: 1,
+            test_account,
+        };
+        use webagent_access::Role;
+        assert!(charges_agent(&principal(Role::User, false)));
+        assert!(charges_agent(&principal(Role::Guest, false)));
+        assert!(!charges_agent(&principal(Role::User, true)));
+        assert!(!charges_agent(&principal(Role::Guest, true)));
+        assert!(!charges_agent(&principal(Role::Administrator, false)));
     }
 
     #[test]

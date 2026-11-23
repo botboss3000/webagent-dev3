@@ -179,7 +179,8 @@ pub async fn guest_login<C: RecordCodec, H: Host>(
             if doc["expires"].as_u64().unwrap_or(0) > now {
                 if let Some(id) = doc["user_id"].as_str() {
                     if let Some(account) = repo.account_by_id(id).await? {
-                        if account["role"] != "guest" {
+                        // A test visitor is reached only through its test sign-in.
+                        if account["role"] != "guest" || crate::is_test_account(&account) {
                             return Err(conflict("Sign out before using guest access"));
                         }
                         if account["user_id"] == id

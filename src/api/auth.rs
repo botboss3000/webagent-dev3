@@ -184,6 +184,14 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
     if let Some(refused) = identity.kind.refuses_method(method.as_str()) {
         return ApiError(StatusCode::FORBIDDEN, refused.into()).into_response();
     }
+    // A test account only through its test sign-in, and that sign-in only while the
+    // administrator run that made it is still going (checked on every request).
+    if !identity.kind_matches_account()
+        || (identity.kind == access::identity::CredentialKind::TestPersona
+            && !test_persona_live(&app, &signed.document).await)
+    {
+        return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()).into_response();
+    }
     doc["_credential"] = json!(identity.kind.name());
     doc["_auth_key"] = json!(identity.credential_key);
     doc["_user_id"] = json!(user_id);
@@ -214,6 +222,26 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
         crate::wake::notify(&app).await;
     }
     response
+}
+/// Whether a test-persona sign-in's creating run is still going: one indexed status read in
+/// the creator's store, no decryption. Fails closed (missing creator, run or status = ended).
+pub(crate) async fn test_persona_live(app: &App, record: &Value) -> bool {
+    let (Some(creator), Some(run)) = (
+        record["creator_user_id"].as_str(),
+        record["creator_run_id"].as_str(),
+    ) else {
+        return false;
+    };
+    let Ok(store) = app.store.for_user(creator).await else {
+        return false;
+    };
+    let status: Option<String> = sqlx::query_scalar("SELECT status FROM run_index WHERE id=?")
+        .bind(run)
+        .fetch_optional(&store.pool)
+        .await
+        .ok()
+        .flatten();
+    status.is_some_and(|status| !webagent_engine::runtime::failure::terminal(&status))
 }
 /// A browser sign-in whose identity was built from its records, kept while they are unchanged.
 struct Remembered {

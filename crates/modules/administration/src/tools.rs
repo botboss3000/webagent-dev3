@@ -4,7 +4,7 @@
 //! Tools no ability owns a folder for live under `Administrator/native_tools/`.
 
 /// Every Administrator native tool.
-pub const TOOLS: [&str; 25] = [
+pub const TOOLS: [&str; 26] = [
     "git_tool",
     "resolve_conflict",
     "commit_and_push",
@@ -25,6 +25,7 @@ pub const TOOLS: [&str; 25] = [
     "terminal_close",
     "read_diagnostics",
     "agent_review",
+    "test_login",
     "start_tunnel",
     "get_tunnel_url",
     "build_work",
@@ -76,9 +77,10 @@ pub fn installed() -> bool {
 
 /// Administrator tools served by their ability's plugin (`plugin.json`, `requests_v1`)
 /// rather than this module, with that ability's `Group/ability_id` folder.
-pub const PLUGINS: [(&str, &str); 2] = [
+pub const PLUGINS: [(&str, &str); 3] = [
     ("read_diagnostics", "Administrator/diagnostics"),
     ("agent_review", "Administrator/diagnostics"),
+    ("test_login", "Administrator/diagnostics"),
 ];
 
 /// The ability folder whose plugin serves `name`, if a plugin does.

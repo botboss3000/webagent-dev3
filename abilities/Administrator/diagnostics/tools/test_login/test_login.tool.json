@@ -1,0 +1,39 @@
+{
+  "name": "test_login",
+  "description": "Sign this chat's Browser Control browser in to the app as the test account of one account tier (administrators only), to use the app as a person of that tier would",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "none",
+    "hint": "a repeat replaces this chat's test sign-in with a fresh one for the same turn"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "tier": {
+        "type": "string",
+        "description": "The account tier id to test as, for example free, or anonymous for a fresh not-signed-in visitor; never administrator"
+      }
+    },
+    "required": [
+      "tier"
+    ],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "test the app as a free user",
+      "check what an anonymous visitor sees",
+      "sign in as a test account"
+    ],
+    "keywords": [
+      "test account",
+      "test login",
+      "persona"
+    ]
+  }
+}

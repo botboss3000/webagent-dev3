@@ -1,0 +1,7 @@
+{
+  "_instructions": "Test accounts (one per signed-in account tier, plus a fresh test visitor per sign-in for the anonymous tier) that an administrator's agent signs in as with the Diagnostics test_login tool. max_active_runs: runs one test account may have going at once (the tier's own limit and the app-wide limit still apply; the lower wins). sign_in_minutes: the longest a test sign-in lasts; it also ends when the run that made it ends. session_retention_days: test accounts' chats older than this are deleted by the storage upkeep. A security setting: change it only by a reviewed edit.",
+  "schema_version": 1,
+  "max_active_runs": 2,
+  "sign_in_minutes": 120,
+  "session_retention_days": 7
+}

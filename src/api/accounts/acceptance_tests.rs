@@ -672,3 +672,267 @@ async fn each_credential_kind_has_its_refused_and_allowed_side() {
         StatusCode::OK
     );
 }
+
+/// One request with an explicit sign-in cookie and CSRF token; returns status and JSON body.
+async fn persona_call(
+    app: &App,
+    method: &str,
+    uri: &str,
+    session: &webagent_accounts::IssuedSession,
+    body: Value,
+) -> (StatusCode, Value) {
+    let response = router(app.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("cookie", format!("v3_session={}", session.token))
+                .header("x-csrf-token", &session.csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// A running administrator run in session `sid`, as `test_login` requires.
+async fn running_admin_run(app: &App, sid: &str, run: &str) {
+    let admin = app.store.for_user("admin").await.unwrap();
+    sqlx::query("INSERT INTO run_index(id,session_id,status,updated_at) VALUES(?,?,'running',1)")
+        .bind(run)
+        .bind(sid)
+        .execute(&admin.pool)
+        .await
+        .unwrap();
+}
+
+async fn end_admin_run(app: &App, run: &str) {
+    let admin = app.store.for_user("admin").await.unwrap();
+    sqlx::query("UPDATE run_index SET status='completed' WHERE id=?")
+        .bind(run)
+        .execute(&admin.pool)
+        .await
+        .unwrap();
+}
+
+const PERSONA_SID: &str = "11111111-2222-4333-8444-555555555555";
+const PERSONA_RUN: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+#[tokio::test]
+async fn a_test_persona_acts_as_its_tier_only_while_its_run_lasts() {
+    let (_root, app) = fixture().await;
+    running_admin_run(&app, PERSONA_SID, PERSONA_RUN).await;
+    let issue = |user: &'static str| {
+        let app = app.clone();
+        async move {
+            app.store
+                .accounts_repository()
+                .issue_test_persona_session(
+                    user,
+                    now(),
+                    600,
+                    webagent_accounts::TestPersonaBinding {
+                        creator_user_id: "admin",
+                        creator_session_id: PERSONA_SID,
+                        creator_run_id: PERSONA_RUN,
+                    },
+                )
+                .await
+        }
+    };
+    let persona = issue("test_free").await.unwrap();
+    // Allowed: the test account's own identity and settings.
+    let (status, me) = persona_call(&app, "GET", "/api/v3/auth/me", &persona, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["user_id"], "test_free");
+    let (status, _) = persona_call(
+        &app,
+        "PUT",
+        "/api/v3/auth/profile",
+        &persona,
+        json!({"username":"test-free","display_name":"Free tester"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Refused: administrator routes and another account's conversation.
+    let (status, _) = persona_call(
+        &app,
+        "GET",
+        "/api/v3/admin/access/accounts",
+        &persona,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let admin = app.store.for_user("admin").await.unwrap();
+    admin
+        .put(
+            "session:persona-private",
+            &json!({"id":"persona-private","agent_id":"shared_default","status":"active"}),
+        )
+        .await
+        .unwrap();
+    app.store
+        .register_shared_session("admin", "persona-private", "shared_default")
+        .await
+        .unwrap();
+    let (status, _) = persona_call(
+        &app,
+        "GET",
+        "/api/v3/sessions/persona-private",
+        &persona,
+        Value::Null,
+    )
+    .await;
+    assert!(!status.is_success(), "{status}");
+    // The run ends: so does the sign-in, on its next request.
+    end_admin_run(&app, PERSONA_RUN).await;
+    let (status, _) = persona_call(&app, "GET", "/api/v3/auth/me", &persona, Value::Null).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // A test account through an ordinary sign-in is refused; a person cannot get the kind.
+    let ordinary = sign_in_as(&app, "test_free").await;
+    assert_eq!(me_status(&app, &ordinary).await, StatusCode::UNAUTHORIZED);
+    assert!(issue("admin").await.is_err());
+}
+
+#[tokio::test]
+async fn test_login_signs_the_browser_in_without_showing_the_cookie() {
+    let (_root, app) = fixture().await;
+    // Refused outside a running turn of the caller's own chat.
+    let outside =
+        crate::browser::test_persona_sign_in(&app, "admin", PERSONA_SID, PERSONA_RUN, "free")
+            .await
+            .unwrap_err();
+    assert!(outside.to_string().contains("own chat"));
+    running_admin_run(&app, PERSONA_SID, PERSONA_RUN).await;
+    for (tier, refusal) in [
+        ("administrator", "administrator"),
+        ("gold", "Unknown account tier"),
+    ] {
+        let error =
+            crate::browser::test_persona_sign_in(&app, "admin", PERSONA_SID, PERSONA_RUN, tier)
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains(refusal), "{tier}: {error}");
+    }
+    let output =
+        crate::browser::test_persona_sign_in(&app, "admin", PERSONA_SID, PERSONA_RUN, "free")
+            .await
+            .unwrap();
+    assert_eq!(output["user_id"], "test_free");
+    assert_eq!(output["signed_in_as"], "test-free");
+    let record = app
+        .store
+        .get(&format!("test_persona_browser:{PERSONA_SID}"))
+        .await
+        .unwrap()
+        .unwrap();
+    let cookie = record["cookie"].as_str().unwrap().to_owned();
+    assert!(!output.to_string().contains(&cookie));
+    // The sign-in works, as the test account, and only through this record's cookie.
+    let doc = app
+        .store
+        .accounts_repository()
+        .inspect_session(&cookie, now())
+        .await
+        .unwrap()
+        .unwrap()
+        .finish()
+        .unwrap()
+        .document;
+    assert_eq!(doc["kind"], "test_persona");
+    assert_eq!(doc["creator_run_id"], PERSONA_RUN);
+    // No event payload carries the cookie.
+    let events = app.store.events("", 0).await.unwrap();
+    assert!(!serde_json::to_string(&events).unwrap().contains(&cookie));
+    // A repeat replaces the earlier sign-in, which ends at once.
+    let again =
+        crate::browser::test_persona_sign_in(&app, "admin", PERSONA_SID, PERSONA_RUN, "free")
+            .await
+            .unwrap();
+    assert!(!again.to_string().contains(&cookie));
+    assert!(app
+        .store
+        .accounts_repository()
+        .inspect_session(&cookie, now())
+        .await
+        .unwrap()
+        .is_none());
+    // The anonymous tier: a fresh flagged guest each time.
+    let visitor =
+        crate::browser::test_persona_sign_in(&app, "admin", PERSONA_SID, PERSONA_RUN, "anonymous")
+            .await
+            .unwrap();
+    let id = visitor["user_id"].as_str().unwrap();
+    assert!(id.starts_with("guest_"));
+    assert!(app
+        .store
+        .accounts_repository()
+        .is_test_account_id(id)
+        .await
+        .unwrap());
+}
+
+/// A session record and one chat message at `at` (Unix seconds) in `store`.
+async fn aged_session(store: &crate::store::Store, sid: &str, at: i64) {
+    store
+        .put(
+            &format!("session:{sid}"),
+            &json!({"id":sid,"agent_id":"shared_default","status":"active","metadata_revision":1,"created_at":at}),
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,?,'r','user',?,?)",
+    )
+    .bind(uuid())
+    .bind(sid)
+    .bind(store.seal(&json!("hello")).unwrap())
+    .bind(at)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn test_accounts_lose_chats_idle_past_retention_and_people_keep_theirs() {
+    let (_root, app) = fixture().await;
+    let day = 86_400;
+    let at = now() as i64;
+    let tester = app.store.for_user("test_free").await.unwrap();
+    aged_session(&tester, "retention-old", at - 8 * day).await;
+    aged_session(&tester, "retention-new", at - day).await;
+    let member = app
+        .store
+        .create_user_account("retention-member", "fixture-long-password-hash")
+        .await
+        .unwrap();
+    let member = member["user_id"].as_str().unwrap().to_owned();
+    let person = app.store.for_user(&member).await.unwrap();
+    aged_session(&person, "retention-person", at - 30 * day).await;
+    tester.trim_history_when_due().await.unwrap();
+    person.trim_history_when_due().await.unwrap();
+    let gone = tester.get("session:retention-old").await.unwrap();
+    assert!(gone.is_none() || gone.unwrap()["status"] == "deleted");
+    assert_eq!(
+        tester.get("session:retention-new").await.unwrap().unwrap()["status"],
+        "active"
+    );
+    assert_eq!(
+        person
+            .get("session:retention-person")
+            .await
+            .unwrap()
+            .unwrap()["status"],
+        "active"
+    );
+}

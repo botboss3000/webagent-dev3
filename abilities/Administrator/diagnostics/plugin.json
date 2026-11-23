@@ -9,14 +9,16 @@
   "effect": "write",
   "tools": [
     "read_diagnostics",
-    "agent_review"
+    "agent_review",
+    "test_login"
   ],
   "requests": [
     "diagnostics.progress",
     "diagnostics.issues",
     "review.note",
     "review.open",
-    "review.resolve"
+    "review.resolve",
+    "testing.login"
   ],
   "build": {
     "toolchain": "rust-1.99",
@@ -35,7 +37,9 @@
       "tools/read_diagnostics/read_diagnostics.tool.json",
       "tools/read_diagnostics/read_diagnostics.skill.md",
       "tools/agent_review/agent_review.tool.json",
-      "tools/agent_review/agent_review.skill.md"
+      "tools/agent_review/agent_review.skill.md",
+      "tools/test_login/test_login.tool.json",
+      "tools/test_login/test_login.skill.md"
     ]
   }
 }

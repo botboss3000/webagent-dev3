@@ -628,6 +628,14 @@ pub fn validate_path(
         if get("session_id").is_some_and(|sid| !shaped(sid, 36, 36, hex_id)) {
             return Err(Fault::rejected("Invalid chat session id"));
         }
+        // A test account's browser uses the app as that account: its own conversations and
+        // agents, any page; the app refuses what the account may not see.
+        if pages.persona {
+            if !shaped(get("agentView").unwrap_or("config"), 1, 40, lower_id) {
+                return Err(Fault::rejected("Unsupported agent view"));
+            }
+            return Ok(urlunsplit("", "", &parsed.path, &urlencode(&query), ""));
+        }
         if get("session_id").is_some_and(|sid| sid != session_id) {
             return Err(Fault::rejected(format!(
                 "This browser opens only its own conversation; use session_id={session_id}"
@@ -670,6 +678,10 @@ pub fn validate_path(
         ));
     }
     if parsed.path == "/api/v3/auth/me" {
+        return Ok(parsed.path);
+    }
+    // A test account's browser reads any app API route; the app answers for that account.
+    if pages.persona && parsed.path.starts_with("/api/v3/") {
         return Ok(parsed.path);
     }
     let prefix = format!("/api/v3/sessions/{session_id}");
@@ -1124,6 +1136,49 @@ mod preview_route_tests {
     fn any_tab() -> Pages {
         Pages::from_authority(&json!({"landing_tab":"wiki","app_pages":[{"tab":"*"}]}))
             .expect("rules")
+    }
+
+    #[test]
+    fn a_test_persona_browser_opens_its_own_account_routes_and_others_stay_confined() {
+        let sid = "12345678-1234-4123-8123-123456789abc";
+        let other = "87654321-4321-4321-8321-cba987654321";
+        let persona = Pages::from_authority(&Pages::test_persona().authority()).expect("rules");
+        assert!(persona.persona);
+        let route = format!("/app?tab=chat&session_id={other}");
+        assert_eq!(
+            validate_path(&Value::from(route.clone()), sid, "shared_default", &persona).unwrap(),
+            route
+        );
+        assert!(validate_path(&Value::from(route), sid, "shared_default", &any_tab()).is_err());
+        for path in [
+            "/api/v3/sessions",
+            "/api/v3/user/status",
+            "/api/v3/accounts",
+        ] {
+            assert_eq!(
+                validate_path(&Value::from(path), sid, "shared_default", &persona).unwrap(),
+                path
+            );
+            assert!(validate_path(&Value::from(path), sid, "shared_default", &any_tab()).is_err());
+        }
+        // Still only exact relative routes on this origin, and no API query strings.
+        for bad in [
+            "https://other.test/app",
+            "/app/../x",
+            "/api/v3/sessions?x=1",
+            "/ui//a",
+        ] {
+            assert!(validate_path(&Value::from(bad), sid, "shared_default", &persona).is_err());
+        }
+        // The flag comes only from the trusted authority, exactly true.
+        for authority in [
+            json!({"landing_tab":"app","app_pages":[{"tab":"*"}],"persona":false}),
+            json!({"landing_tab":"app","app_pages":[{"tab":"*"}],"persona":"yes"}),
+            json!({"landing_tab":"app","app_pages":[{"tab":"*"}],"persona":true,"x":1}),
+        ] {
+            assert!(Pages::from_authority(&authority).is_none(), "{authority}");
+        }
+        assert!(!any_tab().persona);
     }
 
     #[test]

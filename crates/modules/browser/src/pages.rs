@@ -35,6 +35,11 @@ pub struct Pages {
     /// The allowed pages: every listed parameter must match (`"*"` any value, `""` left
     /// out); parameters a rule does not name are not checked.
     pub app_pages: Vec<Map<String, Value>>,
+    /// A browser signed in as a test account (Diagnostics `test_login`): it uses the app as
+    /// that account would, so any app page and API read route opens and the app itself
+    /// decides (a test account is refused administrator pages and other accounts' data).
+    /// Never read from the file; only the app's trusted authority sets it.
+    pub persona: bool,
 }
 
 impl Default for Pages {
@@ -46,6 +51,7 @@ impl Default for Pages {
             sign_in_app: false,
             landing_tab: "session-metrics".into(),
             app_pages: vec![metrics],
+            persona: false,
         }
     }
 }
@@ -112,6 +118,7 @@ impl Pages {
                     Ok(rule.clone())
                 })
                 .collect::<Result<_>>()?,
+            persona: false,
         };
         let landing = [("tab".to_owned(), pages.landing_tab.clone())];
         if !pages.allows(&landing) {
@@ -147,16 +154,43 @@ impl Pages {
     /// The rules a trusted authority carries ([`Pages::authority`]), checked as the file is.
     #[must_use]
     pub fn from_authority(value: &Value) -> Option<Self> {
-        let rules = value.as_object().filter(|rules| rules.len() == 2)?;
+        let rules = value.as_object()?;
+        let persona = match rules.get("persona") {
+            None => false,
+            Some(Value::Bool(true)) => true,
+            Some(_) => return None,
+        };
+        if rules.len() != 2 + usize::from(persona) {
+            return None;
+        }
         let file = json!({"schema_version": 1, "sign_in_app": true,
             "landing_tab": rules.get("landing_tab")?, "app_pages": rules.get("app_pages")?});
-        Self::parse(&serde_json::to_vec(&file).ok()?).ok()
+        let mut pages = Self::parse(&serde_json::to_vec(&file).ok()?).ok()?;
+        pages.persona = persona;
+        Some(pages)
+    }
+
+    /// The rules of a test-account browser: every page, the app decides ([`Pages::persona`]).
+    #[must_use]
+    pub fn test_persona() -> Self {
+        let mut any = Map::new();
+        any.insert("tab".into(), json!("*"));
+        Self {
+            sign_in_app: true,
+            landing_tab: "app".into(),
+            app_pages: vec![any],
+            persona: true,
+        }
     }
 
     /// The rules as the worker's trusted authority carries them.
     #[must_use]
     pub fn authority(&self) -> Value {
-        json!({"landing_tab": self.landing_tab, "app_pages": self.app_pages})
+        let mut value = json!({"landing_tab": self.landing_tab, "app_pages": self.app_pages});
+        if self.persona {
+            value["persona"] = json!(true);
+        }
+        value
     }
 }
 

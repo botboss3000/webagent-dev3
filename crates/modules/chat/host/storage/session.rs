@@ -561,6 +561,26 @@ impl Store {
         self.erase_session(sid, body, Erase::Archived).await
     }
 
+    /// Test-account retention: erases every session whose last message is older than
+    /// `before` (Unix seconds), in any status, as an agent deletion would. Plain columns
+    /// only decide which (no decryption). Returns how many were erased.
+    pub(crate) async fn erase_sessions_idle_before(&self, before: i64) -> Result<u64> {
+        let idle: Vec<String> = sqlx::query_scalar(
+            "SELECT session_id FROM chat GROUP BY session_id HAVING MAX(created_at)<? LIMIT 50",
+        )
+        .bind(before)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut erased = 0;
+        for sid in idle {
+            if self.get(&format!("session:{sid}")).await?.is_some() {
+                self.delete_agent_session(&sid).await?;
+                erased += 1;
+            }
+        }
+        Ok(erased)
+    }
+
     /// Agent deletion erases each of its sessions in any status, Main Chat included.
     pub(crate) async fn delete_agent_session(&self, sid: &str) -> Result<()> {
         let Some(session) = self.get(&format!("session:{sid}")).await? else {

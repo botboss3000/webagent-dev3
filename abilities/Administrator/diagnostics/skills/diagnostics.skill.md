@@ -7,6 +7,10 @@ Use `read_diagnostics` for the native bounded current-session/run diagnostic vie
 With `issues: true`, `read_diagnostics` returns the conversation tree's grouped tool-failure issues (tool, error kind, message template, retries, recoveries, rework and artifact counts) and the notes already recorded. The `agent_review` tool skill explains how to rank them, find causes, and record an explanation for the group you are fixing.
 
 
+To check the app as a person of one account tier would see it, `test_login` signs this chat's
+Browser Control browser in as that tier's test account (never an administrator; see its tool
+skill), then use Browser Control on the app.
+
 ## Tool folder layout and review notes
 
 A tool folder may hold only `<tool>.skill.md`; placeholder `dev_*` folders can be empty. Read the folder before assuming a `<tool>.tool.json` exists.

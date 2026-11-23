@@ -20,6 +20,10 @@ pub enum CredentialKind {
     NotificationReader,
     /// A linked browser-extension device secret.
     BrowserDevice,
+    /// A test account's sign-in, made by Diagnostics `test_login` for one administrator run:
+    /// a person of that tier inside its own account, never administrator power. The only
+    /// way a test account is signed in.
+    TestPersona,
 }
 
 impl CredentialKind {
@@ -32,6 +36,7 @@ impl CredentialKind {
             Self::MessagingBearer => "messaging_bearer",
             Self::NotificationReader => "notification_reader",
             Self::BrowserDevice => "browser_device",
+            Self::TestPersona => TEST_PERSONA,
         }
     }
     /// Whether an identity document (the handlers' JSON form) came from a widget or an agent
@@ -54,6 +59,9 @@ impl CredentialKind {
     /// Value of the sign-in record's `kind` field; a record without one is a person's sign-in
     /// unless its label says it was issued to an agent browser (records made before `kind`).
     pub fn of_sign_in(record: &serde_json::Value) -> Self {
+        if record["kind"] == TEST_PERSONA {
+            return Self::TestPersona;
+        }
         if record["kind"] == AGENT_BROWSER
             || (record["kind"].is_null() && record["user_agent"] == LEGACY_AGENT_BROWSER_LABEL)
         {
@@ -66,6 +74,8 @@ impl CredentialKind {
 
 /// The sign-in record `kind` of an agent-browser sign-in.
 pub const AGENT_BROWSER: &str = webagent_accounts::AGENT_BROWSER_KIND;
+/// The sign-in record `kind` of a test-persona sign-in.
+pub const TEST_PERSONA: &str = webagent_accounts::TEST_PERSONA_KIND;
 /// The label agent-browser sign-ins carried before records had a `kind`.
 pub const LEGACY_AGENT_BROWSER_LABEL: &str = "Browser Control signed-in browser";
 
@@ -95,7 +105,15 @@ impl Identity {
     /// Administrator power: an active administrator account, never through a widget or an
     /// agent's browser.
     pub fn admin_power(&self) -> bool {
-        self.principal.administrator() && !self.kind.restricted()
+        self.principal.administrator()
+            && !self.kind.restricted()
+            && self.kind != CredentialKind::TestPersona
+            && !self.principal.test_account
+    }
+    /// Fail closed: a test account is reachable only through a test-persona sign-in, and a
+    /// test-persona sign-in only ever names a test account.
+    pub fn kind_matches_account(&self) -> bool {
+        self.principal.test_account == (self.kind == CredentialKind::TestPersona)
     }
     /// Whether this credential may change settings, permissions or approvals.
     pub fn may_change_settings(&self) -> bool {
@@ -126,6 +144,7 @@ mod tests {
                 role,
                 tier_id: "administrator".into(),
                 access_revision: 1,
+                test_account: false,
             },
             username: "u".into(),
             generation: "g".into(),
@@ -135,6 +154,33 @@ mod tests {
             credential_record: Vec::new(),
             agent_id: None,
         }
+    }
+
+    #[test]
+    fn a_test_persona_is_a_person_of_its_tier_and_matches_only_test_accounts() {
+        let mut persona = identity(Role::User, CredentialKind::TestPersona);
+        persona.principal.test_account = true;
+        assert!(persona.may_change_settings() && persona.kind_matches_account());
+        assert!(!persona.admin_power());
+        assert_eq!(persona.kind.refuses_method("POST"), None);
+        assert_eq!(
+            CredentialKind::of_sign_in(&json!({"kind": TEST_PERSONA})),
+            CredentialKind::TestPersona
+        );
+        assert_eq!(persona.kind.name(), "test_persona");
+        // Refused: the kind on a real account, a test account through any other kind, and
+        // administrator power even if a record claimed the role.
+        let mut real = identity(Role::User, CredentialKind::TestPersona);
+        assert!(!real.kind_matches_account());
+        real.kind = CredentialKind::Person;
+        assert!(real.kind_matches_account());
+        let mut test_person = identity(Role::User, CredentialKind::Person);
+        test_person.principal.test_account = true;
+        assert!(!test_person.kind_matches_account());
+        let mut claimed = identity(Role::Administrator, CredentialKind::TestPersona);
+        claimed.principal.test_account = true;
+        assert!(!claimed.admin_power());
+        assert_eq!(claimed.effective_role(), Role::User);
     }
 
     #[test]

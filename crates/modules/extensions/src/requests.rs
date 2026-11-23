@@ -24,6 +24,10 @@ pub enum Kind {
     /// session and run, checks administrator authority where the action needs it, and
     /// returns the finished tool result.
     Review(ReviewAction),
+    /// Diagnostics `test_login`: sign the current session's Browser Control browser in as a
+    /// test account of one tier. Administrator callers only; the cookie never reaches the
+    /// plugin or the model.
+    TestLogin,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,7 +51,7 @@ pub enum ReviewAction {
 }
 
 /// Every request the app offers, by name.
-pub const OFFERED: [(&str, Kind); 29] = [
+pub const OFFERED: [(&str, Kind); 30] = [
     ("agents.list", Kind::Route("GET", "/models/agents")),
     (
         "agents.identity.read",
@@ -122,6 +126,7 @@ pub const OFFERED: [(&str, Kind); 29] = [
     ("review.note", Kind::Review(ReviewAction::Note)),
     ("review.open", Kind::Review(ReviewAction::Open)),
     ("review.resolve", Kind::Review(ReviewAction::Resolve)),
+    ("testing.login", Kind::TestLogin),
 ];
 
 /// Why a declaration or a request was refused.

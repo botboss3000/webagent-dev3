@@ -2165,3 +2165,66 @@ async fn a_test_account_keeps_its_tier_and_is_never_an_administrator() {
     tx.commit().await.unwrap();
     assert_eq!(promoted["role"], "administrator");
 }
+
+#[test]
+fn test_account_limits_parse_the_shipped_file_and_refuse_out_of_range_values() {
+    let shipped = include_bytes!("../../../../config/accounts/test-accounts.json");
+    let limits = crate::TestAccountLimits::parse(shipped).unwrap();
+    assert_eq!(limits, crate::TestAccountLimits::default());
+    assert_eq!(
+        (
+            limits.max_active_runs,
+            limits.sign_in_minutes,
+            limits.session_retention_days
+        ),
+        (2, 120, 7)
+    );
+    for bad in [
+        json!({"schema_version":1,"max_active_runs":0,"sign_in_minutes":120,"session_retention_days":7}),
+        json!({"schema_version":1,"max_active_runs":2,"sign_in_minutes":2000,"session_retention_days":7}),
+        json!({"schema_version":1,"max_active_runs":2,"sign_in_minutes":120,"session_retention_days":0}),
+        json!({"schema_version":2,"max_active_runs":2,"sign_in_minutes":120,"session_retention_days":7}),
+        json!({"schema_version":1,"max_active_runs":2,"sign_in_minutes":120,"session_retention_days":7,"x":1}),
+    ] {
+        assert!(
+            crate::TestAccountLimits::parse(bad.to_string().as_bytes()).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_test_persona_sign_in_is_issued_only_for_an_active_test_account() {
+    let f = Fixture::new().await;
+    let r = f.repo();
+    r.ensure_test_account("free", "user")
+        .await
+        .unwrap()
+        .unwrap();
+    let binding = || crate::TestPersonaBinding {
+        creator_user_id: "admin",
+        creator_session_id: "11111111-2222-4333-8444-555555555555",
+        creator_run_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    };
+    let issued = r
+        .issue_test_persona_session("test_free", 100, 600, binding())
+        .await
+        .unwrap();
+    assert_eq!(issued.expires, 700);
+    let doc = r.auth_document(&issued.token).await.unwrap().unwrap();
+    assert_eq!(doc["kind"], crate::TEST_PERSONA_KIND);
+    assert_eq!(doc["creator_user_id"], "admin");
+    let member = f.active("member").await;
+    assert!(r
+        .issue_test_persona_session(&member, 100, 600, binding())
+        .await
+        .is_err());
+    let bad = crate::TestPersonaBinding {
+        creator_run_id: "../x",
+        ..binding()
+    };
+    assert!(r
+        .issue_test_persona_session("test_free", 100, 600, bad)
+        .await
+        .is_err());
+}
