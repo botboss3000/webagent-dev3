@@ -14,6 +14,14 @@ Frontend guidance for the v3 interface; it grants no tool permissions. Ship UI
 source through the broker task workflow. Before a browser journey, resolve its
 registered route and navigate straight to it.
 
+## Two UI folders: web/ replaces ui/
+
+`web/` holds the new UI, served at `/web/...`; `ui/` is the current UI, replaced page by
+page and then deleted. New UI work goes in `web/` unless the user asks to change the
+current page in `ui/`. Read `web/README.md` before working there: `web/` never imports
+from `/ui/`, new pages carry their own styles, `web/admin/` is administrator-only, and a
+current page switches over by re-exporting its `web/` page from its `ui/main-panel` entry.
+
 ## Mobile and desktop, one layout
 
 Most use is on a phone. Every UI change must work at phone width (about

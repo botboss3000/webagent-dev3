@@ -583,7 +583,7 @@ pub(super) fn router(app: App) -> Router {
             // re-downloading every module while a live UI publish still applies at once.
             // Everything else, including generated JSON and API data, is never stored.
             let path=request.uri().path();
-            let static_code=path.starts_with("/ui/")
+            let static_code=(path.starts_with("/ui/")||path.starts_with("/web/"))
                 &&[".js",".css",".svg",".png",".woff2"].iter().any(|ext|path.ends_with(ext));
             let mut response=next.run(request).await;
             if public_widget_module {response.headers_mut().insert("access-control-allow-origin",HeaderValue::from_static("*"));}

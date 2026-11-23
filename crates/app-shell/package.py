@@ -26,10 +26,10 @@ TARGETS = {
 }
 ANDROID_ABI = {"aarch64-linux-android": ("arm64-v8a", "aarch64"),
                "x86_64-linux-android": ("x86_64", "x86_64")}
-APP_FOLDERS = ["ui", "abilities", "config", "plugins/gates", "plugins/engine"]
+APP_FOLDERS = ["ui", "web", "abilities", "config", "plugins/gates", "plugins/engine"]
 # Server-only parts: the administrator pages (Builds, Host Admin, App), the Administrator ability
 # pack (a drop-in pack the core build does not include) and the developer docs.
-APP_EXCLUDE = ["ui/main-panel/Administrator", "abilities/Administrator", "docs"]
+APP_EXCLUDE = ["ui/main-panel/Administrator", "web/admin", "abilities/Administrator", "docs"]
 FEATURES = "linked-context,stable-abilities"
 
 

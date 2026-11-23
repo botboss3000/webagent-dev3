@@ -41,6 +41,13 @@ fn asset(folder: &Path, base: &str, name: &str) -> Result<String, String> {
 
 /// The folder under `ui/main-panel/` whose pages and files only signed-in administrators get.
 pub const ADMINISTRATOR_FOLDER: &str = "Administrator";
+/// The folder under `web/` whose files only signed-in administrators get.
+pub const WEB_ADMINISTRATOR_FOLDER: &str = "admin";
+
+/// The new UI's folder, `web/`, kept beside the `ui/` folder it replaces page by page.
+pub fn web_root(ui: &Path) -> PathBuf {
+    ui.with_file_name("web")
+}
 
 /// Decodes `%XX` escapes as the file server does; malformed escapes stay as written.
 fn percent_decoded(path: &str) -> Vec<u8> {
@@ -63,27 +70,31 @@ fn percent_decoded(path: &str) -> Vec<u8> {
     out
 }
 
-/// Whether a request path names something in the administrator pages folder, read the way the
-/// `/ui` file server resolves it (escapes decoded, empty and `.` segments skipped). A `..`
-/// segment counts as inside, failing closed; the file server refuses those paths anyway.
+/// Whether a request path names something in an administrator folder (`ui/main-panel/Administrator/`
+/// or `web/admin/`), read the way the `/ui` and `/web` file servers resolve it (escapes decoded,
+/// empty and `.` segments skipped). A `..` segment counts as inside, failing closed; the file
+/// servers refuse those paths anyway.
 pub fn administrator_file(path: &str) -> bool {
-    // Only the `/ui` tree serves files; the router matches that prefix undecoded.
-    if !path.starts_with("/ui") {
+    // Only the `/ui` and `/web` trees serve files; the router matches those prefixes undecoded.
+    if !path.starts_with("/ui") && !path.starts_with("/web") {
         return false;
     }
     let decoded = percent_decoded(path);
     let mut segments = decoded
         .split(|&b| b == b'/')
         .filter(|segment| !segment.is_empty() && *segment != b".");
-    if segments.next() != Some(b"ui".as_slice()) {
-        return false;
-    }
+    let folder: &[&[u8]] = match segments.next() {
+        Some(b"ui") => &[b"main-panel", ADMINISTRATOR_FOLDER.as_bytes()],
+        Some(b"web") => &[WEB_ADMINISTRATOR_FOLDER.as_bytes()],
+        _ => return false,
+    };
     let rest: Vec<&[u8]> = segments.collect();
     rest.contains(&b"..".as_slice())
-        || (rest.first() == Some(&b"main-panel".as_slice())
+        || (rest.len() >= folder.len()
             && rest
-                .get(1)
-                .is_some_and(|folder| folder.eq_ignore_ascii_case(ADMINISTRATOR_FOLDER.as_bytes())))
+                .iter()
+                .zip(folder)
+                .all(|(part, name)| part.eq_ignore_ascii_case(name)))
 }
 
 /// The main pages in `ui/main-panel/`, plus the administrator pages in its `Administrator/`
@@ -277,6 +288,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(ui: &Path) -> Router<S> {
         .route_service("/setup.html", ServeFile::new(ui.join("setup.html")))
         .route("/config/ui/{*path}", get(config_ui))
         .nest_service("/ui", ui_files(ui))
+        .nest_service("/web", ui_files(&web_root(ui)))
 }
 
 /// UI settings files live in `config/ui/` (read live, checkout first), served at
@@ -480,6 +492,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn web_files_are_served_from_the_folder_beside_ui() {
+        let root = tempfile::tempdir().unwrap();
+        let ui = root.path().join("ui");
+        fs::create_dir_all(ui.join("chat")).unwrap();
+        fs::create_dir_all(root.path().join("web/chat")).unwrap();
+        fs::write(ui.join("chat/a.js"), "old").unwrap();
+        fs::write(root.path().join("web/chat/a.js"), "new").unwrap();
+        for (path, body) in [("/ui/chat/a.js", "old"), ("/web/chat/a.js", "new")] {
+            let response = routes::<()>(&ui)
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let bytes = axum::body::to_bytes(response.into_body(), 64)
+                .await
+                .unwrap();
+            assert_eq!(bytes.as_ref(), body.as_bytes(), "{path}");
+        }
+    }
+
+    #[tokio::test]
     async fn app_shell_carries_absolute_seo_tags_and_crawler_files() {
         let head = seo_head("https://example.test");
         for tag in [
@@ -615,6 +653,10 @@ mod tests {
             "/ui/main-panel/%41dministrator/x.js",
             "/ui/main%2Dpanel/Administrator/x.js",
             "/ui/main-panel/agents/../Administrator/x.js",
+            "/web/admin/builds/page.js",
+            "/web/Admin",
+            "/web/%61dmin/x.js",
+            "/web/chat/../admin/x.js",
         ] {
             assert!(administrator_file(path), "{path}");
         }
@@ -622,6 +664,9 @@ mod tests {
             "/ui/main-panel/agents/agents.css",
             "/ui/main-panel/notifications/notifications-page.js",
             "/ui/shared/Administrator/x.js",
+            "/web/chat/admin/x.js",
+            "/web/administration.js",
+            "/website/admin/x.js",
             "/app",
             "/api/v3/pages/catalog",
         ] {

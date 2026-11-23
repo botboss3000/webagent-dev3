@@ -55,7 +55,7 @@ pub(super) async fn live_ui(
         return StatusCode::NOT_FOUND.into_response();
     }
     let path = request.uri().path();
-    if (path == "/app" || path.starts_with("/ui/"))
+    if (path == "/app" || path.starts_with("/ui/") || path.starts_with("/web/"))
         && request
             .headers()
             .get("cookie")
@@ -68,7 +68,11 @@ pub(super) async fn live_ui(
         }
     }
     let path = request.uri().path();
-    if matches!(path, "/" | "/app" | "/setup.html") || path == "/ui" || path.starts_with("/ui/") {
+    if matches!(path, "/" | "/app" | "/setup.html")
+        || path == "/ui"
+        || path.starts_with("/ui/")
+        || path.starts_with("/web/")
+    {
         if let Some(ui) = webagent_webapp::configuration::live_root(
             Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
             &webagent_configuration::paths::checkout().join("ui"),
@@ -177,14 +181,20 @@ mod preview {
         uuid::Uuid::parse_str(sid).is_ok_and(|id| id.hyphenated().to_string() == sid)
     }
 
-    /// The file a UI request names under a variant's `ui/` folder, or `None` when the request
-    /// is not a UI file or would leave the folder. Symlinks are never followed.
+    /// The file a UI request names under a variant's `ui/` folder (or its `web/` sibling for
+    /// `/web/...`), or `None` when the request is not a UI file or would leave the folder.
+    /// Symlinks are never followed.
     pub(super) fn variant_file(root: &Path, request_path: &str) -> Option<PathBuf> {
-        let relative = match request_path {
-            "/app" => "index.html",
-            path => path.strip_prefix("/ui/")?,
+        let (mut file, relative) = match request_path {
+            "/app" => (root.to_path_buf(), "index.html"),
+            path => match path.strip_prefix("/ui/") {
+                Some(relative) => (root.to_path_buf(), relative),
+                None => (
+                    webagent_webapp::pages::web_root(root),
+                    path.strip_prefix("/web/")?,
+                ),
+            },
         };
-        let mut file = root.to_path_buf();
         for part in relative.split('/') {
             if part.is_empty() || part == "." || part == ".." || part.contains('\\') {
                 return None;
@@ -450,6 +460,14 @@ mod preview {
             assert!(variant_file(dir.path(), "/ui/shared/x.css").is_none());
             std::os::unix::fs::symlink("/etc/hostname", dir.path().join("link")).expect("link");
             assert!(variant_file(dir.path(), "/ui/link").is_none());
+            // `/web/...` reads the variant's `web/` folder beside its `ui/` folder.
+            let ui = dir.path().join("ui");
+            std::fs::create_dir_all(&ui).expect("ui folder");
+            std::fs::create_dir_all(dir.path().join("web/chat")).expect("web folder");
+            std::fs::write(dir.path().join("web/chat/b.js"), "x").expect("file");
+            assert!(variant_file(&ui, "/web/chat/b.js").is_some());
+            assert!(variant_file(&ui, "/web/../ui/x.js").is_none());
+            assert!(variant_file(&ui, "/web/chat/missing.js").is_none());
             assert!(variant_ok("option-a") && !variant_ok("A") && !variant_ok("../x"));
         }
     }
