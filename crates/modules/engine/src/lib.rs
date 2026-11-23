@@ -6,6 +6,7 @@ compile_error!("Choose an engine mode: linked-context or live-context");
 pub mod components;
 pub mod context_ledger;
 pub mod defaults;
+pub mod due;
 pub mod gates;
 pub mod model_client;
 pub mod output;

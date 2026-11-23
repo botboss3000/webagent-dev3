@@ -2,7 +2,9 @@
 use super::*;
 use crate::engine_runtime::Engine;
 pub(crate) async fn requeue_auto_approval(app: &App, id: &str) -> Result<()> {
-    Engine::requeue_auto_approval(&app.engine(), id).await
+    Engine::requeue_auto_approval(&app.engine(), id)
+        .await
+        .map(|_| ())
 }
 #[cfg(test)]
 pub(crate) async fn scheduler(app: App) {

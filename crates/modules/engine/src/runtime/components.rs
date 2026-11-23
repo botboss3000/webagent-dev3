@@ -5,6 +5,12 @@ use crate::context::abilities::Catalog;
 use crate::ports::*;
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Component pauses saved by this process. Paused runs are not in the scan's "work now", so
+/// the scheduler sweeps every account once after this moves (and once components are back).
+pub static COMPONENT_PAUSES: AtomicU64 = AtomicU64::new(0);
+
 impl<
         S: ScopedStorage
             + ModelRecords
@@ -58,7 +64,9 @@ impl<
         run["error"]=json!(match cause{
   Some(cause)=>format!("Required engine component {component} unavailable ({cause}); work resumes when the component is restored"),
   None=>"Required engine component unavailable; work resumes when the component is restored".to_owned()});
-        app.save(run).await
+        let saved = app.save(run).await;
+        COMPONENT_PAUSES.fetch_add(1, Ordering::AcqRel);
+        saved
     }
     pub async fn component_restore(&self, id: &str) -> Result<()> {
         let app = self;

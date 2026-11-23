@@ -2,6 +2,25 @@
 use super::*;
 impl Store {
     async fn requester_slots_schema(&self) -> Result<()> {
+        // Checked once per state root and process; every admission ran it before.
+        static READY: std::sync::LazyLock<
+            std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+        > = std::sync::LazyLock::new(Default::default);
+        if READY
+            .lock()
+            .map_err(|_| anyhow!("Slot schema registry unavailable"))?
+            .contains(&self.root)
+        {
+            return Ok(());
+        }
+        self.create_requester_slots().await?;
+        READY
+            .lock()
+            .map_err(|_| anyhow!("Slot schema registry unavailable"))?
+            .insert(self.root.clone());
+        Ok(())
+    }
+    async fn create_requester_slots(&self) -> Result<()> {
         sqlx::query("CREATE TABLE IF NOT EXISTS requester_run_slots(run_id TEXT PRIMARY KEY,requester_id TEXT NOT NULL,owner_id TEXT NOT NULL,session_id TEXT NOT NULL,released INTEGER NOT NULL DEFAULT 0,sequence INTEGER NOT NULL,replaced_by TEXT); CREATE INDEX IF NOT EXISTS requester_run_slots_actor ON requester_run_slots(requester_id,released)").execute(&self.app_pool).await?;
         let has:i64=sqlx::query_scalar("SELECT count(*) FROM pragma_table_info('requester_run_slots') WHERE name='replaced_by'").fetch_one(&self.app_pool).await?;
         if has == 0 {
@@ -18,7 +37,19 @@ impl Store {
         }
         Ok(())
     }
+    /// The first reconcile of a process reads every account (nothing is marked applied yet);
+    /// run it once at start-up so no request waits for it. A failure only leaves that work to
+    /// the first admission, as before.
+    pub(crate) async fn prime_requester_slots(&self) {
+        if let Err(error) = self.reconcile_requester_slots().await {
+            tracing::warn!("Requester slot reconciliation deferred: {error}");
+        }
+    }
     pub(crate) async fn reconcile_requester_slots(&self) -> Result<()> {
+        // One reconcile at a time per process: a second caller waits and then finds only the
+        // accounts written meanwhile, instead of reading the same accounts concurrently.
+        static RECONCILE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _one = RECONCILE.lock().await;
         self.requester_slots_schema().await?;
         // Read canonical WAL snapshots before the app writer. New admissions reserve
         // first. Absence cannot prove an interrupted canonical commit did not happen.

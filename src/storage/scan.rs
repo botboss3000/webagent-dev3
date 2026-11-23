@@ -1,22 +1,36 @@
-//! Periodic scans visit only accounts that can have work. Each open account database
+//! Periodic scans visit only accounts that have work now. Each open account database
 //! holds a connection, and each connection an OS thread, so polling every account kept
-//! one thread per account alive. An account not written since it was found idle is
-//! skipped; every idle account is still revisited every 5-10 minutes. One result is shared
-//! by all of a process's scanners for up to a second, and recomputed after any wake hint.
+//! one thread per account alive. An account has work now while a run is queued, running or
+//! waiting on an external job, or a command, notice, background task, review, naming job,
+//! cleanup or module input waits; stopped, paused and parked runs and finished records add
+//! nothing (they change only when someone acts, which writes the account). Deadlines kept in
+//! `app.db` (`account_due`: approval expiry, the automation schedule) bring an account back
+//! when they pass. An account not written since it was found idle is skipped; one written
+//! since stays visible to every scanner for a short window; every idle account is still
+//! revisited every 5-10 minutes. One result is shared by all of a process's scanners for up
+//! to a second, and recomputed after any wake hint.
 use super::Store;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use sqlx::Row;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use webagent_accounts_host::AccountsStore;
+use webagent_engine::due;
 
 /// Base interval before an idle account is revisited; each account adds its own 0-5 min offset.
 const RECHECK: Duration = Duration::from_secs(300);
-/// A revisit stays open long enough for the slowest periodic scan (10 s) to see the account.
+/// A revisit, or a write that left no work, stays open long enough for the slowest periodic
+/// scan (10 s) to see the account.
 const WINDOW: Duration = Duration::from_secs(15);
+/// How long a write that left no work keeps an account visible to every scanner.
+const WRITTEN_WINDOW: Duration = if cfg!(test) {
+    Duration::from_millis(300)
+} else {
+    WINDOW
+};
 /// File times are coarse; a write this close before a check counts as after it.
 const CLOCK_MARGIN: Duration = Duration::from_millis(50);
 /// How long one scan result serves every periodic scanner of the process. Root tests read
@@ -27,28 +41,47 @@ const SHARE: Duration = if cfg!(test) {
     Duration::from_secs(1)
 };
 
-/// Work a periodic scan acts on without a new write, by row presence: unfinished runs,
-/// unacknowledged loop commands, unrelayed notifications, background tasks, host leases,
-/// held follow-ups and naming jobs.
+/// Work a periodic scan acts on now, by plain status or row presence: runs queued, running or
+/// waiting on an external job, unacknowledged loop commands, unrelayed notifications, queued
+/// reasoning cleanup, live or undelivered background tasks (the background index predicate
+/// `background_scan` uses), host leases, queued reviews and naming jobs.
 const PENDING: &str =
-    "SELECT EXISTS(SELECT 1 FROM run_index WHERE status NOT IN ('completed','cancelled','failed'))
+    "SELECT EXISTS(SELECT 1 FROM run_index WHERE status IN ('queued','running','waiting_external'))
     OR EXISTS(SELECT 1 FROM loop_commands WHERE acknowledged_at IS NULL)
     OR EXISTS(SELECT 1 FROM notification_stage)
-    OR EXISTS(SELECT 1 FROM docs WHERE (key>='background_task:' AND key<'background_task;')
-        OR (key>='administrator_host:' AND key<'administrator_host;')
+    OR EXISTS(SELECT 1 FROM reasoning_cleanup)
+    OR EXISTS(SELECT 1 FROM background_task_index WHERE status IN ('queued','running')
+        OR (status='completed' AND NOT EXISTS(SELECT 1 FROM background_task_delivery d
+            WHERE d.id=background_task_index.id)))
+    OR EXISTS(SELECT 1 FROM docs WHERE (key>='administrator_host:' AND key<'administrator_host;')
         OR (key>='manager_pending:' AND key<'manager_pending;')
         OR (key>='session_naming:' AND key<'session_naming;'))";
+/// Approval waits: work only through their expiry deadline, which the scheduler stores.
+const WAITING: &str =
+    "SELECT EXISTS(SELECT 1 FROM run_index WHERE status IN ('waiting_approval','parked'))";
 /// Records kept after their work finishes, so their status decides.
 const RECORDS: &str =
     "SELECT key,value FROM docs WHERE (key>='followup_queue:' AND key<'followup_queue;')
     OR (key>='manager_review:' AND key<'manager_review;')
     OR (key>='module_state:' AND key<'module_state;')";
 
+/// What a kept record asks of the scan.
+#[derive(Debug, PartialEq)]
+enum Need {
+    /// Nothing until someone writes the account.
+    Nothing,
+    /// Work now: visit on every scan.
+    Now,
+    /// Live automation schedules only: the automation service's stored next tick decides.
+    Schedule,
+}
+
 /// Whether a kept record still has work: an unreviewed follow-up, an open manager review
 /// (deadlines run on the clock), or a package with pending input or live schedules.
-fn record_pending(key: &str, value: &Value) -> bool {
+fn record_pending(key: &str, value: &Value) -> Need {
+    let now = |busy: bool| if busy { Need::Now } else { Need::Nothing };
     if key.starts_with("followup_queue:") {
-        value["entries"]
+        now(value["entries"]
             .as_array()
             .into_iter()
             .flatten()
@@ -60,61 +93,90 @@ fn record_pending(key: &str, value: &Value) -> bool {
                     entry["status"].as_str(),
                     Some("cancelled" | "rejected" | "delivered")
                 )
-            })
+            }))
     } else if key.starts_with("manager_review:") {
-        !matches!(
+        now(!matches!(
             value["status"].as_str(),
             Some("acceptable" | "unacceptable" | "review_error" | "cancelled")
-        )
+        ))
     } else {
         let busy = |field: &Value| {
             field.as_array().is_some_and(|v| !v.is_empty())
                 || field.as_object().is_some_and(|v| !v.is_empty())
         };
         let state = &value["state"];
-        busy(&value["pending"])
-            || busy(&value["admission_results"])
-            || state["definitions"]
-                .as_object()
-                .into_iter()
-                .flatten()
-                .any(|(_, d)| d["status"] == "active")
-            || state["occurrences"]
-                .as_object()
-                .into_iter()
-                .flatten()
-                .any(|(_, o)| {
-                    !matches!(
-                        o["status"].as_str(),
-                        Some("completed" | "failed" | "cancelled" | "skipped")
-                    )
-                })
+        let unfinished = state["occurrences"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(_, o)| {
+                !matches!(
+                    o["status"].as_str(),
+                    Some("completed" | "failed" | "cancelled" | "skipped")
+                )
+            });
+        if busy(&value["pending"]) || busy(&value["admission_results"]) || unfinished {
+            return Need::Now;
+        }
+        let scheduled = state["definitions"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(_, d)| d["status"] == "active");
+        match (scheduled, key == "module_state:automation") {
+            (false, _) => Need::Nothing,
+            (true, true) => Need::Schedule,
+            (true, false) => Need::Now,
+        }
     }
 }
 
+/// An account's write-ahead log as last seen: length and modification time, `None` when it
+/// is absent or empty. Any commit changes it; a checkpoint only removes or empties it.
+type WalMark = Option<(u64, SystemTime)>;
+
 struct Idle {
-    since: SystemTime,
+    mark: WalMark,
     recheck_at: Instant,
     open_until: Option<Instant>,
+    /// A write that left no work keeps the account visible until then.
+    written_until: Option<Instant>,
 }
 
 enum Decision {
     Skip,
     Visit,
-    Evaluate { visit: bool },
+    /// Open the account and decide from its contents. `written`: it was written since it was
+    /// last found idle (otherwise this is its first evaluation in this process).
+    Evaluate {
+        visit: bool,
+        written: bool,
+    },
 }
 
 static IDLE: LazyLock<Mutex<HashMap<String, Idle>>> = LazyLock::new(Default::default);
 static SEEN: LazyLock<Mutex<HashMap<(&'static str, String), SystemTime>>> =
     LazyLock::new(Default::default);
 
+/// The account list of one state root and the `(count, max rowid)` of `user_accounts` it was
+/// read at. Accounts are only ever added (`account_rows.rs` is the one writer and deletes
+/// none), so an unchanged pair means an unchanged list.
+struct Accounts {
+    root: PathBuf,
+    version: (i64, i64),
+    users: Vec<String>,
+}
+
+static ACCOUNTS: LazyLock<Mutex<Option<Accounts>>> = LazyLock::new(Default::default);
+
 /// The latest scan result of this process: its state root, the wake sequence read before it
-/// was computed, when it was computed and the accounts it found.
+/// was computed, when it was computed, the accounts it found and every stored deadline.
 struct Shared {
     root: PathBuf,
     wake: u64,
     at: Instant,
     users: Vec<String>,
+    deadlines: Vec<(String, u64)>,
 }
 
 /// Held while scanning, so concurrent scanners wait for one scan and reuse it.
@@ -122,6 +184,12 @@ static SHARED: LazyLock<tokio::sync::Mutex<Option<Shared>>> = LazyLock::new(Defa
 
 fn registry_error<T>(_: T) -> anyhow::Error {
     anyhow!("Account scan registry unavailable")
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Spread rechecks so accounts that went idle together are not reopened together.
@@ -132,14 +200,12 @@ fn offset(user: &str) -> Duration {
     Duration::from_secs(hash % 300)
 }
 
-fn decide(
-    entry: Option<&mut Idle>,
-    written: impl Fn(SystemTime) -> bool,
-    now: Instant,
-) -> Decision {
+fn decide(entry: Option<&mut Idle>, written: impl Fn(&WalMark) -> bool, now: Instant) -> Decision {
     match entry {
-        Some(idle) if !written(idle.since) => {
-            if now < idle.recheck_at {
+        Some(idle) if !written(&idle.mark) => {
+            if idle.written_until.is_some_and(|until| now < until) {
+                Decision::Visit
+            } else if now < idle.recheck_at {
                 Decision::Skip
             } else if idle.open_until.is_none() {
                 idle.open_until = Some(now + WINDOW);
@@ -147,14 +213,54 @@ fn decide(
             } else if idle.open_until.is_some_and(|until| now < until) {
                 Decision::Visit
             } else {
-                Decision::Evaluate { visit: false }
+                Decision::Evaluate {
+                    visit: false,
+                    written: false,
+                }
             }
         }
-        _ => Decision::Evaluate { visit: true },
+        Some(_) => Decision::Evaluate {
+            visit: true,
+            written: true,
+        },
+        None => Decision::Evaluate {
+            visit: true,
+            written: false,
+        },
     }
 }
 
+/// Merge a scan's accounts with the deadlines that have passed by `now` (Unix seconds).
+fn with_deadlines(users: &[String], deadlines: &[(String, u64)], now: u64) -> Vec<String> {
+    let mut seen: HashSet<&str> = users.iter().map(String::as_str).collect();
+    let mut out = users.to_vec();
+    for (user, at) in deadlines {
+        if *at <= now && seen.insert(user.as_str()) {
+            out.push(user.clone());
+        }
+    }
+    out
+}
+
+/// Whether the log changed from `recorded`: a new or longer log, or a later time. An absent or
+/// emptied log is a checkpoint, not a write.
+fn moved(recorded: &WalMark, current: &WalMark) -> bool {
+    current.is_some() && current != recorded
+}
+
 impl Store {
+    fn wal_mark(&self, user: &str) -> WalMark {
+        let wal = self
+            .root
+            .join("user_data")
+            .join(user)
+            .join(format!("{user}.db-wal"));
+        std::fs::metadata(wal)
+            .ok()
+            .filter(|m| m.len() > 0)
+            .and_then(|m| Some((m.len(), m.modified().ok()?)))
+    }
+
     /// Whether the account committed a write after `since`. Commits land in the
     /// write-ahead log; checkpoints only rewrite the main file or empty the log, so
     /// closing an idle connection does not count as a write.
@@ -168,18 +274,53 @@ impl Store {
             .is_ok_and(|m| m.len() > 0 && m.modified().is_ok_and(|t| t + CLOCK_MARGIN > since))
     }
 
-    /// Whether this account handle holds work a periodic scan must act on.
-    async fn pending_work(&self) -> Result<bool> {
+    /// Every account id, read again only when `user_accounts` gained a row (one counting
+    /// statement instead of listing every account on each scan and slot reconcile).
+    pub(crate) async fn account_ids(&self) -> Result<Vec<String>> {
+        let version: (i64, i64) =
+            sqlx::query_as("SELECT count(*),coalesce(max(rowid),0) FROM user_accounts")
+                .fetch_one(&self.app_pool)
+                .await?;
+        if let Some(cached) = ACCOUNTS
+            .lock()
+            .map_err(registry_error)?
+            .as_ref()
+            .filter(|cached| cached.root == self.root && cached.version == version)
+        {
+            return Ok(cached.users.clone());
+        }
+        let users = self.all_user_ids().await?;
+        *ACCOUNTS.lock().map_err(registry_error)? = Some(Accounts {
+            root: self.root.clone(),
+            version,
+            users: users.clone(),
+        });
+        Ok(users)
+    }
+
+    /// What this account handle asks of a periodic scan. `scheduled`: the deadline kinds
+    /// stored for it, which replace "work now" for approval waits and automation schedules.
+    async fn pending_work(&self, scheduled: &HashSet<&str>) -> Result<bool> {
         if sqlx::query_scalar::<_, bool>(PENDING)
             .fetch_one(&self.pool)
             .await?
         {
             return Ok(true);
         }
+        // An approval wait the scheduler has not yet seen has no stored expiry: visit it.
+        if !scheduled.contains(due::APPROVAL)
+            && sqlx::query_scalar::<_, bool>(WAITING)
+                .fetch_one(&self.pool)
+                .await?
+        {
+            return Ok(true);
+        }
         for row in sqlx::query(RECORDS).fetch_all(&self.pool).await? {
             let key: String = row.get("key");
-            if record_pending(&key, &self.unseal(&row.get::<Vec<u8>, _>("value"))?) {
-                return Ok(true);
+            match record_pending(&key, &self.unseal(&row.get::<Vec<u8>, _>("value"))?) {
+                Need::Nothing => {}
+                Need::Schedule if scheduled.contains(due::AUTOMATION) => {}
+                Need::Now | Need::Schedule => return Ok(true),
             }
         }
         Ok(false)
@@ -187,7 +328,9 @@ impl Store {
 
     /// Accounts a periodic scan must visit now, shared by every scanner of the process: a
     /// result is reused for up to [`SHARE`] unless a wake hint arrived since it was taken
-    /// (message admission and run ends send one), so new work is never served stale.
+    /// (message admission and run ends send one), so new work is never served stale. Stored
+    /// deadlines are compared with the clock on every call, so a reused result still brings
+    /// an account back the moment its deadline passes.
     pub async fn scan_user_ids(&self) -> Result<Vec<String>> {
         self.shared_scan(SHARE).await
     }
@@ -199,44 +342,57 @@ impl Store {
         if let Some(shared) = slot.as_ref().filter(|shared| {
             shared.root == self.root && shared.wake == wake && shared.at.elapsed() < share
         }) {
-            return Ok(shared.users.clone());
+            return Ok(with_deadlines(&shared.users, &shared.deadlines, unix_now()));
         }
         let at = Instant::now();
-        let users = self.scan_user_ids_now().await?;
+        let (users, deadlines) = self.scan_user_ids_now().await?;
+        let result = with_deadlines(&users, &deadlines, unix_now());
         *slot = Some(Shared {
             root: self.root.clone(),
             wake,
             at,
-            users: users.clone(),
+            users,
+            deadlines,
         });
-        Ok(users)
+        Ok(result)
     }
 
-    /// Accounts a periodic scan must visit now. The administrator is always visited; an
-    /// account is skipped while it has not been written since it was found to hold no
-    /// pending work, until its periodic revisit.
-    async fn scan_user_ids_now(&self) -> Result<Vec<String>> {
+    /// Accounts a periodic scan must visit now, and every stored deadline. The administrator
+    /// is always visited; an account is skipped while it has not been written since it was
+    /// found to have no work now, until its periodic revisit or one of its deadlines.
+    async fn scan_user_ids_now(&self) -> Result<(Vec<String>, Vec<(String, u64)>)> {
         let now = Instant::now();
-        let mut due = Vec::new();
-        for user in self.all_user_ids().await? {
+        let rows = due::all(&self.app_pool).await?;
+        let mut kinds: HashMap<&str, HashSet<&str>> = HashMap::new();
+        for (user, kind, _) in &rows {
+            kinds
+                .entry(user.as_str())
+                .or_default()
+                .insert(kind.as_str());
+        }
+        let none = HashSet::new();
+        let mut visits = Vec::new();
+        for user in self.account_ids().await? {
             if user == "admin" {
-                due.push(user);
+                visits.push(user);
                 continue;
             }
             let decision = decide(
                 IDLE.lock().map_err(registry_error)?.get_mut(&user),
-                |since| self.written_since(&user, since),
+                |mark| moved(mark, &self.wal_mark(&user)),
                 now,
             );
             let visit = match decision {
                 Decision::Skip => false,
                 Decision::Visit => true,
-                Decision::Evaluate { visit } => {
+                Decision::Evaluate { visit, written } => {
                     let account = self.for_user(&user).await?;
-                    // Taken after opening, so the open's own schema writes are not "new".
-                    let since = SystemTime::now();
+                    // Taken after opening (its schema writes are not "new") and before reading,
+                    // so a write during the read moves the mark and is evaluated next time.
+                    let mark = self.wal_mark(&user);
+                    let scheduled = kinds.get(user.as_str()).unwrap_or(&none);
                     // An unreadable account counts as busy rather than silently skipped.
-                    let pending = account.pending_work().await.unwrap_or(true);
+                    let pending = account.pending_work(scheduled).await.unwrap_or(true);
                     let mut idle = IDLE.lock().map_err(registry_error)?;
                     if pending {
                         idle.remove(&user);
@@ -246,9 +402,12 @@ impl Store {
                         idle.insert(
                             user.clone(),
                             Idle {
-                                since,
+                                mark,
                                 recheck_at,
                                 open_until: None,
+                                // Every scanner sees a written account once, whichever
+                                // of them happened to evaluate it.
+                                written_until: written.then_some(now + WRITTEN_WINDOW),
                             },
                         );
                         visit
@@ -256,10 +415,11 @@ impl Store {
                 }
             };
             if visit {
-                due.push(user);
+                visits.push(user);
             }
         }
-        Ok(due)
+        let deadlines = rows.into_iter().map(|(user, _, at)| (user, at)).collect();
+        Ok((visits, deadlines))
     }
 
     /// Accounts written since `scan` last applied them, with the time to pass to
@@ -268,7 +428,7 @@ impl Store {
         &self,
         scan: &'static str,
     ) -> Result<Vec<(String, SystemTime)>> {
-        let users = self.all_user_ids().await?;
+        let users = self.account_ids().await?;
         // Taken before reading, so a write during the read is seen next time.
         let now = SystemTime::now();
         let seen = SEEN.lock().map_err(registry_error)?;
@@ -295,43 +455,88 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn idle(mark: WalMark, recheck_at: Instant) -> Idle {
+        Idle {
+            mark,
+            recheck_at,
+            open_until: None,
+            written_until: None,
+        }
+    }
 
     #[test]
     fn idle_account_is_skipped_until_written_or_revisited() {
         let now = Instant::now();
-        let quiet = |_| false;
+        let quiet = |_: &WalMark| false;
         assert!(matches!(
             decide(None, quiet, now),
-            Decision::Evaluate { visit: true }
+            Decision::Evaluate {
+                visit: true,
+                written: false
+            }
         ));
-        let since = SystemTime::now();
-        let mut idle = Idle {
-            since,
-            recheck_at: now + RECHECK,
-            open_until: None,
-        };
+        let mut entry = idle(None, now + RECHECK);
         assert!(matches!(
-            decide(Some(&mut idle), quiet, now),
+            decide(Some(&mut entry), quiet, now),
             Decision::Skip
         ));
         assert!(matches!(
-            decide(Some(&mut idle), |_| true, now),
-            Decision::Evaluate { visit: true }
+            decide(Some(&mut entry), |_: &WalMark| true, now),
+            Decision::Evaluate {
+                visit: true,
+                written: true
+            }
         ));
+        // A write that left no work keeps the account visible for its window.
+        entry.written_until = Some(now + WINDOW);
+        assert!(matches!(
+            decide(Some(&mut entry), quiet, now),
+            Decision::Visit
+        ));
+        entry.written_until = None;
         // At the revisit every scan sees the account for the window, then it is re-checked.
         let later = now + RECHECK;
         assert!(matches!(
-            decide(Some(&mut idle), quiet, later),
+            decide(Some(&mut entry), quiet, later),
             Decision::Visit
         ));
         assert!(matches!(
-            decide(Some(&mut idle), quiet, later + Duration::from_secs(5)),
+            decide(Some(&mut entry), quiet, later + Duration::from_secs(5)),
             Decision::Visit
         ));
         assert!(matches!(
-            decide(Some(&mut idle), quiet, later + WINDOW),
-            Decision::Evaluate { visit: false }
+            decide(Some(&mut entry), quiet, later + WINDOW),
+            Decision::Evaluate {
+                visit: false,
+                written: false
+            }
         ));
+    }
+
+    #[test]
+    fn a_checkpoint_is_not_a_write() {
+        let t = SystemTime::now();
+        assert!(!moved(&Some((10, t)), &None));
+        assert!(!moved(&Some((10, t)), &Some((10, t))));
+        assert!(moved(&Some((10, t)), &Some((20, t))));
+        assert!(moved(&None, &Some((10, t))));
+        assert!(moved(
+            &Some((10, t)),
+            &Some((10, t + Duration::from_millis(4)))
+        ));
+    }
+
+    async fn rest(store: &Store, id: &str) {
+        store.scan_user_ids().await.unwrap();
+        tokio::time::sleep(WRITTEN_WINDOW + Duration::from_millis(50)).await;
+        store.scan_user_ids().await.unwrap();
+        assert!(!store
+            .scan_user_ids()
+            .await
+            .unwrap()
+            .contains(&id.to_owned()));
     }
 
     #[tokio::test]
@@ -342,20 +547,23 @@ mod tests {
         let id = guest["user_id"].as_str().unwrap().to_owned();
         // First sight runs the real pending-work query against a new account database.
         assert!(store.scan_user_ids().await.unwrap().contains(&id));
-        // Writes within the clock margin of a check count once more, then the account rests.
-        tokio::time::sleep(CLOCK_MARGIN * 2).await;
-        store.scan_user_ids().await.unwrap();
-        assert!(!store.scan_user_ids().await.unwrap().contains(&id));
+        rest(&store, &id).await;
         let user = store.for_user(&id).await.unwrap();
-        user.put(
-            "background_task:t1",
-            &serde_json::json!({"status":"queued"}),
-        )
-        .await
-        .unwrap();
-        // Written and now busy: visited on every scan while the work remains.
+        user.put("session_naming:s1", &json!({"session_id":"s1"}))
+            .await
+            .unwrap();
+        // Written and busy: visited on every scan while the work remains.
+        for _ in 0..3 {
+            assert!(store.scan_user_ids().await.unwrap().contains(&id));
+            tokio::time::sleep(WRITTEN_WINDOW).await;
+        }
+        user.delete("session_naming:s1").await.unwrap();
+        // A finished background task record is not work: once its write is seen, it rests.
+        user.put("background_task:t1", &json!({"status":"completed"}))
+            .await
+            .unwrap();
         assert!(store.scan_user_ids().await.unwrap().contains(&id));
-        assert!(store.scan_user_ids().await.unwrap().contains(&id));
+        rest(&store, &id).await;
         tokio::time::sleep(CLOCK_MARGIN * 2).await;
         let changed = store.changed_user_ids("test_scan").await.unwrap();
         assert!(changed.iter().any(|(user, _)| *user == id));
@@ -366,12 +574,9 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
-        user.put(
-            "background_task:t2",
-            &serde_json::json!({"status":"queued"}),
-        )
-        .await
-        .unwrap();
+        user.put("background_task:t2", &json!({"status":"queued"}))
+            .await
+            .unwrap();
         assert!(store
             .changed_user_ids("test_scan")
             .await
@@ -380,38 +585,146 @@ mod tests {
             .any(|(u, _)| *u == id));
     }
 
+    async fn index_run(user: &Store, id: &str, status: &str) {
+        sqlx::query("INSERT INTO run_index(id,session_id,status,updated_at) VALUES(?,'s',?,1) ON CONFLICT(id) DO UPDATE SET status=excluded.status")
+            .bind(id)
+            .bind(status)
+            .execute(&user.pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_current_work_and_passed_deadlines_bring_an_account_back() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let guest = store.create_guest_account().await.unwrap();
+        let id = guest["user_id"].as_str().unwrap().to_owned();
+        let user = store.for_user(&id).await.unwrap();
+        // Stopped, paused and stored recovery runs are nothing to do.
+        for (run, status) in [("a", "stopped"), ("b", "paused"), ("c", "recovery")] {
+            index_run(&user, run, status).await;
+        }
+        assert!(store.scan_user_ids().await.unwrap().contains(&id));
+        rest(&store, &id).await;
+        // A queued run is work now.
+        index_run(&user, "d", "queued").await;
+        for _ in 0..2 {
+            assert!(store.scan_user_ids().await.unwrap().contains(&id));
+            tokio::time::sleep(WRITTEN_WINDOW).await;
+        }
+        // Waiting for approval: work until the scheduler stores its expiry ...
+        index_run(&user, "d", "waiting_approval").await;
+        for _ in 0..2 {
+            assert!(store.scan_user_ids().await.unwrap().contains(&id));
+            tokio::time::sleep(WRITTEN_WINDOW).await;
+        }
+        let later = unix_now() + 3600;
+        due::set(&store.app_pool, &id, due::APPROVAL, Some(later))
+            .await
+            .unwrap();
+        index_run(&user, "d", "parked").await;
+        rest(&store, &id).await;
+        // ... and visited again the moment that deadline has passed.
+        due::set(&store.app_pool, &id, due::APPROVAL, Some(unix_now()))
+            .await
+            .unwrap();
+        assert!(store.scan_user_ids().await.unwrap().contains(&id));
+        due::set(&store.app_pool, &id, due::APPROVAL, None)
+            .await
+            .unwrap();
+        index_run(&user, "d", "completed").await;
+        rest(&store, &id).await;
+        // A live automation schedule waits for the automation service's stored next tick.
+        let schedule = json!({"pending":[],"state":{"definitions":{"a":{"status":"active"}}}});
+        user.put("module_state:automation", &schedule)
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            assert!(store.scan_user_ids().await.unwrap().contains(&id));
+            tokio::time::sleep(WRITTEN_WINDOW).await;
+        }
+        due::set(&store.app_pool, &id, due::AUTOMATION, Some(later))
+            .await
+            .unwrap();
+        user.put("module_state:automation", &schedule)
+            .await
+            .unwrap();
+        rest(&store, &id).await;
+    }
+
     #[test]
     fn finished_records_do_not_keep_an_account_busy() {
-        use serde_json::json;
-        assert!(!record_pending(
-            "manager_review:r",
-            &json!({"status":"acceptable"})
-        ));
-        assert!(record_pending(
-            "manager_review:r",
-            &json!({"status":"reviewing"})
-        ));
+        assert_eq!(
+            record_pending("manager_review:r", &json!({"status":"acceptable"})),
+            Need::Nothing
+        );
+        assert_eq!(
+            record_pending("manager_review:r", &json!({"status":"reviewing"})),
+            Need::Now
+        );
         let done = json!({"entries":[{"status":"delivered"},{"review_status":"cancelled"}]});
-        assert!(!record_pending("followup_queue:s", &done));
-        assert!(record_pending(
-            "followup_queue:s",
-            &json!({"entries":[{"status":"queued"}]})
-        ));
+        assert_eq!(record_pending("followup_queue:s", &done), Need::Nothing);
+        assert_eq!(
+            record_pending(
+                "followup_queue:s",
+                &json!({"entries":[{"status":"queued"}]})
+            ),
+            Need::Now
+        );
         let quiet = json!({"pending":[],"admission_results":{},"state":{
             "definitions":{"a":{"status":"paused"}},"occurrences":{"o":{"status":"completed"}}}});
-        assert!(!record_pending("module_state:automation", &quiet));
+        assert_eq!(
+            record_pending("module_state:automation", &quiet),
+            Need::Nothing
+        );
         let scheduled = json!({"pending":[],"state":{"definitions":{"a":{"status":"active"}}}});
-        assert!(record_pending("module_state:automation", &scheduled));
-        assert!(record_pending(
-            "module_state:x",
-            &json!({"pending":[{"id":1}]})
-        ));
+        assert_eq!(
+            record_pending("module_state:automation", &scheduled),
+            Need::Schedule
+        );
+        assert_eq!(
+            record_pending("module_state:outbound_notifications", &scheduled),
+            Need::Now
+        );
+        assert_eq!(
+            record_pending("module_state:x", &json!({"pending":[{"id":1}]})),
+            Need::Now
+        );
+        let running = json!({"state":{"definitions":{"a":{"status":"active"}},
+            "occurrences":{"o":{"status":"queued"}}}});
+        assert_eq!(
+            record_pending("module_state:automation", &running),
+            Need::Now
+        );
     }
 
     #[test]
     fn revisit_offsets_are_spread() {
         assert!(offset("guest-a") < Duration::from_secs(300));
         assert_ne!(offset("guest-a"), offset("guest-b"));
+    }
+
+    #[test]
+    fn passed_deadlines_join_a_shared_result() {
+        let users = vec!["a".to_owned()];
+        let deadlines = vec![
+            ("b".to_owned(), 10),
+            ("c".to_owned(), 20),
+            ("a".to_owned(), 5),
+        ];
+        assert_eq!(with_deadlines(&users, &deadlines, 15), vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn the_account_list_is_read_again_only_when_an_account_is_added() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let before = store.account_ids().await.unwrap();
+        assert_eq!(store.account_ids().await.unwrap(), before);
+        let guest = store.create_guest_account().await.unwrap();
+        let id = guest["user_id"].as_str().unwrap().to_owned();
+        assert!(store.account_ids().await.unwrap().contains(&id));
     }
 
     #[tokio::test]
@@ -422,18 +735,14 @@ mod tests {
         let guest = store.create_guest_account().await.unwrap();
         let id = guest["user_id"].as_str().unwrap().to_owned();
         assert!(store.shared_scan(share).await.unwrap().contains(&id));
-        tokio::time::sleep(CLOCK_MARGIN * 2).await;
         store.scan_user_ids_now().await.unwrap();
-        assert!(!store.scan_user_ids_now().await.unwrap().contains(&id));
+        assert!(!store.scan_user_ids_now().await.unwrap().0.contains(&id));
         // A shared result taken while the account rests.
         assert!(!store.shared_scan(share).await.unwrap().contains(&id));
         let user = store.for_user(&id).await.unwrap();
-        user.put(
-            "background_task:t1",
-            &serde_json::json!({"status":"queued"}),
-        )
-        .await
-        .unwrap();
+        user.put("session_naming:s1", &json!({"session_id":"s1"}))
+            .await
+            .unwrap();
         // Writers of new work send a hint, which makes the shared result stale at once.
         webagent_engine::wake::notify(root.path()).await;
         assert!(store.shared_scan(share).await.unwrap().contains(&id));

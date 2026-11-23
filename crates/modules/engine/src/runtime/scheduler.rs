@@ -43,15 +43,34 @@ impl<
 
     // A frozen Auto release can inherit runs paused by the previous approval policy.
     // Only an undispatched tool is requeued; the claimed run checks live Deny again.
-    pub async fn requeue_auto_approval(app: &Self, id: &str) -> Result<()> {
+    /// Returns when the wait expires (`u64::MAX`: never) for a run that was waiting, so the
+    /// pass can store the account's earliest expiry; `None` for a run that was not waiting.
+    pub async fn requeue_auto_approval(app: &Self, id: &str) -> Result<Option<u64>> {
         if app.active.lock().await.contains_key(id) {
-            return Ok(());
+            return Ok(None);
         }
         let mut run = app.run(id).await?;
-        let sid = run["session_id"].as_str().unwrap_or("").to_owned();
         if status(&run) != "waiting_approval" {
-            return Ok(());
+            return Ok(None);
         }
+        let expiry = config::Config::<C>::read(&app.runtime_path)?
+            .tools
+            .approval_expiry_seconds;
+        let expires_at = if expiry > 0 && run["pending"]["decision"].is_null() {
+            run["pending"]["waiting_since"]
+                .as_u64()
+                .map_or(u64::MAX, |since| since.saturating_add(expiry))
+        } else {
+            u64::MAX
+        };
+        // A run this pass requeues or stops was written, so the account is evaluated again
+        // and the next pass recomputes its expiry; reporting the old one only visits early.
+        Self::requeue_waiting(app, run, expiry)
+            .await
+            .map(|()| Some(expires_at))
+    }
+    async fn requeue_waiting(app: &Self, mut run: Value, expiry: u64) -> Result<()> {
+        let sid = run["session_id"].as_str().unwrap_or("").to_owned();
         if run["parked"] != true && app.steer_waiting(&run).await? {
             return app.park_approval(run).await;
         }
@@ -62,9 +81,6 @@ impl<
         }
         // An approval left undecided past the configured expiry counts as declined; the
         // run continues and the agent is told not to retry.
-        let expiry = config::Config::<C>::read(&app.runtime_path)?
-            .tools
-            .approval_expiry_seconds;
         if expiry > 0
             && run["pending"]["decision"].is_null()
             && run["pending"]["waiting_since"]
@@ -172,6 +188,36 @@ impl<
         run["status"] = json!("queued");
         app.save(&mut run).await
     }
+    /// Offer every account's paused runs to `component_restore`. True when every account was
+    /// read; a failure leaves the sweep pending for the next pass.
+    async fn restore_sweep(app: &Self) -> bool {
+        let Ok(users) = crate::send_future(app.user_views(true)).await else {
+            return false;
+        };
+        let mut complete = true;
+        for user in users {
+            let Ok(runs) = crate::send_future(user.store.active_runs()).await else {
+                complete = false;
+                continue;
+            };
+            for view in runs {
+                if status(&view) != "paused" {
+                    continue;
+                }
+                let Some(id) = view["id"].as_str() else {
+                    continue;
+                };
+                if crate::send_future(user.component_restore(id))
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("Engine component restoration deferred");
+                    complete = false;
+                }
+            }
+        }
+        complete
+    }
     // Retire compacted reasoning outside the run loop. Each user-store job commits
     // atomically and remains queued after a failed attempt or process restart.
     async fn reasoning_cleanup_worker(app: Self) {
@@ -256,6 +302,11 @@ impl<
                 }
             });
             let mut last_recovery = 0;
+            // Component-paused runs are not work the scan returns: every account is swept once
+            // at start, after a component pause in this loop, and when components come back or
+            // shutoff ends after the loop saw them away; the account revisit is the fallback.
+            let mut restore_sweep = true;
+            let mut seen_pauses = super::components::COMPONENT_PAUSES.load(Ordering::Acquire);
             loop {
                 if app.stop.is_cancelled() {
                     break;
@@ -316,7 +367,23 @@ impl<
                 }
                 progress.at(Stage::DispatchGate);
                 let _guard = crate::send_future(app.handles.gate.lock()).await;
-                if let Ok(false) = crate::send_future(app.shutoff()).await {
+                let shutoff = crate::send_future(app.shutoff()).await;
+                let pauses = super::components::COMPONENT_PAUSES.load(Ordering::Acquire);
+                if pauses != seen_pauses {
+                    seen_pauses = pauses;
+                    restore_sweep = true;
+                }
+                if !matches!(shutoff, Ok(false))
+                    || !crate::components::available(crate::ports::AgentMetadata::root(
+                        app.store.records(),
+                    ))
+                {
+                    restore_sweep = true;
+                } else if restore_sweep {
+                    progress.at(Stage::UserScan);
+                    restore_sweep = !crate::send_future(Self::restore_sweep(&app)).await;
+                }
+                if let Ok(false) = shutoff {
                     progress.at(Stage::UserScan);
                     let users = match crate::send_future(app.user_views(false)).await {
                         Ok(users) => users,
@@ -347,6 +414,10 @@ impl<
                         }
                         progress.at(Stage::RunScan);
                         if let Ok(runs) = crate::send_future(user_app.store.active_runs()).await {
+                            // The account's earliest approval expiry, stored after the pass
+                            // so an account with only approval waits rests until then.
+                            let mut expires: Option<u64> = None;
+                            let mut expiry_known = true;
                             for view in runs {
                                 let id = view["id"].as_str().unwrap().to_owned();
                                 if status(&view) == "paused" {
@@ -358,12 +429,19 @@ impl<
                                     continue;
                                 }
                                 if status(&view) == "waiting_approval" {
-                                    if let Err(error) = crate::send_future(
-                                        Self::requeue_auto_approval(&user_app, &id),
-                                    )
+                                    match crate::send_future(Self::requeue_auto_approval(
+                                        &user_app, &id,
+                                    ))
                                     .await
                                     {
-                                        tracing::warn!(run_id=%id,"Auto approval reconciliation deferred: {error}");
+                                        Ok(Some(at)) => {
+                                            expires = Some(expires.map_or(at, |e| e.min(at)));
+                                        }
+                                        Ok(None) => {}
+                                        Err(error) => {
+                                            expiry_known = false;
+                                            tracing::warn!(run_id=%id,"Auto approval reconciliation deferred: {error}");
+                                        }
                                     }
                                     continue;
                                 }
@@ -409,11 +487,15 @@ impl<
                                     .scheduler
                                     .max_active_runs;
                                 if ceiling != 0 && active.len() >= ceiling {
+                                    expiry_known = false;
                                     break;
                                 }
                                 let permit = match app.slots.clone().try_acquire_owned() {
                                     Ok(p) => p,
-                                    Err(_) => break,
+                                    Err(_) => {
+                                        expiry_known = false;
+                                        break;
+                                    }
                                 };
                                 let cancel = app.stop.child_token();
                                 active.insert(id.clone(), cancel.clone());
@@ -553,6 +635,20 @@ impl<
                                         .await;
                                 });
                             }
+                            // A failed reconciliation, or a pass that stopped before seeing every
+                            // run, leaves the expiry due now: the account stays visited and the
+                            // next complete pass stores the real one.
+                            let expires = if expiry_known { expires } else { Some(0) };
+                            if let Err(error) = crate::send_future(APPROVAL_EXPIRIES.set(
+                                ScopedStorage::application_pool(user_app.store.records()),
+                                crate::ports::Records::current_user_id(user_app.store.records()),
+                                crate::due::APPROVAL,
+                                expires,
+                            ))
+                            .await
+                            {
+                                tracing::warn!("Approval expiry not stored: {error}");
+                            }
                         }
                     }
                 }
@@ -581,6 +677,10 @@ impl<
         }
     }
 }
+
+/// Approval expiries this loop stored, so an unchanged one is not written on every pass.
+static APPROVAL_EXPIRIES: std::sync::LazyLock<crate::due::Written> =
+    std::sync::LazyLock::new(Default::default);
 
 /// Failed executions of one turn before the run pauses instead of being recovered again.
 const MAX_INTERRUPTS: u64 = 3;

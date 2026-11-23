@@ -1115,6 +1115,8 @@ async fn serve_loop(app: App, lock: Option<std::fs::File>, stop: CancellationTok
     restore_worker_control(&app).await?;
     recover(&app, true).await?;
     app.ready.store(true, Ordering::Release);
+    let slots = app.store.clone();
+    tokio::spawn(async move { slots.prime_requester_slots().await });
     // Load the local inference model and embed the skill catalog before the first message;
     // best effort, so a failure only slows the first list_skills.
     let warm = app.clone();
@@ -1207,6 +1209,8 @@ async fn serve_api(app: App, close_pools: bool, stop: CancellationToken) -> Resu
     )
     .await?;
     tracing::info!("WebAgent v3 API ready");
+    let slots = app.store.clone();
+    tokio::spawn(async move { slots.prime_requester_slots().await });
     let notification_relay = tokio::spawn(futures_util::FutureExt::boxed(
         api::notifications::service(app.clone()),
     ));

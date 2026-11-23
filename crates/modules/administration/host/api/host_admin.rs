@@ -205,13 +205,42 @@ async fn production_list(app: &App) -> anyhow::Result<Value> {
     if !webagent_administration::tools::installed() {
         anyhow::bail!("Administrator pack not installed");
     }
-    // The administrator account itself, not the first account a full scan returns (which
-    // sorts registered ids below "admin" first).
     let mut caller = app.clone();
-    caller.store = app.store.for_user("admin").await?;
+    caller.store = app.store.for_user(&watch_administrator(app).await?).await?;
     webagent_administration_host::dashboard::production(&crate::tools::administrator::Host(&caller))
         .await
         .map_err(|error| anyhow::anyhow!(error.1))
+}
+
+/// The account the watch reads as: an active administrator by role. The one used last time
+/// (else the account named `admin`) is re-checked with one account read per tick; only when
+/// it is no longer an active administrator are the other accounts read, in id order.
+#[cfg(feature = "administrator")]
+async fn watch_administrator(app: &App) -> anyhow::Result<String> {
+    use webagent_accounts_host::AccountsStore;
+    static CHOSEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let remembered = CHOSEN.lock().ok().and_then(|chosen| chosen.clone());
+    let administrator = |id: String| async move {
+        let account = app.store.account_by_id(&id).await?;
+        anyhow::Ok(account.is_some_and(|account| {
+            crate::access::Principal::from_account(&account).is_ok_and(|p| p.administrator())
+        }))
+    };
+    let mut candidates: Vec<String> = remembered.into_iter().chain(["admin".to_owned()]).collect();
+    for listed in [false, true] {
+        if listed {
+            candidates = app.store.all_user_ids().await?;
+        }
+        for id in candidates.drain(..) {
+            if administrator(id.clone()).await? {
+                if let Ok(mut chosen) = CHOSEN.lock() {
+                    *chosen = Some(id.clone());
+                }
+                return Ok(id);
+            }
+        }
+    }
+    anyhow::bail!("No active administrator account")
 }
 
 /// Builds without the Administrator pack have no broker to read.

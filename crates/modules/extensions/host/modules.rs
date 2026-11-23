@@ -1563,6 +1563,11 @@ async fn admit(app: &App, id: &str, gen: &str, admission: &Value) -> Result<Valu
     wake::notify(app).await;
     Ok(result)
 }
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
 /// Longest wait between user scans of a module package without a hint or a due deadline.
 const MODULE_FALLBACK: Duration = Duration::from_secs(15);
 pub(crate) async fn service(app: App) {
@@ -1592,6 +1597,7 @@ async fn package_service(app: App, id: &'static str) {
     let mut checked_until: Option<tokio::time::Instant> = None;
     let mut scanned_wake = 0u64;
     let mut deferred = false;
+    let schedules = webagent_engine::due::Written::default();
     loop {
         if app.stop.is_cancelled() {
             break;
@@ -1730,7 +1736,26 @@ async fn package_service(app: App, id: &'static str) {
             .max(Duration::from_millis(10));
         tokio::select! {
             _=app.stop.cancelled()=>break,
-            result=jobs.join_next(),if !jobs.is_empty()=>if let Some(Ok((uid,result)))=result{inflight.remove(&uid);let delay=result.as_ref().copied().unwrap_or(1000);next_poll.insert(uid.clone(),tokio::time::Instant::now()+Duration::from_millis(delay));if result.is_ok(){seen.insert(uid);}else{tracing::warn!(module_id=id,"Optional module work deferred");}},
+            result=jobs.join_next(),if !jobs.is_empty()=>if let Some(Ok((uid,result)))=result{
+                inflight.remove(&uid);
+                let delay=result.as_ref().map_or(1000,|(delay,_)|*delay);
+                next_poll.insert(uid.clone(),tokio::time::Instant::now()+Duration::from_millis(delay));
+                if let Ok((_,schedule))=result{
+                    // The scan leaves a user with only live schedules closed until this
+                    // deadline (rounded down, so the account is in the scan when it passes).
+                    let at=match schedule{
+                        Schedule::Live=>Some(Some(now_ms().saturating_add(delay)/1000)),
+                        Schedule::Idle=>Some(None),
+                        Schedule::Unknown=>None,
+                    };
+                    if let (Some(at),true)=(at,id=="automation"){
+                        if schedules.set(&app.store.app_pool,&uid,webagent_engine::due::AUTOMATION,at).await.is_err(){
+                            tracing::warn!(module_id=id,"Automation deadline not stored");
+                        }
+                    }
+                    seen.insert(uid);
+                }else{tracing::warn!(module_id=id,"Optional module work deferred");}
+            },
             _=wake_hints.changed()=>{},
             _=tokio::time::sleep(wait)=>{},
         }
@@ -1783,19 +1808,29 @@ fn main_notes_registered(envelope: &Value, gen: &str, agent: &str, sid: &str) ->
         && definition["trigger"]["kind"] == "main_notes"
         && definition["destination"]["session_id"] == sid
 }
-pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u64> {
+/// What a tick learned about the user's automation schedule, for its `account_due` row.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Schedule {
+    /// Live definitions or occurrences: the next tick is the user's deadline.
+    Live,
+    /// Nothing scheduled: no deadline.
+    Idle,
+    /// The tick did not read the schedule (package unavailable or not installed).
+    Unknown,
+}
+pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<(u64, Schedule)> {
     if !available(id) {
-        return Ok(15000);
+        return Ok((15000, Schedule::Unknown));
     }
     let gen = generation(id)?;
     let _package_lease = package_lock(app, id, false)?;
     let _lock = host_lock(app, id)?;
     let installed = app.store.get(&format!("module_install:{id}")).await?;
     if !installed.is_some_and(|v| v["enabled"] == true && v["generation"] == gen) {
-        return Ok(15000);
+        return Ok((15000, Schedule::Unknown));
     }
     if id == "outbound_notifications" && !administrator(app).await {
-        return Ok(15000);
+        return Ok((15000, Schedule::Unknown));
     }
     let mut notes_by_agent = json!({});
     if id == "automation" {
@@ -1853,7 +1888,7 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
             cursor
         };
         if webagent_extensions::health::idle(&initial, own_latest, &gen) {
-            return Ok(15000);
+            return Ok((15000, Schedule::Idle));
         }
     }
     // A generation transition deactivates every retained subscription before tick.
@@ -2033,14 +2068,17 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
         .await?;
     }
     Ok(if id == "automation" {
-        webagent_extensions::health::delay(
-            &initial,
-            &envelope,
-            tick["result"]["next_deadline_ms"].as_u64(),
-            now().saturating_mul(1000),
+        (
+            webagent_extensions::health::delay(
+                &initial,
+                &envelope,
+                tick["result"]["next_deadline_ms"].as_u64(),
+                now().saturating_mul(1000),
+            ),
+            Schedule::Live,
         )
     } else {
-        1000
+        (1000, Schedule::Unknown)
     })
 }
 fn copy_distribution(source: &FsPath, target: &FsPath) -> Result<()> {

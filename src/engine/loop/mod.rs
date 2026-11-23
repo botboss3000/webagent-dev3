@@ -9,7 +9,8 @@ pub(super) fn append_tool(run: &mut Value, result: &Value) -> Result<()> {
 
 mod recovery;
 pub(crate) use recovery::{
-    attach_external_build_result, reconcile_late_tool_result, recover, user_apps, user_apps_among,
+    attach_external_build_result, every_user_app, reconcile_late_tool_result, recover, user_apps,
+    user_apps_among,
 };
 mod scheduler;
 pub(crate) mod watchdog;

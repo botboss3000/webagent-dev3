@@ -21,6 +21,24 @@ pub(crate) async fn user_apps_among(
 ) -> Result<Vec<App>> {
     scanned_apps(app, Some(among)).await
 }
+/// Every account, for reads that must also count work the scan leaves closed (paused and
+/// approval-waiting runs).
+pub(crate) async fn every_user_app(app: &App) -> Result<Vec<App>> {
+    let mut views = Vec::new();
+    for user in app.store.account_ids().await? {
+        let store = match app.store.for_user(&user).await {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(%error, "Account skipped: its storage could not be opened");
+                continue;
+            }
+        };
+        let mut view = app.clone();
+        view.store = store;
+        views.push(view);
+    }
+    Ok(views)
+}
 async fn scanned_apps(
     app: &App,
     among: Option<&std::collections::HashSet<String>>,
