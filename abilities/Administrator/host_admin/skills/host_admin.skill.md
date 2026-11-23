@@ -37,6 +37,4 @@ For SSH access rules (keys only, Tailscale only) and how to undo them, read the
   (production), those approvals are made only over SSH (`sudo buildctl host approve ID`).
   Listed unit and container restarts need no passphrase.
   When you file a root-equivalent request, tell the user it needs the passphrase or a window.
-- `rotate_browser_login_token` (a new Diagnostics browser sign-in key) is never covered by a
-  window and is not offered to agents: the user requests it over SSH and approves it.
 - A request waits for a decision without a time limit; the user may decide it later.
