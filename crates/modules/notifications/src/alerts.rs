@@ -13,11 +13,16 @@ pub const LIVE_CONFIG: &str = "config/notifications/admin-alerts.json";
 const MAX_BYTES: u64 = 16 * 1024;
 /// Event kinds the host reports.
 /// `host_approval` is one host action waiting on the Host Admin page (raised per request).
-pub const KINDS: [&str; 4] = [
+/// The `supply_chain_*` kinds come from the dependency scan watch (administration module):
+/// new high or critical findings with a fix, a failed or unreadable scan, a stale scan.
+pub const KINDS: [&str; 7] = [
     "login_failed",
     "login_blocked",
     "rate_limited",
     "host_approval",
+    "supply_chain_fixable",
+    "supply_chain_failed",
+    "supply_chain_stale",
 ];
 /// Delivery channels; only `in_app` is implemented.
 pub const CHANNELS: [&str; 4] = ["in_app", "ntfy", "email", "twilio"];
@@ -32,12 +37,24 @@ pub struct Rule {
     pub window_seconds: u64,
 }
 
+/// When the dependency scan watch reads the scan summary and when it calls a scan stale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupplyChain {
+    /// A scan older than this many days is stale (the scanner rescans at least weekly).
+    pub stale_days: u64,
+    /// No scanner run recorded for this many hours is stale (its timer runs every 15 min).
+    pub missed_check_hours: u64,
+    /// Seconds between the watch's reads of the summary.
+    pub check_seconds: u64,
+}
+
 /// The parsed live configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub retention_days: u64,
     pub rules: BTreeMap<String, Rule>,
     pub channels: BTreeMap<String, bool>,
+    pub supply_chain: SupplyChain,
 }
 
 fn object<'a>(value: &'a Value, what: &str) -> Result<&'a serde_json::Map<String, Value>> {
@@ -61,12 +78,13 @@ impl Config {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let value: Value = serde_json::from_slice(bytes)?;
         let top = object(&value, "Alert configuration")?;
-        const KEYS: [&str; 5] = [
+        const KEYS: [&str; 6] = [
             "_instructions",
             "schema_version",
             "retention_days",
             "events",
             "channels",
+            "supply_chain",
         ];
         if top.keys().any(|key| !KEYS.contains(&key.as_str())) {
             bail!("Unknown alert setting");
@@ -118,10 +136,22 @@ impl Config {
             }
             channels.insert(name.clone(), enabled);
         }
+        let scan = object(&value["supply_chain"], "supply_chain")?;
+        const SCAN_KEYS: [&str; 3] = ["stale_days", "missed_check_hours", "check_seconds"];
+        if scan.keys().any(|key| !SCAN_KEYS.contains(&key.as_str())) {
+            bail!("Unknown setting in supply_chain");
+        }
+        let supply = &value["supply_chain"];
+        let supply_chain = SupplyChain {
+            stale_days: bounded(supply, "stale_days", 1, 90)?,
+            missed_check_hours: bounded(supply, "missed_check_hours", 1, 720)?,
+            check_seconds: bounded(supply, "check_seconds", 60, 86_400)?,
+        };
         Ok(Self {
             retention_days,
             rules,
             channels,
+            supply_chain,
         })
     }
 
@@ -163,7 +193,10 @@ impl Config {
                 )
             })
             .collect();
-        json!({"retention_days":self.retention_days,"events":events,"channels":channels})
+        json!({"retention_days":self.retention_days,"events":events,"channels":channels,
+        "supply_chain":{"stale_days":self.supply_chain.stale_days,
+        "missed_check_hours":self.supply_chain.missed_check_hours,
+        "check_seconds":self.supply_chain.check_seconds}})
     }
 }
 
@@ -194,6 +227,18 @@ impl Raised {
             "host_approval" => {
                 "A host action is waiting for approval on the Host Admin page".into()
             }
+            "supply_chain_fixable" => format!(
+                "{} new high or critical {} with a fix available in the deployed release; see the Dashboard's dependency scan card",
+                self.count,
+                if self.count == 1 { "finding" } else { "findings" }
+            ),
+            "supply_chain_failed" => {
+                "The dependency scan failed or its report could not be read; see the Dashboard".into()
+            }
+            "supply_chain_stale" => format!(
+                "The dependency scan has not run for more than {} days, or its scanner stopped checking; see the Dashboard",
+                self.count
+            ),
             other => format!("{} {other} events within {minutes} min", self.count),
         }
     }
@@ -278,8 +323,35 @@ pub async fn schema(pool: &SqlitePool) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS admin_alerts(id INTEGER PRIMARY KEY AUTOINCREMENT,
         kind TEXT NOT NULL,severity TEXT NOT NULL,message TEXT NOT NULL CHECK(length(message)<=512),
         count INTEGER NOT NULL,created_at INTEGER NOT NULL,read_at INTEGER);
-        CREATE INDEX IF NOT EXISTS admin_alerts_created ON admin_alerts(created_at);",
+        CREATE INDEX IF NOT EXISTS admin_alerts_created ON admin_alerts(created_at);
+        CREATE TABLE IF NOT EXISTS admin_alert_memory(key TEXT PRIMARY KEY CHECK(length(key)<=64),
+        value TEXT NOT NULL CHECK(length(value)<=16384),updated_at INTEGER NOT NULL);",
     )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// What a watch already alerted on under `key` (one row per watch, replaced on each change, so it
+/// never grows): fingerprints and state words only, no content.
+pub async fn memory(pool: &SqlitePool, key: &str) -> Result<Option<Value>> {
+    let row: Option<String> =
+        sqlx::query_scalar("SELECT value FROM admin_alert_memory WHERE key=?")
+            .bind(key)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|text| serde_json::from_str(&text).ok()))
+}
+
+/// Replace the watch memory under `key`.
+pub async fn remember(pool: &SqlitePool, key: &str, value: &Value, now: i64) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO admin_alert_memory(key,value,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+    )
+    .bind(key)
+    .bind(value.to_string())
+    .bind(now)
     .execute(pool)
     .await?;
     Ok(())
@@ -427,6 +499,56 @@ mod tests {
         config.rules.get_mut("login_blocked").unwrap().notify = false;
         assert_eq!(Counter::default().hit(&config, "login_blocked", 1), None);
         assert_eq!(Counter::default().hit(&config, "not_a_kind", 1), None);
+    }
+
+    #[test]
+    fn supply_chain_settings_are_bounded_and_messages_name_the_dashboard() {
+        let config = config();
+        assert_eq!(config.supply_chain.stale_days, 8);
+        let mut value: Value = serde_json::from_slice(include_bytes!(
+            "../../../../config/notifications/admin-alerts.json"
+        ))
+        .unwrap();
+        value["supply_chain"]["stale_days"] = json!(0);
+        assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        value["supply_chain"] =
+            json!({"stale_days":8,"missed_check_hours":24,"check_seconds":900,"x":1});
+        assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        let mut fixable = single(&config, "supply_chain_fixable").unwrap();
+        fixable.count = 2;
+        assert!(fixable
+            .message()
+            .starts_with("2 new high or critical findings"));
+        assert!(single(&config, "supply_chain_failed")
+            .unwrap()
+            .message()
+            .contains("failed"));
+    }
+
+    #[tokio::test]
+    async fn memory_is_one_replaced_row_per_key() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        schema(&pool).await.unwrap();
+        assert_eq!(memory(&pool, "supply_chain").await.unwrap(), None);
+        remember(&pool, "supply_chain", &json!({"a":1}), 1)
+            .await
+            .unwrap();
+        remember(&pool, "supply_chain", &json!({"a":2}), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            memory(&pool, "supply_chain").await.unwrap(),
+            Some(json!({"a":2}))
+        );
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM admin_alert_memory")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     #[tokio::test]

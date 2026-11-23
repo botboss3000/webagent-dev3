@@ -13,4 +13,5 @@ pub mod dashboard;
 pub mod find_ranking;
 pub mod notices;
 pub mod schemas;
+pub mod supply_chain;
 pub mod tools;

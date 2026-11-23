@@ -1,5 +1,5 @@
 {
-  "_instructions": "Administrator alerts shown on the Notifications page, read live. events: each kind raises one alert when it happens threshold times within window_seconds (counted in memory; a restart clears the count); notify false ignores the kind. host_approval raises one alert per host action waiting on the Host Admin page (threshold and window do not apply). severity is info, warning or critical. retention_days: how long alerts are kept. channels: in_app is the Notifications page; ntfy, email and twilio are not available yet and must stay disabled.",
+  "_instructions": "Administrator alerts shown on the Notifications page, read live. events: each kind raises one alert when it happens threshold times within window_seconds (counted in memory; a restart clears the count); notify false ignores the kind. host_approval raises one alert per host action waiting on the Host Admin page (threshold and window do not apply). severity is info, warning or critical. retention_days: how long alerts are kept. channels: in_app is the Notifications page; ntfy, email and twilio are not available yet and must stay disabled. supply_chain_fixable, supply_chain_failed and supply_chain_stale come from the dependency scan watch: one alert when a high or critical finding with a fix appears that was not alerted before, when the scan fails or its report is unreadable, and when it goes stale (threshold and window do not apply). supply_chain: stale_days (a scan older than this is stale), missed_check_hours (no scanner run recorded for this long is stale), check_seconds (how often the watch reads the scan summary).",
   "schema_version": 1,
   "retention_days": 30,
   "events": {
@@ -26,6 +26,24 @@
       "severity": "warning",
       "threshold": 1,
       "window_seconds": 60
+    },
+    "supply_chain_fixable": {
+      "notify": true,
+      "severity": "critical",
+      "threshold": 1,
+      "window_seconds": 3600
+    },
+    "supply_chain_failed": {
+      "notify": true,
+      "severity": "warning",
+      "threshold": 1,
+      "window_seconds": 3600
+    },
+    "supply_chain_stale": {
+      "notify": true,
+      "severity": "warning",
+      "threshold": 1,
+      "window_seconds": 3600
     }
   },
   "channels": {
@@ -41,5 +59,10 @@
     "twilio": {
       "enabled": false
     }
+  },
+  "supply_chain": {
+    "stale_days": 8,
+    "missed_check_hours": 24,
+    "check_seconds": 900
   }
 }

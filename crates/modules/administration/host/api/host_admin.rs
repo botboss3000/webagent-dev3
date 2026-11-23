@@ -216,7 +216,7 @@ async fn production_list(app: &App) -> anyhow::Result<Value> {
 /// (else the account named `admin`) is re-checked with one account read per tick; only when
 /// it is no longer an active administrator are the other accounts read, in id order.
 #[cfg(feature = "administrator")]
-async fn watch_administrator(app: &App) -> anyhow::Result<String> {
+pub(crate) async fn watch_administrator(app: &App) -> anyhow::Result<String> {
     use webagent_accounts_host::AccountsStore;
     static CHOSEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
     let remembered = CHOSEN.lock().ok().and_then(|chosen| chosen.clone());

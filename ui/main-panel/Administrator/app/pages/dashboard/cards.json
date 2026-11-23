@@ -378,6 +378,19 @@
       ],
       "fields": [],
       "backend": "connected"
+    },
+    {
+      "id": "supply_chain",
+      "label": "Dependency scan",
+      "icon": "shield-alert",
+      "w": 6,
+      "h": 5,
+      "order": 26,
+      "sections": [
+        "supply_chain"
+      ],
+      "fields": [],
+      "backend": "connected"
     }
   ]
 }

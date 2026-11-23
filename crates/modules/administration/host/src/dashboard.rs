@@ -70,6 +70,12 @@ pub async fn list(host: &dyn AdministrationHost) -> Result<Value, ApiError> {
     Ok(value)
 }
 
+/// The broker's bounded projection of the newest supply-chain scan summary (administrator
+/// only; parse it with `webagent_administration::supply_chain::parse`).
+pub async fn supply_chain(host: &dyn AdministrationHost) -> Result<Value, ApiError> {
+    broker(host, "v3_supply_chain", json!({})).await
+}
+
 /// Mark one retained-work notice reviewed.
 pub async fn review_leftover(host: &dyn AdministrationHost, id: &str) -> Result<Value, ApiError> {
     if !valid_notice_id(id) {

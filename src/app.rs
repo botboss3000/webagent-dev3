@@ -1225,6 +1225,7 @@ async fn serve_api(app: App, close_pools: bool, stop: CancellationToken) -> Resu
     #[cfg(unix)]
     tokio::spawn(api::host_admin::watch(app.clone()));
     tokio::spawn(api::host_admin::production_watch(app.clone()));
+    tokio::spawn(api::supply_chain::watch(app.clone()));
     let shutdown = app.clone();
     serve_http(listener, router(app.clone()), async move {
         let mut signal = webagent_platform::signal::terminate().expect("signal handler");

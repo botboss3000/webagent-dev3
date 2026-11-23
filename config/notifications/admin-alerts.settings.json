@@ -47,7 +47,10 @@
           "login_failed",
           "login_blocked",
           "rate_limited",
-          "host_approval"
+          "host_approval",
+          "supply_chain_fixable",
+          "supply_chain_failed",
+          "supply_chain_stale"
         ]
       }
     },
@@ -79,7 +82,10 @@
           "login_failed",
           "login_blocked",
           "rate_limited",
-          "host_approval"
+          "host_approval",
+          "supply_chain_fixable",
+          "supply_chain_failed",
+          "supply_chain_stale"
         ]
       },
       "bounds": "validator"
@@ -143,12 +149,87 @@
         ]
       },
       "bounds": "validator"
+    },
+    {
+      "id": "notifications.supply_chain.stale_days",
+      "description": "Days after which the last dependency scan counts as stale: the Dashboard card turns red and one administrator alert is raised.",
+      "type": "integer",
+      "pointer": "/supply_chain/stale_days",
+      "layers": [
+        "app"
+      ],
+      "areas": [
+        "notifications",
+        "security",
+        "dependencies"
+      ],
+      "bounds": "validator",
+      "examples": [
+        "warn me if the vulnerability scan is more than 10 days old",
+        "dependency scan stale after two weeks",
+        "how old can the security scan get"
+      ],
+      "unit": "days",
+      "min": 1,
+      "max": 90
+    },
+    {
+      "id": "notifications.supply_chain.missed_check_hours",
+      "description": "Hours without any recorded scanner run after which the dependency scan counts as stale (the scanner normally checks every 15 minutes).",
+      "type": "integer",
+      "pointer": "/supply_chain/missed_check_hours",
+      "layers": [
+        "app"
+      ],
+      "areas": [
+        "notifications",
+        "security",
+        "dependencies"
+      ],
+      "bounds": "validator",
+      "examples": [
+        "alert if the scanner has not run for 12 hours",
+        "the vulnerability scanner stopped",
+        "scanner heartbeat timeout"
+      ],
+      "unit": "hours",
+      "min": 1,
+      "max": 720
+    },
+    {
+      "id": "notifications.supply_chain.check_seconds",
+      "description": "Seconds between the app's reads of the dependency scan summary for administrator alerts.",
+      "type": "integer",
+      "pointer": "/supply_chain/check_seconds",
+      "layers": [
+        "app"
+      ],
+      "areas": [
+        "notifications",
+        "security",
+        "dependencies"
+      ],
+      "bounds": "validator",
+      "examples": [
+        "check the scan report every hour",
+        "read the vulnerability summary more often",
+        "how often the app looks at the dependency scan"
+      ],
+      "unit": "seconds",
+      "min": 60,
+      "max": 86400
     }
   ],
   "excluded": {
     "/schema_version": "File format version.",
     "/channels/**": "Delivery channels: only in_app exists; ntfy, email and twilio are not available yet.",
     "/events/host_approval/threshold": "Host approval alerts are raised once per waiting host action; threshold does not apply.",
-    "/events/host_approval/window_seconds": "Host approval alerts are raised once per waiting host action; window does not apply."
+    "/events/host_approval/window_seconds": "Host approval alerts are raised once per waiting host action; window does not apply.",
+    "/events/supply_chain_fixable/threshold": "Dependency scan alerts are raised once per new finding set or state change; threshold does not apply.",
+    "/events/supply_chain_fixable/window_seconds": "Dependency scan alerts are raised once per new finding set or state change; window does not apply.",
+    "/events/supply_chain_failed/threshold": "Dependency scan alerts are raised once per new finding set or state change; threshold does not apply.",
+    "/events/supply_chain_failed/window_seconds": "Dependency scan alerts are raised once per new finding set or state change; window does not apply.",
+    "/events/supply_chain_stale/threshold": "Dependency scan alerts are raised once per new finding set or state change; threshold does not apply.",
+    "/events/supply_chain_stale/window_seconds": "Dependency scan alerts are raised once per new finding set or state change; window does not apply."
   }
 }

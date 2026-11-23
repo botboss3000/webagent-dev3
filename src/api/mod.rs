@@ -105,6 +105,8 @@ pub(crate) mod session_messaging;
 pub(crate) mod session_stop;
 #[path = "../../crates/modules/files/host/api/storage_cleanup.rs"]
 pub(crate) mod storage_cleanup;
+#[path = "../../crates/modules/administration/host/api/supply_chain.rs"]
+pub(crate) mod supply_chain;
 mod system;
 #[path = "../../crates/modules/chat/host/api/task_list.rs"]
 pub(crate) mod task_list;
@@ -526,6 +528,8 @@ pub(super) fn router(app: App) -> Router {
         .merge(agent_members::router())
         .merge(self::shared_chat::router())
         .merge(admin_api)
+        // Dependency scan card: administrators only, 404 to everyone else.
+        .merge(supply_chain::router(&app))
         .route_layer(middleware::from_fn_with_state(app.clone(), auth));
     let ui = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| {
         webagent_configuration::paths::app()

@@ -1,5 +1,6 @@
 import { readDashboard, paintDashboard, metricOptions } from './advanced.js';
 import { readActivity } from './activity.js';
+import { readSupplyChain, paintSupplyChain } from './supply-chain.js';
 // The catalog owns tile identity and size; system summary supplies current resource values.
  // Config: ui/main-panel/app/pages/dashboard/cards.json -> cards; frontend tile inventory and pending backend state
 /** Mount resource tiles from the administrator summary; return a polling disposer. */
@@ -54,7 +55,9 @@ export async function mountDashboard(host) {
   const grid=node('div',undefined,'dashboard-grid');
   host.append(heading,notice,toolbar,picker,grid);
   let selected=catalog.cards.map(card=>card.id),editing=false;
-  let activity=new Map(),nextActivityAt=0,dashboardData=null;
+  let activity=new Map(),nextActivityAt=0,dashboardData=null,supplyView=null,supplyTile=null;
+  // The dependency scan card repaints only when a new read arrives, so its button keeps its state.
+  const paintSupply=()=>{if(supplyTile)paintSupplyChain(supplyView,supplyTile,node);};
   const updateDashboard=()=>paintDashboard(activityViews,dashboardData,metricSelect.value,node);
   const activityViews=new Map();
   let sample=null,failure='',loading=true,inFlight=false;
@@ -151,6 +154,7 @@ export async function mountDashboard(host) {
     const cancel=()=>request.abort();controller.signal.addEventListener('abort',cancel,{once:true});
     const timeout=setTimeout(()=>request.abort(),15000);
     const pendingActivity=Date.now()>=nextActivityAt?readActivity(request.signal):null;
+    const pendingSupply=pendingActivity?readSupplyChain(request.signal).catch(()=>null):null;
     const requestedWindow=windowSelect.value,pendingDashboard=readDashboard(request.signal,requestedWindow);
     try{
       const response=await fetch('/api/v3/admin/system/summary',{credentials:'same-origin',cache:'no-store',signal:request.signal});
@@ -162,6 +166,7 @@ export async function mountDashboard(host) {
       if(!stopped){sample=null;loading=false;failure=error.name==='AbortError'?'System metrics request timed out':error.message;}
     }finally{
       if(pendingActivity){const result=await pendingActivity;if(!stopped){activity=result;nextActivityAt=Date.now()+30000;}}
+      if(pendingSupply){const result=await pendingSupply;if(!stopped&&result){supplyView=result;paintSupply();}}
       const dashboardResult=await pendingDashboard;if(!stopped&&requestedWindow===windowSelect.value)dashboardData=dashboardResult;
       clearTimeout(timeout);controller.signal.removeEventListener('abort',cancel);inFlight=false;
       if(!stopped){updateMetrics();updateActivity();updateDashboard();timer=setTimeout(refresh,requestedWindow===windowSelect.value?5000:0);}
@@ -169,7 +174,7 @@ export async function mountDashboard(host) {
   }
   /** Repaint local layout only; persistence remains explicitly pending. */
   function paint(){
-    views.clear();activityViews.clear();grid.replaceChildren();picker.replaceChildren();count.textContent=selected.length+' tiles · layout changes last until reload';
+    views.clear();activityViews.clear();supplyTile=null;grid.replaceChildren();picker.replaceChildren();count.textContent=selected.length+' tiles · layout changes last until reload';
     for(const [index,id] of selected.entries()){
       const card=catalog.cards.find(item=>item.id===id);
       const tile=node('article',undefined,'dashboard-tile');tile.dataset.card=id;tile.style.setProperty('--tile-span',card.w);
@@ -187,7 +192,8 @@ export async function mountDashboard(host) {
         const fields=new Map([...body.querySelectorAll('.dashboard-field')].map(row=>[row.firstElementChild.textContent,row.lastElementChild]));
         views.set(id,{tile,badge,needs,fields,value:body.querySelector('.dashboard-value')});
       }
-      if(wired&&!resources.has(id))activityViews.set(id,{tile,badge,body,needs});
+      if(id==='supply_chain')supplyTile={tile,badge,body,needs};
+      else if(wired&&!resources.has(id))activityViews.set(id,{tile,badge,body,needs});
       if(editing){
         const actions=node('div',undefined,'dashboard-tile-actions');
         for(const [label,delta] of [['Move earlier',-1],['Move later',1],['Remove tile',0]]){
@@ -197,7 +203,7 @@ export async function mountDashboard(host) {
         }tile.append(actions);
       }grid.append(tile);
     }
-    updateMetrics();updateActivity();updateDashboard();
+    updateMetrics();updateActivity();updateDashboard();if(supplyView)paintSupply();
     for(const card of catalog.cards){const button=node('button',card.label);button.type='button';button.disabled=selected.includes(card.id);button.onclick=()=>{selected.push(card.id);picker.hidden=true;add.setAttribute('aria-expanded','false');paint();};picker.append(button);}
   }
   add.onclick=()=>{picker.hidden=!picker.hidden;add.setAttribute('aria-expanded',String(!picker.hidden));};

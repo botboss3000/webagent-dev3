@@ -8,6 +8,9 @@ const LABELS = {
   login_blocked: 'Sign-in blocks',
   rate_limited: 'Rate-limited requests',
   host_approval: 'Host actions waiting for approval',
+  supply_chain_fixable: 'New fixable high/critical dependency findings',
+  supply_chain_failed: 'Dependency scan failed',
+  supply_chain_stale: 'Dependency scan stale',
 };
 const CHANNELS = {in_app: 'In-app (this page)', ntfy: 'ntfy push', email: 'Email', twilio: 'SMS (Twilio)'};
 
