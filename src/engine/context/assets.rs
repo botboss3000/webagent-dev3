@@ -32,6 +32,7 @@ pub(crate) async fn fingerprint(
             skills,
             optimization,
             requester,
+            None,
         )
         .await
 }

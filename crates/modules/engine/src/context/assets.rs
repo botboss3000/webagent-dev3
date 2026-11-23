@@ -108,15 +108,25 @@ impl<
         skills: &Value,
         optimization: &Value,
         requester: &str,
+        context: Option<&crate::runtime::call_context::CallContext>,
     ) -> Result<String> {
         let app = self;
-        let fresh = app.asset_catalog()?;
+        // With the step's `CallContext` (context preparation) the step's own catalog and access
+        // reads stand; without one (the dispatch fence, native tools) everything is read fresh.
+        let owned;
+        let fresh = match context {
+            Some(_) => app.abilities.as_ref(),
+            None => {
+                owned = app.asset_catalog()?;
+                &owned
+            }
+        };
         let access = app
-            .chat
-            .live_access(app.store.records(), requester, sid, agent_id)
+            .live_access_in(requester, sid, agent_id, context)
             .await?;
-        let (mode_revision, visibility, state) = app.ability_controls_for(sid, requester).await?;
-        let mode = app.session_mode(sid).await?;
+        let (mode_revision, visibility, state) =
+            app.ability_controls_in(sid, requester, context).await?;
+        let mode = app.session_mode_in(sid, context).await?;
         let scoped = app.store.for_agent(agent_id).await?;
         let ledger = scoped.context_assets(sid, agent_id, requester).await?;
         let own = app

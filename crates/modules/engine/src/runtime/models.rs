@@ -56,6 +56,17 @@ pub struct ModuleView<'a,M,S>(pub &'a M,pub &'a S);
 impl<S:Sync,M:super::ports::ModuleBindings<S>> ModuleAuthority for ModuleView<'_,M,S> {
  fn binding_valid<'a>(&'a self,run:&'a Value)->impl Future<Output=bool>+Send+'a {self.0.binding_valid(self.1,run)}
 }
+/// The step's `CallContext` access answers for its own caller, session and agent; any other
+/// identity is read live, so it never answers for someone else.
+pub struct ContextView<'a,H,S>{pub chat:&'a H,pub store:&'a S,pub access:&'a webagent_access::authority::LiveAccess,pub session:&'a str}
+impl<S:Sync,H:super::ports::ChatAuthority<S>> SessionAuthority for ContextView<'_,H,S> {
+ fn live_access<'a>(&'a self,user:&'a str,session:&'a str,agent:&'a str)->impl Future<Output=Result<webagent_access::authority::LiveAccess>>+Send+'a {
+  async move {
+   if user==self.access.principal.user_id&&agent==self.access.agent_id&&session==self.session {return Ok(self.access.clone());}
+   self.chat.live_access(self.store,user,session,agent).await
+  }
+ }
+}
 pub struct SessionView<'a,H,S>(pub &'a H,pub &'a S);
 impl<S:Sync,H:super::ports::ChatAuthority<S>> SessionAuthority for SessionView<'_,H,S> {
  fn live_access<'a>(&'a self,user:&'a str,session:&'a str,agent:&'a str)->impl Future<Output=Result<webagent_access::authority::LiveAccess>>+Send+'a {self.0.live_access(self.1,user,session,agent)}

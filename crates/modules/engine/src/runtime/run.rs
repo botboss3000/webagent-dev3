@@ -876,6 +876,7 @@ impl<
         skills: &Value,
         optimization: &Value,
         requester: &str,
+        context: Option<&super::call_context::CallContext>,
     ) -> Result<String> {
         app.context_fingerprint(
             sid,
@@ -885,6 +886,7 @@ impl<
             skills,
             optimization,
             requester,
+            context,
         )
         .await
     }
@@ -2077,8 +2079,9 @@ impl<
                 _ => {}
             }
             let access = access.ok().filter(|access| access.admitted());
-            let authorized = match access {
-                Some(_) => app.run_model_authorized(&run).await,
+            // The model grant is checked with the access just read (`CallContext`).
+            let authorized = match &access {
+                Some(access) => app.run_model_authorized_with(&run, access).await,
                 None => false,
             };
             let (Some(access), true) = (access, authorized) else {
@@ -2122,6 +2125,17 @@ impl<
                 .as_str()
                 .expect("a run has a session id")
                 .to_owned();
+            // This step's access inputs, read once for context preparation (stream B4).
+            let call_context = app
+                .call_context(
+                    &sid,
+                    &agent_id,
+                    run["requester_user_id"]
+                        .as_str()
+                        .unwrap_or(app.store.current_user_id()),
+                    &access,
+                )
+                .await;
             let workflow_policy = match app.current_workflow_policy().await {
                 Ok(policy) => policy,
                 Err(_) => {
@@ -2241,6 +2255,7 @@ impl<
                     run["requester_user_id"]
                         .as_str()
                         .unwrap_or(app.store.current_user_id()),
+                    call_context.as_ref(),
                 )
                 .await?;
                 // max_turns 0 means no limit.
@@ -2282,11 +2297,12 @@ impl<
                     drop_orphan_outputs(input);
                 }
                 let (_, mut visibility, ability_state) = app
-                    .ability_controls_for(
+                    .ability_controls_in(
                         &sid,
                         run["requester_user_id"]
                             .as_str()
                             .unwrap_or(app.store.current_user_id()),
+                        call_context.as_ref(),
                     )
                     .await?;
                 // Every enabled schema is sent, so an ability needing a model role this agent
@@ -2298,7 +2314,7 @@ impl<
                     &ability_state,
                     &run["loaded_abilities"],
                 );
-                let mode = app.session_mode(&sid).await?;
+                let mode = app.session_mode_in(&sid, call_context.as_ref()).await?;
                 // CONTEXT-ASSET-KEY: include full freshly resolved access (including
                 // grants), live bundle validity, policy, visibility, loaded state and session mode.
                 // Hash only in memory; never publish private grant data in reports.
@@ -3340,6 +3356,7 @@ impl<
                         current["requester_user_id"]
                             .as_str()
                             .unwrap_or(app.store.current_user_id()),
+                        None,
                     )
                     .await
                     .is_ok_and(|key| key == assembled_asset_key)
@@ -4042,6 +4059,7 @@ impl<
                     current["requester_user_id"]
                         .as_str()
                         .unwrap_or(app.store.current_user_id()),
+                    None,
                 )
                 .await
                 .is_ok_and(|key| key == assembled_asset_key)

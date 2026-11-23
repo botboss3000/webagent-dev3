@@ -18,6 +18,7 @@ pub mod batch;
 pub mod board_delivery;
 pub mod build_tasks;
 pub mod cache_estimate;
+pub mod call_context;
 pub mod components;
 pub mod config;
 pub mod critical_guard;
@@ -224,6 +225,29 @@ impl<
             models::SessionView(&self.chat, self.store.records()),
         )
     }
+    /// As `models`, with the step's access read answering for its own caller (`ContextView`).
+    fn models_with<'b>(
+        &'b self,
+        access: &'b webagent_access::authority::LiveAccess,
+        session: &'b str,
+    ) -> models::ModelServices<'b, S, models::ModuleView<'b, M, S>, models::ContextView<'b, H, S>>
+    {
+        models::ModelServices::new(
+            self.store.records(),
+            self.provider.transport(),
+            &self.gate,
+            &self.refresh,
+            &self.login,
+            &self.stop,
+            models::ModuleView(&self.modules, self.store.records()),
+            models::ContextView {
+                chat: &self.chat,
+                store: self.store.records(),
+                access,
+                session,
+            },
+        )
+    }
     pub async fn pin_model_plan(
         &self,
         plan: &mut webagent_models::model_selection::SelectionPlan,
@@ -258,7 +282,24 @@ impl<
         self.native.selection(self.store.records()).await
     }
     pub async fn run_model_authorized(&self, run: &Value) -> bool {
-        match self.run_candidate(run).await {
+        Self::model_authorization(run, self.run_candidate(run).await)
+    }
+    /// `run_model_authorized` with the access the step already read (stream B4 `CallContext`)
+    /// instead of a second `live_access`; the catalog, grants and roster are read as before.
+    pub async fn run_model_authorized_with(
+        &self,
+        run: &Value,
+        access: &webagent_access::authority::LiveAccess,
+    ) -> bool {
+        let session = run["session_id"].as_str().unwrap_or("");
+        let result = self.models_with(access, session).run_candidate(run).await;
+        Self::model_authorization(run, result)
+    }
+    fn model_authorization(
+        run: &Value,
+        result: Result<Option<webagent_models::model_selection::Candidate>>,
+    ) -> bool {
+        match result {
             Ok(_) => true,
             Err(error) => {
                 tracing::warn!(
