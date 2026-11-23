@@ -139,10 +139,18 @@ def main():
         summary["targets"][target] = {
             "by_severity": dict(Counter(v["Severity"] for v in found)),
             "fixable_by_severity": dict(Counter(v["Severity"] for v in fixable)),
-            "fixable_high_critical": sorted({(v["PkgName"], v["InstalledVersion"], v["VulnerabilityID"], v["FixedVersion"])
-                                             for v in fixable if v["Severity"] in ("HIGH", "CRITICAL")}),
+            # Critical first, then high; each row ends with its severity.
+            "fixable_high_critical": sorted({(v["PkgName"], v["InstalledVersion"], v["VulnerabilityID"], v["FixedVersion"],
+                                              v["Severity"]) for v in fixable if v["Severity"] in ("HIGH", "CRITICAL")},
+                                            key=lambda row: (SEVERITIES.index(row[4]), row)),
         }
+    # The report folder keeps every row; latest.json (read by the broker, at most SUMMARY_LIMIT)
+    # lists the first MAX_FINDINGS rows per target and counts the rest, so a large report is
+    # never refused for its size.
     (folder / "summary.json").write_text(json.dumps(summary, indent=1))
+    for target in summary["targets"].values():
+        rows = target["fixable_high_critical"]
+        target["fixable_high_critical"], target["fixable_not_listed"] = rows[:MAX_FINDINGS], len(rows[MAX_FINDINGS:])
     temporary = ROOT / "latest.json.new"
     temporary.write_text(json.dumps(summary, indent=1))
     os.replace(temporary, latest)
@@ -158,6 +166,8 @@ def main():
 SUMMARY_LIMIT = 256 * 1024
 MAX_TARGETS = 16
 MAX_FINDINGS = 200
+# Rows one target may list in latest.json (the scanner writes at most MAX_FINDINGS).
+MAX_ROWS = 2000
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 _TARGET = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+~@/, -]{0,127}")
@@ -214,26 +224,32 @@ def summary_view(raw):
     targets = value.get("targets", {})
     if not isinstance(targets, dict) or len(targets) > MAX_TARGETS:
         raise ValueError("Invalid targets")
-    total = 0
-    for name, target in targets.items():
+    # Every row is checked; at most MAX_FINDINGS are passed on, critical before high across all
+    # targets, and each target counts the rest as fixable_not_shown (counts stay exact).
+    ranked = []
+    for order, (name, target) in enumerate(targets.items()):
         if not _TARGET.fullmatch(name) or not isinstance(target, dict):
             raise ValueError("Invalid target")
-        rows = target.get("fixable_high_critical", [])
-        if not isinstance(rows, list):
+        rows, not_listed = target.get("fixable_high_critical", []), target.get("fixable_not_listed", 0)
+        if not isinstance(rows, list) or len(rows) > MAX_ROWS:
             raise ValueError("Invalid findings")
-        total += len(rows)
-        if total > MAX_FINDINGS:
-            raise ValueError("Too many findings")
-        findings = []
-        for row in rows:
-            # The scanner writes (package, installed version, identifier, fixed version).
-            if not isinstance(row, list) or len(row) != 4:
+        if isinstance(not_listed, bool) or not isinstance(not_listed, int) or not 0 <= not_listed <= 10_000_000:
+            raise ValueError("Invalid findings count")
+        for index, row in enumerate(rows):
+            # (package, installed version, identifier, fixed version[, severity]); rows written
+            # before the severity was added rank as high.
+            if not isinstance(row, list) or len(row) not in (4, 5) or (len(row) == 5 and row[4] not in ("CRITICAL", "HIGH")):
                 raise ValueError("Invalid finding")
-            package, installed, identifier, fixed = (_text(item) for item in row)
-            findings.append({"package": package, "installed": installed, "id": identifier, "fixed": fixed})
+            package, installed, identifier, fixed = (_text(item) for item in row[:4])
+            rank = SEVERITIES.index(row[4]) if len(row) == 5 else 1
+            ranked.append((rank, order, index, name,
+                           {"package": package, "installed": installed, "id": identifier, "fixed": fixed}))
         view["targets"][name] = {"by_severity": _counts(target.get("by_severity", {})),
                                  "fixable_by_severity": _counts(target.get("fixable_by_severity", {})),
-                                 "fixable_high_critical": findings}
+                                 "fixable_high_critical": [], "fixable_not_shown": len(rows) + not_listed}
+    for _rank, _order, _index, name, finding in sorted(ranked, key=lambda item: item[:3])[:MAX_FINDINGS]:
+        view["targets"][name]["fixable_high_critical"].append(finding)
+        view["targets"][name]["fixable_not_shown"] -= 1
     libraries = value.get("ui_libraries")
     if libraries is None:
         view["ui_libraries"] = None

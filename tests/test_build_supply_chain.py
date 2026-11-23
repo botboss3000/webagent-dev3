@@ -63,7 +63,10 @@ class ViewTests(unittest.TestCase):
             summary(targets={"api": {"by_severity": {"HIGH": -1}}}),
             summary(targets={"api": {"fixable_high_critical": [["apt", "2.6.1", "CVE"]]}}),
             summary(targets={"api": {"fixable_high_critical": [["<script>", "1", "CVE-1", "2"]]}}),
-            summary(targets={"api": {"fixable_high_critical": [["a", "1", "CVE-1", "2"]] * (scan.MAX_FINDINGS + 1)}}),
+            summary(targets={"api": {"fixable_high_critical": [["a", "1", "CVE-1", "2"]] * (scan.MAX_ROWS + 1)}}),
+            summary(targets={"api": {"fixable_high_critical": [["a", "1", "CVE-1", "2", "MEDIUM"]]}}),
+            summary(targets={"api": {"fixable_high_critical": [], "fixable_not_listed": True}}),
+            summary(targets={"api": {"fixable_high_critical": [], "fixable_not_listed": -1}}),
             summary(targets={f"t{i}": {} for i in range(scan.MAX_TARGETS + 1)}),
             summary(ui_libraries={"recorded": {"marked": "12.0.0\n"}, "mismatch": []}),
         ]
@@ -72,6 +75,26 @@ class ViewTests(unittest.TestCase):
                 scan.summary_view(raw)
         with self.assertRaises(ValueError):
             scan.summary_view(b" " * (scan.SUMMARY_LIMIT + 1))
+
+    def test_a_large_report_is_capped_critical_first_with_exact_counts(self):
+        # 618 rows as the scanner wrote them before severities were recorded, plus a critical
+        # finding in a second image: the critical one is shown first, nothing is refused.
+        api = [[f"chromium{'-common' if i % 3 == 1 else '-driver' if i % 3 == 2 else ''}", "156.0.8078.79-1~deb12u1",
+                f"CVE-2026-{20000 + i // 3}", "156.0.8078.108-1~deb12u1"] for i in range(618)]
+        raw = summary(targets={
+            "api": {"by_severity": {"CRITICAL": 6, "HIGH": 612}, "fixable_by_severity": {"CRITICAL": 6, "HIGH": 612},
+                    "fixable_high_critical": api},
+            "gate": {"by_severity": {"CRITICAL": 1}, "fixable_by_severity": {"CRITICAL": 1},
+                     "fixable_high_critical": [["openssl", "3.0.1", "CVE-2026-1", "3.0.2", "CRITICAL"]],
+                     "fixable_not_listed": 5}})
+        view = scan.summary_view(raw)
+        api_view, gate_view = view["targets"]["api"], view["targets"]["gate"]
+        self.assertEqual(len(api_view["fixable_high_critical"]) + len(gate_view["fixable_high_critical"]), scan.MAX_FINDINGS)
+        self.assertEqual(gate_view["fixable_high_critical"][0]["package"], "openssl")
+        self.assertEqual((api_view["fixable_not_shown"], gate_view["fixable_not_shown"]), (618 - 199, 5))
+        self.assertEqual(api_view["fixable_by_severity"], {"CRITICAL": 6, "HIGH": 612})
+        self.assertEqual(api_view["fixable_high_critical"][0]["id"], "CVE-2026-20000")
+        self.assertEqual(scan.summary_view(summary())["targets"]["api"]["fixable_not_shown"], 0)
 
 
 class ReadTests(unittest.TestCase):
@@ -152,6 +175,41 @@ class HeartbeatTests(unittest.TestCase):
                 (root / "latest.json").write_text(json.dumps({"status": "failed", "key": key, "scanned_at": time.time()}))
                 with self.assertRaises(AssertionError):
                     scan.main()
+
+
+class ScanTests(unittest.TestCase):
+    def test_latest_lists_critical_first_and_counts_rows_beyond_the_cap(self):
+        """A full scan with 300 fixable rows: latest.json stays readable, the report folder keeps all."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            release = root / "releases" / "9850cba2-4b43-4a2d-bd06-6a4c3b8d6e0a" / "v3"
+            (release / "abilities").mkdir(parents=True)
+            (release / "Cargo.lock").write_text("# lock\n")
+            vulnerabilities = [{"PkgName": "chromium", "InstalledVersion": "1", "VulnerabilityID": f"CVE-2026-{i:05d}",
+                                "FixedVersion": "2", "Severity": "HIGH"} for i in range(300)]
+            vulnerabilities.append({"PkgName": "zlib", "InstalledVersion": "1", "VulnerabilityID": "CVE-2026-99999",
+                                    "FixedVersion": "2", "Severity": "CRITICAL"})
+
+            def run(argv, **_):
+                if argv[:2] == ["docker", "save"]:
+                    Path(argv[-1]).write_bytes(b"")
+                return str(release / "abilities") if "Mounts" in " ".join(argv) else "sha256:image"
+
+            def trivy(args, out, _mounts):
+                api = "/in/api.tar" in args and "json" in args
+                Path(out).write_text(json.dumps({"Results": [{"Vulnerabilities": vulnerabilities}]} if api else {}))
+            with patch.object(scan, "ROOT", root), patch.object(scan, "run", run), \
+                    patch.object(scan, "trivy", trivy), patch.object(scan.sys, "argv", ["scan"]):
+                self.assertEqual(scan.main(), 0)
+            latest = json.loads((root / "latest.json").read_text())
+            api = latest["targets"]["api"]
+            self.assertEqual((len(api["fixable_high_critical"]), api["fixable_not_listed"]), (scan.MAX_FINDINGS, 101))
+            self.assertEqual(api["fixable_high_critical"][0], ["zlib", "1", "CVE-2026-99999", "2", "CRITICAL"])
+            self.assertEqual(api["fixable_by_severity"], {"HIGH": 300, "CRITICAL": 1})
+            report = json.loads((Path(latest["report"]) / "summary.json").read_text())
+            self.assertEqual(len(report["targets"]["api"]["fixable_high_critical"]), 301)
+            view = scan.summary_view((root / "latest.json").read_bytes())
+            self.assertEqual(view["targets"]["api"]["fixable_not_shown"], 101)
 
 
 if __name__ == "__main__":
