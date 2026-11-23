@@ -40,6 +40,8 @@ authoritative; loading guidance never grants a tool or deployment.
   stay with their module; root tests cover wiring only. When a change touches
   root code that clearly belongs to a module, ask whether to move it now.
 - Preserve other writers' changes and all runtime data.
+- Any change to access, identity, background work, storage, run limits or
+  dependencies also follows `docs/build-protocol.md` (the unified plan's rules).
 
 ## Smallest complete change
 
