@@ -197,12 +197,13 @@ def install(args):
  unit.write_text(text);unit.chmod(0o644);subprocess.run(["systemctl","daemon-reload"],check=True)
  # Release keys run a root-owned copy of the operator shell (sudoers pins its path); keep it current.
  # The root host helper is not copied here: its supervisor_update action replaces it after approval.
- for folder,name,unit in (("/usr/local/lib/webagent-ops","operator_shell.py",None),):
+ for folder,name,unit,installed in (("/usr/local/lib/webagent-ops","operator_shell.py",None,"operator_shell.py"),
+                                    ("/usr/local/sbin","artifact_prune.py",None,"v3-artifact-prune")):
   folder=Path(folder)
   if not folder.is_dir() or folder.is_symlink():continue
-  body=(Path(value["service_dir"])/name).read_bytes();target=folder/name
+  body=(Path(value["service_dir"])/name).read_bytes();target=folder/installed
   if target.exists() and target.read_bytes()==body:continue
-  copy=folder/(name+".new");copy.write_bytes(body);copy.chmod(0o644);os.replace(copy,target)
+  copy=folder/(installed+".new");copy.write_bytes(body);copy.chmod(0o755 if folder.name=="sbin" else 0o644);os.replace(copy,target)
   if unit:subprocess.run(["systemctl","try-restart",unit],check=False)
  boot_host=repoint_boot(boot,boot_home/(BOOT_PIN+".previous")) if boot else {"drop_in":"absent","changed":False,"note":"no "+BOOT_PIN+" drop-in; boot host left unchanged"}
  board=install_board(value,value["service_dir"])
