@@ -129,6 +129,67 @@ pub fn step_vaults(steps: &Value) -> Vec<String> {
     names
 }
 
+/// Name suffixes that only resolve inside a private network: multicast DNS, common
+/// intranet names and Tailscale's MagicDNS.
+const PRIVATE_SUFFIXES: &[&str] = &[
+    "localhost",
+    "local",
+    "localdomain",
+    "internal",
+    "intranet",
+    "lan",
+    "home.arpa",
+    "ts.net",
+    "tailscale.net",
+];
+
+/// Hosts the Browser Extension never acts on, listed or not: the app's own host, taken from
+/// its public `origin`. The queued call carries them to the extension, which checks them too.
+pub fn blocked_hosts(origin: &str) -> Vec<String> {
+    url::Url::parse(origin)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+        .into_iter()
+        .collect()
+}
+
+/// Why the extension may never act on `host`, or `None` when only the site list decides:
+/// the app's own host (also through a listed parent or subdomain of it), loopback, IP
+/// literals of any kind, and private-network or Tailscale names (BROWSER-5).
+pub fn forbidden_host(host: &str, blocked: &[String]) -> Option<&'static str> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let related = |a: &str, b: &str| a == b || a.ends_with(&format!(".{b}"));
+    if blocked
+        .iter()
+        .any(|app| related(&host, app) || related(app, &host))
+    {
+        return Some("this app's own address");
+    }
+    let last = host.rsplit('.').next().unwrap_or("");
+    let ip = matches!(
+        url::Url::parse(&format!("http://{host}/"))
+            .ok()
+            .and_then(|u| u.host().map(|h| h.to_owned())),
+        Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))
+    );
+    // A name whose last label is a number is an address in a browser's eyes (`0x7f.1`).
+    if ip || host.contains([':', '[']) || last.starts_with(|c: char| c.is_ascii_digit()) {
+        return Some("an IP address");
+    }
+    if PRIVATE_SUFFIXES.iter().any(|suffix| related(&host, suffix)) {
+        return Some("a private-network address");
+    }
+    None
+}
+
+/// The Browser Extension's site list from the agent's `sites` setting, split into the hosts
+/// it may use and the entries it refuses whatever the setting says ([`forbidden_host`]).
+pub fn extension_sites(setting: &str, blocked: &[String]) -> (Vec<String>, Vec<String>) {
+    sites(setting)
+        .into_iter()
+        .partition(|host| forbidden_host(host, blocked).is_none())
+}
+
 /// Whether `url` is an http(s) address on one of `sites` or their subdomains.
 pub fn site_allowed(url: &str, sites: &[String]) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
@@ -146,14 +207,20 @@ pub fn site_allowed(url: &str, sites: &[String]) -> bool {
 }
 
 /// Admit one `browser_extension_action` call: required fields per action and, for actions that
-/// load a page, an allowlisted address. The extension checks the tab's current site again
-/// before acting, since a page can redirect anywhere.
-pub fn check_action(args: &Value, sites: &[String]) -> Result<()> {
+/// load a page, an allowlisted address that is not `blocked` or private. The extension checks
+/// the tab's current site again at every action, since a page can redirect anywhere.
+pub fn check_action(args: &Value, sites: &[String], blocked: &[String]) -> Result<()> {
     let action = args["action"].as_str().unwrap_or("");
     let has = |field: &str| !args[field].is_null();
     match action {
         "open" | "navigate" => {
             let url = args["url"].as_str().unwrap_or("");
+            let host = url::Url::parse(url)
+                .ok()
+                .and_then(|parsed| parsed.host_str().map(str::to_owned));
+            if let Some(reason) = host.as_deref().and_then(|h| forbidden_host(h, blocked)) {
+                bail!("{url} is {reason}; the browser extension never acts there");
+            }
             if !site_allowed(url, sites) {
                 bail!("{url} is not on this agent's browser site list; an operator adds sites in the Browser Extension ability settings");
             }
@@ -312,7 +379,7 @@ mod tests {
     #[test]
     fn actions_need_their_fields_and_listed_sites() {
         let list = sites("example.com");
-        let ok = |args: Value| check_action(&args, &list).is_ok();
+        let ok = |args: Value| check_action(&args, &list, &[]).is_ok();
         assert!(ok(json!({"action":"open","url":"https://example.com"})));
         assert!(!ok(json!({"action":"navigate","url":"https://other.test"})));
         assert!(!ok(json!({"action":"click"})));
@@ -321,6 +388,57 @@ mod tests {
         assert!(ok(json!({"action":"type","ref":4,"text":"hi"})));
         assert!(ok(json!({"action":"read"})));
         assert!(!ok(json!({"action":"eval"})));
+    }
+
+    #[test]
+    fn the_app_itself_is_never_opened_even_when_listed() {
+        let blocked = blocked_hosts("https://dev.webagent.live");
+        assert_eq!(blocked, ["dev.webagent.live"]);
+        let open = json!({"action":"open","url":"https://dev.webagent.live/app"});
+        // Listed by hand: the server still refuses it.
+        let listed = sites("dev.webagent.live, example.com");
+        let refused = check_action(&open, &listed, &blocked).unwrap_err();
+        assert!(refused.to_string().contains("own address"), "{refused}");
+        // And the agent's list never keeps it, nor a parent or subdomain of it.
+        let (allowed, dropped) = extension_sites(
+            "dev.webagent.live webagent.live api.dev.webagent.live example.com",
+            &blocked,
+        );
+        assert_eq!(allowed, ["example.com"]);
+        assert_eq!(dropped.len(), 3);
+        // The listed site on the same list still opens.
+        let other = json!({"action":"open","url":"https://www.example.com/a"});
+        assert!(check_action(&other, &allowed, &blocked).is_ok());
+        let navigate = json!({"action":"navigate","url":"https://dev.webagent.live/app?tab=admin"});
+        assert!(check_action(&navigate, &listed, &blocked).is_err());
+    }
+
+    #[test]
+    fn site_lists_refuse_loopback_private_and_tailscale_hosts() {
+        let blocked = blocked_hosts("https://dev.webagent.live");
+        let (allowed, dropped) = extension_sites(
+            "localhost, app.localhost, 127.0.0.1, 10.1.2.3, 192.168.1.10, 172.16.0.5, \
+             169.254.169.254, 100.87.9.65, 0x7f.0.0.1, 2130706433.1, nas.local, \
+             db.corp.internal, intranet, printer.lan, router.home.arpa, ar-server.tail1234.ts.net, \
+             crm.example.com, docs.rs",
+            &blocked,
+        );
+        assert_eq!(allowed, ["crm.example.com", "docs.rs"]);
+        assert_eq!(dropped.len(), 15, "{dropped:?}");
+        for host in ["[::1]", "::1", "[fe80::1]"] {
+            assert_eq!(
+                forbidden_host(host, &blocked),
+                Some("an IP address"),
+                "{host}"
+            );
+        }
+        assert_eq!(forbidden_host("crm.example.com", &blocked), None);
+        // Even an entry that slipped onto the list is refused at open and navigate.
+        let raw = sites("192.168.1.10 nas.local");
+        for url in ["http://192.168.1.10/admin", "https://nas.local/"] {
+            let open = json!({"action":"open","url":url});
+            assert!(check_action(&open, &raw, &blocked).is_err(), "{url}");
+        }
     }
 
     #[test]

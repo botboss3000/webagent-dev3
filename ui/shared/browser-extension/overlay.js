@@ -1,4 +1,5 @@
-// Injected into each agent tab through the debugger (never into the user's other tabs).
+// Injected into each agent tab through the debugger (never into the user's other tabs), in its
+// own script world: page scripts cannot see `__webagentOverlay` or the `__webagentUser` signal.
 // Shows the agent's pointer, click ripples and typing, and hands control to the user as
 // soon as they click or type themselves. Its host is aria-hidden so page reads skip it,
 // and it ignores pointer events except on its own buttons.

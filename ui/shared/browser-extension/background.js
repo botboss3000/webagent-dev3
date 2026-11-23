@@ -3,8 +3,14 @@
 // Linking: the content script on WebAgent's pages passes a one-time code; it is traded for
 // this device's secret. Work: long-poll the server for the linked account's actions, run
 // each one with the debugger in the agent's own window, and post the result. The agent
-// never touches tabs it did not open, and never acts on a site outside the agent's list.
+// never touches tabs outside its own tab group, never acts on a site outside the agent's
+// list, and never on this app's own address or a private one (guard.js, checked at every
+// action and again before each input).
+import {COMMANDS, describeTab, hostOf, siteAllowed, tabRefusal} from './guard.js';
+
 const API = '/api/v3/browser';
+// The overlay and its take-over signal live in a separate script world, out of the page's reach.
+const WORLD = 'webagent-overlay';
 const READ_LIMIT = 12000;
 const KEYS = {Enter: 13, Tab: 9, Escape: 27, Space: 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39,
   ArrowDown: 40, PageUp: 33, PageDown: 34, Home: 36, End: 35, Backspace: 8};
@@ -111,7 +117,9 @@ async function run(link, call) {
   if (!ack.ok) return;
   let body;
   try {
-    body = {id: call.id, output: await act(call.args, call.sites || [])};
+    // The app's own hosts: those the server names, plus the one this browser is linked to.
+    const blocked = [...new Set([...(call.blocked_hosts || []), hostOf(link.origin)].filter(Boolean))];
+    body = {id: call.id, output: await act(call.args, {sites: call.sites || [], blocked})};
   } catch (error) {
     body = {id: call.id, error: String(error.message || error), started: error.started === true};
   }
@@ -126,22 +134,19 @@ poll();
 
 // ---- The agent window -------------------------------------------------------------------
 
-function siteAllowed(url, sites) {
-  try {
-    const parsed = new URL(url);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
-    const host = parsed.hostname.toLowerCase();
-    return sites.some(site => host === site || host.endsWith('.' + site));
-  } catch { return false; }
-}
-
 const failure = (message, started = false) => Object.assign(new Error(message), {started});
 
+// The agent's tabs: those it opened that are still in its tab group. A tab the user drags out
+// of the group is theirs from then on.
 async function agentTabs() {
   const ids = await session.get('tabs') || [];
+  const group = await session.get('group');
   const tabs = [];
   for (const id of ids) {
-    try { tabs.push(await chrome.tabs.get(id)); } catch { /* closed by the user */ }
+    try {
+      const tab = await chrome.tabs.get(id);
+      if (group != null && tab.groupId === group) tabs.push(tab);
+    } catch { /* closed by the user */ }
   }
   await session.set('tabs', tabs.map(tab => tab.id));
   return tabs;
@@ -150,9 +155,26 @@ async function agentTabs() {
 async function currentTab(wanted) {
   const tabs = await agentTabs();
   const id = wanted ?? await session.get('current');
-  const tab = tabs.find(t => t.id === id) || tabs.at(-1);
-  if (!tab) throw failure('No agent tab is open; use open first');
+  const tab = tabs.find(t => t.id === id) || (wanted == null ? tabs.at(-1) : null);
+  if (!tab) throw failure(wanted == null ? 'No agent tab is open; use open first' : `Tab ${wanted} is not an agent tab; call tabs`);
   await session.set('current', tab.id);
+  return tab;
+}
+
+async function context(rules) {
+  return {...rules, group: await session.get('group')};
+}
+
+// The tab as it is now, refused when it has left the site list or reached a forbidden host
+// since the last check. On a forbidden host the debugger lets go of the tab.
+async function guard(tabId, action, rules) {
+  let tab;
+  try { tab = await chrome.tabs.get(tabId); } catch { throw failure('The agent tab was closed'); }
+  const refusal = tabRefusal(action, tab, await context(rules));
+  if (refusal) {
+    if (refusal.includes('never acts there')) await detach(tabId);
+    throw failure(refusal);
+  }
   return tab;
 }
 
@@ -174,11 +196,12 @@ async function openTab(url) {
       .catch(() => chrome.windows.create({url, focused: true}));
     tab = window.tabs[0];
   }
-  await session.set('tabs', [...tabs.map(t => t.id), tab.id]);
-  await session.set('current', tab.id);
   const groupId = await chrome.tabs.group({tabIds: [tab.id], ...(tabs[0]?.groupId > -1
     ? {groupId: tabs[0].groupId} : {createProperties: {windowId: tab.windowId}})});
   await chrome.tabGroups.update(groupId, {title: 'WebAgent', color: 'purple'});
+  await session.set('group', groupId);
+  await session.set('tabs', [...tabs.map(t => t.id), tab.id]);
+  await session.set('current', tab.id);
   return tab;
 }
 
@@ -188,7 +211,13 @@ const attached = new Set();
 let overlaySource;
 
 async function cdp(tabId, method, params = {}) {
+  if (!COMMANDS.has(method)) throw failure(`DevTools command ${method} is not allowed`);
   return chrome.debugger.sendCommand({tabId}, method, params);
+}
+
+async function detach(tabId) {
+  attached.delete(tabId);
+  await chrome.debugger.detach({tabId}).catch(() => {});
 }
 
 async function attach(tabId) {
@@ -202,9 +231,31 @@ async function attach(tabId) {
   overlaySource ??= await (await fetch(chrome.runtime.getURL('overlay.js'))).text();
   await cdp(tabId, 'Page.enable');
   await cdp(tabId, 'Runtime.enable');
-  await cdp(tabId, 'Runtime.addBinding', {name: '__webagentUser'});
-  await cdp(tabId, 'Page.addScriptToEvaluateOnNewDocument', {source: overlaySource});
-  await cdp(tabId, 'Runtime.evaluate', {expression: overlaySource});
+  // Only the overlay's own world sees the take-over signal and the overlay controls, so page
+  // scripts can neither hand control back nor silence the user's take-over.
+  await cdp(tabId, 'Runtime.addBinding', {name: '__webagentUser', executionContextName: WORLD});
+  await cdp(tabId, 'Page.addScriptToEvaluateOnNewDocument', {source: overlaySource, worldName: WORLD});
+  await inWorld(tabId, overlaySource).catch(() => {});
+}
+
+// The overlay world of the tab's current document (created once per document, then reused).
+async function world(tabId) {
+  const {frameTree} = await cdp(tabId, 'Page.getFrameTree');
+  const {executionContextId} = await cdp(tabId, 'Page.createIsolatedWorld',
+    {frameId: frameTree.frame.id, worldName: WORLD});
+  return executionContextId;
+}
+
+// A document that is still loading may replace the world between the two calls: try again.
+async function inWorld(tabId, expression) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await cdp(tabId, 'Runtime.evaluate', {expression, contextId: await world(tabId), returnByValue: true});
+    } catch (error) {
+      if (attempt >= 3 || !/context/i.test(String(error.message))) throw error;
+      await sleep(150);
+    }
+  }
 }
 
 chrome.debugger.onDetach.addListener(source => attached.delete(source.tabId));
@@ -223,8 +274,9 @@ async function setPaused(paused) {
   }
 }
 
+// The overlay script returns at once where it already runs, so a new world gets it here too.
 async function overlay(tabId, call) {
-  await cdp(tabId, 'Runtime.evaluate', {expression: `window.__webagentOverlay?.${call}`});
+  await inWorld(tabId, `${overlaySource}\nwindow.__webagentOverlay?.${call}`);
 }
 
 async function evaluate(tabId, expression) {
@@ -239,9 +291,9 @@ async function settle(tabId) {
   }
 }
 
-async function page(tabId) {
-  const tab = await chrome.tabs.get(tabId);
-  return {tab: tabId, url: tab.url, title: tab.title};
+// The tab after an action; one that has left the list shows only its host.
+async function page(tabId, rules) {
+  return describeTab(await chrome.tabs.get(tabId), await context(rules));
 }
 
 async function center(tabId, ref) {
@@ -317,54 +369,66 @@ async function read(tabId, offset = 0) {
   const text = lines.join('\n');
   const part = text.slice(offset, offset + READ_LIMIT);
   const next = offset + READ_LIMIT < text.length ? offset + READ_LIMIT : null;
-  return {...await page(tabId), text: part, next_offset: next};
+  const tab = await chrome.tabs.get(tabId);
+  return {tab: tabId, url: tab.url, title: tab.title, text: part, next_offset: next};
 }
 
 // ---- Actions ----------------------------------------------------------------------------
 
-async function act(args, sites) {
+async function act(args, rules) {
   if (await session.get('paused')) {
     throw failure('The user took over this browser window. Wait until they hand control back, then read the page again.');
   }
   const {action} = args;
   if (action === 'tabs') {
     const current = await session.get('current');
-    return {tabs: (await agentTabs()).map(t => ({tab: t.id, url: t.url, title: t.title, current: t.id === current}))};
+    const ctx = await context(rules);
+    return {tabs: (await agentTabs()).map(t => ({...describeTab(t, ctx), current: t.id === current}))};
   }
-  if ((action === 'open' || action === 'navigate') && !siteAllowed(args.url, sites)) {
-    throw failure(`${args.url} is not on this agent's site list`);
+  if ((action === 'open' || action === 'navigate') && !siteAllowed(args.url, rules.sites, rules.blocked)) {
+    throw failure(`${args.url} is not on this agent's site list, or is an address the agent never opens`);
   }
   if (action === 'open') {
     const tab = await openTab(args.url);
     await attach(tab.id);
     await settle(tab.id);
-    return page(tab.id);
+    // A redirect to a forbidden host lets go of the tab and says so.
+    await guard(tab.id, 'navigate', rules);
+    return page(tab.id, rules);
   }
-  const tab = await currentTab(args.tab);
+  // Checked at every action against where the tab is now; navigate's target was checked
+  // above, so it may also lead off a page that left the list.
+  const tab = await guard((await currentTab(args.tab)).id, action, rules);
   if (action === 'close') {
+    await detach(tab.id);
     await chrome.tabs.remove(tab.id);
     return {closed: tab.id};
   }
-  // navigate's target was checked above, so it may also lead off a disallowed page.
-  if (action !== 'navigate' && !siteAllowed(tab.url, sites)) {
-    throw failure(`The agent tab is on ${new URL(tab.url).hostname}, which is not on this agent's site list`);
-  }
+  // Before each input: the page may have moved since the check above.
+  const still = () => guard(tab.id, action, rules);
   await attach(tab.id);
   await overlay(tab.id, 'user(false)');
   if (action === 'navigate') {
     await overlay(tab.id, `caption(${JSON.stringify('Opening ' + args.url)})`);
+    await still();
     await cdp(tab.id, 'Page.navigate', {url: args.url});
     await settle(tab.id);
-    return page(tab.id);
+    return page(tab.id, rules);
   }
   if (action === 'read') {
     await overlay(tab.id, 'caption("Reading the page")');
-    return read(tab.id, args.offset || 0);
+    const before = await still();
+    const text = await read(tab.id, args.offset || 0);
+    // A page that moved during the read is not returned: it may be somewhere else now.
+    const after = await still();
+    if (after.url !== before.url) throw failure('The page changed while it was read; read again');
+    return text;
   }
   const label = labels.get(tab.id)?.get(args.ref) || 'the page';
   if (action === 'click') {
     const {x, y} = await pointAt(tab.id, args.ref, 'Clicking ' + label);
     await overlay(tab.id, 'expect(800)');
+    await still();
     await cdp(tab.id, 'Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
     try {
       await cdp(tab.id, 'Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button: 'left', clickCount: 1});
@@ -375,12 +439,14 @@ async function act(args, sites) {
     await overlay(tab.id, `ripple(${x},${y})`).catch(() => {});
     await sleep(300);
     await settle(tab.id);
-    return {...await page(tab.id), clicked: label};
+    return {...await page(tab.id, rules), clicked: label};
   }
   if (action === 'type') {
     await pointAt(tab.id, args.ref, 'Typing into ' + label);
     await cdp(tab.id, 'DOM.focus', {backendNodeId: args.ref});
-    const {object} = await cdp(tab.id, 'DOM.resolveNode', {backendNodeId: args.ref});
+    // Resolved in the overlay's world, so page scripts cannot fake the password check.
+    const {object} = await cdp(tab.id, 'DOM.resolveNode',
+      {backendNodeId: args.ref, executionContextId: await world(tab.id)});
     const {result} = await cdp(tab.id, 'Runtime.callFunctionOn', {objectId: object.objectId, returnByValue: true,
       functionDeclaration: `function(clear){
         if (clear && typeof this.select === 'function') this.select();
@@ -394,18 +460,19 @@ async function act(args, sites) {
       // A few characters at a time, so the user can follow the typing.
       for (const chunk of args.text.match(/[\s\S]{1,4}/g) || []) {
         await overlay(tab.id, 'expect(400)');
+        await still();
         await cdp(tab.id, 'Input.insertText', {text: chunk});
         typed += chunk;
         await overlay(tab.id, `caption(${JSON.stringify(`Typing into ${label}: ` + (secret ? '•'.repeat(typed.length) : typed).slice(-60))})`);
         await sleep(25);
       }
-      if (args.submit) await key(tab.id, 'Enter');
+      if (args.submit) { await still(); await key(tab.id, 'Enter'); }
     } catch (error) {
       throw failure(String(error.message || error), true);
     }
     await overlay(tab.id, 'box(null)');
     await settle(tab.id);
-    return {...await page(tab.id), typed_into: label, submitted: args.submit === true};
+    return {...await page(tab.id, rules), typed_into: label, submitted: args.submit === true};
   }
   if (action === 'press') {
     if (args.ref != null) {
@@ -414,18 +481,20 @@ async function act(args, sites) {
     } else {
       await overlay(tab.id, `caption(${JSON.stringify('Pressing ' + args.key)})`);
     }
+    await still();
     try { await key(tab.id, args.key); } catch (error) { throw failure(String(error.message || error), true); }
     await settle(tab.id);
-    return {...await page(tab.id), pressed: args.key};
+    return {...await page(tab.id, rules), pressed: args.key};
   }
   if (action === 'scroll') {
     const {width, height} = await evaluate(tab.id, '({width: innerWidth, height: innerHeight})');
     await overlay(tab.id, 'caption("Scrolling")');
     await overlay(tab.id, 'expect(600)');
+    await still();
     await cdp(tab.id, 'Input.dispatchMouseEvent', {type: 'mouseWheel', x: width / 2, y: height / 2,
       deltaX: 0, deltaY: args.dy || 600});
     await sleep(300);
-    return {...await page(tab.id), scroll_y: await evaluate(tab.id, 'scrollY')};
+    return {...await page(tab.id, rules), scroll_y: await evaluate(tab.id, 'scrollY')};
   }
   throw failure('Unknown action ' + action);
 }

@@ -90,9 +90,10 @@ mod tests {
 
     #[test]
     fn shipped_file_parses() {
+        // The file is live: an administrator may change its values (it held 10 per app after
+        // 2026-11-21), so it only has to parse within the accepted ranges.
         let bytes = include_bytes!("../../../../config/browser/browser-limits.json");
-        let limits = Limits::parse(bytes).unwrap();
-        assert_eq!(limits, Limits::default());
+        Limits::parse(bytes).unwrap();
     }
 
     #[test]

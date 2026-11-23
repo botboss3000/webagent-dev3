@@ -13,7 +13,8 @@ use webagent_accounts_host::AccountsStore;
 use webagent_browser as rules;
 use webagent_configuration::digest;
 
-/// `{id, user, pending, args, sites, state, created, ...}` per queued action, under its user.
+/// `{id, user, pending, args, sites, blocked_hosts, state, created, ...}` per queued action,
+/// under its user.
 const CALLS: &str = "browser_call:";
 /// `{id, name, created, secret, last_seen}` per linked device, under its user.
 const DEVICES: &str = "browser_device:";
@@ -256,9 +257,7 @@ pub(crate) async fn next(
                 call["offered"] = json!(now());
                 call["device"] = json!(device.id);
                 app.store.put(&key, &call).await?;
-                return Ok(Json(json!({"call":{
-                    "id":call["id"],"args":call["args"],"sites":call["sites"],"session":call["session"],
-                }})));
+                return Ok(Json(json!({"call":offer(&call)})));
             }
         }
         if now() >= deadline {
@@ -266,6 +265,18 @@ pub(crate) async fn next(
         }
         tokio::time::sleep(TICK).await;
     }
+}
+
+/// What the extension receives for one queued call: the action, the agent's site list and
+/// the hosts it must never act on. A call queued before `blocked_hosts` existed gets the app's
+/// host now; the extension adds the host it is linked to in any case.
+fn offer(call: &Value) -> Value {
+    let blocked = match &call["blocked_hosts"] {
+        Value::Array(hosts) if !hosts.is_empty() => Value::Array(hosts.clone()),
+        _ => json!(blocked_hosts()),
+    };
+    json!({"id":call["id"],"args":call["args"],"sites":call["sites"],
+        "blocked_hosts":blocked,"session":call["session"]})
 }
 
 fn call_id(input: &Value) -> Result<&str, ApiError> {
@@ -396,14 +407,23 @@ pub(crate) fn owns(name: &str) -> bool {
     rules::TOOLS.contains(&name)
 }
 
-/// The agent's allowlisted sites for session `sid`.
-async fn agent_sites(host: &tools::native_host::Host<'_>, sid: &str) -> Result<Vec<String>> {
+/// The hosts the extension never acts on: this app's own host (BROWSER-5).
+fn blocked_hosts() -> Vec<String> {
+    rules::blocked_hosts(&webagent_webapp::pages::public_origin())
+}
+
+/// The agent's allowlisted sites for session `sid`, and the entries refused whatever the
+/// setting says (the app itself, loopback, private and Tailscale hosts, IP literals).
+async fn agent_sites(
+    host: &tools::native_host::Host<'_>,
+    sid: &str,
+) -> Result<(Vec<String>, Vec<String>)> {
     use tools::native::NativeHost;
     let (_, visibility, _) = host.ability_controls(sid).await?;
     let setting = visibility["settings"][rules::ABILITY]["sites"]
         .as_str()
         .unwrap_or("");
-    Ok(rules::sites(setting))
+    Ok(rules::extension_sites(setting, &blocked_hosts()))
 }
 
 fn install_url() -> String {
@@ -967,7 +987,8 @@ pub(crate) async fn execute(
     host.authorize(call, name, args, &cancel).await?;
     // The person in the chat, also in a shared conversation: only their browser is used.
     let user = host.actor().to_owned();
-    let sites = agent_sites(&host, call.sid).await?;
+    let (sites, refused) = agent_sites(&host, call.sid).await?;
+    let blocked = blocked_hosts();
     let devices = device_list(&app.store, &user).await?;
     let online = devices.iter().any(|d| d["online"] == true);
     if name == "browser_extension_status" {
@@ -977,6 +998,10 @@ pub(crate) async fn execute(
             (false, false) => "offline",
         };
         let mut output = json!({"status":status,"devices":devices,"sites":sites});
+        if !refused.is_empty() {
+            output["refused_sites"] = json!(refused);
+            output["refused_reason"] = json!("The extension never acts on this app's own address, loopback, private-network or Tailscale hosts, or IP addresses, even when an operator lists them.");
+        }
         if status == "not_linked" {
             output["install_url"] = json!(install_url());
             output["next_step"] = json!("Give the user install_url: it explains installing the WebAgent browser extension in Chrome. Once installed it links to their account by itself while they are signed in here.");
@@ -991,7 +1016,7 @@ pub(crate) async fn execute(
             json!({"status":"denied","output":"No sites are allowed for this agent yet; an operator adds them in the Browser Extension ability settings"}),
         );
     }
-    if let Err(error) = rules::check_action(args, &sites) {
+    if let Err(error) = rules::check_action(args, &sites, &blocked) {
         return Ok(json!({"status":"denied","output":error.to_string()}));
     }
     // One document per tool call: a retried call finds its earlier action instead of
@@ -1011,7 +1036,8 @@ pub(crate) async fn execute(
         app.store
             .put(
                 &key,
-                &json!({"id":id,"session":call.sid,"args":args,"sites":sites,"state":"pending","created":now()}),
+                &json!({"id":id,"session":call.sid,"args":args,"sites":sites,
+                    "blocked_hosts":blocked,"state":"pending","created":now()}),
             )
             .await?;
     }
@@ -1030,7 +1056,12 @@ pub(crate) async fn execute(
         };
         let at = now();
         match doc["state"].as_str() {
-            Some("replied") => return Ok(json!({"status":"success","output":doc["output"]})),
+            // Page text, titles and addresses come from outside: labelled like Browser
+            // Control's results.
+            Some("replied") => {
+                return Ok(json!({"status":"success","output":doc["output"],
+                    "source_kind":"untrusted_browser_observation"}))
+            }
             Some("failed") => {
                 let error = doc["error"].as_str().unwrap_or("no detail");
                 let status = if doc["started"] == true {
@@ -1134,6 +1165,36 @@ mod tests {
             .await
             .unwrap();
         assert!(admit(&app, &device).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn queued_calls_tell_the_extension_which_hosts_it_never_acts_on() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let (_, identity) = sign_in(&app).await;
+        let device = linked_device(&app, &identity).await;
+        let app_host = blocked_hosts();
+        assert_eq!(app_host.len(), 1);
+        // One call queued with its blocked hosts, one queued before they existed.
+        for (n, blocked) in [(1u64, json!(["app.example"])), (2, Value::Null)] {
+            let id = format!("{n:064x}");
+            app.store
+                .put(
+                    &format!("{CALLS}admin:{id}"),
+                    &json!({"id":id,"session":"s","args":{"action":"read"},"sites":["example.com"],
+                        "blocked_hosts":blocked,"state":"pending","created":now() + n}),
+                )
+                .await
+                .unwrap();
+            let offered = next(State(app.clone()), device.clone()).await.unwrap().0;
+            let call = &offered["call"];
+            assert_eq!(call["sites"], json!(["example.com"]));
+            let expected = if blocked.is_null() {
+                json!(&app_host)
+            } else {
+                blocked
+            };
+            assert_eq!(call["blocked_hosts"], expected, "{call}");
+        }
     }
 
     #[tokio::test]

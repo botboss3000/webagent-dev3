@@ -1,7 +1,7 @@
 import {zip} from './zip.js';
 
 // Everything the unpacked extension needs; the install page and zip helper stay behind.
-const FILES = ['manifest.json', 'background.js', 'link.js', 'overlay.js', 'popup.html', 'popup.js'];
+const FILES = ['manifest.json', 'background.js', 'guard.js', 'link.js', 'overlay.js', 'popup.html', 'popup.js'];
 
 const button = document.getElementById('download'), status = document.getElementById('status');
 button.addEventListener('click', async () => {

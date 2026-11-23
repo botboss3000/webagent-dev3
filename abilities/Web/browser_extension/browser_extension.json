@@ -15,7 +15,7 @@
         "type": "text",
         "default": "",
         "max_length": 2000,
-        "hint": "Hosts separated by commas or new lines, for example crm.example.com. Each covers its subdomains. The agent cannot open or act on any other site."
+        "hint": "Hosts separated by commas or new lines, for example crm.example.com. Each covers its subdomains. The agent cannot open or act on any other site, nor ever on this app itself, localhost, private-network or Tailscale hosts or IP addresses."
       }
     ]
   },
