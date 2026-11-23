@@ -1,52 +1,114 @@
 //! Send feedback: forwards a signed-in caller's report to the configured feedback relay.
-//! Submission rules and settings live in `webagent_webapp::feedback`; this root-bound adapter
-//! supplies the HTTP handler, the installation's relay identity and the outbound call.
+//! Submission rules, settings and the attempt limiter live in `webagent_webapp::feedback`;
+//! this root-bound adapter supplies the HTTP handler, the caller check, the installation's
+//! relay identity and the outbound call.
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
 use std::path::Path;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
+use webagent_access::identity::Identity;
+use webagent_access::Role;
 use webagent_webapp::configuration::{app_settings, LIVE_SETTINGS};
-use webagent_webapp::feedback::{self, Submission};
+use webagent_webapp::feedback::{self, Limiter, Settings, Submission};
 
 use crate::{bad, uuid, Api, ApiError, App, State};
 
-/// Forward one report to the relay and answer with the issue link it returns, when any.
+/// Outbound attempts counted for this API process; they start again at each restart.
+static LIMITER: LazyLock<Mutex<Limiter>> = LazyLock::new(Default::default);
+/// One client for every relay call, so repeat calls reuse its connection set-up.
+static CLIENT: LazyLock<Option<reqwest::Client>> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .ok()
+});
+
+/// Forward one report to the relay; the reply carries no issue link (the repository is private).
 pub(crate) async fn submit(State(app): State<App>, Json(body): Json<Value>) -> Api {
-    let submission: Submission =
-        serde_json::from_value(body).map_err(|_| bad("Invalid feedback"))?;
     let settings = feedback::settings(&app_settings(Path::new(LIVE_SETTINGS))?)?;
+    let installation = installation_id(&app.store.root).await?;
+    let (user_id, kind, payload) = {
+        let mut limiter = LIMITER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prepare(
+            app.identity.as_deref(),
+            &settings,
+            body,
+            &installation,
+            &mut limiter,
+            crate::now(),
+        )?
+    };
+    let outcome = send(&settings.relay_url, &payload).await;
+    tracing::info!(target: "feedback", user_id, kind, outcome = outcome.as_ref().map_or_else(|e| e.1.as_str(), |_| "sent"), "feedback attempt");
+    outcome.map(|()| Json(json!({"ok": true})))
+}
+
+/// Only people signed in to the app with a registered account may send: the app's guest
+/// (anonymous) role is refused. A person's guest or member standing in an agent does not count.
+fn may_send(identity: Option<&Identity>) -> Option<&Identity> {
+    identity.filter(|identity| identity.principal.role != Role::Guest)
+}
+
+/// Everything before the outbound call: switch, caller, report rules, then the limits. The
+/// attempt is charged here, so it counts whatever the relay later answers.
+fn prepare(
+    identity: Option<&Identity>,
+    settings: &Settings,
+    body: Value,
+    installation: &str,
+    limiter: &mut Limiter,
+    now: u64,
+) -> Result<(String, String, Value), ApiError> {
     if !settings.enabled {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
             "Feedback is turned off here".into(),
         ));
     }
-    let installation = installation_id(&app.store.root).await?;
-    let payload = feedback::relay_payload(&submission, &installation, env!("CARGO_PKG_VERSION"))
+    let caller = may_send(identity).ok_or_else(|| {
+        ApiError(
+            StatusCode::FORBIDDEN,
+            "Sign in with an account to send feedback".into(),
+        )
+    })?;
+    let submission: Submission =
+        serde_json::from_value(body).map_err(|_| bad("Invalid feedback"))?;
+    let payload = feedback::relay_payload(&submission, installation, env!("CARGO_PKG_VERSION"))
         .map_err(bad)?;
+    if !limiter.try_charge(caller.user_id(), now, settings) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many submissions. Please try again later.".into(),
+        ));
+    }
+    Ok((caller.user_id().to_owned(), submission.kind, payload))
+}
+
+/// Post one report; only the relay's status is used, its body is never read.
+async fn send(relay_url: &str, payload: &Value) -> Result<(), ApiError> {
     let unreachable = || {
         ApiError(
             StatusCode::BAD_GATEWAY,
             "Feedback service unreachable".into(),
         )
     };
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
-        .connect_timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|_| unreachable())?;
-    let response = client
-        .post(&settings.relay_url)
-        .json(&payload)
+    let client = CLIENT.as_ref().ok_or_else(unreachable)?;
+    let status = client
+        .post(relay_url)
+        .json(payload)
         .send()
         .await
         .map_err(|error| {
             tracing::warn!(%error, "feedback relay call failed");
             unreachable()
-        })?;
-    let status = response.status();
+        })?
+        .status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -63,38 +125,137 @@ pub(crate) async fn submit(State(app): State<App>, Json(body): Json<Value>) -> A
             "Feedback service rejected the submission".into(),
         ));
     }
-    let reply: Value = response.json().await.unwrap_or(Value::Null);
-    let issue_url = reply["issue_url"]
-        .as_str()
-        .filter(|url| url.starts_with("https://"));
-    Ok(Json(json!({"ok": true, "issue_url": issue_url})))
+    Ok(())
 }
 
 /// The installation's stable relay identity, created on first use so the relay can rate-limit
-/// one installation without affecting others. It lives in state, never in shared config.
+/// one installation without affecting others. It lives in state, never in shared config. A new
+/// ID is written to a private temporary file and then linked into place, so a reader never sees
+/// a partly written file and simultaneous first uses all return the one that was linked first.
 async fn installation_id(root: &Path) -> anyhow::Result<String> {
     let path = root.join("webapp/feedback-installation-id");
-    if let Ok(existing) = tokio::fs::read_to_string(&path).await {
-        let existing = existing.trim();
-        if existing.len() >= 16 {
-            return Ok(existing.to_owned());
-        }
+    let read = || async {
+        tokio::fs::read_to_string(&path)
+            .await
+            .ok()
+            .map(|id| id.trim().to_owned())
+            .filter(|id| id.len() >= 16)
+    };
+    if let Some(id) = read().await {
+        return Ok(id);
     }
     tokio::fs::create_dir_all(root.join("webapp")).await?;
     let fresh = uuid();
-    tokio::fs::write(&path, &fresh).await?;
-    Ok(fresh)
+    let temporary = root.join(format!("webapp/.feedback-installation-id.{fresh}"));
+    tokio::fs::write(&temporary, &fresh).await?;
+    tokio::fs::File::open(&temporary).await?.sync_all().await?;
+    let published = if tokio::fs::try_exists(&path).await? {
+        // An existing file that is not a valid ID (for example emptied by a power loss) is replaced.
+        tokio::fs::rename(&temporary, &path).await
+    } else {
+        match tokio::fs::hard_link(&temporary, &path).await {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            other => other,
+        }
+    };
+    let _ = tokio::fs::remove_file(&temporary).await;
+    published?;
+    read()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("Feedback installation ID unreadable"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use webagent_access::identity::CredentialKind;
+    use webagent_access::{AccountStatus, Principal};
+
+    fn identity(role: Role, user_id: &str) -> Identity {
+        Identity {
+            principal: Principal {
+                user_id: user_id.into(),
+                status: AccountStatus::Active,
+                role,
+                tier_id: "free".into(),
+                access_revision: 1,
+                test_account: false,
+            },
+            username: user_id.into(),
+            generation: "g".into(),
+            auth_epoch: Some(0),
+            kind: CredentialKind::Person,
+            credential_key: "auth:x".into(),
+            credential_record: Vec::new(),
+            agent_id: None,
+        }
+    }
+
+    fn report() -> Value {
+        json!({"type":"bug","body":"broken"})
+    }
+
+    #[test]
+    fn only_registered_app_accounts_pass_and_refusals_charge_nothing() {
+        let on = feedback::settings(&json!({})).unwrap();
+        let off = feedback::settings(&json!({"feedback":{"enabled":false}})).unwrap();
+        let user = identity(Role::User, "u1");
+        let admin = identity(Role::Administrator, "a1");
+        let guest = identity(Role::Guest, "g1");
+        let mut limiter = Limiter::default();
+        let status = |result: Result<(String, String, Value), ApiError>| {
+            result.map(|_| StatusCode::OK).unwrap_or_else(|e| e.0)
+        };
+        assert_eq!(
+            status(prepare(Some(&user), &off, report(), "i", &mut limiter, 0)),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(prepare(Some(&guest), &on, report(), "i", &mut limiter, 0)),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(prepare(None, &on, report(), "i", &mut limiter, 0)),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(prepare(
+                Some(&user),
+                &on,
+                json!({"type":"bug","body":" "}),
+                "i",
+                &mut limiter,
+                0
+            )),
+            StatusCode::BAD_REQUEST
+        );
+        // None of the refusals above was charged: all five hourly attempts remain.
+        for _ in 0..5 {
+            assert_eq!(
+                status(prepare(Some(&user), &on, report(), "i", &mut limiter, 0)),
+                StatusCode::OK
+            );
+        }
+        assert_eq!(
+            status(prepare(Some(&user), &on, report(), "i", &mut limiter, 0)),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        let (caller, kind, payload) =
+            prepare(Some(&admin), &on, report(), "inst", &mut limiter, 0).unwrap();
+        assert_eq!((caller.as_str(), kind.as_str()), ("a1", "bug"));
+        assert!(
+            !payload.to_string().contains("a1"),
+            "the relay never sees the account"
+        );
+    }
 
     #[tokio::test]
-    async fn installation_id_is_created_once_and_reused() {
+    async fn installation_id_is_created_once_and_shared_by_concurrent_first_uses() {
         let root = tempfile::tempdir().unwrap();
-        let first = installation_id(root.path()).await.unwrap();
-        assert!(first.len() >= 16);
-        assert_eq!(installation_id(root.path()).await.unwrap(), first);
+        let (a, b) = tokio::join!(installation_id(root.path()), installation_id(root.path()));
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert!(a.len() >= 16);
+        assert_eq!(a, b);
+        assert_eq!(installation_id(root.path()).await.unwrap(), a);
     }
 }

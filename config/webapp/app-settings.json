@@ -20,7 +20,9 @@
     }
   },
   "feedback": {
-    "_instructions": "Send feedback in the account menu. enabled (boolean, missing = true) shows the form; relay_url (https, no credentials; missing = the upstream WebAgent relay) receives each report, which the relay files as an issue in the project's private feedback repository. Reports carry the text, an optional email and this installation's random ID (state/webapp/feedback-installation-id), never the account. The API rereads this file per request; signed-in pages adopt enabled within five seconds.",
-    "enabled": true
+    "_instructions": "Send feedback in the account menu. enabled (boolean, missing = true) shows the form and allows reports from accounts signed in to the app (the app's guest/anonymous role is refused). relay_url (https, no credentials; missing = the upstream WebAgent relay) receives each report, which the relay files as an issue in the project's private feedback repository. per_account_per_hour (1-100, missing = 5) and per_installation_per_day (1-10000, missing = 50) limit outbound relay attempts, counted in memory by the API process and reset at each restart. Reports carry the text, an optional email and this installation's random ID (state/webapp/feedback-installation-id), never the account. The API rereads this file per request; signed-in pages adopt enabled within five seconds.",
+    "enabled": true,
+    "per_account_per_hour": 5,
+    "per_installation_per_day": 50
   }
 }

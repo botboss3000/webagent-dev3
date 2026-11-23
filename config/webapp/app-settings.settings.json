@@ -88,6 +88,46 @@
         "account menu"
       ],
       "bounds": "validator"
+    },
+    {
+      "id": "app_ui.feedback.per_account_per_hour",
+      "description": "How many feedback reports one account may send in an hour.",
+      "type": "number",
+      "pointer": "/feedback/per_account_per_hour",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let people send more feedback",
+        "limit feedback to 2 an hour per person"
+      ],
+      "areas": [
+        "feedback",
+        "limits"
+      ],
+      "min": 1,
+      "max": 100,
+      "bounds": "validator"
+    },
+    {
+      "id": "app_ui.feedback.per_installation_per_day",
+      "description": "How many feedback reports the whole installation may send in a day.",
+      "type": "number",
+      "pointer": "/feedback/per_installation_per_day",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "raise the daily feedback limit",
+        "at most 20 feedback reports a day"
+      ],
+      "areas": [
+        "feedback",
+        "limits"
+      ],
+      "min": 1,
+      "max": 10000,
+      "bounds": "validator"
     }
   ],
   "excluded": {
