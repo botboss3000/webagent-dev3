@@ -31,6 +31,21 @@ fn lane_error(error: LaneError) -> anyhow::Error {
     }
 }
 
+/// What the guard shows a model for call `name(args)`: the state (rule, the newest messages,
+/// the shortened arguments) and the messages it offers to link.
+fn guard_input(
+    definition: &webagent_abilities::tool_definitions::ToolDefinition,
+    name: &str,
+    args: &Value,
+    messages: &[Message],
+    policy: &Policy,
+) -> (Value, Vec<Message>) {
+    let messages = rules::recent(messages, policy);
+    let guard = definition.guard.as_ref();
+    let shown = rules::shown_arguments(args, guard, policy.argument_max_chars);
+    (rules::state(name, shown, guard, &messages), messages)
+}
+
 impl<
         S: ScopedStorage
             + ChatEffects
@@ -81,10 +96,7 @@ impl<
             .into_iter()
             .map(|(label, text)| Message { label, text })
             .collect();
-        let messages = rules::recent(&messages, &policy);
-        let guard = definition.guard.as_ref();
-        let shown = rules::shown_arguments(args, guard, policy.argument_max_chars);
-        let state = rules::state(name, shown, guard, &messages);
+        let (state, messages) = guard_input(&definition, name, args, &messages, &policy);
         let (verdict, error) = match self.guard_verdict(run, &state, &messages, &policy).await {
             Ok(verdict) => (Some(verdict), None),
             Err(error) => (None, Some(error.to_string())),
@@ -93,6 +105,42 @@ impl<
         let mut record = rules::record(verdict.as_ref(), error.as_deref(), mode, passed);
         record["line"] = json!(rules::approval_line(&record));
         Ok(Some(record))
+    }
+
+    /// An administrator's guard probe: guard check for call `name(args)` with user `messages`,
+    /// asked of one model (`entry_id`, a roster entry of session `sid`'s agent) exactly as the
+    /// guard would ask it, with no time limit beyond the model's own. Returns the verdict, or
+    /// the error, and the milliseconds the model took. Nothing is recorded.
+    pub async fn guard_probe(
+        &self,
+        sid: &str,
+        entry_id: &str,
+        name: &str,
+        args: &Value,
+        messages: Vec<Message>,
+    ) -> Result<Value> {
+        let definition = webagent_abilities::tool_definitions::get(name)
+            .ok_or_else(|| anyhow!("Unknown tool"))?;
+        let agent = self.chat.agent_id(self.store.records(), sid).await?;
+        let policy = Policy::live();
+        let (state, messages) = guard_input(&definition, name, args, &messages, &policy);
+        let mut plan = self
+            .models()
+            .model_catalog()
+            .await?
+            .resolve_guard_entry(&agent, entry_id)?;
+        self.pin_model_plan(&mut plan).await?;
+        let run = json!({"agent_id":agent,"session_id":sid,
+            "requester_user_id":self.store.records().current_user_id()});
+        let started = Instant::now();
+        let answer = self.guard_ask(&run, plan, &state, &messages).await;
+        let elapsed = started.elapsed().as_millis() as u64;
+        Ok(match answer {
+            Ok(verdict) => json!({"verdict":verdict.asked.as_str(),"confidence":verdict.confidence,
+                "message":verdict.message,"model":verdict.model,
+                "passes":verdict.passes(&policy),"elapsed_ms":elapsed}),
+            Err(error) => json!({"error":error.to_string(),"elapsed_ms":elapsed}),
+        })
     }
 
     /// Ask the guard models in order until one answers, within the policy's time limits.

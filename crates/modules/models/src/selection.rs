@@ -170,6 +170,27 @@ impl Catalog {
         Ok(plans)
     }
 
+    /// One roster entry of `agent_id` as the critical tool guard would ask it, for an
+    /// administrator's guard probe: a decision model as Decision, any other as a text model.
+    pub fn resolve_guard_entry(&self, agent_id: &str, entry_id: &str) -> Result<SelectionPlan> {
+        let roster = self
+            .agent_models
+            .get(agent_id)
+            .ok_or_else(|| anyhow::anyhow!("Agent model roster required"))?;
+        let decision = self
+            .entries
+            .get(entry_id)
+            .is_some_and(|entry| ModelRole::Decision.supported_by(entry));
+        let role = if decision {
+            ModelRole::Decision
+        } else {
+            ModelRole::Standard
+        };
+        let mut plan = self.resolve_roster(roster, role, entry_id, None)?;
+        plan.candidates.truncate(1);
+        Ok(plan)
+    }
+
     /// The text model for a chat in execution mode `mode`: the mode's own model when the
     /// roster names one, else the Standard (Text) appointment.
     pub fn resolve_mode(&self, agent_id: &str, mode: Option<&str>) -> Result<SelectionPlan> {
@@ -1027,6 +1048,16 @@ mod tests {
                 ("a".to_owned(), ModelRole::Standard)
             ]
         );
+        let probe = c.resolve_guard_entry("agent-a", "b").unwrap();
+        assert_eq!(
+            (probe.role, probe.candidates.len()),
+            (ModelRole::Decision, 1)
+        );
+        assert_eq!(
+            c.resolve_guard_entry("agent-a", "a").unwrap().role,
+            ModelRole::Standard
+        );
+        assert!(c.resolve_guard_entry("agent-a", "outside").is_err());
     }
     #[test]
     fn modes_use_their_own_text_model_or_fall_back_to_text() {

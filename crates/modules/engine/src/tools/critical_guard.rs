@@ -400,14 +400,17 @@ pub fn approval_line(record: &Value) -> String {
         .as_f64()
         .map(|c| format!(", {:.0}%", c * 100.0))
         .unwrap_or_default();
-    match record["verdict"].as_str() {
-        Some("requested") => format!(
-            "Guard: matched your message {}{confidence}",
-            record["message"].as_str().unwrap_or("")
-        ),
-        Some("not_requested") => format!("Guard: no message of yours asks for this{confidence}"),
-        Some(_) => format!("Guard: unclear whether you asked for this{confidence}"),
-        None => format!(
+    match (record["verdict"].as_str(), record["message"].as_str()) {
+        // A "requested" answer that did not pass (too unsure, or no message named) is not a match.
+        (Some("requested"), Some(label)) if record["passed"] == true => {
+            format!("Guard: matched your message {label}{confidence}")
+        }
+        (Some("requested"), _) => format!("Guard: not sure you asked for this{confidence}"),
+        (Some("not_requested"), _) => {
+            format!("Guard: no message of yours asks for this{confidence}")
+        }
+        (Some(_), _) => format!("Guard: unclear whether you asked for this{confidence}"),
+        (None, _) => format!(
             "Guard: could not check this call ({})",
             record["error"].as_str().unwrap_or("no model answered")
         ),
@@ -586,6 +589,24 @@ mod tests {
             approval_line(&record),
             "Guard: unclear whether you asked for this, 62%"
         );
+        let unsure = Verdict {
+            asked: Asked::Requested,
+            confidence: Some(0.26),
+            message: None,
+            model: "jev".into(),
+        };
+        let held = super::record(Some(&unsure), None, Mode::Enforce, false);
+        assert_eq!(
+            approval_line(&held),
+            "Guard: not sure you asked for this, 26%"
+        );
+        let matched = Verdict {
+            confidence: Some(0.97),
+            message: Some("u2".into()),
+            ..unsure
+        };
+        let ran = super::record(Some(&matched), None, Mode::Enforce, true);
+        assert_eq!(approval_line(&ran), "Guard: matched your message u2, 97%");
         let failed = super::record(None, Some("timed out"), Mode::Enforce, false);
         assert_eq!(
             approval_line(&failed),

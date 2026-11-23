@@ -285,6 +285,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/ability-drift/rebuild", post(ability_drift::rebuild))
         .merge(build_dashboard::admin_router())
         .merge(app_defaults::admin_router())
+        .route("/admin/guard/probe", post(guard_probe))
         .merge(host_admin_routes())
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.

@@ -26,7 +26,8 @@ function guardBadge(guard) {
 function guardText(guard) {
   const confidence = typeof guard.confidence === 'number' ? `, ${Math.round(guard.confidence * 100)}%` : '';
   const model = guard.model ? ` (${guard.model})` : '';
-  if (guard.verdict === 'requested') return `Guard: matched request ${guard.message || ''}${confidence}${model}.`;
+  if (guard.verdict === 'requested' && guard.passed === true && guard.message) return `Guard: matched request ${guard.message}${confidence}${model}.`;
+  if (guard.verdict === 'requested') return `Guard: not sure the user asked for this${confidence}${model}.`;
   if (guard.verdict === 'not_requested') return `Guard: no user message asks for this${confidence}${model}.`;
   if (guard.verdict === 'unclear') return `Guard: unclear whether the user asked for this${confidence}${model}.`;
   return `Guard: could not check this action (${guard.error || 'no model answered'}).`;

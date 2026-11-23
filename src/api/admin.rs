@@ -426,3 +426,50 @@ mod composition_revision_tests {
         assert_ne!(before, stamp(app.store.prompt_slot_stamp().await.unwrap()));
     }
 }
+
+/// Critical tool guard probe: ask one of a session's agent's models whether `messages` ask for
+/// call `tool(arguments)`, exactly as the guard would, and how long it took. Used to compare
+/// decision models; nothing is recorded or run. Body: `{"session_id","entry_id","tool",
+/// "arguments","messages":[{"label","text"}]}` (at most 32 messages).
+pub(crate) async fn guard_probe(State(app): State<App>, Json(body): Json<Value>) -> Api {
+    let text = |key: &str| {
+        body[key]
+            .as_str()
+            .filter(|v| !v.is_empty() && v.len() <= 200)
+            .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, format!("{key} is required")))
+    };
+    let (sid, entry, tool) = (text("session_id")?, text("entry_id")?, text("tool")?);
+    let Some(list) = body["messages"].as_array().filter(|m| m.len() <= 32) else {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "messages must be a list of at most 32".into(),
+        ));
+    };
+    let messages = list
+        .iter()
+        .map(|m| webagent_engine::tools::critical_guard::Message {
+            label: m["label"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(16)
+                .collect(),
+            text: m["text"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(20_000)
+                .collect(),
+        })
+        .collect();
+    let arguments = if body["arguments"].is_object() {
+        body["arguments"].clone()
+    } else {
+        json!({})
+    };
+    Ok(Json(
+        app.engine()
+            .guard_probe(sid, entry, tool, &arguments, messages)
+            .await?,
+    ))
+}
