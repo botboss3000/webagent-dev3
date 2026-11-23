@@ -143,7 +143,8 @@ export function mountChatActionPanel({root,guard,request,note}) {
   }
   async function loadRoutes(){
     const sid=routeSession,epoch=routeGeneration,read=++routeRead;if(!sid)return;
-    const data=await request('/sessions/'+encodeURIComponent(sid)+'/messaging-routes');
+    // The embedded chat may not read remembered routes (refused with 403): it has none to show.
+    let data;try{data=await request('/sessions/'+encodeURIComponent(sid)+'/messaging-routes');}catch(error){if(error.status!==403)throw error;data={routes:[]};}
     if(sid!==routeSession||epoch!==routeGeneration||read!==routeRead)return;
     routeList.replaceChildren();
     const routes=(data.routes||[]).filter(route=>!route.revoked);
