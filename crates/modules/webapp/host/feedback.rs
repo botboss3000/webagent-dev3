@@ -13,7 +13,7 @@ use webagent_access::Role;
 use webagent_webapp::configuration::{app_settings, LIVE_SETTINGS};
 use webagent_webapp::feedback::{self, Limiter, Settings, Submission};
 
-use crate::{bad, uuid, Api, ApiError, App, State};
+use crate::{bad, uuid, Api, ApiError, App};
 
 /// Outbound attempts counted for this API process; they start again at each restart.
 static LIMITER: LazyLock<Mutex<Limiter>> = LazyLock::new(Default::default);
@@ -28,7 +28,12 @@ static CLIENT: LazyLock<Option<reqwest::Client>> = LazyLock::new(|| {
 });
 
 /// Forward one report to the relay; the reply carries no issue link (the repository is private).
-pub(crate) async fn submit(State(app): State<App>, Json(body): Json<Value>) -> Api {
+/// The caller's handle comes from the request: the sign-in middleware stores it there with the
+/// caller's identity, which the router's shared `State` never carries.
+pub(crate) async fn submit(
+    axum::Extension(app): axum::Extension<App>,
+    Json(body): Json<Value>,
+) -> Api {
     let settings = feedback::settings(&app_settings(Path::new(LIVE_SETTINGS))?)?;
     let installation = installation_id(&app.store.root).await?;
     let (user_id, kind, payload) = {
@@ -257,5 +262,58 @@ mod tests {
         assert!(a.len() >= 16);
         assert_eq!(a, b);
         assert_eq!(installation_id(root.path()).await.unwrap(), a);
+    }
+
+    /// Through the real router and sign-in middleware: a registered user's report reaches the
+    /// report rules (400 for an empty one, so nothing is sent), proving the caller's identity
+    /// arrives; without a sign-in the router refuses before the handler.
+    #[tokio::test]
+    async fn the_route_sees_the_signed_in_caller() {
+        use tower::ServiceExt;
+        use webagent_accounts_host::AccountsStore;
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let account = app
+            .store
+            .create_user_account("feedback-user", "fixture-long-password-hash")
+            .await
+            .unwrap();
+        let user = account["user_id"].as_str().unwrap().to_owned();
+        app.store
+            .update_account_access(&user, 1, crate::access::AccountStatus::Active, "free")
+            .await
+            .unwrap();
+        let account = app.store.account_by_id(&user).await.unwrap().unwrap();
+        let token = uuid();
+        app.store
+            .put(
+                &format!("auth:{}", crate::digest(&json!(token))),
+                &json!({"user_id":user,"csrf":"fixture","expires":crate::now()+3600,"generation":account["generation"]}),
+            )
+            .await
+            .unwrap();
+        let post = |cookie: Option<String>| {
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/v3/feedback")
+                .header("content-type", "application/json")
+                .header("x-csrf-token", "fixture");
+            if let Some(cookie) = cookie {
+                request = request.header("cookie", cookie);
+            }
+            request
+                .body(axum::body::Body::from(
+                    json!({"type":"bug","body":" "}).to_string(),
+                ))
+                .unwrap()
+        };
+        let router = crate::router(app.clone());
+        let signed_in = router
+            .clone()
+            .oneshot(post(Some(format!("v3_session={token}"))))
+            .await
+            .unwrap();
+        assert_eq!(signed_in.status(), StatusCode::BAD_REQUEST);
+        let anonymous = router.oneshot(post(None)).await.unwrap();
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
     }
 }
