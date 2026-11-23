@@ -71,15 +71,13 @@ async fn list_in(
 /// What the task gate did with one call.
 pub(crate) enum TaskGate {
     Pass,
-    /// It opened a section (this revision) and the call goes ahead.
-    Opened(u64),
-    /// The call is refused with this message.
-    Refused(String),
+    /// It filed the unfiled requests (this revision) and the call goes ahead.
+    Filed(u64),
 }
 
 /// Whether stored user messages become task gate requests: on in the app. Runtime test
-/// fixtures switch it off because most tests count model calls exactly, and an unfiled
-/// request adds the end-of-turn reminder's call.
+/// fixtures switch it off because most tests count list revisions exactly, and an unfiled
+/// request makes the gate or the turn end write one.
 pub(crate) static RECORD_MESSAGE_REQUESTS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
 
@@ -136,9 +134,9 @@ impl Store {
     /// [`webagent_chat::task_list::gate`]). `batch_writes` are the arguments of the
     /// `task_list_write` calls made in the same model step: the gate judges the list as
     /// those writes leave it (one that would be refused counts as not made), so a batch
-    /// can file its work and make its change in parallel. Opening a section commits a
-    /// revision attributed to the gate, which the agent receives with its next model call;
-    /// a retried call returns its first answer through its receipt.
+    /// can file its work and make its change in parallel. Filing commits a revision
+    /// attributed to the gate, which the agent receives with its next model call; a retried
+    /// call returns its first answer through its receipt.
     pub(crate) async fn task_list_gate(
         &self,
         sid: &str,
@@ -160,11 +158,10 @@ impl Store {
         {
             let receipt = self.unseal(&raw)?;
             tx.commit().await?;
-            return Ok(TaskGate::Opened(receipt["revision"].as_u64().unwrap_or(0)));
+            return Ok(TaskGate::Filed(receipt["revision"].as_u64().unwrap_or(0)));
         }
         let (_, list) = list_in(self, &mut tx, sid).await?;
         let requests = requests_in(self, &mut tx, sid).await?;
-        let texts = webagent_chat::task_list::texts();
         let mut judged = list.clone();
         for arguments in batch_writes {
             let mut write = arguments.clone();
@@ -185,16 +182,12 @@ impl Store {
                 judged = next;
             }
         }
-        let write = match webagent_chat::task_list::gate(&judged, &requests, &texts, every_tool) {
+        let write = match webagent_chat::task_list::gate(&judged, &requests, every_tool) {
             webagent_chat::task_list::Gate::Pass => {
                 tx.commit().await?;
                 return Ok(TaskGate::Pass);
             }
-            webagent_chat::task_list::Gate::Refuse(message) => {
-                tx.commit().await?;
-                return Ok(TaskGate::Refused(message));
-            }
-            webagent_chat::task_list::Gate::Open(write) => write,
+            webagent_chat::task_list::Gate::File(write) => write,
         };
         self.base_run_fence(&mut tx, sid, rid, None, Some(generation))
             .await?;
@@ -218,7 +211,7 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(TaskGate::Opened(revision))
+        Ok(TaskGate::Filed(revision))
     }
 
     /// Session `sid`'s task list document at `revision` (the current one when `None`), read
@@ -514,16 +507,13 @@ impl Store {
 
     /// Task list context for one model call in session `sid` at history
     /// `basis`: the snapshot definition `(id, body)`, frozen until `basis` changes at a rewind
-    /// or block merge (later changes reach the history as tool results), and the lines for
-    /// the step's guidance message: the current one-line task state, then the reminder to
-    /// file work when `calls` tool calls since the user's last message included no list write
-    /// (`filed`). The list is the session's, so every participant's runs get it.
+    /// or block merge (later changes reach the history as tool results), and the line for
+    /// the step's guidance message: the current one-line task state. The list is the
+    /// session's, so every participant's runs get it.
     pub(crate) async fn task_list_context(
         &self,
         sid: &str,
         basis: &str,
-        calls: u64,
-        filed: bool,
     ) -> Result<(Vec<(String, String)>, Vec<String>, Vec<(u64, String)>)> {
         let key = list_key(sid)?;
         let document = self.task_list_current(sid).await?.unwrap_or(Value::Null);
@@ -576,38 +566,38 @@ impl Store {
         }
         let id = format!("session-tasks-{}", view["revision"].as_u64().unwrap_or(0));
         let snapshot = view["snapshot"].as_str().unwrap_or("").to_owned();
-        let requests = self.task_requests(sid).await?;
-        let lines = [
-            webagent_chat::task_list::step_line(&list, &texts),
-            webagent_chat::task_list::unfiled_line(&list, &requests, &texts),
-            webagent_chat::task_list::unfiled_reminder(calls, filed, &texts),
-        ];
-        Ok((
-            vec![(id, snapshot)],
-            lines.into_iter().flatten().collect(),
-            updates,
-        ))
+        let lines = webagent_chat::task_list::step_line(&list, &texts);
+        Ok((vec![(id, snapshot)], lines.into_iter().collect(), updates))
     }
 
-    /// The end-of-turn reminder for session `sid` when its task list still has open steps
-    /// or user requests are unfiled, or `None`.
-    pub(crate) async fn task_list_end_reminder(&self, sid: &str) -> Result<Option<String>> {
-        let list: webagent_chat::task_list::List = match self.get(&list_key(sid)?).await? {
-            Some(document) if document["session_id"] == sid => {
-                serde_json::from_value(document["list"].clone())?
-            }
-            _ => webagent_chat::task_list::List::default(),
+    /// Settle session `sid`'s requests when a turn of run `rid` ends: those still unfiled
+    /// were answered in the reply without tool work, so they are set aside. This revision
+    /// does not reach the agent; nothing is written when every request is filed.
+    pub(crate) async fn task_list_settle(&self, sid: &str, rid: &str) -> Result<()> {
+        let _guard = self.context_gate.write().await;
+        // Read-then-write: take the write lock first, so a concurrent writer makes this wait
+        // (busy_timeout) instead of failing with 'database is locked'.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let (_, list) = list_in(self, &mut tx, sid).await?;
+        let requests = requests_in(self, &mut tx, sid).await?;
+        let Some(write) = webagent_chat::task_list::settle(&list, &requests) else {
+            tx.commit().await?;
+            return Ok(());
         };
-        let texts = webagent_chat::task_list::texts();
-        let requests = self.task_requests(sid).await?;
-        let lines: Vec<String> = [
-            webagent_chat::task_list::end_reminder(&list, &texts),
-            webagent_chat::task_list::end_unfiled(&list, &requests, &texts),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        Ok((!lines.is_empty()).then(|| lines.join("\n")))
+        let (next, changes) = webagent_chat::task_list::apply(&list, write, crate::now())?;
+        let marks = webagent_chat::task_list::marks(&list, &next);
+        self.task_list_commit(
+            &mut tx,
+            sid,
+            list.revision,
+            json!({"turn_end":rid}),
+            &serde_json::to_value(&next)?,
+            &json!(changes),
+            &marks,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 }
 
@@ -615,11 +605,12 @@ impl Store {
 mod tests {
     use super::*;
 
-    /// Requests get labels with their messages; the gate opens a section once (a retried
-    /// call replays), passes while every request is filed, refuses a new unfiled one and
-    /// delivers the opened section to the agent once; a citation must name a counted request.
+    /// Requests get labels with their messages; the gate files them once (a retried call
+    /// replays), never refuses, and delivers its filing to the agent once; the turn end sets
+    /// aside what is still unfiled without telling the agent; a citation must name a counted
+    /// request.
     #[tokio::test]
-    async fn the_gate_opens_once_and_refuses_unfiled_requests() {
+    async fn the_gate_files_requests_and_the_turn_end_settles_the_rest() {
         let (_root, app) = crate::runtime_tests::fixture_uninitialized().await;
         let store = &app.store;
         store
@@ -649,24 +640,17 @@ mod tests {
         record("user:a", "Fix the login redirect").await;
         record("user:a", "Fix the login redirect").await;
         assert_eq!(store.task_requests("s").await.unwrap().items.len(), 1);
-        // A model call before the gate fixes the snapshot at revision 0, as in a session.
-        let (_, lines, _) = store
-            .task_list_context("s", "basis", 0, false)
-            .await
-            .unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.starts_with("Unfiled requests: u1")),
-            "{lines:?}"
-        );
+        // A model call before the gate fixes the snapshot at revision 0, as in a session;
+        // unfiled requests add no guidance line.
+        let (_, lines, _) = store.task_list_context("s", "basis").await.unwrap();
+        assert!(lines.is_empty(), "{lines:?}");
 
-        let TaskGate::Opened(revision) = store
+        let TaskGate::Filed(revision) = store
             .task_list_gate("s", "r", "call-1", "g", &[], false)
             .await
             .unwrap()
         else {
-            panic!("no open section opens one");
+            panic!("an unfiled request is filed");
         };
         assert_eq!(revision, 1);
         assert!(matches!(
@@ -674,7 +658,7 @@ mod tests {
                 .task_list_gate("s", "r", "call-1", "g", &[], false)
                 .await
                 .unwrap(),
-            TaskGate::Opened(1)
+            TaskGate::Filed(1)
         ));
         assert!(matches!(
             store
@@ -683,48 +667,36 @@ mod tests {
                 .unwrap(),
             TaskGate::Pass
         ));
-        let (_, lines, updates) = store
-            .task_list_context("s", "basis", 0, false)
-            .await
-            .unwrap();
-        assert!(
-            !lines.iter().any(|line| line.starts_with("Unfiled")),
-            "{lines:?}"
-        );
+        let (_, _, updates) = store.task_list_context("s", "basis").await.unwrap();
         assert_eq!(updates.len(), 1);
-        assert!(
-            updates[0].1.contains("task gate opened"),
-            "{}",
-            updates[0].1
+        assert!(updates[0].1.contains("filed"), "{}", updates[0].1);
+
+        // A follow-up is filed on the open section, never refused.
+        record("user:b", "Also check mobile").await;
+        assert!(matches!(
+            store
+                .task_list_gate("s", "r", "call-3", "g", &[], false)
+                .await
+                .unwrap(),
+            TaskGate::Filed(2)
+        ));
+        let document = store.task_list_current("s").await.unwrap().unwrap();
+        assert_eq!(
+            document["list"]["sections"][0]["requests"],
+            json!(["u1", "u2"])
         );
 
-        record("user:b", "Also check mobile").await;
-        let TaskGate::Refused(message) = store
-            .task_list_gate("s", "r", "call-3", "g", &[], false)
-            .await
-            .unwrap()
-        else {
-            panic!("an unfiled request is refused while a section is open");
-        };
-        assert!(message.contains("u2 \"Also check mobile\""), "{message}");
-        let (_, lines, _) = store
-            .task_list_context("s", "basis", 0, false)
-            .await
-            .unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.starts_with("Unfiled requests: u2")),
-            "{lines:?}"
-        );
-        assert!(store
-            .task_list_end_reminder("s")
-            .await
-            .unwrap()
-            .is_some_and(|text| text.contains("u2")));
+        // A thanks answered without tools is set aside at the turn end, silently.
+        record("user:c", "Thanks").await;
+        store.task_list_settle("s", "r").await.unwrap();
+        store.task_list_settle("s", "r").await.unwrap();
+        let document = store.task_list_current("s").await.unwrap().unwrap();
+        assert_eq!(document["revision"], 3);
+        assert_eq!(document["list"]["set_aside"][0]["request"], "u3");
+        let (_, _, updates) = store.task_list_context("s", "basis").await.unwrap();
+        assert_eq!(updates.len(), 1, "{updates:?}");
 
         // Citing a request that was never counted is refused at commit.
-        let document = store.task_list_current("s").await.unwrap().unwrap();
         let list: webagent_chat::task_list::List =
             serde_json::from_value(document["list"].clone()).unwrap();
         let write = |labels: serde_json::Value| -> webagent_chat::task_list::Write {
@@ -734,14 +706,14 @@ mod tests {
             webagent_chat::task_list::apply(&list, write(json!(["u9"])), 2).unwrap();
         let marks = webagent_chat::task_list::marks(&list, &bad);
         assert!(store
-            .task_list_user_write("s", "bad-cite", 1, &json!(bad), &json!(changes), &marks)
+            .task_list_user_write("s", "bad-cite", 3, &json!(bad), &json!(changes), &marks)
             .await
             .is_err());
         let (good, changes) =
-            webagent_chat::task_list::apply(&list, write(json!(["u2"])), 2).unwrap();
+            webagent_chat::task_list::apply(&list, write(json!(["u3"])), 2).unwrap();
         let marks = webagent_chat::task_list::marks(&list, &good);
         store
-            .task_list_user_write("s", "good-cite", 1, &json!(good), &json!(changes), &marks)
+            .task_list_user_write("s", "good-cite", 3, &json!(good), &json!(changes), &marks)
             .await
             .unwrap();
         assert!(matches!(
@@ -754,7 +726,7 @@ mod tests {
     }
 
     /// A list write in the same model step counts as made, so the change in that step
-    /// passes without the gate opening its own section; a write naming an unknown request
+    /// passes without the gate filing for it; a write naming an unknown request
     /// or refused by the rules counts as not made.
     #[tokio::test]
     async fn the_gate_counts_the_steps_own_list_write() {
@@ -805,7 +777,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TaskGate::Opened(1)
+            TaskGate::Filed(1)
         ));
     }
 
@@ -937,10 +909,7 @@ mod tests {
         // The run belongs to another session there.
         assert!(store.task_list("foreign", "r", None).await.is_err());
         // The snapshot stays as it was until the history basis changes.
-        let (first, _, _) = store
-            .task_list_context("owned", "b1", 0, false)
-            .await
-            .unwrap();
+        let (first, _, _) = store.task_list_context("owned", "b1").await.unwrap();
         assert_eq!(first[0].0, "session-tasks-2");
         store
             .put(
@@ -965,25 +934,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let (same, _, _) = store
-            .task_list_context("owned", "b1", 0, false)
-            .await
-            .unwrap();
+        let (same, _, _) = store.task_list_context("owned", "b1").await.unwrap();
         assert_eq!(same, first);
-        let (rebuilt, _, _) = store
-            .task_list_context("owned", "b2", 0, false)
-            .await
-            .unwrap();
+        let (rebuilt, _, _) = store.task_list_context("owned", "b2").await.unwrap();
         assert_eq!(rebuilt[0].0, "session-tasks-3");
-        let (_, lines, _) = store
-            .task_list_context("owned", "b2", 9, false)
-            .await
-            .unwrap();
-        assert_eq!(
-            lines.len(),
-            1,
-            "an empty list still asks to file work: {lines:?}"
-        );
         // A user edit is fenced like the agent's, kept in history and delivered once.
         assert!(store
             .task_list_user_write(
@@ -1008,16 +962,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(edit["revision"], 4);
-        let (_, _, updates) = store
-            .task_list_context("owned", "b2", 0, false)
-            .await
-            .unwrap();
+        let (_, _, updates) = store.task_list_context("owned", "b2").await.unwrap();
         assert_eq!(updates.len(), 1);
         assert!(updates[0].1.ends_with("s1.2 added"), "{:?}", updates[0]);
-        let (_, _, again) = store
-            .task_list_context("owned", "b2", 0, false)
-            .await
-            .unwrap();
+        let (_, _, again) = store.task_list_context("owned", "b2").await.unwrap();
         assert!(again.is_empty());
         // A panel edit updates only a plan an agent run already saved.
         assert!(store
@@ -1028,11 +976,12 @@ mod tests {
         assert_eq!(history[0]["revision"], 4);
         assert_eq!(history[0]["by"], "user");
         assert_eq!(history.last().unwrap()["revision"], 1);
-        assert!(store
-            .task_list_end_reminder("owned")
-            .await
-            .unwrap()
-            .is_none());
+        // Nothing is unfiled, so the turn end writes no revision.
+        store.task_list_settle("owned", "r").await.unwrap();
+        assert_eq!(
+            store.task_list_current("owned").await.unwrap().unwrap()["revision"],
+            4
+        );
     }
 
     /// A task list write that reads before it writes must wait for a concurrent writer, not

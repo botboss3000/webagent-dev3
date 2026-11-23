@@ -268,13 +268,22 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
         }
         return Ok((next, changes));
     }
-    let index = match write.section.id.as_deref() {
-        Some(id) => next
-            .sections
-            .iter()
-            .position(|section| section.id == id)
-            .ok_or_else(|| anyhow!("No section {id}; read the list for current ids"))?,
-        None => {
+    // An id the list does not know, given with a title, is a new section: the server picks
+    // its id, so a guessed id costs no retry.
+    let found = write
+        .section
+        .id
+        .as_deref()
+        .and_then(|id| next.sections.iter().position(|section| section.id == id));
+    let existing = found.is_some();
+    let index = match (found, write.section.id.as_deref()) {
+        (Some(index), _) => index,
+        (None, Some(id)) if write.section.title.is_none() => {
+            bail!(
+                "No section {id}; the session task list in your instructions names the current ids"
+            )
+        }
+        (None, _) => {
             if next.sections.len() >= MAX_SECTIONS {
                 bail!("This session's list already keeps {MAX_SECTIONS} sections");
             }
@@ -302,7 +311,7 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
         }
     };
     let section = &mut next.sections[index];
-    if write.section.id.is_some() {
+    if existing {
         if let Some(title) = write.section.title.as_deref() {
             section.title = text(title, 3, 120, "A section title")?;
             changes.push(format!("{} renamed: {}", section.id, section.title));
@@ -343,9 +352,17 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
     if let Some(summary) = write.section.summary.as_deref() {
         section.summary = text(summary, 20, 1200, "A section summary")?;
     }
+    // A section is open, done or cancelled; `in_progress` on a section means open.
     if let Some(status) = write
         .section
         .status
+        .map(|status| {
+            if status == Status::InProgress {
+                Status::Open
+            } else {
+                status
+            }
+        })
         .filter(|status| *status != section.status)
     {
         set_section_status(section, status)?;
@@ -666,43 +683,28 @@ pub fn unknown_requests(before: &List, after: &List, requests: &Requests) -> Vec
     unknown
 }
 
-/// `u7 "first words", u8 "..."` for the guidance and gate texts.
-fn named(requests: &[&Request]) -> String {
-    requests
-        .iter()
-        .map(|item| format!("{} \"{}\"", item.id, item.text))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Whether an open section has a step in progress.
-fn step_in_progress(list: &List) -> bool {
-    list.sections.iter().any(|section| {
-        section.status == Status::Open
-            && section
-                .steps
-                .iter()
-                .any(|step| step.status == Status::InProgress)
-    })
-}
+/// Requests one filing write cites; older unfiled ones are set aside instead.
+const MAX_FILED: usize = MAX_EVIDENCE;
 
 /// What the task gate does with a call that needs it.
 #[derive(Debug)]
 pub enum Gate {
-    /// Every request is cited or set aside and a step is in progress.
+    /// Every request is cited or set aside.
     Pass,
-    /// No section is open: this write opens one for the unfiled requests with a
-    /// placeholder step in progress, and the call goes ahead.
-    Open(Write),
-    /// The call is refused with this message for the agent.
-    Refuse(String),
+    /// This server write files the unfiled requests, and the call goes ahead.
+    File(Write),
 }
 
-/// The task gate for one call that needs it (see [`Gate`]). With `every_tool` (the gate
-/// covers every tool call, not only changes) a newest request that was set aside as
-/// needing no tools refuses the call, so a request that gets tool calls is always cited.
+/// The task gate for one call that needs it (see [`Gate`]). It never refuses: unfiled
+/// requests are cited on the newest open section (the agent may move them in a later
+/// write), or on a new section titled from the first one when none is open. With
+/// `every_tool` (the gate covers every tool call, not only changes) a newest request that
+/// was set aside is cited too, so a request that gets tool calls is always on the list.
+/// Unfiled requests beyond the newest [`MAX_FILED`] are earlier messages the turn-end
+/// settling missed; they are set aside rather than cited.
 #[must_use]
-pub fn gate(list: &List, requests: &Requests, texts: &Value, every_tool: bool) -> Gate {
+pub fn gate(list: &List, requests: &Requests, every_tool: bool) -> Gate {
+    let mut pending = unfiled(list, requests);
     if every_tool {
         if let Some(newest) = requests.items.last().filter(|newest| {
             !cited(list).contains(newest.id.as_str())
@@ -711,81 +713,83 @@ pub fn gate(list: &List, requests: &Requests, texts: &Value, every_tool: bool) -
                     .iter()
                     .any(|aside| aside.request == newest.id)
         }) {
-            return Gate::Refuse(
-                text_field(texts, "gate_set_aside_newest").replace("{request}", &newest.id),
-            );
+            pending.push(newest);
         }
     }
-    let unfiled = unfiled(list, requests);
-    let in_progress = step_in_progress(list);
-    if unfiled.is_empty() && in_progress {
+    if pending.is_empty() {
         return Gate::Pass;
     }
-    if !list
+    let skip = pending.len().saturating_sub(MAX_FILED);
+    let set_aside = pending[..skip]
+        .iter()
+        .map(|item| SetAside {
+            request: item.id.clone(),
+            reason: "earlier message, answered before this work".to_owned(),
+        })
+        .collect();
+    let filed = &pending[skip..];
+    let labels = Some(filed.iter().map(|item| item.id.clone()).collect());
+    if let Some(open) = list
         .sections
         .iter()
-        .any(|section| section.status == Status::Open)
+        .rev()
+        .find(|section| section.status == Status::Open)
     {
-        let title = unfiled
-            .first()
-            .map(|item| item.text.trim_end_matches('…').trim())
-            .filter(|title| title.len() >= 3)
-            .map_or_else(
-                || "Requested change".to_owned(),
-                |title| {
-                    // Section titles are at most 120 bytes; cut at a character boundary.
-                    let mut cut = String::new();
-                    for ch in title.chars() {
-                        if cut.len() + ch.len_utf8() > 120 {
-                            break;
-                        }
-                        cut.push(ch);
-                    }
-                    cut
-                },
-            );
-        return Gate::Open(Write {
+        return Gate::File(Write {
             section: SectionWrite {
-                title: Some(title),
-                origin: Some(Origin::User),
-                requests: (!unfiled.is_empty())
-                    .then(|| unfiled.iter().map(|item| item.id.clone()).collect()),
+                id: Some(open.id.clone()),
+                requests: labels,
                 ..SectionWrite::default()
             },
-            steps: vec![StepWrite {
-                label: Some(text_field(texts, "gate_placeholder_step")),
-                status: Some(Status::InProgress),
-                ..StepWrite::default()
-            }],
+            set_aside,
             ..Write::default()
         });
     }
-    let mut problems = Vec::new();
-    if !unfiled.is_empty() {
-        problems.push(text_field(texts, "gate_unfiled").replace("{requests}", &named(&unfiled)));
-    }
-    if !in_progress {
-        problems.push(text_field(texts, "gate_no_step"));
-    }
-    Gate::Refuse(text_field(texts, "gate_refusal").replace("{problems}", &problems.join(" ")))
+    let title = filed
+        .first()
+        .map(|item| item.text.trim_end_matches('…').trim())
+        .filter(|title| title.len() >= 3)
+        .map_or_else(
+            || "Requested work".to_owned(),
+            |title| {
+                // Section titles are at most 120 bytes; cut at a character boundary.
+                let mut cut = String::new();
+                for ch in title.chars() {
+                    if cut.len() + ch.len_utf8() > 120 {
+                        break;
+                    }
+                    cut.push(ch);
+                }
+                cut
+            },
+        );
+    Gate::File(Write {
+        section: SectionWrite {
+            title: Some(title),
+            origin: Some(Origin::User),
+            requests: labels,
+            ..SectionWrite::default()
+        },
+        set_aside,
+        ..Write::default()
+    })
 }
 
-/// The end-of-turn line naming unfiled requests, or `None` when there are none.
+/// The write that settles session requests when a turn ends: every request still unfiled
+/// was answered in the reply without tool work, so it is set aside; `None` when none is.
 #[must_use]
-pub fn end_unfiled(list: &List, requests: &Requests, texts: &Value) -> Option<String> {
+pub fn settle(list: &List, requests: &Requests) -> Option<Write> {
     let unfiled = unfiled(list, requests);
-    let template = text_field(texts, "end_unfiled");
-    (!unfiled.is_empty() && !template.is_empty())
-        .then(|| template.replace("{requests}", &named(&unfiled)))
-}
-
-/// The per-step guidance line naming unfiled requests, or `None` when there are none.
-#[must_use]
-pub fn unfiled_line(list: &List, requests: &Requests, texts: &Value) -> Option<String> {
-    let unfiled = unfiled(list, requests);
-    let template = text_field(texts, "unfiled_requests");
-    (!unfiled.is_empty() && !template.is_empty())
-        .then(|| template.replace("{requests}", &named(&unfiled)))
+    (!unfiled.is_empty()).then(|| Write {
+        set_aside: unfiled
+            .iter()
+            .map(|item| SetAside {
+                request: item.id.clone(),
+                reason: "answered in the reply".to_owned(),
+            })
+            .collect(),
+        ..Write::default()
+    })
 }
 
 fn text_field(texts: &Value, key: &str) -> String {
@@ -887,45 +891,6 @@ pub fn step_line(list: &List, texts: &Value) -> Option<String> {
         }
         line
     })
-}
-
-/// The end-of-turn reminder when open sections still have open or in-progress steps (up to
-/// eight named), or `None`.
-#[must_use]
-pub fn end_reminder(list: &List, texts: &Value) -> Option<String> {
-    let open = list
-        .sections
-        .iter()
-        .filter(|section| section.status == Status::Open)
-        .flat_map(|section| section.steps.iter())
-        .filter(|step| step.status.unfinished())
-        .collect::<Vec<_>>();
-    let template = text_field(texts, "end_reminder");
-    if open.is_empty() || template.is_empty() {
-        return None;
-    }
-    let mut steps = open
-        .iter()
-        .take(8)
-        .map(|step| format!("{} \"{}\"", step.id, step.label))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if open.len() > 8 {
-        steps.push_str(&format!(" and {} more", open.len() - 8));
-    }
-    Some(template.replace("{steps}", &steps))
-}
-
-/// The reminder to file tool work in the list, once `calls` tool calls since the user's last
-/// message reach the configured threshold without a `task_list_write` among them. `{calls}`
-/// in the text is that count, so the text changes each call and a harness that passes the
-/// guidance message on only when it changes still shows it on every call.
-#[must_use]
-pub fn unfiled_reminder(calls: u64, filed: bool, texts: &Value) -> Option<String> {
-    let threshold = texts["unfiled_after_calls"].as_u64().unwrap_or(0);
-    let text = text_field(texts, "unfiled_reminder");
-    (threshold > 0 && calls >= threshold && !filed && !text.is_empty())
-        .then(|| text.replace("{calls}", &calls.to_string()))
 }
 
 /// One line per section: id, title, origin, status and step counts.
@@ -1260,31 +1225,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(step_line(&edited, &texts), step_line(&list, &texts));
-        assert_eq!(
-            end_reminder(&list, &texts).unwrap(),
-            "Before you end this turn: s1.2 \"Patch\", s1.3 \"Verify\" are still open in the \
-             session task list. Finish them, mark them blocked or cancelled with \
-             task_list_write, or answer without calling a tool to end the turn with your \
-             earlier reply."
-        );
-        assert_eq!(end_reminder(&List::default(), &texts), None);
-        assert!(unfiled_reminder(3, false, &texts)
-            .unwrap()
-            .starts_with("Session tasks: 3 tool calls"));
-        assert_ne!(
-            unfiled_reminder(4, false, &texts),
-            unfiled_reminder(3, false, &texts)
-        );
-        assert_eq!(unfiled_reminder(2, false, &texts), None);
-        assert_eq!(unfiled_reminder(4, true, &texts), None);
     }
 
-    /// Requests get stable labels; the gate opens a section when none is open, refuses
-    /// while a request is unfiled or no step is in progress, and passes once each is cited
-    /// or set aside with a step in progress.
+    /// Requests get stable labels. The gate never refuses: it files unfiled requests on the
+    /// newest open section, or opens one titled from the first, and needs no step in
+    /// progress; the turn-end settling sets aside what the reply answered without tools.
     #[test]
-    fn requests_are_cited_or_set_aside_before_the_gate_passes() {
-        let texts = texts();
+    fn the_gate_files_requests_and_the_turn_end_settles_the_rest() {
         let mut requests = Requests::default();
         assert!(requests.add("user:a", "Fix the   login\nredirect please", 1));
         assert!(!requests.add("user:a", "again", 2));
@@ -1294,81 +1241,123 @@ mod tests {
         assert_eq!(requests.items[1].id, "u2");
 
         let empty = List::default();
-        let Gate::Open(opening) = gate(&empty, &requests, &texts, false) else {
-            panic!("no open section opens one");
+        let Gate::File(opening) = gate(&empty, &requests, false) else {
+            panic!("unfiled requests are filed");
         };
         let (opened, _) = apply(&empty, opening, 10).unwrap();
+        assert_eq!(opened.sections[0].title, "Fix the login redirect please");
         assert_eq!(opened.sections[0].requests, vec!["u1", "u2"]);
         assert_eq!(opened.sections[0].origin, Origin::User);
-        assert_eq!(opened.sections[0].steps[0].status, Status::InProgress);
-        assert!(matches!(
-            gate(&opened, &requests, &texts, false),
-            Gate::Pass
-        ));
+        assert!(opened.sections[0].steps.is_empty());
+        // No step in progress is needed.
+        assert!(matches!(gate(&opened, &requests, false), Gate::Pass));
 
+        // A follow-up goes on the newest open section.
         requests.add("user:c", "Now the CSS", 20);
-        let Gate::Refuse(message) = gate(&opened, &requests, &texts, false) else {
-            panic!("an unfiled request with a section open is refused");
+        let Gate::File(follow) = gate(&opened, &requests, false) else {
+            panic!("a follow-up is filed");
         };
-        assert!(message.contains("u3 \"Now the CSS\""), "{message}");
-        assert!(unfiled_line(&opened, &requests, &texts).is_some());
+        assert_eq!(follow.section.id.as_deref(), Some("s1"));
+        let (followed, _) = apply(&opened, follow, 21).unwrap();
+        assert_eq!(followed.sections[0].requests, vec!["u1", "u2", "u3"]);
 
-        let (aside, changes) = apply(
-            &opened,
-            write(serde_json::json!({"set_aside":[{"request":"u3","reason":"question only"}]})),
-            21,
+        // A message answered without tools is set aside when the turn ends.
+        requests.add("user:d", "Thanks!", 30);
+        let settling = settle(&followed, &requests).unwrap();
+        let (settled, changes) = apply(&followed, settling, 31).unwrap();
+        assert_eq!(changes, vec!["u4 set aside: answered in the reply"]);
+        assert!(settle(&settled, &requests).is_none());
+        assert!(matches!(gate(&settled, &requests, false), Gate::Pass));
+        // When the gate covers every tool, a set-aside newest request getting tool calls is
+        // cited instead, which takes it off the set-aside list.
+        let Gate::File(recite) = gate(&settled, &requests, true) else {
+            panic!("a set-aside newest request is cited for tool work");
+        };
+        let (recited, _) = apply(&settled, recite, 32).unwrap();
+        assert!(recited.set_aside.is_empty());
+        assert!(matches!(gate(&recited, &requests, true), Gate::Pass));
+
+        // With no section open, the next request opens a new one.
+        let (closed, _) = apply(
+            &recited,
+            write(serde_json::json!({"section":{"id":"s1","status":"done",
+                "summary":"Login redirect and CSS fixed."}})),
+            33,
         )
         .unwrap();
-        assert_eq!(changes, vec!["u3 set aside: question only"]);
-        assert!(matches!(gate(&aside, &requests, &texts, false), Gate::Pass));
-        // When the gate covers every tool, the newest request set aside refuses tools.
-        let Gate::Refuse(message) = gate(&aside, &requests, &texts, true) else {
-            panic!("a set-aside newest request refuses a tool call");
+        requests.add("user:e", "Add a dark theme", 40);
+        let Gate::File(second) = gate(&closed, &requests, false) else {
+            panic!("a new request opens a section");
         };
-        assert!(message.contains("u3"), "{message}");
-        assert_eq!(unfiled_line(&aside, &requests, &texts), None);
-
-        let (restored, _) =
-            apply(&aside, write(serde_json::json!({"restore":["u3"]})), 22).unwrap();
-        assert!(matches!(
-            gate(&restored, &requests, &texts, false),
-            Gate::Refuse(_)
-        ));
-        let (cited, changes) = apply(
-            &restored,
-            write(serde_json::json!({"section":{"id":"s1"},
-                "steps":[{"label":"Restyle","requests":["u3"]}]})),
-            23,
-        )
-        .unwrap();
-        assert!(changes.contains(&"s1.2 cites u3".to_owned()), "{changes:?}");
-        assert!(matches!(gate(&cited, &requests, &texts, false), Gate::Pass));
-        assert!(unknown_requests(&restored, &cited, &requests).is_empty());
+        assert_eq!(second.section.id, None);
+        assert_eq!(second.section.title.as_deref(), Some("Add a dark theme"));
 
         let (unknown, _) = apply(
-            &cited,
+            &recited,
             write(serde_json::json!({"section":{"id":"s1","requests":["u9"]}})),
-            24,
+            41,
         )
         .unwrap();
-        assert_eq!(unknown_requests(&cited, &unknown, &requests), vec!["u9"]);
+        assert_eq!(unknown_requests(&recited, &unknown, &requests), vec!["u9"]);
         assert!(apply(
-            &cited,
+            &recited,
             write(serde_json::json!({"set_aside":[{"request":"x1","reason":"bad"}]})),
-            25
+            42
         )
         .is_err());
+    }
 
-        let (finished, _) = apply(
-            &cited,
-            write(serde_json::json!({"section":{"id":"s1"},
-                "steps":[{"id":"s1.1","status":"done"},{"id":"s1.2","status":"done"}]})),
-            26,
+    /// Only the newest requests are cited by one filing write; older unfiled ones are set
+    /// aside, so a backlog never needs another write on the next call.
+    #[test]
+    fn a_backlog_of_unfiled_requests_is_set_aside_except_the_newest() {
+        let mut requests = Requests::default();
+        for index in 0..20 {
+            requests.add(&format!("user:{index}"), &format!("Message {index}"), index);
+        }
+        let Gate::File(filing) = gate(&List::default(), &requests, false) else {
+            panic!("unfiled requests are filed");
+        };
+        let (filed, _) = apply(&List::default(), filing, 50).unwrap();
+        assert_eq!(filed.sections[0].requests.len(), MAX_FILED);
+        assert_eq!(filed.set_aside.len(), 20 - MAX_FILED);
+        assert_eq!(filed.sections[0].requests[0], "u5");
+        assert!(matches!(gate(&filed, &requests, false), Gate::Pass));
+    }
+
+    /// The usual slips cost no retry: `in_progress` on a section means open, and a guessed
+    /// id for a new titled section gets the server's id.
+    #[test]
+    fn common_write_slips_are_accepted() {
+        let (list, _) = apply(
+            &List::default(),
+            write(
+                serde_json::json!({"section":{"id":"s1","title":"List the files",
+                "status":"in_progress"},"steps":[{"label":"Run ls","status":"in_progress"}]}),
+            ),
+            1,
         )
         .unwrap();
-        let Gate::Refuse(message) = gate(&finished, &requests, &texts, false) else {
-            panic!("an open section with no step in progress is refused");
-        };
-        assert!(message.contains("No step is in progress"), "{message}");
+        assert_eq!(list.sections[0].id, "s1");
+        assert_eq!(list.sections[0].status, Status::Open);
+        let (again, _) = apply(
+            &list,
+            write(serde_json::json!({"section":{"id":"s7","title":"Another task"}})),
+            2,
+        )
+        .unwrap();
+        assert_eq!(again.sections[1].id, "s2");
+        assert!(apply(&list, write(serde_json::json!({"section":{"id":"s9"}})), 3).is_err());
+        let (same, changes) = apply(
+            &list,
+            write(
+                serde_json::json!({"section":{"id":"s1","status":"in_progress",
+                "notes":"keep it short"}}),
+            ),
+            4,
+        )
+        .unwrap();
+        assert_eq!(same.sections[0].status, Status::Open);
+        assert_eq!(changes, vec!["s1 notes updated"]);
     }
 }

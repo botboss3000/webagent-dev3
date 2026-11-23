@@ -301,8 +301,8 @@ pub(crate) async fn fixture() -> (TempDir, App) {
         .await
         .unwrap();
     grant_fixture_levels(&app.store, "shared_default").await;
-    // Most runtime tests count model calls exactly; the task gate (and the end-of-turn
-    // reminder its placeholder step brings) is switched on only where a test covers it.
+    // Most runtime tests count task list revisions exactly; the task gate's filing is
+    // switched on only where a test covers it.
     webagent_engine::runtime::run::TASK_GATE_DEFAULT
         .store(false, std::sync::atomic::Ordering::Relaxed);
     webagent_engine::runtime::critical_guard::GUARD_DEFAULT
@@ -1722,14 +1722,8 @@ async fn plan_exit_needs_a_plan_and_can_continue_in_ask_mode() {
     assert_eq!(tasks["list"]["sections"][0]["origin"], "user");
     assert_eq!(tasks["list"]["sections"][0]["plan"], true);
     let requests = requests.lock().await;
-    // The final reply left the plan's steps open, so one more call carried the reminder.
-    assert_eq!(requests.len(), 5);
-    let reminder = requests[4]["input"].as_array().unwrap().last().unwrap();
-    assert_eq!(reminder["role"], "user");
-    assert!(reminder["content"]
-        .as_str()
-        .unwrap()
-        .contains("still open in the session task list"));
+    // The final reply left the plan's steps open; that costs no extra call.
+    assert_eq!(requests.len(), 4);
     let output = |n: usize, call: &str| {
         requests[n]["input"]
             .as_array()
@@ -3519,7 +3513,7 @@ async fn prompt_slot_tool_in_auto_writes_once_without_approval() {
 }
 
 #[tokio::test]
-async fn task_gate_opens_a_section_for_the_first_change_and_reminds_at_turn_end() {
+async fn task_gate_files_the_request_before_the_first_change_without_an_extra_call() {
     use axum::routing::post;
 
     let (_root, mut app) = fixture().await;
@@ -3601,13 +3595,19 @@ async fn task_gate_opens_a_section_for_the_first_change_and_reminds_at_turn_end(
     assert_eq!(slot["content"], "Use checked patches.");
     assert_eq!(slot["revision"], 1);
     // The change ran: with no section open the gate opened one citing the user's message,
-    // and the turn's end reminder (its placeholder step is still in progress) added a call.
+    // with no steps, and the turn cost no call beyond the tool call and the reply.
     let document = app.store.task_list_current(&sid).await.unwrap().unwrap();
     let section = &document["list"]["sections"][0];
     assert_eq!(section["requests"], json!(["u1"]));
-    assert_eq!(section["steps"][0]["status"], "in_progress");
+    assert_eq!(section["title"], "hello");
+    assert_eq!(section["steps"], json!([]));
     let requests = requests.lock().await;
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 2);
+    // The second call carries the filing as a delivered list change.
+    assert!(
+        requests[1]["input"].to_string().contains("The app filed"),
+        "the filing reaches the agent"
+    );
     let output = requests[1]["input"]
         .as_array()
         .unwrap()

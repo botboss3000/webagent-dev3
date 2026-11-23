@@ -958,11 +958,11 @@ impl<
         run["error"] = json!(format!("Context preparation failed at {stage}: {error}"));
         app.save(run).await
     }
-    /// The task gate's refusal for tool `name` of `run`, or `None` when it may run. The
-    /// agent's Task Progress setting `task_gate` picks what it covers: `all_tools` (every
-    /// call but the core basics; the default), `changes` (tools whose `task` is required)
-    /// or `off`. An agent that never saved it follows [`TASK_GATE_DEFAULT`]. With no
-    /// section open the gate opens one instead.
+    /// The task gate for tool `name` of `run`: it files the session's unfiled user requests
+    /// before the call runs, and never refuses. The agent's Task Progress setting
+    /// `task_gate` picks what it covers: `all_tools` (every call but the core basics; the
+    /// default), `changes` (tools whose `task` is required) or `off`. An agent that never
+    /// saved it follows [`TASK_GATE_DEFAULT`].
     pub(crate) async fn task_gate(
         app: &Self,
         run: &Value,
@@ -970,7 +970,7 @@ impl<
         rid: &str,
         name: &str,
         visibility: &Value,
-    ) -> Result<Option<String>> {
+    ) -> Result<()> {
         let mode = match &visibility["settings"]["task_progress"]["task_gate"] {
             Value::String(mode) => mode.as_str(),
             Value::Bool(false) => "off",
@@ -986,7 +986,7 @@ impl<
             _ => !webagent_abilities::tool_definitions::is_core(name),
         };
         if !covered {
-            return Ok(None);
+            return Ok(());
         }
         // The list writes of this model step count as made, whichever order the calls run
         // in, so a step can file its work and make its change in parallel.
@@ -1479,23 +1479,9 @@ impl<
                 }
             }
         }
-        // The task gate: a change waits until the session task list accounts for every user
-        // request and a step is in progress (see docs/tool-policy.md).
-        if let Some(message) = Self::task_gate(&app, &run, &sid, &id, &name, &visibility).await? {
-            app.actions
-                .not_dispatched(app.store.records(), &run, &run["pending"])
-                .await?;
-            let result = json!({"status":"rejected","error_kind":"task_required","output":message});
-            Self::append_tool(&mut run, &result)?;
-            app.store
-                .save_run_observed(
-                    &mut run,
-                    "tool_result",
-                    &json!({"run_id":id,"name":name,"result":result}),
-                )
-                .await?;
-            return Ok(std::ops::ControlFlow::Continue(()));
-        }
+        // The task gate: the session task list files every user request before the call
+        // runs (see docs/tool-policy.md).
+        Self::task_gate(&app, &run, &sid, &id, &name, &visibility).await?;
         if effective.permission != access::Permission::Deny && H::messaging_owns(&name) {
             if let Err(error) = app
                 .native
@@ -3820,14 +3806,6 @@ impl<
                         bridge,
                     );
                 }
-                // SESSION TASKS: the reminder call is the history, which already ends with the
-                // draft reply, plus the reminder, kept out of history like the closer. The run
-                // is reloaded before its response, which clears `pending` there.
-                if run["task_reminder"]["pending"] == true {
-                    drop_call_note(&mut projected_input);
-                    projected_input
-                        .push(json!({"role":"user","content":run["task_reminder"]["message"]}));
-                }
                 // CLOSING TURN: the same request plus a private closer message, kept out of
                 // history, so the provider can reuse its cached prefix.
                 if run["closing_turn"].is_object() {
@@ -4383,24 +4361,6 @@ impl<
                         } else {
                             None
                         };
-                        // SESSION TASKS: an answer to the reminder that calls no tool is dropped,
-                        // and the run publishes the reply it already wrote.
-                        let reminder_answered = run["task_reminder"]["pending"] == true;
-                        if reminder_answered {
-                            run["task_reminder"]["pending"] = json!(false);
-                        }
-                        let reminder_idle = reminder_answered
-                            && closing_reply.is_none()
-                            && engine_output::tool_calls(output, crate::tool_output::CONTROL_NAME)
-                                .is_empty();
-                        let closing_reply = closing_reply.or_else(|| {
-                            reminder_idle.then(|| {
-                                run["task_reminder"]["draft"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_owned()
-                            })
-                        });
                         // The closing answer is never published or kept: the run finishes
                         // with the reply it already wrote.
                         let no_output = Vec::new();
@@ -4491,48 +4451,20 @@ impl<
                                     .await?;
                                 return Ok(());
                             }
-                            // SESSION TASKS: the first final reply of a run while the session
-                            // task list still has open steps gets one more call with a
-                            // reminder, so the agent can finish, block or cancel them first.
-                            if run["task_reminder"].is_null() {
+                            // SESSION TASKS: user requests the run answered without tool work
+                            // are set aside, so the list never asks about them; it costs no
+                            // model call.
+                            {
                                 let (task_sid, _, _) = webagent_context::assets::identity(
                                     &run,
                                     app.store.current_user_id(),
                                 )?;
-                                // A turn that ends waiting on its own background work (a
-                                // broker check or release) leaves its step open on purpose;
-                                // the result arrives as a notice that starts the next run.
-                                let waiting = app
-                                    .store
-                                    .background_scan(Some(&task_sid))
-                                    .await?
-                                    .iter()
-                                    .any(|task| {
-                                        task["run_id"] == json!(id)
-                                            && !super::background::finished(task)
-                                    });
-                                let reminder = if waiting {
-                                    None
-                                } else {
-                                    Box::pin(
-                                        app.native
-                                            .session_tasks_end(app.store.records(), &task_sid),
-                                    )
-                                    .await?
-                                };
-                                if let Some(message) = reminder {
-                                    run["task_reminder"] =
-                                        json!({"draft":text,"message":message,"pending":true});
-                                    run["phase"] = json!("model");
-                                    app.store
-                                        .save_run_observed(
-                                            &mut run,
-                                            "model_output",
-                                            &json!({"output":output}),
-                                        )
-                                        .await?;
-                                    continue;
-                                }
+                                Box::pin(app.native.session_tasks_end(
+                                    app.store.records(),
+                                    &task_sid,
+                                    &id,
+                                ))
+                                .await?;
                             }
                             // CLOSING TURN: the reply is final; before it publishes, one more
                             // call on this model asks for the status (see `closing_answer`).

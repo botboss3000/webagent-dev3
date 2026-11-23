@@ -1,6 +1,8 @@
 # Read the session task list
 
-`task_list_read` shows this session's task list. It is instant and changes nothing.
+`task_list_read` shows this session's task list. It is instant and changes nothing. The
+current list is already in your instructions, so use this only for one section's full
+detail, an earlier revision or a comparison.
 
 - `{}`: the current revision and one line per section (id, title, who asked for it,
   status, done and open step counts, and the closing summary of finished sections).

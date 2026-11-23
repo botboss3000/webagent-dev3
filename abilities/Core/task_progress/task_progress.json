@@ -16,24 +16,24 @@
     "settings": [
       {
         "key": "task_gate",
-        "label": "Require A Task",
+        "label": "File Requests Before Tools",
         "type": "select",
         "default": "all_tools",
         "options": [
           {
             "value": "all_tools",
-            "label": "All tool calls — every request with tool work goes in the task list"
+            "label": "All tool calls — every request that gets tool calls is filed in the task list"
           },
           {
             "value": "changes",
-            "label": "Changes only — tools that change something"
+            "label": "Changes only — requests are filed before tools that change something"
           },
           {
             "value": "off",
-            "label": "Off — reminders only"
+            "label": "Off — the app files nothing before tool calls"
           }
         ],
-        "hint": "Before a tool call runs, its user request must be cited on a section or step of the session task list, with a step in progress (the app opens a section itself when none is open). All tool calls (default): every tool except the core basics (task list, skills, time, mode); a request set aside as needing no tools cannot get tool calls. Changes only: just tools that change something. Off: the agent is only reminded.",
+        "hint": "Before a tool call runs, the app files each new user request in the session task list itself (on the newest open section, or a new section titled from the request), so the agent never spends a step on it. Requests answered without tool calls are set aside when the agent replies. All tool calls (default): before every tool except the core basics (task list, skills, time, mode). Changes only: before tools that change something. Off: nothing is filed before tool calls.",
         "scope": "agent"
       },
       {

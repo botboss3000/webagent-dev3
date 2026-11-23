@@ -195,24 +195,21 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         basis: &'a str,
     ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<(u64, String)>)>> + Send + 'a;
     /// Session task list context for one model call in session `sid` at
-    /// history `basis`: the snapshot definition `(id, body)`, the step's guidance lines
-    /// (the one-line state, and the reminder to file work when `calls` tool calls since the
-    /// user's last message held no list write, `filed`) and the user's edits not yet in the
-    /// history, one `(revision, text)` each.
+    /// history `basis`: the snapshot definition `(id, body)`, the step's guidance line (the
+    /// one-line state) and the user's and the gate's changes not yet in the history, one
+    /// `(revision, text)` each.
     fn session_tasks<'a>(
         &'a self,
         store: &'a S,
         sid: &'a str,
         basis: &'a str,
-        calls: u64,
-        filed: bool,
     ) -> impl Future<Output = Result<TaskContext>> + Send + 'a;
     /// The task gate for tool call `pending_id` of run `rid` (generation `generation`) in
-    /// session `sid`: `None` lets the call run, `Some(text)` refuses it with that message
-    /// for the agent. With no section open the gate opens one and lets the call run.
-    /// `batch_writes` are the arguments of `task_list_write` calls in the same model step,
-    /// which the gate counts as made; `every_tool` says the gate covers every tool call, so
-    /// a newest request set aside refuses it.
+    /// session `sid`. It never refuses: unfiled user requests are filed on the newest open
+    /// section, or a new one, and the call runs. `batch_writes` are the arguments of
+    /// `task_list_write` calls in the same model step, which the gate counts as made;
+    /// `every_tool` says the gate covers every tool call, so a newest request set aside is
+    /// cited too.
     #[allow(clippy::too_many_arguments)]
     fn session_task_gate<'a>(
         &'a self,
@@ -223,14 +220,15 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         generation: &'a str,
         batch_writes: &'a [Value],
         every_tool: bool,
-    ) -> impl Future<Output = Result<Option<String>>> + Send + 'a;
-    /// The reminder sent once when a turn of session `sid` ends while its task list still
-    /// has open steps, or `None`.
+    ) -> impl Future<Output = Result<()>> + Send + 'a;
+    /// Settle session `sid`'s requests when run `rid` publishes its final reply: those still
+    /// unfiled were answered without tool work and are set aside.
     fn session_tasks_end<'a>(
         &'a self,
         store: &'a S,
         sid: &'a str,
-    ) -> impl Future<Output = Result<Option<String>>> + Send + 'a;
+        rid: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a;
     /// The user's newest `count` requests in session `sid` for the critical tool guard, oldest
     /// first, as `(label, text)`; for an automated run `rid` (a scheduled task) its stored
     /// instruction comes last, labelled `task`.

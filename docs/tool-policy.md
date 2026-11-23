@@ -39,9 +39,11 @@ checked against the tool's `parameters` (`crates/modules/engine/src/tools/argume
 
 ## 4. The task gate
 
-A tool call the gate covers runs only when the session task list accounts for every user
-request and a step is in progress (`Engine::task_gate` in `run.rs`, also on the
-parallel batch path in `batch.rs`; rules in `crates/modules/chat/src/task_list.rs` `gate`).
+Before a tool call the gate covers runs, the session task list accounts for every user
+request: the gate files unfiled ones itself and never refuses the call
+(`Engine::task_gate` in `run.rs`, also on the parallel batch path in `batch.rs`; rules in
+`crates/modules/chat/src/task_list.rs` `gate`). Keeping the list costs the agent no
+model call of its own.
 
 - `task` in `<tool>.tool.json` is `required` or `exempt`. Absent: a core tool is exempt,
   otherwise a write is required and a read exempt. Coordination and housekeeping tools
@@ -53,20 +55,21 @@ parallel batch path in `batch.rs`; rules in `crates/modules/chat/src/task_list.r
   messages are not requests. Labels live in `base_tasks:{sid}:labels`, apart from the list,
   so a new message never makes the agent's list write stale.
 - A request is accounted for when a section or step cites it (`requests`) or it is set
-  aside with a reason (`set_aside`). Answering a question does not file it.
-- With no open section, the gate opens one itself: titled from the first unfiled request,
-  citing every unfiled request, with a placeholder step in progress; the call runs and the
-  agent receives the new section as a `task_list_read` row on its next call. With a section
-  open, a call that finds unfiled requests or no step in progress is refused
-  (`error_kind: task_required`) with the requests named and what to do.
+  aside with a reason (`set_aside`). When a run publishes its final reply, requests still
+  unfiled were answered without tool work and are set aside (`settle`), silently.
+- The gate cites unfiled requests on the newest open section, or opens a section titled
+  from the first one when none is open; no step needs to be in progress. The call runs and
+  the agent receives the filing as a `task_list_read` row on its next call, and may move a
+  request to another or a new section in a later write. One filing cites at most 16
+  requests; older unfiled ones are set aside.
 - A `task_list_write` in the same model step counts as made, whichever order the calls run
   in, so a step can file its work and make its change in parallel; a write the rules would
   refuse, or one citing an unknown request, counts as not made.
 - What it covers is the agent's Task Progress setting `task_gate`: `all_tools` (the
   default: every tool call except core tools, the task list, skill, time and mode basics,
-  whatever `task` says; a newest request set aside as needing no tools refuses the call,
-  so a request that gets tool calls is always cited), `changes` (only tools whose `task`
-  is required) or `off` (the per-step and end-of-turn reminders stay).
+  whatever `task` says; a newest request set aside as needing no tools is cited when it
+  gets tool calls), `changes` (only tools whose `task` is required) or `off` (no filing
+  before calls; the turn end still sets unfiled requests aside).
 - Plan mode is independent: approving a plan still seeds its section.
 
 ## 5. Messaging, the action ledger and the repeat guard

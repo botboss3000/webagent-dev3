@@ -1,12 +1,13 @@
 {
   "name": "task_list_write",
-  "description": "Add or update one section of this session's task list and its steps; give the list's current revision",
+  "description": "Add or update one section of this session's task list and its steps",
   "parameters": {
     "type": "object",
     "properties": {
       "expected_revision": {
         "type": "integer",
-        "minimum": 0
+        "minimum": 0,
+        "description": "Optional; the write applies to the current list."
       },
       "section": {
         "type": "object",
@@ -35,6 +36,7 @@
             "type": "string",
             "enum": [
               "open",
+              "in_progress",
               "done",
               "cancelled"
             ]
@@ -141,9 +143,7 @@
         "maxLength": 300
       }
     },
-    "required": [
-      "expected_revision"
-    ],
+    "required": [],
     "additionalProperties": false
   },
   "match": {

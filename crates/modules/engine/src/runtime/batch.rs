@@ -410,13 +410,7 @@ impl<
                 let mut view = run.clone();
                 view["pending"] = pending.clone();
                 // The task gate, as for a single call (see docs/tool-policy.md).
-                if let Some(message) =
-                    Self::task_gate(app, &view, &sid, id, &name, &visibility).await?
-                {
-                    result = Some(
-                        json!({"status":"rejected","error_kind":"task_required","output":message}),
-                    );
-                }
+                Self::task_gate(app, &view, &sid, id, &name, &visibility).await?;
             }
             // The critical tool guard, as for a single call.
             if result.is_none() {

@@ -8,7 +8,12 @@ use serde_json::Value;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WriteArgs {
-    expected_revision: u64,
+    /// Accepted but not enforced: a write changes only the section and steps it names, so
+    /// it applies to the current list. The app's own filing write can move the revision in
+    /// the same model step, and a fence would cost the agent a read and a retry.
+    #[serde(default)]
+    #[allow(dead_code)]
+    expected_revision: Option<u64>,
     #[serde(default)]
     section: rules::SectionWrite,
     #[serde(default)]
@@ -36,13 +41,5 @@ pub(super) async fn run(host: &dyn NativeHost, call: Call<'_>, args: &Value) -> 
         ..rules::Write::default()
     };
     let fold = request.fold_earlier.then_some(focus);
-    save(
-        host,
-        call,
-        "tasks",
-        Some(request.expected_revision),
-        write,
-        fold,
-    )
-    .await
+    save(host, call, "tasks", None, write, fold).await
 }

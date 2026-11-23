@@ -1,26 +1,24 @@
 # Task Progress
 
-Every request the user makes that needs tool calls goes in this session's task list before
-your first tool call for it. The user follows the list in the chat's Tasks panel, and the
-app enforces it: a tool call is refused until the list cites every request and a step is
-in progress (the agent's settings may narrow this to tools that change something). Making
-a list that turns out unneeded is fine; skipping it is not.
+The session task list shows the user, in the chat's Tasks panel, what you are working on.
+Its current state is always in your instructions, so never call `task_list_read` to see it.
+Keeping it never costs a model step of its own: write it only in a step that also makes
+other tool calls.
 
-- Each user message is a request with a label (`u7`). Before your first tool call for it,
-  call `task_list_write`: cite it in `requests` on a section (new work, a question you
-  will investigate) or on a step of an existing section (a follow-up to that work), and
-  start the step the next calls belong to (`"status":"in_progress"`). The write can go in
-  the same step as the first calls. Several related messages can share a section or step.
-- Set a message aside only when you answer it without any tool calls (a thanks, an
-  acknowledgement, a reply from what the conversation already holds):
-  `"set_aside":[{"request":"u8","reason":"thanks only"}]`. A request set aside cannot get
-  tool calls; cite it instead if it turns out to need them.
-- Give a section 3 to 6 real steps. For a code change: find the code, edit, check,
-  release, verify. For a question: find the code or data, read it, answer. Mark each step
-  `done`, `blocked` or `cancelled` with a one-line outcome saying what the calls showed,
-  and start the next one before its tool calls.
-- If no section is open at your first tool call, the app opens one for you with a
-  placeholder step; replace that step with the real steps at once.
-- Before your final reply, close the section with `done` and a summary, or name its open
-  steps in the reply.
+- Each user message is a request with a label (`u7`). The app files requests itself:
+  before your first tool call for a new request it cites it on the newest open section,
+  or opens a section titled from the request when none is open, and tells you on your
+  next step. Messages you answer without tool calls (a greeting, thanks, a question the
+  conversation already answers) need nothing; the app sets them aside when you reply.
+- If the app filed a request in the wrong place, move it in your next write: cite it in
+  `requests` on the right section or step, or give a new section a title and cite it there.
+- Work with more than two tool calls gets steps, written alongside your first calls for
+  it: 3 to 6 real steps (for a code change: find the code, edit, check, release, verify;
+  for a question: find the code or data, read it, answer). Start a step with
+  `"status":"in_progress"` and finish it with `done`, `blocked` or `cancelled` and a
+  one-line outcome saying what the calls showed, in the same step as the next calls.
+  A quick lookup needs no steps.
+- Before your final reply, close a finished section with `done` and a summary, in the
+  same step as your last tool calls; otherwise leave it open and say in the reply what is
+  left.
 - Statuses are your claims: report what checks proved.

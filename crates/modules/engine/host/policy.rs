@@ -163,19 +163,18 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
         store: &'a Store,
         sid: &'a str,
         basis: &'a str,
-        calls: u64,
-        filed: bool,
     ) -> impl std::future::Future<Output = Result<webagent_engine::runtime::ports::TaskContext>>
            + Send
            + 'a {
-        store.task_list_context(sid, basis, calls, filed)
+        store.task_list_context(sid, basis)
     }
     fn session_tasks_end<'a>(
         &'a self,
         store: &'a Store,
         sid: &'a str,
-    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
-        store.task_list_end_reminder(sid)
+        rid: &'a str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        store.task_list_settle(sid, rid)
     }
     fn guard_messages<'a>(
         &'a self,
@@ -195,17 +194,12 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
         generation: &'a str,
         batch_writes: &'a [Value],
         every_tool: bool,
-    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         async move {
-            Ok(
-                match store
-                    .task_list_gate(sid, rid, pending_id, generation, batch_writes, every_tool)
-                    .await?
-                {
-                    crate::store::TaskGate::Refused(message) => Some(message),
-                    crate::store::TaskGate::Pass | crate::store::TaskGate::Opened(_) => None,
-                },
-            )
+            store
+                .task_list_gate(sid, rid, pending_id, generation, batch_writes, every_tool)
+                .await?;
+            Ok(())
         }
     }
 }
