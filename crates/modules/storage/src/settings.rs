@@ -34,7 +34,27 @@ pub fn parse(bytes: &[u8]) -> Result<Value> {
         return Err(anyhow!("storage-settings.json must be an object"));
     }
     admin_encryption_enabled(&value)?;
+    max_connected_users(&value)?;
     Ok(value)
+}
+
+/// The optional bound on account databases holding open connections at once
+/// (`user_database_pools.max_connected`, at least [`crate::pool::MIN_CONNECTED_USERS`]);
+/// absence keeps [`crate::pool::DEFAULT_MAX_CONNECTED_USERS`].
+pub fn max_connected_users(settings: &Value) -> Result<usize> {
+    let Some(value) = settings.pointer("/user_database_pools/max_connected") else {
+        return Ok(crate::pool::DEFAULT_MAX_CONNECTED_USERS);
+    };
+    value
+        .as_u64()
+        .and_then(|limit| usize::try_from(limit).ok())
+        .filter(|limit| *limit >= crate::pool::MIN_CONNECTED_USERS)
+        .ok_or_else(|| {
+            anyhow!(
+                "storage-settings.json user_database_pools.max_connected must be an integer of at least {}",
+                crate::pool::MIN_CONNECTED_USERS
+            )
+        })
 }
 
 /// Validate the optional administrator encryption switch; absence keeps encryption enabled.

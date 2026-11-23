@@ -3,5 +3,9 @@
   "admin_database_encryption": {
     "_instructions": "true seals the administrator account's records with the installation key (default; a missing or invalid file also keeps encryption on). false lets the fixed admin account store new records as authenticated plaintext for troubleshooting; other accounts and secrets are always sealed and existing records stay readable either way. Saved from the administrator encryption page; adopted at the next write in each process.",
     "enabled": true
+  },
+  "user_database_pools": {
+    "_instructions": "max_connected: how many account databases may hold open connections at once in each process (API and loop; at least 8). Each connection is one thread and the containers allow 1,024 tasks, so a pass over every account must not keep one open per account. Past the bound the idle databases used longest ago are closed (reopened on their next use). Read at process start.",
+    "max_connected": 64
   }
 }

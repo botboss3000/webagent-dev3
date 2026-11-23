@@ -316,6 +316,24 @@ async fn pools_create_plane_schema_with_profile_permissions() {
         .unwrap();
 }
 
+#[test]
+fn connected_user_bound_is_validated() {
+    let read = |text: &str| {
+        settings::parse(text.as_bytes()).map(|v| settings::max_connected_users(&v).unwrap())
+    };
+    assert_eq!(read("{}").unwrap(), pool::DEFAULT_MAX_CONNECTED_USERS);
+    assert_eq!(
+        read(r#"{"user_database_pools":{"max_connected":40}}"#).unwrap(),
+        40
+    );
+    for bad in [
+        r#"{"user_database_pools":{"max_connected":2}}"#,
+        r#"{"user_database_pools":{"max_connected":"9"}}"#,
+    ] {
+        assert!(read(bad).is_err(), "{bad}");
+    }
+}
+
 #[tokio::test]
 async fn user_plane_registry_keeps_active_and_admin_handles() {
     let root = tempfile::tempdir().unwrap();

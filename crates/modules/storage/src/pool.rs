@@ -10,7 +10,10 @@ use std::{
     collections::HashMap,
     path::Path,
     str::FromStr,
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 use tokio::sync::RwLock;
 use webagent_platform::fs::PermissionsExt;
@@ -237,6 +240,8 @@ pub struct UserPlane {
     pub context_gate: Arc<RwLock<()>>,
     /// Set once this process has verified the account's one-time migration markers.
     pub migrated: Arc<AtomicBool>,
+    /// When this process last selected the account ([`UserPlane::touch`]); orders eviction.
+    pub last_use: Arc<AtomicU64>,
 }
 
 impl UserPlane {
@@ -247,8 +252,75 @@ impl UserPlane {
             context_cache: Arc::new(Mutex::new(ContextCache::new(16 * 1024 * 1024))),
             context_gate: Arc::new(RwLock::new(())),
             migrated: Arc::new(AtomicBool::new(false)),
+            last_use: Arc::new(AtomicU64::new(USE_SEQUENCE.fetch_add(1, Ordering::Relaxed))),
         }
     }
+
+    /// Record that a Store handle was just made for this account.
+    pub fn touch(&self) {
+        self.last_use.store(
+            USE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+    }
+}
+
+static USE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// Account databases that may hold open connections at once unless
+/// `config/storage/storage-settings.json` `user_database_pools.max_connected` says otherwise.
+pub const DEFAULT_MAX_CONNECTED_USERS: usize = 64;
+/// The lowest accepted bound; below it ordinary concurrent work would evict itself.
+pub const MIN_CONNECTED_USERS: usize = 8;
+static MAX_CONNECTED_USERS: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_CONNECTED_USERS);
+
+/// Set the process-wide bound on connected account databases (read once at `Store::open`).
+pub fn set_max_connected_users(limit: usize) {
+    MAX_CONNECTED_USERS.store(limit.max(MIN_CONNECTED_USERS), Ordering::Relaxed);
+}
+
+/// The process-wide bound on connected account databases.
+pub fn max_connected_users() -> usize {
+    MAX_CONNECTED_USERS.load(Ordering::Relaxed)
+}
+
+/// Registered account databases that hold at least one open connection.
+pub fn connected_users(states: &HashMap<String, UserPlane>) -> usize {
+    states
+        .values()
+        .filter(|state| state.pool.size() > 0)
+        .count()
+}
+
+/// CONNECTED-USER-BOUND: every SQLite connection holds an OS thread and an idle one lives
+/// 5-10 s, so a pass that opens every account quickly (start-up, storage limits, an
+/// administrator page listing every account) used to hold a thread per account and reach the
+/// container's 1,024-task limit ("Resource temporarily unavailable"). Past `limit` connected
+/// entries, the idle ones used longest ago are removed down to three quarters of it. A removed
+/// pool closes its connections when its last handle drops (the caller drops the returned
+/// planes after releasing the registry lock); the next visit reopens it. Like
+/// [`retain_active_users`], entries with a live Store clone and the administrator are kept.
+#[must_use]
+pub fn evict_idle_connected(
+    states: &mut HashMap<String, UserPlane>,
+    limit: usize,
+) -> Vec<UserPlane> {
+    let connected = connected_users(states);
+    if connected <= limit {
+        return Vec::new();
+    }
+    let mut idle: Vec<(u64, String)> = states
+        .iter()
+        .filter(|(id, state)| {
+            *id != "admin" && state.pool.size() > 0 && Arc::strong_count(&state.context_gate) == 1
+        })
+        .map(|(id, state)| (state.last_use.load(Ordering::Relaxed), id.clone()))
+        .collect();
+    idle.sort_unstable();
+    idle.into_iter()
+        .take(connected - limit * 3 / 4)
+        .filter_map(|(_, id)| states.remove(&id))
+        .collect()
 }
 
 /// Registered user databases kept before idle ones are dropped. An idle entry holds no
@@ -288,6 +360,53 @@ mod registry_tests {
                 (format!("user-{i}"), UserPlane::new(pool))
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn connected_accounts_stay_under_the_bound_oldest_idle_first() {
+        let root = tempfile::tempdir().unwrap();
+        let mut states = HashMap::new();
+        for i in 0..12 {
+            let pool = open_pool(
+                &root.path().join(format!("user_data/u{i}/u{i}.db")),
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+            states.insert(format!("u{i}"), UserPlane::new(pool));
+        }
+        let admin = open_pool(&root.path().join("user_data/admin/admin.db"), true, true)
+            .await
+            .unwrap();
+        states.insert("admin".to_owned(), UserPlane::new(admin));
+        // u0 is in use by a Store clone; u1 was selected most recently.
+        let in_use = states["u0"].clone();
+        states["u1"].touch();
+        assert_eq!(connected_users(&states), 13);
+        // At or under the bound nothing goes.
+        assert!(evict_idle_connected(&mut states, 13).is_empty());
+        let removed = evict_idle_connected(&mut states, 8);
+        // Down to three quarters of the bound: 13 - 6 = 7 removed.
+        assert_eq!(removed.len(), 7);
+        assert_eq!(connected_users(&states), 6);
+        for kept in ["admin", "u0", "u1"] {
+            assert!(states.contains_key(kept), "{kept} must stay");
+        }
+        // The oldest idle entries went first.
+        for gone in ["u2", "u3", "u4", "u5", "u6", "u7", "u8"] {
+            assert!(!states.contains_key(gone), "{gone} should be evicted first");
+        }
+        drop(in_use);
+        drop(removed);
+    }
+
+    #[test]
+    fn the_bound_never_goes_below_its_floor() {
+        set_max_connected_users(1);
+        assert_eq!(max_connected_users(), MIN_CONNECTED_USERS);
+        set_max_connected_users(DEFAULT_MAX_CONNECTED_USERS);
+        assert_eq!(max_connected_users(), DEFAULT_MAX_CONNECTED_USERS);
     }
 
     #[tokio::test]

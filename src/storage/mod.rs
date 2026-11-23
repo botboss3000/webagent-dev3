@@ -150,6 +150,12 @@ impl Store {
     pub async fn open(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)?;
         let codec = Codec::open(root)?;
+        // A malformed file was refused by `Codec::open` above; a missing one keeps the default.
+        webagent_storage::pool::set_max_connected_users(
+            webagent_storage::settings::max_connected_users(
+                &webagent_storage::settings::read_settings(root)?,
+            )?,
+        );
         // Keep the administrator's original data path during migration.
         let admin_state =
             UserPlane::new(open_pool(&root.join("user_data/admin/admin.db"), true, true).await?);
@@ -259,6 +265,7 @@ impl Store {
     }
     async fn open_user(&self, user_id: &str) -> Result<Self> {
         let existing = self.user_states.read().await.get(user_id).cloned();
+        let mut opened = false;
         let state = match existing {
             Some(state) => state,
             None => {
@@ -277,10 +284,23 @@ impl Store {
                     // User-qualified context keys prevent cross-account collisions.
                     state.context_cache = self.context_cache.clone();
                     states.insert(user_id.to_owned(), state.clone());
+                    opened = true;
                     state
                 }
             }
         };
+        state.touch();
+        // Just opened, or about to reconnect: keep connected accounts under the bound.
+        if opened || state.pool.size() == 0 {
+            let limit = webagent_storage::pool::max_connected_users();
+            if webagent_storage::pool::connected_users(&*self.user_states.read().await) > limit {
+                let removed = webagent_storage::pool::evict_idle_connected(
+                    &mut *self.user_states.write().await,
+                    limit,
+                );
+                drop(removed);
+            }
+        }
         let migrated = state.migrated.clone();
         let handle = Self {
             core: StoreCore {
