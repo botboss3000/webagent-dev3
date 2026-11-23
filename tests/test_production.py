@@ -58,7 +58,10 @@ FILES = {
     "Cargo.toml": CARGO, "Cargo.lock": LOCK, "src/main.rs": b"fn main() {}\n",
     "abilities/Core/base/base.json": b"{}", "abilities/Administrator/host_admin/host_admin.json": b"{}",
     "abilities/Administrator/codebase_admin/codebase_admin.json": b"{}",
-    "ui/main-panel/builds/builds.js": b"", "ui/main-panel/chat/chat.js": b"",
+    "ui/main-panel/Administrator/builds/builds-page.js": b"",
+    "ui/main-panel/Administrator/host-admin/host-admin-page.js": b"",
+    "ui/main-panel/Administrator/app/app-page.js": b"", "ui/main-panel/Administrator/notifications/alerts.js": b"",
+    "ui/main-panel/chat/chat.js": b"",
     "build-service/host.py": b"", "tests/test_x.py": b"", "AGENTS.md": b"", "live-files.json": b"{}",
     "crates/app-shell/installer/release-macos.yml": b"name: Release macOS\n",
 }
@@ -110,7 +113,8 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(names, [".github/workflows/release-macos.yml", "Cargo.lock", "Cargo.toml",
                                  "abilities/Administrator/codebase_admin/codebase_admin.json",
                                  "abilities/Core/base/base.json", "crates/app-shell/installer/release-macos.yml",
-                                 "live-files.json", "src/main.rs", "ui/main-panel/chat/chat.js"])
+                                 "live-files.json", "src/main.rs", "ui/main-panel/Administrator/app/app-page.js",
+                                 "ui/main-panel/Administrator/notifications/alerts.js", "ui/main-panel/chat/chat.js"])
         self.assertIn('version = "0.1.0"', (tree / "Cargo.toml").read_text())
         self.assertIn('version = "0.1.0"', (tree / "Cargo.lock").read_text())
 

@@ -77,8 +77,11 @@ for pattern in patterns:
 Path("/output/manifest.json").write_text(json.dumps(files))
 COLLECT
 """
-# Development-only parts inside allowed folders.
-EXCLUDE = ("abilities/Administrator/host_admin", "ui/main-panel/builds", "ui/main-panel/host-admin")
+# Development-only parts inside allowed folders. The Builds and Host Admin pages live under
+# ui/main-panel/Administrator/ (moved 2026-11-22); the App page and the notifications alerts
+# beside them were shipped before the move and still are.
+EXCLUDE = ("abilities/Administrator/host_admin", "ui/main-panel/Administrator/builds",
+           "ui/main-panel/Administrator/host-admin")
 FIRST = "0.1.0"
 BUMPS = ("patch", "minor", "major")
 # Release settings: scheduler "production" in the installation JSON overrides these
