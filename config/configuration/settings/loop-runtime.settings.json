@@ -213,7 +213,6 @@
   ],
   "excluded": {
     "/cache/context_budget_bytes": "Scheduler internals; not offered in v1.",
-    "/cache/document_budget_bytes": "Scheduler internals; not offered in v1.",
     "/context/max_context_bytes": "Scheduler internals; not offered in v1.",
     "/scheduler/background_rescan_interval_ms": "Scheduler internals; not offered in v1.",
     "/scheduler/drain_timeout_seconds": "Scheduler internals; not offered in v1.",
