@@ -111,6 +111,10 @@ pub struct LiveAccess {
     /// The owner's tier and every tier ranked below it, from the same policy read: a tier
     /// gets each ability and tool any tier below it gets (`account_ladder::inherited`).
     pub owner_tiers: Vec<String>,
+    /// Whether the owner's agents may run catalog models now: the owner account's own value
+    /// (billing service or administrator), else its tier's default; always for an
+    /// administrator owner. From the owner account `live_access` already reads.
+    pub owner_catalog_models: bool,
     pub revision: AccessRevision,
     pub capability_level: crate::capabilities::CapabilityLevel,
     /// The policy's run-sharing limits, read with the tier from the same policy document.
@@ -144,6 +148,7 @@ impl LiveAccess {
             self.owner_tier_id,
             self.owner_tier,
             self.owner_tiers,
+            self.owner_catalog_models,
             self.capability_level,
             self.agent_limits,
             self.tool_permissions,
@@ -165,6 +170,22 @@ impl LiveAccess {
     pub fn model_allowed(&self, model: &str, model_owner: &str) -> bool {
         self.admitted() && self.owner_tier_allows_model(model, model_owner)
     }
+    /// Whether the agent's owner is on a paid tier: ranked above Free, below Administrator.
+    /// Their agents' runs go first and are not held back by `run_limits.plus_reserved_runs`.
+    pub fn owner_paid(&self) -> bool {
+        self.owner_tier_id != crate::FREE_TIER
+            && self.owner_tier_id != crate::ADMINISTRATOR_TIER
+            && self.owner_tiers.iter().any(|tier| tier == crate::FREE_TIER)
+    }
+    /// The owner's limits shared across all their agents that apply to this caller: none for
+    /// an administrator caller or on an administrator's agents (unlimited).
+    pub fn owner_totals(&self) -> crate::OwnerLimits {
+        match &self.owner_tier {
+            _ if self.principal.administrator() => crate::OwnerLimits::default(),
+            Some(tier) if self.owner_tier_id != crate::ADMINISTRATOR_TIER => tier.owner_limits,
+            _ => crate::OwnerLimits::default(),
+        }
+    }
     /// The owner's-tier half of [`Self::model_allowed`], for model administration, which
     /// also serves agents that are not admitting runs (disabled, or the editor's own access).
     pub fn owner_tier_allows_model(&self, model: &str, model_owner: &str) -> bool {
@@ -172,7 +193,8 @@ impl LiveAccess {
             if !self.agent_owner_id.is_empty() && model_owner == self.agent_owner_id {
                 tier.allows_own_models()
             } else {
-                tier.allows_model(model)
+                // A catalog model also needs the owner's "catalog models allowed" switch.
+                self.owner_catalog_models && tier.allows_model(model)
             }
         })
     }
@@ -182,14 +204,14 @@ impl LiveAccess {
     }
     /// The tier's limit; a test account also stays within the live test-account cap
     /// (`config/accounts/test-accounts.json`), so a test never starves real users.
-    pub fn max_active_runs(&self) -> u32 {
-        if self.principal.test_account {
-            self.tier
-                .max_active_runs
-                .min(webagent_accounts::TestAccountLimits::live().max_active_runs)
-        } else {
-            self.tier.max_active_runs
-        }
+    /// Runs a caller may have going at once across all agents: only a test account's own
+    /// safety cap. A person's own tier no longer limits their runs on agents (user decision
+    /// 11-23 2:40 PM): on an agent they are limited by their level's runs at once there (capped
+    /// by the owner's tier), its users at once, the owner's total and the server's limit.
+    pub fn account_run_limit(&self) -> Option<u32> {
+        self.principal
+            .test_account
+            .then(|| webagent_accounts::TestAccountLimits::live().max_active_runs)
     }
 
     fn agent_tool_permission(&self, name: &str) -> Permission {
@@ -486,12 +508,18 @@ impl<C: RecordCodec> Repository<'_, C> {
         }
         // The owner's tier comes first: it decides whether visitors are let in. A missing
         // owner account leaves no tier, so no ability, model or visitor works.
-        let owner_tier_id = if owner == principal.user_id {
-            principal.tier_id.clone()
+        let (owner_tier_id, owner_catalog_value) = if owner == principal.user_id {
+            (
+                principal.tier_id.clone(),
+                account["catalog_models"].as_bool(),
+            )
         } else {
             match self.account_by_id(&owner).await? {
-                Some(account) => Principal::from_account(&account)?.tier_id,
-                None => String::new(),
+                Some(account) => (
+                    Principal::from_account(&account)?.tier_id,
+                    account["catalog_models"].as_bool(),
+                ),
+                None => (String::new(), None),
             }
         };
         let (owner_tiers, owner_tier) = if owner_tier_id.is_empty() {
@@ -509,6 +537,12 @@ impl<C: RecordCodec> Repository<'_, C> {
                     .filter(|owner| owner.validate().is_ok()),
             )
         };
+        let owner_catalog_models = owner_tier_id == crate::ADMINISTRATOR_TIER
+            || owner_catalog_value.unwrap_or_else(|| {
+                owner_tier
+                    .as_ref()
+                    .is_some_and(|tier| tier.owner_limits.catalog_models != Some(false))
+            });
         let member_access = crate::membership::MemberAccess::from_metadata(&metadata)?;
         let raw = self.agent_membership(user_id, agent_id).await?;
         let membership =
@@ -650,6 +684,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             owner_tier_id,
             owner_tier,
             owner_tiers,
+            owner_catalog_models,
             revision,
             capability_level,
             run_limits,

@@ -9,6 +9,31 @@ use uuid::Uuid;
 /// its `storage` section, storage limits.
 pub const LIVE_POLICY: &str = "config/access/policy.json";
 const POLICY_LIMIT: u64 = 4 * 1024 * 1024;
+/// The loop's live runtime file, read here only for its server-wide run limit.
+const LOOP_RUNTIME: &str = "config/engine/loop-runtime.json";
+
+/// The server-wide run limit, the loop's `scheduler.max_active_runs` (0: none). 0 too where
+/// this process does not see the live files (fixtures) or the file cannot be read; the loop
+/// itself refuses an unreadable runtime file.
+pub fn server_run_ceiling() -> usize {
+    if !webagent_configuration::live::writable() {
+        return 0;
+    }
+    std::fs::read(LOOP_RUNTIME)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|runtime| runtime["scheduler"]["max_active_runs"].as_u64())
+        .and_then(|ceiling| usize::try_from(ceiling).ok())
+        .unwrap_or(0)
+}
+
+/// A policy as loaded: valid, and asking no tier for more runs at once than the server holds.
+fn parse_policy(bytes: &[u8]) -> Result<Value> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    validate_configuration(&value)?;
+    crate::run_limits::check_ceiling(&value, server_run_ceiling())?;
+    Ok(value)
+}
 /// Fresh-install tiers; which abilities their owners' agents get is in the ability manifests.
 fn fresh_install_tiers() -> [Tier; 2] {
     let operator = Tier {
@@ -41,8 +66,7 @@ pub fn policy_path(root: &std::path::Path) -> std::path::PathBuf {
     root.join("config/access-policy.json")
 }
 fn parse_digested(bytes: &[u8]) -> Result<(Value, String)> {
-    let value: Value = serde_json::from_slice(bytes)?;
-    validate_configuration(&value)?;
+    let value = parse_policy(bytes)?;
     let digest = webagent_configuration::digest(&value);
     Ok((value, digest))
 }
@@ -84,12 +108,11 @@ impl<C: RecordCodec> Repository<'_, C> {
         Ok(lock)
     }
     pub fn read_access_policy(&self) -> Result<Value> {
-        let parse = |bytes: &[u8]| -> Result<Value> {
-            let value: Value = serde_json::from_slice(bytes)?;
-            validate_configuration(&value)?;
-            Ok(value)
-        };
-        webagent_configuration::live::parsed_path(&self.access_policy_path(), POLICY_LIMIT, parse)
+        webagent_configuration::live::parsed_path(
+            &self.access_policy_path(),
+            POLICY_LIMIT,
+            parse_policy,
+        )
     }
     /// The live policy with its digest, computed once per version of the file (the live
     /// parser cache keeps both) instead of hashing the whole policy at every access check.
@@ -161,6 +184,9 @@ impl<C: RecordCodec> Repository<'_, C> {
     }
     pub fn write_access_policy(&self, value: &Value) -> Result<()> {
         use std::io::Write;
+        // Never write a policy the next load would refuse (it would fail every access check):
+        // a tier asking for more runs at once than the server holds is refused here.
+        crate::run_limits::check_ceiling(value, server_run_ceiling())?;
         let path = self.access_policy_path();
         if let Some(relative) = path.to_str().filter(|_| path.is_relative()) {
             // Callers hold policy_lock(); the broker also fences on the bytes read here.

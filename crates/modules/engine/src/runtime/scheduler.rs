@@ -588,9 +588,29 @@ impl<
                     // claim in its writer transaction (requester limit, per-agent cap, slots
                     // kept for administrators); the loop's ceiling still stops the pass.
                     let mut waiting = std::collections::HashSet::new();
-                    for (requester_key, (user_app, id, mut run)) in
-                        fair_order(candidates, last_served.as_deref())
-                    {
+                    // Paid-tier priority (plus tier spec 8.3): runs whose slot goes first now
+                    // (paid owners' agents, Free runs past their longest wait) are served
+                    // before the others, each group in turn over requesters.
+                    let first = match candidates.first() {
+                        Some((_, (user_app, _, _))) => {
+                            let ids: Vec<&str> = candidates
+                                .iter()
+                                .map(|(_, (_, id, _))| id.as_str())
+                                .collect();
+                            crate::send_future(first_in_line(
+                                ScopedStorage::application_pool(user_app.store.records()),
+                                &ids,
+                            ))
+                            .await
+                        }
+                        None => std::collections::HashSet::new(),
+                    };
+                    let (ahead, behind): (Vec<_>, Vec<_>) = candidates
+                        .into_iter()
+                        .partition(|(_, (_, id, _))| first.contains(id));
+                    let mut ordered = fair_order(ahead, last_served.as_deref());
+                    ordered.extend(fair_order(behind, last_served.as_deref()));
+                    for (requester_key, (user_app, id, mut run)) in ordered {
                         if waiting.contains(&requester_key) {
                             continue;
                         }
@@ -814,6 +834,36 @@ pub fn fair_order<T>(items: Vec<(String, T)>, last: Option<&str>) -> Vec<(String
         }
         if !any {
             return ordered;
+        }
+    }
+}
+
+/// Of the queued runs `ids`, those whose run slot goes first now: a paid owner's agent's,
+/// or a Free run past its longest wait (`first_at` on admission's slot table). A failed read
+/// puts every run in one group, as before priority existed.
+pub async fn first_in_line(
+    pool: &sqlx::SqlitePool,
+    ids: &[&str],
+) -> std::collections::HashSet<String> {
+    if ids.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+        });
+    let list = serde_json::to_string(ids).unwrap_or_else(|_| "[]".into());
+    match sqlx::query_scalar::<_, String>("SELECT run_id FROM requester_run_slots WHERE released=0 AND first_at<=? AND run_id IN (SELECT value FROM json_each(?))")
+        .bind(now)
+        .bind(list)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(first) => first.into_iter().collect(),
+        Err(error) => {
+            tracing::warn!("Run priority not read: {error}");
+            std::collections::HashSet::new()
         }
     }
 }

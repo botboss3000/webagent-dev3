@@ -5,7 +5,7 @@ use super::{
 };
 use anyhow::Context;
 use webagent_configuration::{digest, read};
-const IDS: [&str; 17] = [
+const IDS: [&str; 18] = [
     "app_settings",
     "app_ui",
     "chat",
@@ -23,6 +23,7 @@ const IDS: [&str; 17] = [
     "models_runtime",
     "model_backup",
     "command_limits",
+    "billing",
 ];
 /// Live files (checkout-relative, listed in `live-files.json`) for configuration edited in place.
 pub(crate) fn live(id: &str) -> Option<&'static str> {
@@ -38,6 +39,7 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
         "admin_alerts" => webagent_notifications::alerts::LIVE_CONFIG,
         "models_runtime" => webagent_models::settings::LIVE,
         "model_backup" => webagent_models::backup_policy::LIVE,
+        "billing" => crate::access::billing::LIVE,
         #[cfg(feature = "local-worker")]
         "command_limits" => webagent_worker::limits::LIVE_LIMITS,
         #[cfg(feature = "administrator")]
@@ -102,7 +104,24 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         "chat" => webagent_chat::configuration::validate_chat_config(value)
             .map_err(|_| anyhow::anyhow!("Invalid chat configuration"))?,
         "loop_runtime" => {
-            serde_json::from_value::<loop_runtime::Config>(value.clone())?.validate()?
+            let runtime = serde_json::from_value::<loop_runtime::Config>(value.clone())?;
+            runtime.validate()?;
+            // The server-wide run limit may not go below what a tier promises (spec 8.2). Only
+            // where the app runs on its live files (fixtures keep their own policy).
+            let policy = webagent_configuration::live::writable()
+                .then(|| {
+                    read(std::path::Path::new(
+                        crate::access::policy_file::LIVE_POLICY,
+                    ))
+                    .ok()
+                })
+                .flatten();
+            if let Some(policy) = policy {
+                crate::access::run_limits::check_ceiling(
+                    &policy,
+                    runtime.scheduler.max_active_runs,
+                )?;
+            }
         }
         "context_compaction" => {
             serde_json::from_value::<context_compaction::Config>(value.clone())?.validate()?
@@ -122,6 +141,9 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         "model_backup" => {
             webagent_models::backup_policy::BackupPolicy::parse(&serde_json::to_vec(value)?)?;
         }
+        "billing" => {
+            crate::access::billing::Config::parse(&serde_json::to_vec(value)?)?;
+        }
         #[cfg(feature = "local-worker")]
         "command_limits" => {
             webagent_worker::limits::CommandLimits::parse(&serde_json::to_vec(value)?)?;
@@ -135,6 +157,10 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         }
         "access_policy" => {
             crate::registration::validate_configuration(value)?;
+            crate::access::run_limits::check_ceiling(
+                value,
+                crate::access::policy_file::server_run_ceiling(),
+            )?;
             webagent_actions::links::LedgerPolicy::from_policy(value)?;
             webagent_engine::tools::critical_guard::Policy::from_policy(value)?;
             // Fixture policies may omit storage; the live file always has it.

@@ -12,6 +12,10 @@ pub const APPROVAL: &str = "approval";
 pub const AUTOMATION: &str = "automation";
 /// The earliest keep-alive check of the account's saved sessions.
 pub const KEEP_ALIVE: &str = "keep_alive";
+/// The next UTC day for an account whose runs paused at a daily limit: they resume then.
+pub const LIMIT_RESUME: &str = "limit_resume";
+/// An agent owner has limit alerts waiting to become notices (see `usage_ledger`).
+pub const OWNER_ALERT: &str = "owner_alert";
 
 /// Create the table and its time index; idempotent.
 pub async fn schema(pool: &SqlitePool) -> Result<()> {

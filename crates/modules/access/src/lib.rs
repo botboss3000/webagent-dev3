@@ -183,9 +183,11 @@ pub struct Tier {
     pub owner_limits: OwnerLimits,
 }
 
-/// Limits an agent owner's tier sets on each agent they own: how many people it serves and
-/// whether signed-out visitors may use it (agents owned: `storage.tiers.*.max_published_agents`).
-/// The owner may lower the numbers on each agent (`MemberAccess`). Absent means no limit.
+/// Limits an agent owner's tier sets: on each agent they own, how many people it serves and
+/// whether signed-out visitors may use it (the owner may lower those numbers on each agent,
+/// `MemberAccess`); and shared across all their agents, their runs at once, command processor
+/// time per day and automations (agents owned: `storage.tiers.*.max_published_agents`; storage:
+/// `storage.tiers.*.user_storage_mb`). Absent means no limit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OwnerLimits {
@@ -198,6 +200,21 @@ pub struct OwnerLimits {
     /// Whether signed-out visitors may chat with the owner's agents without a widget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_visitors: Option<bool>,
+    /// Runs going at once on all the owner's agents together (non-administrator requesters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs_at_once: Option<u32>,
+    /// Command processor seconds per UTC day on all the owner's agents together (C5's
+    /// command budget ledger).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_seconds_per_day: Option<u32>,
+    /// Automations (scheduled tasks and event triggers) one account may keep alive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automations: Option<u32>,
+    /// Whether owners at this level may run catalog models (any model they did not connect
+    /// themselves) by default; each owner's own value (set by the billing service or an
+    /// administrator) wins. Absent means allowed. Own models are never affected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_models: Option<bool>,
 }
 impl OwnerLimits {
     pub fn unlimited(&self) -> bool {
@@ -206,6 +223,9 @@ impl OwnerLimits {
     fn valid(&self) -> bool {
         self.agent_users.is_none_or(|n| n <= 1_000_000)
             && self.agent_users_at_once.is_none_or(|n| n <= 200)
+            && self.runs_at_once.is_none_or(|n| n <= 200)
+            && self.compute_seconds_per_day.is_none_or(|n| n <= 8_640_000)
+            && self.automations.is_none_or(|n| n <= 200)
     }
     pub fn allows_public_visitors(&self) -> bool {
         self.public_visitors != Some(false)
@@ -225,6 +245,14 @@ impl OwnerLimits {
                 (true, true) => self.public_visitors,
                 _ => Some(false),
             },
+            runs_at_once: run_limits::lower(self.runs_at_once, upper.runs_at_once),
+            compute_seconds_per_day: run_limits::lower(
+                self.compute_seconds_per_day,
+                upper.compute_seconds_per_day,
+            ),
+            automations: run_limits::lower(self.automations, upper.automations),
+            // A default, not a ceiling: each tier keeps its own.
+            catalog_models: self.catalog_models,
         }
     }
 }
@@ -735,6 +763,7 @@ mod tests {
 }
 
 pub mod authority;
+pub mod billing;
 pub mod capabilities;
 pub mod credential_authorization;
 pub mod policy_file;

@@ -421,10 +421,14 @@ async fn change_account(
         )
         .await?;
     }
+    #[cfg(all(unix, feature = "server-bins"))]
+    crate::billing::tier_changed(&app, &id);
     Ok(Json(json!({"account":account})))
 }
 /// The `account_due` kind whose time is when an account's tier ends (its `tier_until`).
 pub(crate) const TIER_END_DUE: &str = "tier_end";
+/// The `account_due` kind whose time is when an account's paid grant ends.
+pub(crate) const PAID_END_DUE: &str = "paid_end";
 /// How often the API looks for accounts whose tier has ended.
 const TIER_END_TICK: std::time::Duration = std::time::Duration::from_secs(60);
 /// How long a tier end that could not be written waits before it is tried again (seconds).
@@ -463,52 +467,160 @@ pub(crate) async fn tier_end_service(app: App) {
         if let Err(error) = end_due_tiers(&app, crate::now()).await {
             tracing::warn!(%error, "Tier end pass failed");
         }
+        if let Err(error) = deliver_owner_alerts(&app, crate::now()).await {
+            tracing::warn!(%error, "Owner alert pass failed");
+        }
+        if let Err(error) = resume_limited_runs(&app, crate::now()).await {
+            tracing::warn!(%error, "Limit resume pass failed");
+        }
     }
 }
-/// One pass at `now`: each account whose tier-end row is due is read again, and one whose end
-/// date has passed returns to Free through the account writer (its `auth_epoch` rises, its
-/// runs stop as for any tier change; its settings and data stay). Returns how many ended.
+/// One pass at `now`: each account whose tier-end or paid-end row is due is read again, and
+/// what has ended goes through the account writer: an administrator's grant back to Free, a
+/// paid grant removed (the account keeps the higher of what is left; its `auth_epoch` rises;
+/// running work finishes, settings and data stay). Both rows are then set to the stored ends
+/// exactly. Returns how many accounts changed.
 pub(crate) async fn end_due_tiers(app: &App, now: u64) -> anyhow::Result<usize> {
     let pool = &app.store.app_pool;
+    let mut due = webagent_engine::due::passed(pool, TIER_END_DUE, now).await?;
+    due.extend(webagent_engine::due::passed(pool, PAID_END_DUE, now).await?);
+    due.sort();
+    due.dedup();
     let mut ended = 0;
-    for id in webagent_engine::due::passed(pool, TIER_END_DUE, now).await? {
+    for id in due {
         let _guard = app.gate.lock().await;
-        let account = app.store.account_by_id(&id).await?;
-        let until = account
-            .as_ref()
-            .and_then(|account| account["tier_until"].as_u64());
-        let next = match (account, until) {
-            (Some(_), Some(until)) if until > now => Some(until),
-            (Some(account), Some(_)) => {
-                let principal = crate::access::Principal::from_account(&account)?;
-                match app
-                    .store
-                    .update_account_tier(
-                        &id,
-                        principal.access_revision,
-                        principal.status,
-                        crate::access::FREE_TIER,
-                        None,
+        let (tier_end, paid_end) = match app.store.end_passed_grants(&id, now).await {
+            Ok(changed) => {
+                if changed.is_some() {
+                    ended += 1;
+                    #[cfg(all(unix, feature = "server-bins"))]
+                    crate::billing::tier_changed(app, &id);
+                }
+                match app.store.account_by_id(&id).await? {
+                    Some(account) => {
+                        let sources = crate::access::repository::TierSources::of(&account)?;
+                        (
+                            sources.admin_until.filter(|until| *until > now),
+                            sources
+                                .paid
+                                .map(|paid| paid.until)
+                                .filter(|until| *until > now),
+                        )
+                    }
+                    None => (None, None),
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Tier end not written; trying again later");
+                let retry = Some(now.saturating_add(TIER_END_RETRY));
+                (retry, retry)
+            }
+        };
+        webagent_engine::due::set(pool, &id, TIER_END_DUE, tier_end).await?;
+        webagent_engine::due::set(pool, &id, PAID_END_DUE, paid_end).await?;
+    }
+    Ok(ended)
+}
+/// Turn each due owner's waiting limit alerts (80 and 100 percent of their plan's runs at
+/// once and daily command time) into notices on their Notifications page.
+pub(crate) async fn deliver_owner_alerts(app: &App, now: u64) -> anyhow::Result<usize> {
+    let pool = &app.store.app_pool;
+    let mut delivered = 0;
+    for owner in webagent_engine::due::passed(pool, webagent_engine::due::OWNER_ALERT, now).await? {
+        let notices = webagent_engine::usage_ledger::take_owner_alerts(pool, &owner).await?;
+        if let Ok(store) = app.store.for_user(&owner).await {
+            for (kind, level, limit) in notices {
+                if let Some(text) = webagent_engine::usage_ledger::alert_text(&kind, level, limit) {
+                    let severity = if level >= 100 { "warning" } else { "info" };
+                    store
+                        .add_notice(&format!("plan_{kind}_{level}"), severity, &text)
+                        .await?;
+                    delivered += 1;
+                }
+            }
+        }
+        webagent_engine::due::set(pool, &owner, webagent_engine::due::OWNER_ALERT, None).await?;
+    }
+    Ok(delivered)
+}
+/// Resume each due account's runs that paused at a daily limit, now that the day has turned,
+/// through the normal resume control (it checks the limits again). Only paused runs are read
+/// (plain run index), and only those the account itself requested.
+pub(crate) async fn resume_limited_runs(app: &App, now: u64) -> anyhow::Result<usize> {
+    let pool = &app.store.app_pool;
+    let mut resumed = 0;
+    for user in webagent_engine::due::passed(pool, webagent_engine::due::LIMIT_RESUME, now).await? {
+        let mut next = None;
+        match app.store.for_user(&user).await {
+            Ok(store) => {
+                let paused: Vec<String> =
+                    sqlx::query_scalar("SELECT id FROM run_index WHERE status='paused'")
+                        .fetch_all(&store.pool)
+                        .await
+                        .unwrap_or_default();
+                let mut scoped = app.clone();
+                scoped.store = store;
+                for id in paused {
+                    let Ok(run) = scoped.run(&id).await else {
+                        continue;
+                    };
+                    let limited = run["error"]
+                        .as_str()
+                        .is_some_and(|error| error.starts_with("Daily usage limit reached"));
+                    if !limited || run["requester_user_id"].as_str().is_some_and(|r| r != user) {
+                        continue;
+                    }
+                    let request =
+                        format!("limit-resume-{}", webagent_engine::usage_ledger::day(now));
+                    match crate::command(
+                        State(scoped.clone()),
+                        Path((id.clone(), "resume".to_owned())),
+                        Json(json!({"client_request_id":request})),
                     )
                     .await
-                {
-                    // Running work finishes; new work follows Free's limits.
-                    Ok(_) => {
-                        ended += 1;
-                        None
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "Tier end not written; trying again later");
-                        Some(now.saturating_add(TIER_END_RETRY))
+                    {
+                        Ok(_) => resumed += 1,
+                        Err(error) => {
+                            tracing::warn!(run = %id, error = %error.1, "Limited run not resumed");
+                            next = Some(now.saturating_add(TIER_END_RETRY));
+                        }
                     }
                 }
             }
-            // No account or no end date (changed since): nothing left to do.
-            _ => None,
-        };
-        webagent_engine::due::set(pool, &id, TIER_END_DUE, next).await?;
+            Err(error) => {
+                tracing::warn!(%error, "Limited runs not read; trying again later");
+                next = Some(now.saturating_add(TIER_END_RETRY));
+            }
+        }
+        webagent_engine::due::set(pool, &user, webagent_engine::due::LIMIT_RESUME, next).await?;
     }
-    Ok(ended)
+    Ok(resumed)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CatalogChange {
+    /// On, off, or null for the tier's default.
+    allowed: Option<bool>,
+}
+/// An administrator sets an owner's "catalog models allowed" value (the billing service sets
+/// it the same way, through the account writer).
+async fn change_catalog_models(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+    Json(body): Json<CatalogChange>,
+) -> Api {
+    administrator(&app, &identity).await?;
+    let (account, _) = {
+        let _guard = app.gate.lock().await;
+        app.store
+            .set_catalog_models(&id, body.allowed)
+            .await
+            .map_err(|error| invalid(&error.to_string()))?
+    };
+    #[cfg(all(unix, feature = "server-bins"))]
+    crate::billing::tier_changed(&app, &id);
+    Ok(Json(json!({"account":account})))
 }
 async fn tiers(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
     administrator(&app, &identity).await?;
@@ -839,6 +951,10 @@ pub fn router() -> Router<App> {
             get(account_management::accounts).post(account_management::create_account),
         )
         .route("/accounts/{id}", axum::routing::put(change_account))
+        .route(
+            "/accounts/{id}/catalog-models",
+            axum::routing::put(change_catalog_models),
+        )
         .route(
             "/accounts/{id}/profile",
             axum::routing::put(account_management::change_profile),

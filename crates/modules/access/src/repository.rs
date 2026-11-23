@@ -12,8 +12,96 @@ fn account_view(value: &Value) -> Result<Value> {
         json!({"user_id":principal.user_id,"username":value["username"],
         "status":principal.status,"role":principal.role,
         "tier_id":principal.tier_id,"tier_until":value["tier_until"],
+        "granted_tier":value["granted_tier"],"paid_until":value["paid"]["until"],
+        "catalog_models":value["catalog_models"],
         "access_revision":principal.access_revision}),
     )
+}
+/// The plain index of accounts above Free: ids, tier ids and times only.
+const ACCOUNT_TIERS_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS account_tiers(user_id TEXT PRIMARY KEY,tier_id TEXT NOT NULL,admin_tier TEXT NOT NULL,grant_until INTEGER,paid_until INTEGER) WITHOUT ROWID";
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(u64::MAX)
+}
+
+/// A paid grant as stored on the account (plus tier 3.8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaidSource {
+    pub tier: String,
+    pub until: u64,
+    pub reference: String,
+}
+
+/// An account's tier sources: the administrator's choice (with its end), the paid grant and
+/// the catalog switch. The account's tier is derived from them by the one writer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TierSources {
+    pub status: AccountStatus,
+    pub admin_tier: String,
+    pub admin_until: Option<u64>,
+    pub paid: Option<PaidSource>,
+    pub catalog_models: Option<bool>,
+}
+
+impl TierSources {
+    /// The sources of a stored account (its state view).
+    pub fn of(account: &Value) -> Result<Self> {
+        let principal = Principal::from_account(account)?;
+        let paid = &account["paid"];
+        Ok(Self {
+            status: principal.status,
+            admin_tier: account["granted_tier"]
+                .as_str()
+                .filter(|tier| access::valid_id(tier))
+                .map_or(principal.tier_id, str::to_owned),
+            admin_until: account["tier_until"].as_u64(),
+            paid: match (
+                paid["tier"].as_str(),
+                paid["until"].as_u64(),
+                paid["reference"].as_str(),
+            ) {
+                (Some(tier), Some(until), Some(reference)) => Some(PaidSource {
+                    tier: tier.to_owned(),
+                    until,
+                    reference: reference.to_owned(),
+                }),
+                _ => None,
+            },
+            catalog_models: account["catalog_models"].as_bool(),
+        })
+    }
+    /// Which sources hold the account above Free: `grant`, `paid`, `both` or `none` (for the
+    /// billing service).
+    pub fn source(&self, now: u64) -> &'static str {
+        source_of(
+            &self.admin_tier,
+            self.paid.as_ref().is_some_and(|paid| paid.until > now),
+        )
+    }
+}
+
+/// `grant` when the administrator's choice is above Free, `paid` when a paid grant is active,
+/// `both`, or `none`.
+pub fn source_of(admin_tier: &str, paid_active: bool) -> &'static str {
+    let grant = admin_tier != access::FREE_TIER && admin_tier != access::ANONYMOUS_TIER;
+    match (grant, paid_active) {
+        (true, true) => "both",
+        (true, false) => "grant",
+        (false, true) => "paid",
+        (false, false) => "none",
+    }
+}
+
+/// One row of the plain `account_tiers` index: an account above Free and where it comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TierRow {
+    pub user_id: String,
+    pub tier_id: String,
+    pub admin_tier: String,
+    pub grant_until: Option<u64>,
+    pub paid_until: Option<u64>,
 }
 async fn audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -68,8 +156,10 @@ impl<C: RecordCodec> Repository<'_, C> {
     }
     /// Set an account's status and tier, with an optional end date (Unix seconds) after which
     /// it returns to Free. Only a tier ranked above Free and below Administrator may end, and
-    /// only in the future. Writes through the one account writer, so `auth_epoch` rises; the
-    /// caller stores the `account_due` row that brings the end, before calling this.
+    /// only in the future. This is the administrator's choice; an active paid grant still
+    /// raises the account above it (plus tier 3.8). Writes through the one account writer, so
+    /// `auth_epoch` rises; the caller stores the `account_due` row that brings the end, before
+    /// calling this.
     pub async fn update_account_tier(
         &self,
         id: &str,
@@ -82,23 +172,141 @@ impl<C: RecordCodec> Repository<'_, C> {
             bail!("Invalid account update");
         }
         if let Some(until) = tier_until {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_secs())
-                .unwrap_or(u64::MAX);
             crate::account_ladder::tier_end_allowed(
                 &self.read_access_policy()?,
                 tier_id,
                 until,
-                now,
+                unix_now(),
             )?;
         }
-        let role = Role::for_tier(tier_id);
         if id == "admin"
             && (status != AccountStatus::Active || tier_id != access::ADMINISTRATOR_TIER)
         {
             bail!("The original administrator must remain active");
         }
+        if self.entitlement_tier(tier_id).await?.is_none() {
+            bail!("Entitlement tier not found");
+        }
+        let (account, _) = self
+            .write_tier_sources(id, Some(expected_revision), |sources| {
+                sources.status = status;
+                sources.admin_tier = tier_id.to_owned();
+                sources.admin_until = tier_until;
+                Ok(())
+            })
+            .await?;
+        Ok(account)
+    }
+    /// Apply a paid grant (billing service): `tier` until `until`, once per `reference`. Only a
+    /// tier between Free and Administrator; never creates an account or touches a role but
+    /// through the tier. Returns the account view and the tier sources as now stored.
+    pub async fn apply_paid_grant(
+        &self,
+        id: &str,
+        tier: &str,
+        until: u64,
+        reference: &str,
+    ) -> Result<(Value, TierSources)> {
+        crate::account_ladder::grantable(&self.read_access_policy()?, tier)?;
+        if until <= unix_now() || until > crate::account_ladder::LATEST_TIER_END {
+            bail!("A grant's end must be in the future");
+        }
+        self.write_tier_sources(id, None, |sources| {
+            sources.paid = Some(PaidSource {
+                tier: tier.to_owned(),
+                until,
+                reference: reference.to_owned(),
+            });
+            Ok(())
+        })
+        .await
+    }
+    /// End the paid grant now if it is the one applied with `grant_reference`; `None` when
+    /// there was nothing to end (already ended or replaced).
+    pub async fn end_paid_grant(
+        &self,
+        id: &str,
+        grant_reference: &str,
+    ) -> Result<Option<(Value, TierSources)>> {
+        let state = self
+            .accounts()
+            .account_state(id)
+            .await?
+            .ok_or_else(|| anyhow!("Account not found"))?;
+        if state["paid"]["reference"].as_str() != Some(grant_reference) {
+            return Ok(None);
+        }
+        self.write_tier_sources(id, None, |sources| {
+            if sources.paid.as_ref().map(|paid| paid.reference.as_str()) != Some(grant_reference) {
+                bail!("Paid grant changed");
+            }
+            sources.paid = None;
+            Ok(())
+        })
+        .await
+        .map(Some)
+    }
+    /// End what has ended by `now`: the administrator's grant (back to Free) and the paid
+    /// grant. Returns the new state, or `None` when nothing had ended.
+    pub async fn end_passed_grants(
+        &self,
+        id: &str,
+        now: u64,
+    ) -> Result<Option<(Value, TierSources)>> {
+        let Some(state) = self.accounts().account_state(id).await? else {
+            return Ok(None);
+        };
+        let sources = TierSources::of(&state)?;
+        let admin_ended = sources.admin_until.is_some_and(|until| until <= now);
+        let paid_ended = sources.paid.as_ref().is_some_and(|paid| paid.until <= now);
+        if !admin_ended && !paid_ended {
+            return Ok(None);
+        }
+        self.write_tier_sources(id, None, |sources| {
+            if sources.admin_until.is_some_and(|until| until <= now) {
+                sources.admin_tier = access::FREE_TIER.to_owned();
+                sources.admin_until = None;
+            }
+            if sources.paid.as_ref().is_some_and(|paid| paid.until <= now) {
+                sources.paid = None;
+            }
+            Ok(())
+        })
+        .await
+        .map(Some)
+    }
+    /// Set the owner's "catalog models allowed" value (`None`: the tier's default). Never on
+    /// an administrator, who is not limited.
+    pub async fn set_catalog_models(
+        &self,
+        id: &str,
+        allowed: Option<bool>,
+    ) -> Result<(Value, TierSources)> {
+        self.write_tier_sources(id, None, |sources| {
+            if sources.admin_tier == access::ADMINISTRATOR_TIER {
+                bail!("Administrators are not limited");
+            }
+            sources.catalog_models = allowed;
+            Ok(())
+        })
+        .await
+    }
+    /// The one path that changes an account's tier sources: read them in the writer
+    /// transaction, apply `change`, derive the tier (the higher of the administrator's choice
+    /// and an active paid grant) and its role, and write through the account writer (its
+    /// `auth_epoch` and access revision rise). Keeps the plain `account_tiers` index (ids,
+    /// tier ids and times only) of accounts above Free in the same transaction.
+    async fn write_tier_sources(
+        &self,
+        id: &str,
+        expected_revision: Option<u64>,
+        change: impl FnOnce(&mut TierSources) -> Result<()>,
+    ) -> Result<(Value, TierSources)> {
+        if !access::valid_id(id) {
+            bail!("Invalid account update");
+        }
+        let policy = self.read_access_policy()?;
+        let now = unix_now();
         let mut tx = self.app_pool.begin().await?;
         self.accounts().lock_account_in(&mut tx, id).await?;
         let account = self
@@ -106,44 +314,109 @@ impl<C: RecordCodec> Repository<'_, C> {
             .account_state_in(&mut tx, id)
             .await?
             .ok_or_else(|| anyhow!("Account not found"))?;
+        let revision = Principal::from_account(&account)?.access_revision;
+        if expected_revision.is_some_and(|expected| expected != revision) {
+            bail!("Account revision changed");
+        }
+        let mut sources = TierSources::of(&account)?;
+        change(&mut sources)?;
+        let tier_id = match &sources.paid {
+            Some(paid) if paid.until > now => {
+                crate::account_ladder::higher(&policy, &sources.admin_tier, &paid.tier)?
+            }
+            _ => sources.admin_tier.as_str(),
+        }
+        .to_owned();
+        let role = Role::for_tier(&tier_id);
         // Only visitors who are not signed in hold the anonymous tier, and they hold no other.
         if (account["role"] == "guest") != (role == Role::Guest) {
             bail!("The anonymous tier belongs only to visitors who are not signed in");
         }
-        if Principal::from_account(&account)?.access_revision != expected_revision {
-            bail!("Account revision changed");
-        }
-        if self.entitlement_tier(tier_id).await?.is_none() {
+        if policy["tiers"].get(&tier_id).is_none() {
             bail!("Entitlement tier not found");
         }
+        let status = sources.status;
         let role_value = serde_json::to_value(role)?;
-        let account = self
+        let granted = (tier_id != sources.admin_tier).then_some(sources.admin_tier.as_str());
+        let written = self
             .accounts()
             .apply_access_in(
                 &mut tx,
                 id,
                 webagent_accounts::AccessMutation {
-                    expected_revision,
+                    expected_revision: revision,
                     status,
                     role: role_value.as_str().ok_or_else(|| anyhow!("Invalid role"))?,
-                    tier_id,
-                    tier_until,
+                    tier_id: &tier_id,
+                    tier_until: sources.admin_until,
+                    sources: Some(webagent_accounts::TierSources {
+                        granted_tier: granted,
+                        paid: sources
+                            .paid
+                            .as_ref()
+                            .map(|paid| webagent_accounts::PaidGrant {
+                                tier: &paid.tier,
+                                until: paid.until,
+                                reference: &paid.reference,
+                            }),
+                        catalog_models: sources.catalog_models,
+                    }),
                     profile_is_admin: status == AccountStatus::Active
                         && role == Role::Administrator,
                 },
             )
             .await?;
+        sqlx::query(ACCOUNT_TIERS_SCHEMA).execute(&mut *tx).await?;
+        if tier_id == access::FREE_TIER || role == Role::Guest {
+            sqlx::query("DELETE FROM account_tiers WHERE user_id=?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        } else {
+            sqlx::query("INSERT INTO account_tiers(user_id,tier_id,admin_tier,grant_until,paid_until) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET tier_id=excluded.tier_id,admin_tier=excluded.admin_tier,grant_until=excluded.grant_until,paid_until=excluded.paid_until")
+                .bind(id)
+                .bind(&tier_id)
+                .bind(&sources.admin_tier)
+                .bind(sources.admin_until.and_then(|until| i64::try_from(until).ok()))
+                .bind(sources.paid.as_ref().and_then(|paid| i64::try_from(paid.until).ok()))
+                .execute(&mut *tx)
+                .await?;
+        }
         audit(
             &mut tx,
             self,
             "account_access_changed",
             &json!({"user_id":id,
-            "status":status,"role":role,"tier_id":tier_id,"tier_until":tier_until,
-            "access_revision":expected_revision+1}),
+            "status":status,"role":role,"tier_id":tier_id,"tier_until":sources.admin_until,
+            "granted_tier":granted,"paid_until":sources.paid.as_ref().map(|paid| paid.until),
+            "catalog_models":sources.catalog_models,"access_revision":revision+1}),
         )
         .await?;
         tx.commit().await?;
-        account_view(&account)
+        Ok((account_view(&written)?, TierSources::of(&written)?))
+    }
+    /// Accounts above Free from the plain `account_tiers` index (no account record is
+    /// decrypted), for the billing service. An account changed before this index existed
+    /// appears at its next tier change.
+    pub async fn accounts_above_free(&self) -> Result<Vec<TierRow>> {
+        sqlx::query(ACCOUNT_TIERS_SCHEMA)
+            .execute(self.app_pool)
+            .await?;
+        let rows: Vec<(String, String, String, Option<i64>, Option<i64>)> = sqlx::query_as(
+            "SELECT user_id,tier_id,admin_tier,grant_until,paid_until FROM account_tiers ORDER BY user_id",
+        )
+        .fetch_all(self.app_pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(user_id, tier_id, admin_tier, grant, paid)| TierRow {
+                user_id,
+                tier_id,
+                admin_tier,
+                grant_until: grant.and_then(|v| u64::try_from(v).ok()),
+                paid_until: paid.and_then(|v| u64::try_from(v).ok()),
+            })
+            .collect())
     }
     pub async fn entitlement_tier(&self, id: &str) -> Result<Option<Tier>> {
         if !access::valid_id(id) {
@@ -652,6 +925,7 @@ impl<C: RecordCodec> Repository<'_, C> {
                         role: role.as_str().unwrap_or("user"),
                         tier_id: tier,
                         tier_until: account["tier_until"].as_u64(),
+                        sources: None,
                         profile_is_admin: status == AccountStatus::Active
                             && tier == access::ADMINISTRATOR_TIER,
                     },

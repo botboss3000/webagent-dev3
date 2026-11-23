@@ -99,7 +99,7 @@
     },
     {
       "id": "access.tier.max_active_runs",
-      "description": "How many agent runs one account at this account level may have going at the same time.",
+      "description": "Most runs one person may have going at once on one agent owned by an account at this level (a level's own runs at once is capped by it). A person's own level does not limit their runs on other owners' agents.",
       "type": "integer",
       "pointer": "/tiers/{tier}/max_active_runs",
       "layers": [
@@ -211,6 +211,94 @@
       },
       "bounds": "validator",
       "notes": "Absent means allowed. Widgets are not affected."
+    },
+    {
+      "id": "access.tier.owner_limits.runs_at_once",
+      "description": "Most runs going at once on all the agents owned by an account at this level together (people other than administrators); a new message beyond it is refused. Absent means no limit.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/owner_limits/runs_at_once",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "free owners get two runs at once",
+        "plus owners run 9 things at the same time",
+        "how many runs can my agents have going"
+      ],
+      "areas": [
+        "agents",
+        "limits",
+        "runs"
+      ],
+      "min": 0,
+      "max": 200,
+      "parameters": {
+        "tier": [
+          "plus",
+          "free"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Must not exceed the loop's scheduler.max_active_runs (the server-wide limit); a policy that does is refused. The administrator level has none."
+    },
+    {
+      "id": "access.tier.owner_limits.compute_seconds_per_day",
+      "description": "Command processor seconds per day (UTC) on all the agents owned by an account at this level together; past it further commands are refused until midnight UTC. Absent means no limit.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/owner_limits/compute_seconds_per_day",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "free owners get 15 minutes of compute a day",
+        "five hours of commands for plus",
+        "daily compute time for agent owners"
+      ],
+      "areas": [
+        "agents",
+        "limits",
+        "compute"
+      ],
+      "min": 0,
+      "max": 8640000,
+      "unit": "seconds",
+      "parameters": {
+        "tier": [
+          "plus",
+          "free"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Counted from the command budget ledger; administrators' own commands are not counted. The administrator level has none."
+    },
+    {
+      "id": "access.tier.owner_limits.automations",
+      "description": "Most automations (scheduled tasks and event triggers) one account may keep alive on agents owned by an account at this level. Absent means the automation ability's own setting decides.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/owner_limits/automations",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "free owners may keep 3 automations",
+        "plus allows 50 scheduled tasks",
+        "limit background jobs per plan"
+      ],
+      "areas": [
+        "agents",
+        "limits",
+        "automations"
+      ],
+      "min": 0,
+      "max": 200,
+      "parameters": {
+        "tier": [
+          "plus",
+          "free"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Caps the automation ability's max_automations_per_user. The administrator level has none."
     },
     {
       "id": "access.tier_names",
@@ -580,6 +668,52 @@
       ],
       "min": 0,
       "max": 64,
+      "bounds": "validator"
+    },
+    {
+      "id": "access.run_limits.plus_reserved_runs",
+      "description": "Run slots kept for agents whose owner is on a paid level (Plus): runs on other owners' agents may hold at most the ordinary slots less this many. 0 keeps nothing back.",
+      "type": "integer",
+      "pointer": "/run_limits/plus_reserved_runs",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "keep two run slots for plus users",
+        "reserve capacity for paying owners",
+        "free users can't take every slot"
+      ],
+      "areas": [
+        "runs",
+        "limits",
+        "priority"
+      ],
+      "min": 0,
+      "max": 64,
+      "bounds": "validator",
+      "notes": "Runs already going are never stopped; a waiting Free run past free_max_wait_seconds is no longer held back."
+    },
+    {
+      "id": "access.run_limits.free_max_wait_seconds",
+      "description": "Seconds a waiting run on a Free owner's agent waits before it is served like a paid one, so Free is slowed but never starved.",
+      "type": "integer",
+      "pointer": "/run_limits/free_max_wait_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "free runs wait at most two minutes",
+        "stop starving free users",
+        "longest wait for free runs"
+      ],
+      "areas": [
+        "runs",
+        "limits",
+        "priority"
+      ],
+      "min": 0,
+      "max": 86400,
+      "unit": "seconds",
       "bounds": "validator"
     },
     {

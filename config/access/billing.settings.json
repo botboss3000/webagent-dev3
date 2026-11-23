@@ -1,0 +1,71 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see config/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "access.billing.socket_path",
+      "description": "Socket file of the private billing service the app connects to; empty turns billing off and every account keeps what it has.",
+      "type": "string",
+      "pointer": "/socket_path",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "connect billing at /run/webagent-billing/billing.sock",
+        "turn billing off",
+        "where is the billing service"
+      ],
+      "areas": [
+        "billing",
+        "plans"
+      ],
+      "max_length": 107,
+      "bounds": "validator",
+      "nullable": true,
+      "notes": "Absolute path; read when the API starts. The folder must be mounted into the API container. Set to null to turn billing off."
+    },
+    {
+      "id": "access.billing.service_uid",
+      "description": "System account id that must own the billing service's socket; any other peer is refused.",
+      "type": "integer",
+      "pointer": "/service_uid",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "billing service runs as uid 998",
+        "which account may serve billing"
+      ],
+      "areas": [
+        "billing",
+        "security"
+      ],
+      "min": 0,
+      "max": 4294967295,
+      "bounds": "validator",
+      "nullable": true,
+      "notes": "Required with a socket path; read when the API starts."
+    },
+    {
+      "id": "access.billing.request_timeout_seconds",
+      "description": "Seconds the app waits for the billing service to answer a request, such as a payment link, before showing Billing unavailable.",
+      "type": "integer",
+      "pointer": "/request_timeout_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "wait 5 seconds for billing",
+        "billing links time out after 20 seconds"
+      ],
+      "areas": [
+        "billing",
+        "limits"
+      ],
+      "unit": "seconds",
+      "min": 1,
+      "max": 60,
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {}
+}

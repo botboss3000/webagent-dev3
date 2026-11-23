@@ -1182,8 +1182,18 @@ async fn execution_scope(
     if visibility["visibility"]["automation"] == "off" {
         return Err(anyhow!("Automation ability disabled"));
     }
+    let mut settings = visibility["settings"]["automation"].clone();
+    // The agent owner's plan caps the automations one account keeps alive (the service's own
+    // default is 20).
+    if let Some(cap) = access.owner_totals().automations {
+        let own = settings["max_automations_per_user"].as_u64().unwrap_or(20);
+        if !settings.is_object() {
+            settings = json!({});
+        }
+        settings["max_automations_per_user"] = json!(own.min(u64::from(cap)));
+    }
     Ok(
-        json!({"agent_id":agent,"session_id":sid,"settings":visibility["settings"]["automation"],"interactive_user":interactive}),
+        json!({"agent_id":agent,"session_id":sid,"settings":settings,"interactive_user":interactive}),
     )
 }
 pub(crate) async fn admin_list(Extension(app): Extension<App>) -> Api {

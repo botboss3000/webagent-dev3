@@ -49,7 +49,9 @@ mod module_records;
 #[path = "../../crates/modules/chat/host/storage/participation.rs"]
 pub(crate) mod participation;
 mod requester_quota;
-pub(crate) use requester_quota::{limit_refusal, AGENT_USERS_BUSY, AGENT_USERS_FULL};
+pub(crate) use requester_quota::{
+    limit_refusal, AGENT_USERS_BUSY, AGENT_USERS_FULL, OWNER_RUNS_FULL,
+};
 mod review;
 mod scan;
 pub(crate) use scan::WriteMarks;

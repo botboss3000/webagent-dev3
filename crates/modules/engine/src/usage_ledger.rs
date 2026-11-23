@@ -25,6 +25,8 @@ pub const REQUESTER: &str = "requester";
 pub const AGENT: &str = "agent";
 /// Command processor time of one run (its `cpu_ms`, on the days its commands ran).
 pub const RUN: &str = "run";
+/// Command processor time on all of one owner's agents per day (non-administrator requesters).
+pub const OWNER: &str = "owner";
 /// Days of rows kept (today included).
 pub const RETENTION_DAYS: i64 = 35;
 
@@ -212,16 +214,23 @@ pub async fn refusal_on(
     Ok(None)
 }
 
-/// Add one finished command's processor time to its run and to its requester's day.
+/// Add one finished command's processor time to its run, to its requester's day and, when
+/// given, to the agent owner's day.
 pub async fn record_command_on(
     pool: &SqlitePool,
     requester: &str,
     run: &str,
+    owner: Option<&str>,
     day: i64,
     cpu_ms: u64,
 ) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    for (scope, id) in [(REQUESTER, requester), (RUN, run)] {
+    for (scope, id) in [
+        (REQUESTER, Some(requester)),
+        (RUN, Some(run)),
+        (OWNER, owner),
+    ] {
+        let Some(id) = id else { continue };
         sqlx::query("INSERT INTO usage_daily(scope,id,day,cpu_ms) VALUES(?,?,?,?) ON CONFLICT(scope,id,day) DO UPDATE SET cpu_ms=cpu_ms+excluded.cpu_ms")
             .bind(scope)
             .bind(id)
@@ -234,14 +243,19 @@ pub async fn record_command_on(
     Ok(())
 }
 
-/// [`record_command_on`] for today, for `access`'s requester.
+/// [`record_command_on`] for today, for `access`'s requester and (unless an administrator or
+/// test account ran it) the agent's owner.
 pub async fn record_command(
     pool: &SqlitePool,
     access: &LiveAccess,
     run: &str,
     cpu_ms: u64,
 ) -> Result<()> {
-    record_command_on(pool, &access.principal.user_id, run, today(), cpu_ms).await
+    let owner = (charges_agent(&access.principal) && !access.agent_owner_id.is_empty())
+        .then_some(access.agent_owner_id.as_str());
+    let day = today();
+    record_command_on(pool, &access.principal.user_id, run, owner, day, cpu_ms).await?;
+    compute_alerts(pool, access, day, cpu_ms).await
 }
 
 /// Why `access`'s requester may not start another command in `run` on `day`: the run's or the
@@ -284,7 +298,181 @@ pub async fn command_refusal_on(
             )));
         }
     }
+    // The owner's plan: processor time on all their agents together today.
+    if let Some(limit) = access.owner_totals().compute_seconds_per_day {
+        let used: Option<i64> =
+            sqlx::query_scalar("SELECT cpu_ms FROM usage_daily WHERE scope=? AND id=? AND day=?")
+                .bind(OWNER)
+                .bind(&access.agent_owner_id)
+                .bind(day)
+                .fetch_optional(pool)
+                .await?;
+        if used.unwrap_or(0) >= i64::from(limit) * 1000 {
+            return Ok(Some(format!(
+                "Compute limit reached: this agent's owner's plan allows {} of commands a day on all their agents. It resets at 00:00 UTC.",
+                minutes(limit)
+            )));
+        }
+    }
     Ok(None)
+}
+
+/// Owner limit alerts waiting to become notices: one row per owner, limit, period and level
+/// (80 or 100 percent), so each is raised once; `limit_value` is the limit it was raised at.
+/// Delivered rows are deleted once older than [`ALERTS_KEPT_DAYS`].
+const ALERTS_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS owner_alerts(owner_id TEXT NOT NULL,kind TEXT NOT NULL,period INTEGER NOT NULL,level INTEGER NOT NULL,limit_value INTEGER NOT NULL,delivered INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(owner_id,kind,period,level)) WITHOUT ROWID";
+/// Days delivered owner alerts are kept (they stop a repeat on the same day).
+pub const ALERTS_KEPT_DAYS: i64 = 2;
+/// Owner alert kinds.
+pub const ALERT_COMPUTE: &str = "compute";
+pub const ALERT_RUNS: &str = "runs_at_once";
+
+/// Raise `owner`'s alert for `kind` at `level` percent of `limit` on UTC day `period` (once),
+/// and bring their `owner_alert` due row to now so the API turns it into a notice.
+pub async fn raise_owner_alert(
+    pool: &SqlitePool,
+    owner: &str,
+    kind: &str,
+    period: i64,
+    level: u32,
+    limit: u32,
+) -> Result<()> {
+    sqlx::query(ALERTS_SCHEMA).execute(pool).await?;
+    let added = sqlx::query("INSERT INTO owner_alerts(owner_id,kind,period,level,limit_value) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING")
+        .bind(owner)
+        .bind(kind)
+        .bind(period)
+        .bind(level)
+        .bind(limit)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if added > 0 {
+        crate::due::earlier(
+            pool,
+            owner,
+            crate::due::OWNER_ALERT,
+            u64::try_from(now()).unwrap_or(0),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// `owner`'s undelivered alerts (kind, level, limit), marked delivered; old delivered rows go.
+pub async fn take_owner_alerts(pool: &SqlitePool, owner: &str) -> Result<Vec<(String, u32, u32)>> {
+    sqlx::query(ALERTS_SCHEMA).execute(pool).await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT kind,level,limit_value FROM owner_alerts WHERE owner_id=? AND delivered=0 ORDER BY period,kind,level",
+    )
+    .bind(owner)
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE owner_alerts SET delivered=1 WHERE owner_id=? AND delivered=0")
+        .bind(owner)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM owner_alerts WHERE owner_id=? AND delivered=1 AND period<?")
+        .bind(owner)
+        .bind(today() - ALERTS_KEPT_DAYS)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(rows
+        .into_iter()
+        .map(|(kind, level, limit)| {
+            (
+                kind,
+                u32::try_from(level).unwrap_or(0),
+                u32::try_from(limit).unwrap_or(0),
+            )
+        })
+        .collect())
+}
+
+/// The percent levels `used_before` → `used_after` (of `limit`) crossed: 80 and/or 100.
+#[must_use]
+pub fn crossed(used_before: u64, used_after: u64, limit: u64) -> Vec<u32> {
+    [80_u32, 100]
+        .into_iter()
+        .filter(|level| {
+            let mark = limit.saturating_mul(u64::from(*level)).div_ceil(100);
+            limit > 0 && used_before < mark && used_after >= mark
+        })
+        .collect()
+}
+
+/// After a command: raise the owner's compute alerts its time crossed (owners with a limit).
+async fn compute_alerts(
+    pool: &SqlitePool,
+    access: &LiveAccess,
+    day: i64,
+    cpu_ms: u64,
+) -> Result<()> {
+    let Some(limit) = access.owner_totals().compute_seconds_per_day else {
+        return Ok(());
+    };
+    if !charges_agent(&access.principal) || access.agent_owner_id.is_empty() {
+        return Ok(());
+    }
+    let used: Option<i64> =
+        sqlx::query_scalar("SELECT cpu_ms FROM usage_daily WHERE scope=? AND id=? AND day=?")
+            .bind(OWNER)
+            .bind(&access.agent_owner_id)
+            .bind(day)
+            .fetch_optional(pool)
+            .await?;
+    let after = u64::try_from(used.unwrap_or(0)).unwrap_or(0);
+    for level in crossed(after.saturating_sub(cpu_ms), after, u64::from(limit) * 1000) {
+        raise_owner_alert(
+            pool,
+            &access.agent_owner_id,
+            ALERT_COMPUTE,
+            day,
+            level,
+            limit,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The owner's notice for an alert (counts only; no names of the people who used it).
+#[must_use]
+pub fn alert_text(kind: &str, level: u32, limit: u32) -> Option<String> {
+    Some(match (kind, level) {
+        (ALERT_COMPUTE, 80) => format!(
+            "Your agents have used 80% of your plan's {} of commands today. It resets at 00:00 UTC.",
+            minutes(limit)
+        ),
+        (ALERT_COMPUTE, 100) => format!(
+            "Your agents have used all of your plan's {} of commands today; further commands wait until 00:00 UTC.",
+            minutes(limit)
+        ),
+        (ALERT_RUNS, 80) => format!(
+            "Your agents are using 80% of your plan's {limit} runs at once."
+        ),
+        (ALERT_RUNS, 100) => format!(
+            "Your agents reached your plan's {limit} runs at once; new messages wait until a run finishes."
+        ),
+        _ => return None,
+    })
+}
+
+/// The next UTC midnight after `now` (Unix seconds), when daily limits reset.
+#[must_use]
+pub fn next_reset(now: u64) -> u64 {
+    (now / 86_400 + 1) * 86_400
+}
+
+/// `seconds` in words: whole hours from two hours, else minutes from two minutes.
+fn minutes(seconds: u32) -> String {
+    match seconds {
+        s if s >= 7_200 && s % 3_600 == 0 => format!("{} hours", s / 3_600),
+        s if s >= 120 => format!("{} minutes", s / 60),
+        s => format!("{s} seconds"),
+    }
 }
 
 /// [`command_refusal_on`] for today.
@@ -718,12 +906,21 @@ mod tests {
     #[tokio::test]
     async fn command_time_adds_up_per_run_and_per_requester_day() {
         let pool = pool().await;
-        record_command_on(&pool, "u1", "r1", 100, 1500)
+        record_command_on(&pool, "u1", "r1", Some("o1"), 100, 1500)
             .await
             .unwrap();
-        record_command_on(&pool, "u1", "r1", 101, 500)
+        record_command_on(&pool, "u1", "r1", None, 101, 500)
             .await
             .unwrap();
+        let owner: i64 = sqlx::query_scalar(
+            "SELECT SUM(cpu_ms) FROM usage_daily WHERE scope='owner' AND id='o1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(owner, 1500);
+        assert_eq!(minutes(900), "15 minutes");
+        assert_eq!(minutes(18_000), "5 hours");
         let run: i64 =
             sqlx::query_scalar("SELECT SUM(cpu_ms) FROM usage_daily WHERE scope='run' AND id='r1'")
                 .fetch_one(&pool)
@@ -834,7 +1031,7 @@ mod tests {
             )
             .await
         );
-        record_command_on(&pool, "visitor", "r1", 20_000, 2_500)
+        record_command_on(&pool, "visitor", "r1", None, 20_000, 2_500)
             .await
             .unwrap();
         assert!(flush(&pool, "r1", None, totals(160, 30, 900), now + 70).await);
@@ -968,6 +1165,41 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(marks, vec!["acked", "recent", "unacked"]);
+    }
+
+    #[test]
+    fn alerts_fire_once_at_80_and_100_percent() {
+        assert_eq!(crossed(0, 79, 100), Vec::<u32>::new());
+        assert_eq!(crossed(79, 80, 100), vec![80]);
+        assert_eq!(crossed(70, 120, 100), vec![80, 100]);
+        assert_eq!(crossed(100, 150, 100), Vec::<u32>::new());
+        assert_eq!(crossed(0, 5, 0), Vec::<u32>::new());
+        assert_eq!(next_reset(86_400 * 3 + 5), 86_400 * 4);
+    }
+
+    #[tokio::test]
+    async fn an_owner_alert_is_raised_once_and_taken_once() {
+        let pool = pool().await;
+        crate::due::schema(&pool).await.unwrap();
+        for _ in 0..2 {
+            raise_owner_alert(&pool, "o1", ALERT_RUNS, today(), 100, 2)
+                .await
+                .unwrap();
+        }
+        let due = crate::due::passed(&pool, crate::due::OWNER_ALERT, u64::MAX / 2)
+            .await
+            .unwrap();
+        assert_eq!(due, vec!["o1".to_owned()]);
+        assert_eq!(
+            take_owner_alerts(&pool, "o1").await.unwrap(),
+            vec![(ALERT_RUNS.to_owned(), 100, 2)]
+        );
+        assert!(take_owner_alerts(&pool, "o1").await.unwrap().is_empty());
+        // The same alert the same day is not raised again.
+        raise_owner_alert(&pool, "o1", ALERT_RUNS, today(), 100, 2)
+            .await
+            .unwrap();
+        assert!(take_owner_alerts(&pool, "o1").await.unwrap().is_empty());
     }
 
     #[test]

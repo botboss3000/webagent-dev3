@@ -325,7 +325,9 @@ async fn tick_session(app: &App, s: &str) -> Result<()> {
         return Ok(());
     }
     if active.len() >= app.runtime.read().await.scheduler.max_unresolved_runs
-        || active.len() >= access.max_active_runs() as usize
+        || access
+            .account_run_limit()
+            .is_some_and(|limit| active.len() >= limit as usize)
     {
         return Ok(());
     }

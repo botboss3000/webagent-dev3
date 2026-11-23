@@ -130,6 +130,11 @@ pub(crate) const ROUTES: &[Route] = &[
     none("/api/v3/admin/access/accounts"),
     none("/api/v3/admin/access/accounts/{id}/profile"),
     none("/api/v3/admin/access/accounts/{id}"),
+    // Administrators set an owner's catalog switch; the billing routes refuse widgets and agent
+    // browsers in the handler too (a person's own plan).
+    none("/api/v3/admin/access/accounts/{id}/catalog-models"),
+    none("/api/v3/billing"),
+    none("/api/v3/billing/link"),
     none("/api/v3/admin/access/accounts/{id}/sessions"),
     none("/api/v3/admin/access/accounts/{id}/sessions/{session_id}"),
     none("/api/v3/admin/access/agents/{id}/ability-permissions"),

@@ -18,6 +18,10 @@
       "descriptors": "config/access/policy.settings.json"
     },
     {
+      "config": "config/access/billing.json",
+      "descriptors": "config/access/billing.settings.json"
+    },
+    {
       "config": "config/context/context-compaction.json",
       "descriptors": "config/configuration/settings/context-compaction.settings.json"
     },

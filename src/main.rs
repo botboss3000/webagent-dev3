@@ -79,6 +79,10 @@ mod optimization_settings;
 mod parallel_batch;
 #[path = "../crates/modules/access/host/api.rs"]
 mod phase3_api;
+// The outgoing billing connection: Unix server builds only (absent from Core, Windows, Android).
+#[cfg(all(unix, feature = "server-bins"))]
+#[path = "../crates/modules/access/host/billing.rs"]
+mod billing;
 #[path = "api/accounts/registration.rs"]
 mod registration;
 #[path = "api/accounts/request_limits.rs"]

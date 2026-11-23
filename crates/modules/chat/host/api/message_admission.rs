@@ -44,6 +44,9 @@ fn blocked_summary(reason: &str) -> Option<&'static str> {
         crate::store::AGENT_USERS_FULL => {
             "This agent can't take on new people right now. Try again later."
         }
+        crate::store::OWNER_RUNS_FULL => {
+            "This agent's owner has as many runs going as their plan allows. Try again in a few minutes."
+        }
         "Model unavailable"
         | "Text model required, or selected model is unavailable"
         | "System model assignment is invalid or unauthorized"

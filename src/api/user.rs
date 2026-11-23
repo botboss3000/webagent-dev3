@@ -907,8 +907,15 @@ async fn user_status(
         "runs":crate::public_runs(&app,runs).await?})))
 }
 
+/// The Plan panel's billing routes (Unix server builds; none elsewhere).
+fn billing_routes(router: Router<App>) -> Router<App> {
+    #[cfg(all(unix, feature = "server-bins"))]
+    return router.merge(crate::billing::router());
+    #[cfg(not(all(unix, feature = "server-bins")))]
+    router
+}
 pub(crate) fn router() -> Router<App> {
-    Router::new()
+    billing_routes(Router::new())
         .route(
             "/models/agents/{id}/main-chat",
             get(crate::main_chat::agent_read).put(crate::main_chat::agent_configure),

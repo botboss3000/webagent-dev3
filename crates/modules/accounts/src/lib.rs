@@ -140,7 +140,7 @@ pub use protection::{session_cookie, session_token, valid_csrf, valid_origin};
 mod bootstrap;
 
 mod access_records;
-pub use access_records::{AccessMutation, InitialAccess};
+pub use access_records::{AccessMutation, InitialAccess, PaidGrant, TierSources};
 
 pub mod api;
 

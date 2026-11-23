@@ -13,7 +13,28 @@ pub struct AccessMutation<'a> {
     /// When the tier ends (Unix seconds) and the account returns to Free; `None` keeps it
     /// until changed. The `account_due` row that brings the change is the caller's.
     pub tier_until: Option<u64>,
+    /// The tier's other sources and the catalog switch; `None` keeps the stored ones.
+    pub sources: Option<TierSources<'a>>,
     pub profile_is_admin: bool,
+}
+
+/// Where an account's tier comes from beside the administrator's choice, and its catalog
+/// switch (plus tier spec 3.4, 3.8), supplied by Access, never evaluated by Accounts.
+pub struct TierSources<'a> {
+    /// The administrator's own tier choice while a paid grant raises the account above it
+    /// (`None`: `tier_id` is the administrator's choice).
+    pub granted_tier: Option<&'a str>,
+    /// The billing service's paid grant.
+    pub paid: Option<PaidGrant<'a>>,
+    /// Whether the account's agents may run catalog models (`None`: its tier's default).
+    pub catalog_models: Option<bool>,
+}
+
+/// A paid grant: a tier until a time (Unix seconds), applied once per provider reference.
+pub struct PaidGrant<'a> {
+    pub tier: &'a str,
+    pub until: u64,
+    pub reference: &'a str,
 }
 pub(crate) fn state(value: &Value) -> Value {
     let mut result = serde_json::Map::new();
@@ -24,6 +45,9 @@ pub(crate) fn state(value: &Value) -> Value {
         "role",
         "tier_id",
         "tier_until",
+        "granted_tier",
+        "paid",
+        "catalog_models",
         "access_revision",
         "generation",
         "is_approved",
@@ -140,6 +164,34 @@ impl<C: RecordCodec> Repository<'_, C> {
                     record.remove("tier_until");
                 }
             }
+        }
+        if let Some(sources) = &update.sources {
+            ensure!(
+                sources.granted_tier.is_none_or(crate::valid_id)
+                    && sources
+                        .paid
+                        .as_ref()
+                        .is_none_or(|paid| crate::valid_id(paid.tier) && !paid.reference.is_empty()),
+                "Invalid account update"
+            );
+            let record = account
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("Invalid account record"))?;
+            match sources.granted_tier {
+                Some(tier) => record.insert("granted_tier".into(), json!(tier)),
+                None => record.remove("granted_tier"),
+            };
+            match &sources.paid {
+                Some(paid) => record.insert(
+                    "paid".into(),
+                    json!({"tier":paid.tier,"until":paid.until,"reference":paid.reference}),
+                ),
+                None => record.remove("paid"),
+            };
+            match sources.catalog_models {
+                Some(allowed) => record.insert("catalog_models".into(), json!(allowed)),
+                None => record.remove("catalog_models"),
+            };
         }
         account["access_revision"] = json!(revision
             .checked_add(1)

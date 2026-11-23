@@ -34,6 +34,50 @@ impl Store {
             .update_account_tier(id, expected_revision, status, tier_id, tier_until)
             .await
     }
+    /// Apply a paid grant (billing service), once per reference; see the access repository.
+    pub async fn apply_paid_grant(
+        &self,
+        id: &str,
+        tier: &str,
+        until: u64,
+        reference: &str,
+    ) -> Result<(Value, crate::access::repository::TierSources)> {
+        self.access_repository()
+            .apply_paid_grant(id, tier, until, reference)
+            .await
+    }
+    /// End the paid grant applied with `grant_reference` (none: nothing to end).
+    pub async fn end_paid_grant(
+        &self,
+        id: &str,
+        grant_reference: &str,
+    ) -> Result<Option<(Value, crate::access::repository::TierSources)>> {
+        self.access_repository()
+            .end_paid_grant(id, grant_reference)
+            .await
+    }
+    /// End an account's grants whose end has passed by `now`.
+    pub async fn end_passed_grants(
+        &self,
+        id: &str,
+        now: u64,
+    ) -> Result<Option<(Value, crate::access::repository::TierSources)>> {
+        self.access_repository().end_passed_grants(id, now).await
+    }
+    /// Set an owner's "catalog models allowed" value through the account writer.
+    pub async fn set_catalog_models(
+        &self,
+        id: &str,
+        allowed: Option<bool>,
+    ) -> Result<(Value, crate::access::repository::TierSources)> {
+        self.access_repository()
+            .set_catalog_models(id, allowed)
+            .await
+    }
+    /// Accounts above Free from the plain `account_tiers` index.
+    pub async fn accounts_above_free(&self) -> Result<Vec<crate::access::repository::TierRow>> {
+        self.access_repository().accounts_above_free().await
+    }
     /// Test-only non-administrator tier with the administrator tier's grants, for tests
     /// that need a fully entitled ordinary user.
     #[cfg(test)]

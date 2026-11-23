@@ -347,6 +347,7 @@ async fn status_handoff_is_transactional_and_revision_guarded() {
             role: "user",
             tier_id: "free",
             tier_until: None,
+            sources: None,
             profile_is_admin: false,
         },
     )
@@ -369,6 +370,7 @@ async fn status_handoff_is_transactional_and_revision_guarded() {
                 role: "user",
                 tier_id: "free",
                 tier_until: None,
+                sources: None,
                 profile_is_admin: false
             }
         )
@@ -385,6 +387,7 @@ async fn status_handoff_is_transactional_and_revision_guarded() {
             role: "user",
             tier_id: "free",
             tier_until: None,
+            sources: None,
             profile_is_admin: false,
         },
     )
@@ -437,6 +440,7 @@ async fn access_handoff_preserves_credentials_and_rolls_back_with_caller() {
                 role: "user",
                 tier_id: "free",
                 tier_until: None,
+                sources: None,
                 profile_is_admin: false,
             },
         )
@@ -458,6 +462,7 @@ async fn access_handoff_preserves_credentials_and_rolls_back_with_caller() {
                 role: "user",
                 tier_id: "free",
                 tier_until: None,
+                sources: None,
                 profile_is_admin: false,
             }
         )
@@ -474,6 +479,7 @@ async fn access_handoff_preserves_credentials_and_rolls_back_with_caller() {
             role: "user",
             tier_id: "free",
             tier_until: None,
+            sources: None,
             profile_is_admin: false,
         },
     )
@@ -994,6 +1000,7 @@ impl crate::api::Host for AuthHost<'_> {
                 role: "user",
                 tier_id: "free",
                 tier_until: None,
+                sources: None,
                 profile_is_admin: false,
             },
         )
@@ -1850,6 +1857,7 @@ async fn every_identity_change_raises_auth_epoch_and_a_missing_account_has_none(
             role: "user",
             tier_id: "free",
             tier_until: None,
+            sources: None,
             profile_is_admin: false,
         },
     )
@@ -1956,6 +1964,7 @@ fn test_access(status: AccountStatus, role: &str, tier: &str) -> AccessMutation<
             _ => "free",
         },
         tier_until: None,
+        sources: None,
         profile_is_admin: role == "administrator",
     }
 }

@@ -60,7 +60,7 @@ pub fn inherited(policy: &Value, tier: &str) -> Vec<String> {
     }
 }
 /// The latest end date a tier may be given (the last second of the year 9999, Unix seconds).
-const LATEST_TIER_END: u64 = 253_402_300_799;
+pub const LATEST_TIER_END: u64 = 253_402_300_799;
 /// Whether `tier` may be given the end date `until` (Unix seconds) at `now`: only a tier ranked
 /// above Free and below Administrator ends, and only in the future, since an ended tier
 /// returns the account to Free.
@@ -78,6 +78,28 @@ pub fn tier_end_allowed(policy: &Value, tier: &str, until: u64, now: u64) -> Res
         bail!("A tier's end date must be in the future");
     }
     Ok(())
+}
+/// Whether `tier` may be granted by a paid subscription or given an end date: it exists and
+/// ranks above Free and below Administrator (no other tier, never Administrator).
+pub fn grantable(policy: &Value, tier: &str) -> Result<()> {
+    let ids = order(policy)?;
+    let rank = |id: &str| ids.iter().position(|v| v == id);
+    match (rank(tier), rank(crate::FREE_TIER)) {
+        (Some(tier_rank), Some(free)) if tier_rank < free && tier != crate::ADMINISTRATOR_TIER => {
+            Ok(())
+        }
+        _ => bail!("Only a tier above Free and below Administrator can be granted"),
+    }
+}
+/// The higher-ranked of two tiers; a tier missing from the ladder ranks lowest.
+pub fn higher<'a>(policy: &Value, left: &'a str, right: &'a str) -> Result<&'a str> {
+    let ids = order(policy)?;
+    let rank = |id: &str| ids.iter().position(|v| v == id).unwrap_or(usize::MAX);
+    Ok(if rank(right) < rank(left) {
+        right
+    } else {
+        left
+    })
 }
 pub fn effective(policy: &Value, id: &str) -> Result<Tier> {
     let ids = order(policy)?;
@@ -177,8 +199,29 @@ mod tests {
         assert_eq!(policy["tier_names"]["plus"], "Plus");
         let plus = effective(&policy, "plus").unwrap();
         assert!(plus.allows_model("any-catalog-model"));
-        assert_eq!(plus.max_active_runs, 25);
+        // Provisional values that fit the server's 10 runs at once (spec 8.2).
+        assert_eq!(plus.max_active_runs, 9);
+        assert_eq!(plus.owner_limits.runs_at_once, Some(9));
+        crate::run_limits::check_ceiling(&policy, 10).unwrap();
+        assert!(crate::run_limits::check_ceiling(&policy, 8).is_err());
         assert_eq!(inherited(&policy, "plus"), ["plus", "free", "anonymous"]);
+    }
+    #[test]
+    fn paid_grants_are_only_tiers_between_free_and_administrator() {
+        let tier = |id: &str| json!({"id":id,"revision":1,"allowed_models":["*"],"max_sessions":8,"max_active_runs":2});
+        let policy = json!({"tiers":{"administrator":tier("administrator"),"plus":tier("plus"),
+            "free":tier("free"),"anonymous":tier("anonymous")},
+            "tier_order":["administrator","plus","free","anonymous"]});
+        grantable(&policy, "plus").unwrap();
+        for id in ["administrator", "free", "anonymous", "gold", ""] {
+            assert!(grantable(&policy, id).is_err(), "{id}");
+        }
+        assert_eq!(higher(&policy, "free", "plus").unwrap(), "plus");
+        assert_eq!(
+            higher(&policy, "administrator", "plus").unwrap(),
+            "administrator"
+        );
+        assert_eq!(higher(&policy, "gold", "free").unwrap(), "free");
     }
     #[test]
     fn only_a_tier_between_free_and_administrator_ends_and_only_later() {

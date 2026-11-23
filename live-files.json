@@ -12,6 +12,7 @@
     "abilities/*/_group.svg",
     "abilities/Administrator/codebase_admin/tools/file_search/find-ranking.json",
     "config/access/*.settings.json",
+    "config/access/billing.json",
     "config/access/policy.json",
     "config/accounts/*.settings.json",
     "config/accounts/authentication.json",

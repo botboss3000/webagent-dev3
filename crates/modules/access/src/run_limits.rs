@@ -26,6 +26,14 @@ pub struct RunLimits {
     pub concurrent_commands_per_run: Option<u32>,
     /// Commands one account's runs may have going at once.
     pub concurrent_commands_per_user: Option<u32>,
+    /// Ordinary run slots kept for agents whose owner is on a paid tier (ranked above Free,
+    /// below Administrator): runs on other agents (Free) may hold at most the ordinary
+    /// ceiling less this many. 0 keeps nothing back; slots are never held empty for long,
+    /// since a Free run past `free_max_wait_seconds` is no longer held back.
+    pub plus_reserved_runs: u32,
+    /// Seconds a Free run waits before it is served like a paid one (first in line and not
+    /// held back by `plus_reserved_runs`), so Free is slowed, never starved.
+    pub free_max_wait_seconds: u32,
 }
 
 impl Default for RunLimits {
@@ -38,6 +46,8 @@ impl Default for RunLimits {
             command_cpu_seconds_per_user_day: Some(14_400),
             concurrent_commands_per_run: Some(2),
             concurrent_commands_per_user: Some(4),
+            plus_reserved_runs: 0,
+            free_max_wait_seconds: 120,
         }
     }
 }
@@ -55,6 +65,12 @@ impl RunLimits {
             .map_err(|error| anyhow!("Invalid run_limits policy: {error}"))?;
         if limits.reserved_admin_runs > 64 {
             bail!("run_limits.reserved_admin_runs must be 0..=64");
+        }
+        if limits.plus_reserved_runs > 64 {
+            bail!("run_limits.plus_reserved_runs must be 0..=64");
+        }
+        if limits.free_max_wait_seconds > 86_400 {
+            bail!("run_limits.free_max_wait_seconds must be 0..=86400");
         }
         if limits
             .max_active_runs_per_agent
@@ -114,6 +130,52 @@ impl RunLimits {
         let reserved = usize::try_from(self.reserved_admin_runs).unwrap_or(usize::MAX);
         (global != 0).then(|| global.saturating_sub(reserved).max(1))
     }
+
+    /// Held slots Free runs may take at once: the ordinary ceiling less `plus_reserved_runs`,
+    /// at least 1 (`None`: nothing is kept back).
+    #[must_use]
+    pub fn free_cap(&self, global: usize) -> Option<usize> {
+        let reserved = usize::try_from(self.plus_reserved_runs).unwrap_or(usize::MAX);
+        if reserved == 0 {
+            return None;
+        }
+        self.ordinary_ceiling(global)
+            .map(|ordinary| ordinary.saturating_sub(reserved).max(1))
+    }
+}
+
+/// Refuse a policy whose tier values ask for more runs at once than the server can hold
+/// (plus tier spec 8.2): every tier but Administrator's `max_active_runs` and owner limits'
+/// `runs_at_once` and `agent_users_at_once` must be at most `ceiling`, the loop's
+/// `scheduler.max_active_runs` (0: no ceiling, nothing to check).
+pub fn check_ceiling(policy: &Value, ceiling: usize) -> Result<()> {
+    if ceiling == 0 {
+        return Ok(());
+    }
+    for (id, definition) in policy["tiers"].as_object().into_iter().flatten() {
+        if id == crate::ADMINISTRATOR_TIER {
+            continue;
+        }
+        let owner = &definition["owner_limits"];
+        for (name, value) in [
+            ("max_active_runs", &definition["max_active_runs"]),
+            ("owner_limits.runs_at_once", &owner["runs_at_once"]),
+            (
+                "owner_limits.agent_users_at_once",
+                &owner["agent_users_at_once"],
+            ),
+        ] {
+            if value
+                .as_u64()
+                .is_some_and(|value| value > u64::try_from(ceiling).unwrap_or(u64::MAX))
+            {
+                bail!(
+                    "Tier {id}: {name} {value} is above the server's limit of {ceiling} runs at once"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The stricter of two optional limits (absent means no limit).
@@ -171,6 +233,32 @@ mod tests {
         ] {
             assert!(RunLimits::from_policy(&bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn tier_run_values_above_the_server_limit_are_refused_except_administrators() {
+        let policy = |plus: u64, owner: u64| {
+            json!({"tiers":{"administrator":{"max_active_runs":200},
+                "plus":{"max_active_runs":plus,"owner_limits":{"runs_at_once":owner,
+                "agent_users_at_once":3}},"free":{"max_active_runs":2}}})
+        };
+        check_ceiling(&policy(10, 9), 10).unwrap();
+        check_ceiling(&policy(25, 25), 0).unwrap();
+        let refused = check_ceiling(&policy(25, 9), 10).unwrap_err().to_string();
+        assert!(
+            refused.contains("Tier plus: max_active_runs 25"),
+            "{refused}"
+        );
+        assert!(check_ceiling(&policy(9, 11), 10).is_err());
+        // Free's cap keeps the paid reserve back from the ordinary ceiling, at least 1.
+        let mut limits = RunLimits::default();
+        assert_eq!(limits.free_cap(10), None);
+        limits.plus_reserved_runs = 3;
+        assert_eq!(limits.free_cap(10), Some(6));
+        limits.plus_reserved_runs = 20;
+        assert_eq!(limits.free_cap(10), Some(1));
+        assert_eq!(limits.free_cap(0), None);
+        assert!(RunLimits::from_policy(&json!({"run_limits":{"plus_reserved_runs":65}})).is_err());
     }
 
     #[test]

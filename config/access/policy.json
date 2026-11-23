@@ -50,10 +50,12 @@
     "command_cpu_seconds_per_user_day": 14400,
     "concurrent_commands_per_run": 2,
     "concurrent_commands_per_user": 4,
+    "free_max_wait_seconds": 120,
     "max_active_runs_per_agent": null,
+    "plus_reserved_runs": 0,
     "reserved_admin_runs": 1
   },
-  "revision": 65,
+  "revision": 66,
   "storage": {
     "compress_idle_days": 7,
     "compression": {
@@ -88,7 +90,7 @@
       "free": {
         "agent_storage_mb": 50,
         "max_published_agents": 2,
-        "user_storage_mb": 100
+        "user_storage_mb": 1024
       },
       "plus": {
         "agent_storage_mb": 50,
@@ -145,11 +147,14 @@
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 10,
+      "revision": 11,
       "owner_limits": {
         "agent_users": 20,
         "agent_users_at_once": 3,
-        "public_visitors": false
+        "automations": 3,
+        "compute_seconds_per_day": 900,
+        "public_visitors": false,
+        "runs_at_once": 2
       }
     },
     "plus": {
@@ -157,14 +162,17 @@
         "*"
       ],
       "id": "plus",
-      "max_active_runs": 25,
+      "max_active_runs": 9,
       "max_sessions": 100,
       "model_policy": null,
-      "revision": 2,
+      "revision": 3,
       "owner_limits": {
         "agent_users": 500,
-        "agent_users_at_once": 25,
-        "public_visitors": true
+        "agent_users_at_once": 9,
+        "automations": 50,
+        "compute_seconds_per_day": 18000,
+        "public_visitors": true,
+        "runs_at_once": 9
       }
     }
   }

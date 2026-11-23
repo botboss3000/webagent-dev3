@@ -2317,6 +2317,17 @@ impl<
                 )
                 .await?
                 {
+                    // The account's paused runs resume at the next UTC day through its
+                    // `limit_resume` due row (due row first, then the run).
+                    let pool = ScopedStorage::application_pool(app.store.records());
+                    let account = crate::ports::Records::current_user_id(app.store.records());
+                    crate::due::earlier(
+                        pool,
+                        account,
+                        crate::due::LIMIT_RESUME,
+                        crate::usage_ledger::next_reset(crate::now()),
+                    )
+                    .await?;
                     run["status"] = json!("paused");
                     run["error"] = json!(reason);
                     app.save(&mut run).await?;
