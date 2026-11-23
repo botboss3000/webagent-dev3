@@ -73,7 +73,7 @@ impl Default for Settings {
                 answer_seconds: 1800,
                 poll_hold_seconds: 10,
                 pairing_code_seconds: 600,
-                store_poll_ms: 250,
+                store_poll_ms: 100,
                 heartbeat_timeout_seconds: 15,
                 client: BridgeClient {
                     heartbeat_seconds: 5,

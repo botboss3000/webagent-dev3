@@ -14,7 +14,7 @@
     "offer_lease_seconds": 15,
     "pairing_code_seconds": 600,
     "poll_hold_seconds": 10,
-    "store_poll_ms": 250,
+    "store_poll_ms": 100,
     "unclaimed_call_seconds": 15
   },
   "schema_version": 1,

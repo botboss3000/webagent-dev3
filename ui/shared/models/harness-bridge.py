@@ -148,7 +148,7 @@ Per-chat files: work/harness-bridge/sessions/<webagent-session>/. `usage [--json
 bridge keeps on this computer (per-chat folders and the harnesses' session stores); `cleanup [--dry-run]`
 runs the clean-up that also runs on its schedule (cleanup.json; daily 03:00 by default).
 """
-import base64, calendar, difflib, hashlib, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request, uuid
+import base64, calendar, difflib, hashlib, http.client, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
@@ -477,26 +477,69 @@ class Gone(Exception):
     """The call is no longer this process's: offered elsewhere, finished or revoked."""
 
 
+# One kept-alive connection per thread (the poll loop, each call's thread): a new TLS connection costs
+# 0.1-0.15 s, and a call makes several requests (ack, heartbeats, reply).
+CONNECTIONS = threading.local()
+
+
+def connection(base, timeout):
+    parts = urllib.parse.urlsplit(base)
+    held = getattr(CONNECTIONS, "held", None)
+    if held is None or held[0] != base:
+        if held:
+            held[1].close()
+        kind = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+        held = CONNECTIONS.held = (base, kind(parts.netloc, timeout=timeout))
+    held[1].timeout = timeout
+    if held[1].sock:
+        held[1].sock.settimeout(timeout)
+    return held[1]
+
+
+def drop_connection():
+    held = getattr(CONNECTIONS, "held", None)
+    if held:
+        held[1].close()
+    CONNECTIONS.held = None
+
+
 def post(path, body, timeout=60, url=None):
     headers = {"Content-Type": "application/json", "User-Agent": "harness-bridge/2"}
     if url is None:
         headers["Authorization"] = "Bearer " + secret()
     # A manual `reply` answers as the process that fetched the call (saved with it).
-    request = urllib.request.Request((url or URL) + path, json.dumps({"instance": INSTANCE, **body}).encode(),
-                                     method="POST", headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as error:
-        # Any server error is the server's: it restarts during a deploy, so the poll is retried.
-        if error.code >= 500:
-            raise Transient(f"HTTP {error.code}")
-        detail = error.read()[:300].decode(errors="replace")
-        if error.code in (404, 409):
-            raise Gone(f"HTTP {error.code} {detail}")
-        sys.exit(f"{path}: HTTP {error.code} {detail}")
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
-        raise Transient(str(error))
+    data = json.dumps({"instance": INSTANCE, **body}).encode()
+    base = (url or URL).rstrip("/")
+    prefix = urllib.parse.urlsplit(base).path
+    for attempt in (1, 2):
+        conn = connection(base, timeout)
+        reused = conn.sock is not None
+        try:
+            conn.request("POST", prefix + path, data, headers)
+            response = conn.getresponse()
+            raw = response.read()
+        except (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError) as error:
+            drop_connection()
+            # A kept-alive connection the server already closed: send again on a new one.
+            if reused and attempt == 1:
+                continue
+            raise Transient(str(error))
+        except (OSError, http.client.HTTPException) as error:
+            drop_connection()
+            raise Transient(str(error))
+        break
+    if response.getheader("Connection", "").lower() == "close":
+        drop_connection()
+    status = response.status
+    if status < 300:
+        return json.loads(raw)
+    # Any server error is the server's: it restarts during a deploy, so the poll is retried.
+    if status >= 500:
+        raise Transient(f"HTTP {status}")
+    detail = raw[:300].decode(errors="replace")
+    if status in (404, 409):
+        raise Gone(f"HTTP {status} {detail}")
+    sys.exit(f"{path}: HTTP {status} {detail}")
 
 
 # Harness processes by call id, so a Stop from WebAgent can interrupt the one running that call.
@@ -598,8 +641,6 @@ def fetch(session=None, forks=()):
             stop_calls(response.get("cancelled") or [])
             apply_settings(response.get("settings"))
             call = response["call"]
-            if call:
-                post("/api/v3/harness-bridge/ack", {"id": call["id"]})
         except (Transient, Gone) as error:
             print(f"poll failed ({error}); retrying in 2 s", file=sys.stderr)
             time.sleep(2)
@@ -607,7 +648,19 @@ def fetch(session=None, forks=()):
         if call:
             call["fetched_at"] = time.time()
             call["instance"] = INSTANCE
+            # The ack goes out while the harness starts. A call WebAgent no longer offers to this process
+            # (taken back, or the ack lost) is stopped here and never replied to; WebAgent offers it again.
+            threading.Thread(target=acknowledge, args=(call["id"],), daemon=True).start()
             return call
+
+
+def acknowledge(call_id):
+    try:
+        post("/api/v3/harness-bridge/ack", {"id": call_id})
+    except (Transient, Gone) as error:
+        print(f"{call_id}: not acknowledged ({error}); stopping it", file=sys.stderr)
+        GONE.add(call_id)
+        stop_calls([call_id])
 
 
 def cmd_pair(url, code, name):
