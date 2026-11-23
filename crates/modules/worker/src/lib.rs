@@ -106,6 +106,20 @@ pub async fn serve(config: Config) -> io::Result<()> {
     std::fs::set_permissions(&config.socket, std::fs::Permissions::from_mode(0o660))?;
     let active = Arc::new(Active::default());
     let persistent = Arc::new(Persistent::new(&config));
+    {
+        // C6: preview ports go back once nothing runs in their workspace (checked each minute).
+        let (active, persistent, files) = (
+            Arc::clone(&active),
+            Arc::clone(&persistent),
+            config.files.clone(),
+        );
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                release_ports(&files, &active, &persistent).await;
+            }
+        });
+    }
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -182,6 +196,43 @@ fn existing_workspace(roots: &files::Roots, request: &Value) -> Option<PathBuf> 
     }
     let path = std::fs::canonicalize(&roots.workspaces).ok()?.join(session);
     path.is_dir().then_some(path)
+}
+
+/// Releases the preview port claims of workspaces with no running command, terminal or tunnel
+/// that were not used for [`commands::CLAIM_IDLE`] (see [`commands::release_idle_ports`]).
+async fn release_ports(roots: &files::Roots, active: &Active, persistent: &Persistent) {
+    let workspaces = {
+        let root = roots.workspaces.clone();
+        tokio::task::spawn_blocking(move || -> Vec<(String, PathBuf, String)> {
+            let Ok(root) = std::fs::canonicalize(root) else {
+                return Vec::new();
+            };
+            std::fs::read_dir(&root)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|entry| {
+                    let base = entry.path();
+                    let sid = entry.file_name().to_str()?.to_owned();
+                    let name = commands::claim_name(&base).ok()?;
+                    Some((sid, base, name))
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
+    };
+    let busy: std::collections::HashSet<String> = workspaces
+        .into_iter()
+        .filter(|(sid, base, _)| {
+            active.busy(sid)
+                || persistent.terminals.count(base) > 0
+                || persistent.tunnels.count(base) > 0
+        })
+        .map(|(_, _, name)| name)
+        .collect();
+    let claims = roots.port_claims.clone();
+    let _ = tokio::task::spawn_blocking(move || commands::release_idle_ports(&claims, &busy)).await;
 }
 
 /// Where the Sandbox ability publishes each session's folder size.

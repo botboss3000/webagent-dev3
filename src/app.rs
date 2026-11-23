@@ -996,6 +996,11 @@ async fn run_process() -> Result<()> {
         }),
     ));
     let store = Store::open(&root).await?;
+    // C6: the shared application database keeps a connection open; checkpoint it when idle.
+    tokio::spawn(webagent_storage::pool::checkpoint_when_idle(
+        store.app_pool.clone(),
+        root.join("db/app.db-wal"),
+    ));
     // Plugin packages follow the API's role in a desktop process.
     let service_role = if desktop { "api" } else { role.as_str() };
     diagnostics::init(&root, &store, service_role).await;

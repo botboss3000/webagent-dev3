@@ -6,6 +6,10 @@ use crate::{
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
+/// Finished background task records (cancelled, failed, or completed and delivered) kept per
+/// account; older ones are deleted when a new task is created (C6).
+pub const FINISHED_KEPT: i64 = 100;
+
 impl<
         'a,
         R: Records,
@@ -166,8 +170,37 @@ impl<
             saved["revision"] = json!(expected.map_or(0, |value| value + 1));
             sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(format!("background_task:{id}")).bind(self.records.seal(&saved)?).execute(&mut *tx).await?;
+            if expected.is_none() {
+                prune_finished(&mut tx).await?;
+            }
             tx.commit().await?;
             Ok(true)
         }
     }
+}
+
+/// Deletes the records, index rows and delivery marks of finished tasks past the newest
+/// [`FINISHED_KEPT`] (by creation order). Queued, running and undelivered tasks are never
+/// touched, so no result is lost; a later read of a pruned task finds nothing.
+async fn prune_finished(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
+    const OLD: &str = "SELECT b.id FROM background_task_index b WHERE b.status IN ('cancelled','failed') OR (b.status='completed' AND EXISTS (SELECT 1 FROM background_task_delivery d WHERE d.id=b.id)) ORDER BY b.rowid DESC LIMIT -1 OFFSET ?";
+    let old: Vec<String> = sqlx::query_scalar(OLD)
+        .bind(FINISHED_KEPT)
+        .fetch_all(&mut **tx)
+        .await?;
+    for id in old {
+        sqlx::query("DELETE FROM docs WHERE key=?")
+            .bind(format!("background_task:{id}"))
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM background_task_delivery WHERE id=?")
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM background_task_index WHERE id=?")
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
 }

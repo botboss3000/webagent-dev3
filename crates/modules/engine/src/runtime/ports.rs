@@ -21,6 +21,8 @@ pub trait ScopedStorage:
         key: &'a str,
         value: &'a Value,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
+    /// Delete a document (absent: nothing changes).
+    fn delete<'a>(&'a self, key: &'a str) -> impl Future<Output = Result<()>> + Send + 'a;
     /// An attachment record with its file bytes filled into `data`, in memory only.
     fn attachment_with_data(
         &self,

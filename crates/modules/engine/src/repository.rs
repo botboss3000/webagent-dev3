@@ -1363,7 +1363,7 @@ impl<
     }
 }
 
-mod background;
+pub(crate) mod background;
 
 /// Events that replace the session's history checkpoint: a compaction or a major reorder.
 fn reshapes_context(kind: &str) -> bool {

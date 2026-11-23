@@ -625,3 +625,38 @@ async fn failed_or_error_stopped_runs_keep_one_notice_row_until_they_move_on() {
         .unwrap();
     assert_eq!(role, "notice");
 }
+
+#[tokio::test]
+async fn finished_background_tasks_are_pruned_past_the_newest_kept_and_live_ones_stay() {
+    let f = Fixture::new().await;
+    let _run = f.initial().await;
+    let kept = crate::repository::background::FINISHED_KEPT as usize;
+    // One queued and one completed-but-undelivered task first: they are never pruned.
+    for (id, status) in [("live", "queued"), ("undelivered", "completed")] {
+        let task = json!({"id":id,"user_id":"admin","session_id":"s","status":status,"revision":0});
+        assert!(f.repo().background_cas(&task, None).await.unwrap());
+    }
+    for n in 0..kept + 5 {
+        let task = json!({"id":format!("done-{n}"),"user_id":"admin","session_id":"s","status":"failed","revision":0});
+        assert!(f.repo().background_cas(&task, None).await.unwrap());
+    }
+    // The newest `kept` finished records remain (the last creation pruned to that number).
+    assert_eq!(f.count("background_task_index").await, kept as i64 + 2);
+    for gone in 0..5 {
+        assert!(f
+            .repo()
+            .background_get(&format!("done-{gone}"))
+            .await
+            .unwrap()
+            .is_none());
+    }
+    assert!(f
+        .repo()
+        .background_get(&format!("done-{}", kept + 4))
+        .await
+        .unwrap()
+        .is_some());
+    for id in ["live", "undelivered"] {
+        assert!(f.repo().background_get(id).await.unwrap().is_some());
+    }
+}

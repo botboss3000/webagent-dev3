@@ -136,6 +136,12 @@ pub(crate) fn network_ports(directory: &Path, base: &Path) -> io::Result<Vec<u16
         if ports.len() != 4 || ports.iter().any(|port| !PREVIEW_PORTS.contains(port)) {
             return Err(invalid());
         }
+        // In use now: [`release_idle_ports`] keeps a claim touched within `CLAIM_IDLE`.
+        OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)?
+            .set_modified(std::time::SystemTime::now())?;
         return Ok(ports);
     }
     let mut claimed = BTreeSet::new();
@@ -166,6 +172,54 @@ pub(crate) fn network_ports(directory: &Path, base: &Path) -> io::Result<Vec<u16
     file.write_all(serde_json::to_string(&ports)?.as_bytes())?;
     file.sync_all()?;
     Ok(ports)
+}
+
+/// A claim not used for this long, in a workspace with nothing running, is released.
+pub(crate) const CLAIM_IDLE: Duration = Duration::from_secs(600);
+
+/// The claim file name of a workspace (canonical path digest), as [`network_ports`] names it.
+pub(crate) fn claim_name(base: &Path) -> io::Result<String> {
+    let key = std::fs::canonicalize(base)?;
+    Ok(format!(
+        "{}.json",
+        hex::encode(Sha256::digest(key.to_string_lossy().as_bytes()))
+    ))
+}
+
+/// C6: releases the preview port claims in `directory` that are not in `busy` (the claim
+/// names of workspaces with a running command, terminal or tunnel) and were not used for
+/// [`CLAIM_IDLE`], under the same lock as claiming. A workspace whose session ended, or
+/// whose terminals and commands all ended, gets ports again when it next runs something.
+/// Returns how many it released.
+pub(crate) fn release_idle_ports(
+    directory: &Path,
+    busy: &std::collections::HashSet<String>,
+) -> io::Result<usize> {
+    if !directory.is_dir() {
+        return Ok(0);
+    }
+    let lock = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(directory.join("lock"))?;
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
+    let mut released = 0;
+    for entry in std::fs::read_dir(directory)?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".json") || busy.contains(&name) {
+            continue;
+        }
+        let idle = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age >= CLAIM_IDLE);
+        if idle && std::fs::remove_file(entry.path()).is_ok() {
+            released += 1;
+        }
+    }
+    Ok(released)
 }
 
 /// Whether nothing listens on `127.0.0.1:port` now (no address reuse, as Python's bind).
@@ -400,4 +454,41 @@ async fn terminate(session: &mut Session) -> Option<i32> {
         }
     };
     status.and_then(exit_code)
+}
+
+#[cfg(test)]
+mod port_release_tests {
+    use super::*;
+
+    #[test]
+    fn idle_claims_are_released_and_busy_or_recent_ones_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let claims = root.path().join("claims");
+        let (busy, idle, recent) = (
+            root.path().join("a"),
+            root.path().join("b"),
+            root.path().join("c"),
+        );
+        for base in [&busy, &idle, &recent] {
+            std::fs::create_dir(base).unwrap();
+            network_ports(&claims, base).unwrap();
+        }
+        let old = std::time::SystemTime::now() - CLAIM_IDLE - Duration::from_secs(5);
+        for base in [&busy, &idle] {
+            let path = claims.join(claim_name(base).unwrap());
+            OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        let busy_names = std::collections::HashSet::from([claim_name(&busy).unwrap()]);
+        assert_eq!(release_idle_ports(&claims, &busy_names).unwrap(), 1);
+        assert!(!claims.join(claim_name(&idle).unwrap()).exists());
+        assert!(claims.join(claim_name(&busy).unwrap()).exists());
+        assert!(claims.join(claim_name(&recent).unwrap()).exists());
+        // The released workspace claims again when it next runs something.
+        assert_eq!(network_ports(&claims, &idle).unwrap().len(), 4);
+    }
 }

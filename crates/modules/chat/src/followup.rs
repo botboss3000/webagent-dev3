@@ -156,12 +156,44 @@ pub async fn queue_read_tx<C: RecordCodec>(
     Ok(q)
 }
 
+/// Finished entries (delivered, cancelled or rejected) a queue keeps, newest last (C6); older
+/// ones are dropped when the queue is written. Open entries are always kept. Their run slots are
+/// released by the slot reconcile, which also releases a slot whose entry is gone.
+pub const FINISHED_KEPT: usize = 32;
+
+/// Drops all but the newest [`FINISHED_KEPT`] finished entries, keeping the order.
+pub fn prune_finished(q: &mut Value) {
+    let Some(entries) = q["entries"].as_array_mut() else {
+        return;
+    };
+    let finished = |entry: &Value| {
+        matches!(
+            entry["status"].as_str(),
+            Some("delivered" | "cancelled" | "rejected")
+        )
+    };
+    let mut excess = entries
+        .iter()
+        .filter(|entry| finished(entry))
+        .count()
+        .saturating_sub(FINISHED_KEPT);
+    entries.retain(|entry| {
+        if excess > 0 && finished(entry) {
+            excess -= 1;
+            false
+        } else {
+            true
+        }
+    });
+}
+
 pub async fn queue_write_tx<C: RecordCodec>(
     codec: &C,
     t: &mut Transaction<'_, Sqlite>,
     q: &mut Value,
 ) -> Result<()> {
     q["revision"] = json!(q["revision"].as_u64().unwrap_or(0) + 1);
+    prune_finished(q);
     let s = q["session_id"].as_str().unwrap();
     sqlx::query(
         "INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -195,4 +227,29 @@ pub async fn queue_reserve<C: RecordCodec>(
         return Err(anyhow!("Session not found"));
     }
     require_active_session(codec, t, s).await
+}
+
+#[cfg(test)]
+mod pruning_tests {
+    use serde_json::{json, Value};
+
+    #[test]
+    fn a_queue_keeps_its_open_entries_and_only_the_newest_finished_ones() {
+        let mut entries: Vec<Value> = (0..40)
+            .map(|n| json!({"id":format!("f{n}"),"status":"delivered"}))
+            .collect();
+        entries.insert(3, json!({"id":"open","status":"pending"}));
+        let mut q = json!({"session_id":"s","entries":entries});
+        super::prune_finished(&mut q);
+        let ids: Vec<&str> = q["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), super::FINISHED_KEPT + 1);
+        assert_eq!(ids[0], "open");
+        assert_eq!(ids[1], "f8");
+        assert_eq!(*ids.last().unwrap(), "f39");
+    }
 }

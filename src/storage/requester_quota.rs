@@ -216,6 +216,9 @@ impl Store {
                 ));
             }
             let rows=sqlx::query("SELECT key,value FROM docs WHERE (key>='manager_review:' AND key<'manager_review;') OR (key>='followup_queue:' AND key<'followup_queue;')").fetch_all(&pool).await?;
+            // Follow-up review slots whose entry still exists; a held one whose entry was
+            // pruned from its queue (C6) or whose queue is gone is released below.
+            let mut entries_seen = std::collections::HashSet::new();
             for row in rows {
                 let key: String = row.get("key");
                 let value = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
@@ -239,6 +242,7 @@ impl Store {
                         // nothing; every message admission used to repeat one such update
                         // for each finished follow-up the account ever had.
                         let slot = format!("followup-review:{owner}:{sid}:{id}");
+                        entries_seen.insert(slot.clone());
                         if reviewing || (terminal && held.contains(&slot)) {
                             records.push((
                                 slot,
@@ -286,6 +290,18 @@ impl Store {
                     sid.to_owned(),
                     Slot::finished(terminal),
                 ));
+            }
+            let prefix = format!("followup-review:{owner}:");
+            for slot in held.iter().filter(|slot| slot.starts_with(&prefix)) {
+                if !entries_seen.contains(slot) {
+                    records.push((
+                        slot.clone(),
+                        owner.clone(),
+                        owner.clone(),
+                        String::new(),
+                        Slot::Finish,
+                    ));
+                }
             }
         }
         let mut tx = self.app_pool.begin().await?;
@@ -926,5 +942,35 @@ mod tests {
         drop(first);
         let third = CommandSlot::take(&access, "r7").unwrap();
         drop((second, third));
+    }
+
+    #[tokio::test]
+    async fn a_follow_up_review_slot_is_released_once_its_entry_is_pruned() {
+        let (_root, store) = opened().await;
+        let user = &free_accounts(&store, &["followups"]).await[0];
+        let me = user.current_user_id().to_owned();
+        let slot = format!("followup-review:{me}:s:e1");
+        let queue = |entries: Value| json!({"schema_version":1,"session_id":"s","revision":0,"held":false,"entries":entries});
+        user.put(
+            "followup_queue:s",
+            &queue(json!([{"id":"e1","status":"pending","review_status":"reviewing"}])),
+        )
+        .await
+        .unwrap();
+        user.reconcile_requester_slots().await.unwrap();
+        let released = || async {
+            sqlx::query_scalar::<_, i64>("SELECT released FROM requester_run_slots WHERE run_id=?")
+                .bind(&slot)
+                .fetch_one(&store.app_pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(released().await, 0, "a reviewing entry holds its slot");
+        // The entry is pruned from its queue (C6): the slot is released, not leaked.
+        user.put("followup_queue:s", &queue(json!([])))
+            .await
+            .unwrap();
+        user.reconcile_requester_slots().await.unwrap();
+        assert_eq!(released().await, 1);
     }
 }

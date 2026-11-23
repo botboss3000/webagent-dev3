@@ -350,6 +350,12 @@ impl webagent_engine::runtime::ports::ScopedStorage for Store {
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         Store::put(self, key, value)
     }
+    fn delete<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        StoreCore::delete(self, key)
+    }
     fn attachment_with_data(
         &self,
         record: Value,

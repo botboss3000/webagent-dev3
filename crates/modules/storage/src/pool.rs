@@ -18,6 +18,38 @@ use std::{
 use tokio::sync::RwLock;
 use webagent_platform::fs::PermissionsExt;
 
+/// Bytes a database's write-ahead log is cut back to after a checkpoint (C6).
+pub const WAL_SIZE_LIMIT: u64 = 16 * 1024 * 1024;
+/// How often [`checkpoint_when_idle`] looks at the log.
+const IDLE_CHECK: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// C6: checkpoint `pool`'s database (its log is `wal`) once it has gone idle, that is when the
+/// log has not changed for a whole check interval. Account databases need none: SQLite
+/// checkpoints a database when its last connection closes, and idle account pools close theirs
+/// within seconds. The shared application database keeps a connection open, so without this
+/// its log only shrinks when a write happens to complete a checkpoint. A passive checkpoint
+/// never waits for readers or blocks writers; the next write then restarts the log and cuts it
+/// to [`WAL_SIZE_LIMIT`]. Runs until the pool is closed.
+pub async fn checkpoint_when_idle(pool: SqlitePool, wal: std::path::PathBuf) {
+    let mut last: Option<(u64, std::time::SystemTime)> = None;
+    loop {
+        tokio::time::sleep(IDLE_CHECK).await;
+        if pool.is_closed() {
+            return;
+        }
+        let mark = std::fs::metadata(&wal)
+            .ok()
+            .and_then(|meta| Some((meta.len(), meta.modified().ok()?)));
+        if mark.is_some_and(|(len, _)| len > 0) && mark == last {
+            // A busy or failed checkpoint is tried again at the next idle check.
+            let _ = sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
+                .execute(&pool)
+                .await;
+        }
+        last = mark;
+    }
+}
+
 /// Open a durable WAL authority with bounded connections, profile permissions and the tables its owner needs.
 /// `events` adds the event log (user and application planes); `runs` adds the user-plane run schema.
 /// Notification staging tables are added by their owner after this returns.
@@ -43,7 +75,10 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Full)
-        .busy_timeout(std::time::Duration::from_secs(5));
+        .busy_timeout(std::time::Duration::from_secs(5))
+        // C6: after a checkpoint the log file is cut back to this size instead of keeping
+        // its largest size for good.
+        .pragma("journal_size_limit", WAL_SIZE_LIMIT.to_string());
     // The application plane (events without runs: app.db) is shared by every account's
     // sign-in, directory, scan and relay access, so it gets twice the connections, keeps one
     // open and closes idle ones after 60 s; user and agent planes keep 4.

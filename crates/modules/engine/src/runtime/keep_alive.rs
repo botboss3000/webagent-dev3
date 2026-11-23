@@ -296,7 +296,10 @@ impl<
             let Some(mut timing) = self.store.get(&key).await? else {
                 continue;
             };
+            // A stub kept by an earlier version: delete it with the rest (C6).
             if timing["stopped"] == true {
+                let session = timing["session_id"].as_str().unwrap_or_default().to_owned();
+                self.keep_alive_stop(&session).await?;
                 continue;
             }
             // Looked at again when its ping is due, or on the next tick once that has passed.
@@ -391,17 +394,17 @@ impl<
         Ok(next)
     }
 
-    /// Stop pinging a session and drop its saved conversation copy.
+    /// Stop pinging a session: delete its timing, its saved conversation copy and its visit
+    /// mark (C6; they used to stay as stubs). A later model call records them again.
     async fn keep_alive_stop(&self, session: &str) -> anyhow::Result<()> {
-        self.store
-            .put(
-                &timing_key(session),
-                &json!({"session_id":session,"stopped":true}),
-            )
-            .await?;
-        self.store
-            .put(&request_key(session), &json!({"session_id":session}))
-            .await
+        for key in [
+            timing_key(session),
+            request_key(session),
+            visit_key(session),
+        ] {
+            self.store.delete(&key).await?;
+        }
+        Ok(())
     }
 
     /// Send one ping; a bridge answers from a fork of the chat's session.
