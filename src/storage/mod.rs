@@ -381,6 +381,7 @@ impl Store {
             UNIQUE(agent_id,slot_name));
             CREATE INDEX IF NOT EXISTS agent_prompts_order ON agent_prompts(agent_id,order_index,slot_name);")
             .execute(&self.agent_pool).await?;
+        webagent_storage::revisions::install_agent(&self.agent_pool).await?;
         let mut tx = self.agent_pool.begin().await?;
         let exists: Option<String> =
             sqlx::query_scalar("SELECT id FROM agents WHERE id='shared_default'")

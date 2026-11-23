@@ -16,6 +16,7 @@ pub mod docs;
 pub mod migration;
 pub mod pool;
 pub mod recovery;
+pub mod revisions;
 pub mod routing;
 pub mod settings;
 #[cfg(test)]

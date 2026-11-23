@@ -90,6 +90,14 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
         .execute(&pool)
         .await?;
     }
+    // Plain revisions of the records access decisions read (`revisions`): the model catalog's
+    // in the application database, the sessions' in each user database.
+    if events && !runs {
+        crate::revisions::install_app(&pool).await?;
+    }
+    if runs {
+        crate::revisions::install_user(&pool).await?;
+    }
     if events && !runs {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS loop_heartbeat(
             singleton INTEGER PRIMARY KEY CHECK(singleton=1),owner TEXT NOT NULL,

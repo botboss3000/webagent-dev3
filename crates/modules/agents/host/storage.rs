@@ -63,6 +63,7 @@ pub(crate) async fn open_agent_pool(root:&Path, agent_id:&str) -> Result<SqliteP
         -- Former recycling-bin statuses become archive statuses on first open.
         UPDATE agents SET status=replace(status,'deleted','archived') WHERE status IN ('deleted','deleted_disabled');")
         .execute(&pool).await?;
+    webagent_storage::revisions::install_agent(&pool).await?;
     Ok(pool)
 }
 
