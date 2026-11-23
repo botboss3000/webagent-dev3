@@ -74,6 +74,40 @@ pub(crate) async fn insert(
     Ok(())
 }
 
+/// The account's record and `auth_epoch` read in one statement, so the pair is consistent.
+pub(crate) async fn record_with_epoch(
+    pool: &SqlitePool,
+    user_id: &str,
+) -> Result<Option<(Vec<u8>, Option<i64>)>> {
+    Ok(
+        sqlx::query_as("SELECT value,auth_epoch FROM user_accounts WHERE user_id=?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?,
+    )
+}
+
+/// One indexed read per request: the account's `auth_epoch` while the sign-in record `key`
+/// still holds exactly `record` (its sealed bytes, compared without decrypting); `None` when
+/// the sign-in was deleted or rewritten, the account is gone or has no epoch.
+pub(crate) async fn sign_in_epoch(
+    pool: &SqlitePool,
+    user_id: &str,
+    key: &str,
+    record: &[u8],
+) -> Result<Option<i64>> {
+    let value: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT auth_epoch FROM user_accounts WHERE user_id=? \
+         AND EXISTS(SELECT 1 FROM docs WHERE key=? AND value=?)",
+    )
+    .bind(user_id)
+    .bind(key)
+    .bind(record)
+    .fetch_optional(pool)
+    .await?;
+    Ok(value.flatten())
+}
+
 /// The account's current `auth_epoch`; `None` when the row or its value is missing, which
 /// callers treat as changed (fail closed).
 pub(crate) async fn auth_epoch(pool: &SqlitePool, user_id: &str) -> Result<Option<i64>> {

@@ -10,6 +10,8 @@ struct App {
     // Authentication actor remains distinct from canonical conversation storage.
     chat_actor: Option<String>,
     chat_access: Option<shared_chat::SessionAccess>,
+    /// The caller of the request this handle serves, set by the authentication middleware.
+    identity: Option<Arc<access::identity::Identity>>,
     abilities: Arc<abilities::Catalog>,
     gate: Arc<Mutex<()>>,
     provider: provider::Provider,
@@ -1051,6 +1053,7 @@ async fn run_process() -> Result<()> {
         store,
         chat_actor: None,
         chat_access: None,
+        identity: None,
         abilities: Arc::new(catalog),
         gate: Arc::new(Mutex::new(())),
         provider: provider::Provider::new().with_bridge(bridge),
@@ -1362,6 +1365,8 @@ impl EngineHostState {
             abilities: view.catalog.clone(),
             chat_actor: view.actor.map(str::to_owned),
             chat_access: view.binding.cloned(),
+            // Tool calls run for the session's actor, never as a request's caller.
+            identity: None,
             runtime: view.handles.runtime.clone(),
             runtime_path: view.handles.runtime_path.clone(),
             compaction_config_path: view.handles.compaction_config_path.clone(),

@@ -210,6 +210,7 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
         store,
         chat_actor: None,
         chat_access: None,
+        identity: None,
         abilities: Arc::new(native_catalog()),
         gate: Arc::new(Mutex::new(())),
         provider: provider::Provider::new(),

@@ -107,7 +107,7 @@ fn username_ok(value: &str) -> bool {
 pub use authentication::{
     hash_password, message_api_authorized, message_api_token_hash, verify_password,
 };
-pub use sessions::IssuedSession;
+pub use sessions::{session_key, IssuedSession};
 pub use sessions::{AuthenticatedSession, RegistrationMode};
 mod protection;
 pub use protection::{session_cookie, session_token, valid_csrf, valid_origin, BrowserLoginBridge};

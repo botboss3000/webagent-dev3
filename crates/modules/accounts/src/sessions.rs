@@ -26,6 +26,10 @@ pub struct AuthenticatedSession {
 pub(crate) fn auth_key(token: &str) -> String {
     format!("auth:{}", webagent_configuration::digest(&json!(token)))
 }
+/// The sign-in record key of a browser cookie value; `None` for a malformed token.
+pub fn session_key(token: &str) -> Option<String> {
+    (token.len() == 36).then(|| auth_key(token))
+}
 impl<C: RecordCodec> Repository<'_, C> {
     /// Revocation checks ownership in the same transaction as deletion.
     pub async fn revoke_session(&self, user: &str, id: &str) -> Result<bool> {
@@ -166,8 +170,18 @@ pub struct SessionCandidate {
     key: String,
     state: Value,
     generation_matches: bool,
+    auth_epoch: Option<i64>,
+    record: Vec<u8>,
 }
 impl SessionCandidate {
+    /// The sign-in record's sealed bytes as read, for later unchanged-record checks.
+    pub fn record(&self) -> &[u8] {
+        &self.record
+    }
+    /// The account's `auth_epoch` read together with the record this candidate came from.
+    pub fn auth_epoch(&self) -> Option<i64> {
+        self.auth_epoch
+    }
     pub fn account_state(&self) -> &Value {
         &self.state
     }
@@ -183,6 +197,12 @@ impl SessionCandidate {
     }
 }
 impl<C: RecordCodec> Repository<'_, C> {
+    /// The account's `auth_epoch` while sign-in record `key` still holds the sealed bytes
+    /// `record` (one indexed read, no decryption); `None` means the remembered identity is
+    /// stale or the sign-in ended.
+    pub async fn sign_in_epoch(&self, user: &str, key: &str, record: &[u8]) -> Result<Option<i64>> {
+        crate::account_rows::sign_in_epoch(self.app_pool, user, key, record).await
+    }
     /// Access page authorization deliberately precedes generation validation in browser middleware.
     pub async fn inspect_session(&self, token: &str, now: u64) -> Result<Option<SessionCandidate>> {
         if token.len() != 36 {
@@ -198,17 +218,20 @@ impl<C: RecordCodec> Repository<'_, C> {
             .bind(key)
             .fetch_optional(self.app_pool)
             .await?;
-        let Some(blob) = blob else {
+        let Some(record) = blob else {
             return Ok(None);
         };
-        let document = self.unseal(&blob)?;
+        let document = self.unseal(&record)?;
         if document["expires"].as_u64().unwrap_or(0) <= now {
             return Ok(None);
         }
         let user = document["user_id"].as_str().unwrap_or("admin");
-        let Some(account) = self.account_by_id(user).await? else {
+        let Some((blob, auth_epoch)) =
+            crate::account_rows::record_with_epoch(self.app_pool, user).await?
+        else {
             return Ok(None);
         };
+        let account = self.unseal(&blob)?;
         let Ok(identity) = crate::identity(&account) else {
             return Ok(None);
         };
@@ -225,6 +248,8 @@ impl<C: RecordCodec> Repository<'_, C> {
             key: key.to_owned(),
             state: crate::access_records::state(&account),
             generation_matches,
+            auth_epoch,
+            record,
         }))
     }
 

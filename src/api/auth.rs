@@ -8,6 +8,7 @@ pub(crate) use crate::account_authentication::{
     setup_admin, setup_status, update_profile, update_session_policy,
 };
 use axum::response::IntoResponse;
+use std::sync::Arc;
 pub(crate) use webagent_accounts::message_api_token_hash;
 use webagent_accounts_host::AccountsStore;
 pub(crate) fn message_api_authorized(expected: Option<&[u8; 32]>, headers: &HeaderMap) -> bool {
@@ -30,27 +31,33 @@ pub(crate) async fn message_api_auth(
         )
         .into_response();
     }
-    let authorized = app
-        .store
-        .account_by_id("admin")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|account| {
-            access::Principal::from_account(&account)
-                .ok()
-                .map(|principal| {
-                    principal.active()
-                        && principal.administrator()
-                        && account["is_approved"] == true
+    let account = app.store.account_by_id("admin").await.ok().flatten();
+    let identity = account.as_ref().and_then(|account| {
+        let principal = access::Principal::from_account(account).ok()?;
+        (principal.active() && principal.administrator() && account["is_approved"] == true).then(
+            || {
+                Arc::new(access::identity::Identity {
+                    principal,
+                    username: account["username"].as_str().unwrap_or_default().to_owned(),
+                    generation: account["generation"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    auth_epoch: None,
+                    kind: access::identity::CredentialKind::MessagingBearer,
+                    credential_key: String::new(),
+                    credential_record: Vec::new(),
+                    agent_id: None,
                 })
-        })
-        .unwrap_or(false);
-    if !authorized {
+            },
+        )
+    });
+    let Some(identity) = identity else {
         return ApiError(StatusCode::UNAUTHORIZED, "Messaging API unavailable".into())
             .into_response();
-    }
+    };
     let mut caller = app.clone();
+    caller.identity = Some(identity);
     caller.store = match app.store.for_user("admin").await {
         Ok(store) => store,
         Err(_) => {
@@ -94,18 +101,41 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
     }
 
     let token = webagent_accounts::session_token(&headers);
-    let candidate = match app
-        .store
-        .accounts_repository()
-        .inspect_session(token, now())
-        .await
-    {
-        Ok(Some(candidate)) => candidate,
-        _ => return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()).into_response(),
+    let at = now();
+    let known = match webagent_accounts::session_key(token) {
+        Some(key) => remembered(&app, &key, at).await,
+        None => None,
     };
-    let principal = match access::Principal::from_account(candidate.account_state()) {
-        Ok(principal) if principal.active() => principal,
-        _ => return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()).into_response(),
+    // A sign-in confirmed unchanged this request, or one read and checked in full.
+    let (principal, signed) = match known {
+        Some(known) => (known.identity.principal.clone(), Some(known)),
+        None => {
+            let candidate = match app
+                .store
+                .accounts_repository()
+                .inspect_session(token, at)
+                .await
+            {
+                Ok(Some(candidate)) => candidate,
+                _ => {
+                    return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into())
+                        .into_response()
+                }
+            };
+            let principal = match access::Principal::from_account(candidate.account_state()) {
+                Ok(principal) if principal.active() => principal,
+                _ => {
+                    return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into())
+                        .into_response()
+                }
+            };
+            let epoch = candidate.auth_epoch();
+            let record = candidate.record().to_vec();
+            let signed = candidate
+                .finish()
+                .map(|session| remember(&app, session, record, principal.clone(), epoch, at));
+            (principal, signed)
+        }
     };
     if principal.role == access::Role::Guest
         && registration::mode(&app).await.unwrap_or_default() != "public_registered"
@@ -123,11 +153,12 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
             return ApiError(StatusCode::FORBIDDEN, "Page access denied".into()).into_response();
         }
     }
-    let Some(session) = candidate.finish() else {
+    let Some(signed) = signed else {
         return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()).into_response();
     };
-    let user_id = session.identity.user_id;
-    let mut doc = session.document;
+    let identity = signed.identity.clone();
+    let user_id = identity.user_id().to_owned();
+    let mut doc = signed.document.clone();
     if !webagent_accounts::valid_csrf(
         method.as_str(),
         doc["csrf"].as_str().unwrap_or(""),
@@ -149,22 +180,25 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
     {
         return ApiError(StatusCode::FORBIDDEN, "Invalid request origin".into()).into_response();
     }
-    doc["_auth_key"] = json!(session.key);
+    doc["_auth_key"] = json!(identity.credential_key);
     doc["_user_id"] = json!(user_id);
-    doc["_role"] = json!(principal.role);
+    doc["_role"] = json!(identity.effective_role());
     doc["_tier_id"] = json!(principal.tier_id);
     doc["_access_revision"] = json!(principal.access_revision);
     let mut caller = app.clone();
-    caller.store = match app.store.for_user(&user_id).await {
+    // This request read the account row (or its epoch) just now, so it still exists.
+    caller.store = match app.store.for_identity(&identity).await {
         Ok(store) => store,
         Err(_) => {
             return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()).into_response()
         }
     };
+    caller.identity = Some(identity.clone());
     if let Some(refused) = crate::request_limits::signed_in(&app, &user_id, &method, &path).await {
         return refused;
     }
     request.extensions_mut().insert(caller);
+    request.extensions_mut().insert(identity);
     request.extensions_mut().insert(doc);
     let mutation = !matches!(
         *request.method(),
@@ -176,6 +210,98 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
     }
     response
 }
+/// A browser sign-in whose identity was built from its records, kept while they are unchanged.
+struct Remembered {
+    identity: Arc<access::identity::Identity>,
+    document: Value,
+    expires: u64,
+}
+type RememberedKey = (std::path::PathBuf, String);
+/// Remembered sign-ins of this process, keyed by store root and sign-in record. An entry is
+/// used only after this request's indexed read shows the account's `auth_epoch` unchanged and
+/// the sign-in record still present with the same sealed bytes; nothing is reused on time alone. The bound only costs
+/// rebuilds: a full map is emptied.
+static REMEMBERED: std::sync::LazyLock<std::sync::Mutex<HashMap<RememberedKey, Arc<Remembered>>>> =
+    std::sync::LazyLock::new(Default::default);
+const REMEMBERED_LIMIT: usize = 4096;
+
+/// The remembered sign-in for `key` when its records are unchanged (one indexed read).
+async fn remembered(app: &App, key: &str, at: u64) -> Option<Arc<Remembered>> {
+    let slot = (app.store.root.clone(), key.to_owned());
+    let known = REMEMBERED.lock().ok()?.get(&slot).cloned()?;
+    let current = app
+        .store
+        .accounts_repository()
+        .sign_in_epoch(
+            known.identity.user_id(),
+            key,
+            &known.identity.credential_record,
+        )
+        .await
+        .ok()
+        .flatten();
+    if known.expires > at && current.is_some() && current == known.identity.auth_epoch {
+        return Some(known);
+    }
+    if let Ok(mut map) = REMEMBERED.lock() {
+        map.remove(&slot);
+    }
+    None
+}
+
+/// The identity of a sign-in checked in full; remembered when its account has an epoch.
+fn remember(
+    app: &App,
+    session: webagent_accounts::AuthenticatedSession,
+    record: Vec<u8>,
+    principal: access::Principal,
+    auth_epoch: Option<i64>,
+    at: u64,
+) -> Arc<Remembered> {
+    let identity = access::identity::Identity {
+        principal,
+        username: session.identity.username,
+        generation: session.document["generation"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        auth_epoch,
+        kind: access::identity::CredentialKind::of_sign_in(&session.document),
+        credential_key: session.key.clone(),
+        credential_record: record,
+        agent_id: session.document["agent_id"].as_str().map(str::to_owned),
+    };
+    let entry = Arc::new(Remembered {
+        expires: session.document["expires"].as_u64().unwrap_or(0),
+        identity: Arc::new(identity),
+        document: session.document,
+    });
+    // Fail closed: an account without an epoch is checked in full on every request.
+    if auth_epoch.is_some() {
+        if let Ok(mut map) = REMEMBERED.lock() {
+            if map.len() >= REMEMBERED_LIMIT {
+                map.retain(|_, known| known.expires > at);
+                if map.len() >= REMEMBERED_LIMIT {
+                    map.clear();
+                }
+            }
+            map.insert((app.store.root.clone(), session.key), entry.clone());
+        }
+    }
+    entry
+}
+
+/// The `auth_epoch` of the remembered identity for a cookie value, if one is remembered.
+#[cfg(test)]
+pub(crate) fn remembered_epoch(app: &App, token: &str) -> Option<i64> {
+    let key = webagent_accounts::session_key(token)?;
+    REMEMBERED
+        .lock()
+        .ok()?
+        .get(&(app.store.root.clone(), key))
+        .and_then(|known| known.identity.auth_epoch)
+}
+
 pub(crate) async fn admin_auth(State(app): State<App>, request: Request, next: Next) -> Response {
     let Some(identity) = request.extensions().get::<Value>() else {
         return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()).into_response();

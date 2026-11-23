@@ -245,6 +245,18 @@ impl Store {
         if !self.accounts_repository().account_exists(user_id).await? {
             return Err(anyhow!("Account not found"));
         }
+        self.open_user(user_id).await
+    }
+    /// `for_user` for a request's caller: the authentication middleware read the account row
+    /// (or its `auth_epoch`) during this request, which is the same existence fence.
+    pub async fn for_identity(&self, identity: &access::identity::Identity) -> Result<Self> {
+        let user_id = identity.user_id();
+        if !access::valid_id(user_id) {
+            return Err(anyhow!("Invalid account identity"));
+        }
+        self.open_user(user_id).await
+    }
+    async fn open_user(&self, user_id: &str) -> Result<Self> {
         let existing = self.user_states.read().await.get(user_id).cloned();
         let state = match existing {
             Some(state) => state,

@@ -10,6 +10,7 @@ use axum::Extension;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::Serialize;
 use sha2::Digest;
+use std::sync::Arc;
 use webagent_accounts_host::AccountsStore;
 #[derive(Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -723,13 +724,31 @@ pub(crate) async fn bearer(app: &App, request: &mut Request) -> std::result::Res
         .account_by_id(&user)
         .await?
         .ok_or_else(unauthorized)?;
+    // `credential_valid` checked this account active and approved during this request.
+    let principal = access::Principal::from_account(&account).map_err(|_| unauthorized())?;
+    let identity = Arc::new(access::identity::Identity {
+        username: account["username"].as_str().unwrap_or_default().to_owned(),
+        generation: account["generation"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        // Widget credentials are checked in full on every request.
+        auth_epoch: None,
+        kind: access::identity::CredentialKind::Widget,
+        credential_key: auth_key.clone(),
+        credential_record: Vec::new(),
+        agent_id: doc["agent_id"].as_str().map(str::to_owned),
+        principal,
+    });
     doc["_auth_key"] = json!(auth_key);
     doc["_user_id"] = json!(user);
-    doc["_role"] = account["role"].clone();
+    doc["_role"] = json!(identity.effective_role());
     doc["_tier_id"] = account["tier_id"].clone();
     doc["_access_revision"] = account["access_revision"].clone();
     doc["_embed_agent"] = doc["agent_id"].clone();
+    caller.identity = Some(identity.clone());
     request.extensions_mut().insert(caller);
+    request.extensions_mut().insert(identity);
     request.extensions_mut().insert(doc);
     Ok(())
 }

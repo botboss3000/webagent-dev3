@@ -55,7 +55,15 @@ async fn resolve_internal(
     lifecycle: bool,
     deleted_receipt: bool,
 ) -> Result<SessionAccess> {
-    resolve_store_internal(&app.store, sid, user, lifecycle, deleted_receipt).await
+    resolve_store_internal(
+        &app.store,
+        sid,
+        user,
+        app.identity.as_deref(),
+        lifecycle,
+        deleted_receipt,
+    )
+    .await
 }
 pub async fn scope(app: App, sid: &str) -> Result<App> {
     let actor = actor(&app).to_owned();
@@ -140,20 +148,38 @@ pub(crate) async fn uses_shared_queue(app: &App, sid: &str) -> Result<bool> {
             .any(|member| member["user_id"] != app.store.current_user_id()))
 }
 
+/// `caller` is the request's identity. When it is `user` and its account's `auth_epoch` and
+/// sign-in record are unchanged (one indexed read, also on a long-lived stream's later checks),
+/// the account is as it was when the identity was checked active and approved; otherwise the
+/// account record is read and checked here.
 async fn resolve_store_internal(
     store: &Store,
     sid: &str,
     user: &str,
+    caller: Option<&crate::access::identity::Identity>,
     lifecycle: bool,
     deleted_receipt: bool,
 ) -> Result<SessionAccess> {
-    let account = store
-        .account_by_id(user)
-        .await?
-        .ok_or_else(|| anyhow!("Account not found"))?;
-    if !crate::access::Principal::from_account(&account)?.active() || account["is_approved"] != true
-    {
-        bail!("Account unavailable");
+    let unchanged = match caller.filter(|identity| identity.user_id() == user) {
+        Some(identity) if identity.auth_epoch.is_some() => {
+            store
+                .accounts_repository()
+                .sign_in_epoch(user, &identity.credential_key, &identity.credential_record)
+                .await?
+                == identity.auth_epoch
+        }
+        _ => false,
+    };
+    if !unchanged {
+        let account = store
+            .account_by_id(user)
+            .await?
+            .ok_or_else(|| anyhow!("Account not found"))?;
+        if !crate::access::Principal::from_account(&account)?.active()
+            || account["is_approved"] != true
+        {
+            bail!("Account unavailable");
+        }
     }
     let mut directory = store.shared_directory(sid).await?;
     if directory.is_none() {
@@ -199,11 +225,8 @@ async fn resolve_store_internal(
     {
         return Err(SessionAuthorityDenied.into());
     }
-    let storage = store.for_user(owner).await?;
-    let session = storage
-        .get(&format!("session:{sid}"))
-        .await?
-        .ok_or_else(|| anyhow!("Session not found"))?;
+    // The session record read above, in this same call, decides its status too.
+    let session = pinned;
     if (session["status"] == "deleted" && !deleted_receipt)
         || (!lifecycle && session["status"] != "active")
     {
@@ -221,7 +244,7 @@ async fn resolve_store_internal(
     })
 }
 pub(crate) async fn resolve_store(store: &Store, sid: &str, user: &str) -> Result<SessionAccess> {
-    resolve_store_internal(store, sid, user, false, false).await
+    resolve_store_internal(store, sid, user, None, false, false).await
 }
 
 pub(crate) async fn guard_operation<T>(
