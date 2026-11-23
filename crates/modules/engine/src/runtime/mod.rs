@@ -108,9 +108,11 @@ impl<
             .unwrap_or(true))
     }
     pub async fn save(&self, run: &mut Value) -> Result<()> {
-        // An unreachable model's notice names the agent administrator's contact, read once
-        // when the run stops on it. A failed read leaves the notice without an address.
-        if run["error"] == failure::MODEL_UNREACHABLE && run.get("admin_contact").is_none() {
+        // A notice that sends the user to the agent administrator names their contact, read
+        // once when the run stops on it. A failed read leaves the notice without an address.
+        if run["error"].as_str().is_some_and(failure::needs_admin)
+            && run.get("admin_contact").is_none()
+        {
             let agent = run["agent_id"]
                 .as_str()
                 .unwrap_or("shared_default")

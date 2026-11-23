@@ -25,7 +25,78 @@ pub(crate) async fn send(
     if SERVER_FIELDS.iter().any(|field| body.get(field).is_some()) {
         return Err(bad("Answer panels through their answer endpoint"));
     }
-    send_message(app, id, body).await
+    match send_message(app.clone(), id.clone(), body).await {
+        Err(error) => Err(explain_blocked(&app, &id, error).await),
+        sent => sent,
+    }
+}
+
+/// What the chat user is told for a send refused by the agent's setup or limits.
+fn blocked_summary(reason: &str) -> Option<&'static str> {
+    Some(match reason {
+        "Agent unavailable" | "Agent access unavailable" => "You can't use this agent right now.",
+        "Account run limit reached" => {
+            "You have the most runs allowed going at once. Wait for one to finish."
+        }
+        "Model unavailable"
+        | "Text model required, or selected model is unavailable"
+        | "System model assignment is invalid or unauthorized"
+        | "Assigned model is no longer entitled or configured"
+        | "Assigned provider connection is not authorized"
+        | "Incoming-message review requires valid criteria and an authorized System model" => {
+            "This agent can't reply right now."
+        }
+        _ => return None,
+    })
+}
+
+/// The refusal text: the user's summary, the agent administrator's contact, and for agent
+/// operators and installation administrators the original reason.
+fn blocked_message(summary: &str, contact: Option<&str>, reason: Option<&str>) -> String {
+    let contact = webagent_engine::runtime::failure::contact_administrator(contact);
+    match reason {
+        Some(reason) => format!("{summary} {contact} Administrator detail: {reason}."),
+        None => format!("{summary} {contact}"),
+    }
+}
+
+/// Rewrite a setup or limit refusal from the chat send button for its reader. Agents and
+/// extensions that admit through `prepare_message` keep the original reason.
+async fn explain_blocked(app: &App, sid: &str, error: ApiError) -> ApiError {
+    let Some(summary) = blocked_summary(&error.1) else {
+        return error;
+    };
+    let Ok(agent) = session_agent_id(app, sid).await else {
+        return error;
+    };
+    let admin = app
+        .store
+        .agent_authority(crate::shared_chat::actor(app), &agent)
+        .await
+        .is_ok_and(|rights| {
+            rights["can_manage"] == true || rights["installation_administrator"] == true
+        });
+    let contact = admin_contact(app, &agent).await;
+    let reason = admin.then_some(error.1.as_str());
+    ApiError(
+        error.0,
+        blocked_message(summary, contact.as_deref(), reason),
+    )
+}
+
+/// The agent administrator's contact email (Identity → Profile), if one is set and readable.
+async fn admin_contact(app: &App, agent: &str) -> Option<String> {
+    let store = app.store.for_agent(agent).await.ok()?;
+    let raw: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
+        .bind(agent)
+        .fetch_one(&store.agent_pool)
+        .await
+        .ok()?;
+    let metadata = store.unseal_agent(&raw).ok()?;
+    metadata["admin_contact_email"]
+        .as_str()
+        .filter(|email| !email.is_empty())
+        .map(str::to_owned)
 }
 
 /// Admit one user message: queued behind live work, or as a new run. `body` may carry the
@@ -717,5 +788,27 @@ pub(crate) async fn record_admitted_turn(app: &App, agent: &str, message_id: &Va
     };
     if let Err(error) = super::agent_members::record_turn(app, agent, message_id).await {
         tracing::warn!("Message limit log unavailable: {error:#}");
+    }
+}
+
+#[cfg(test)]
+mod blocked_tests {
+    use super::{blocked_message, blocked_summary};
+
+    /// Chat users get the next step and the contact; operators also get the reason.
+    #[test]
+    fn setup_refusals_split_user_and_operator_text() {
+        let reason = "Assigned provider connection is not authorized";
+        let summary = blocked_summary(reason).unwrap();
+        assert_eq!(
+            blocked_message(summary, Some("ops@example.com"), None),
+            "This agent can't reply right now. Contact the administrator at ops@example.com."
+        );
+        assert_eq!(
+            blocked_message(summary, None, Some(reason)),
+            "This agent can't reply right now. Contact the administrator. Administrator \
+             detail: Assigned provider connection is not authorized."
+        );
+        assert!(blocked_summary("Resolve the existing run first").is_none());
     }
 }

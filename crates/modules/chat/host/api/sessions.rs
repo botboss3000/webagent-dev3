@@ -447,14 +447,28 @@ pub(crate) async fn snapshot_query(
     crate::manager::decorate(&app, &mut messages).await?;
     crate::api::context_remedy::decorate(&app, &mut messages).await?;
     // Agent operators decide fixes such as raising the compaction trigger after a context error.
-    let agent_operator = app
+    let rights = app
         .store
         .agent_authority(
             crate::shared_chat::actor(&app),
             _session["agent_id"].as_str().unwrap_or("shared_default"),
         )
         .await
-        .is_ok_and(|rights| rights["can_manage"] == true);
+        .ok();
+    let agent_operator = rights
+        .as_ref()
+        .is_some_and(|rights| rights["can_manage"] == true);
+    // A notice's full cause is for agent operators and installation administrators only.
+    let installation_admin = rights
+        .as_ref()
+        .is_some_and(|rights| rights["installation_administrator"] == true);
+    if !agent_operator && !installation_admin {
+        for item in messages.iter_mut().filter(|item| item["role"] == "notice") {
+            if let Some(content) = item["content"].as_object_mut() {
+                content.remove("detail");
+            }
+        }
+    }
     let usage = crate::usage::public(
         &app.store
             .get(&format!("session_usage:{id}"))

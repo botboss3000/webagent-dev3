@@ -27,6 +27,8 @@ dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px))
 .chat-action-detail-toggle::after{content:'';width:6px;height:6px;flex-shrink:0;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin:0 3px 3px}
 .chat-action-detail-toggle[aria-expanded=true]::after{transform:rotate(225deg);margin-top:5px}
 .chat-action p{margin:6px 0 0}
+/* A run notice's full cause, sent only to agent operators and installation administrators. */
+.chat-action .chat-action-admin-detail{font-size:12px;opacity:.85}
 .chat-action-plan{margin:8px 0 0;padding:10px 12px;border:var(--border-width) solid var(--border-soft,var(--border));border-radius:10px;color:var(--fg-1)}
 .chat-action-plan summary{font-weight:600;cursor:pointer;min-height:32px;display:flex;align-items:center;-webkit-tap-highlight-color:transparent}
 .chat-action-plan summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}

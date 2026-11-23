@@ -219,16 +219,35 @@ impl<
                     || (matches!(status, "paused" | "stopped") && error.is_some()));
             if shown {
                 // An operator-approvable fix travels with the notice so a reload shows it.
-                let mut content = serde_json::json!({"status": status, "error": error});
+                use crate::runtime::failure;
+                // Everyone reads `error`; `detail` (the full cause) is sent only to agent
+                // operators and installation administrators.
+                let shown_error = error.map(failure::public_error);
+                let mut content = serde_json::json!({"status": status, "error": shown_error});
+                let detail = if error == Some(failure::MODEL_UNREACHABLE) {
+                    run["unreachable_detail"].as_str()
+                } else {
+                    error.filter(|raw| Some(*raw) != shown_error)
+                };
+                if let Some(detail) = detail {
+                    content["detail"] = json!(detail);
+                }
                 if run["context_remedy"].is_object() {
                     content["remedy"] = run["context_remedy"].clone();
                 }
-                // An unreachable model needs a different next step than "write a new message".
-                if error == Some(crate::runtime::failure::MODEL_UNREACHABLE) {
-                    content["guidance"] =
-                        json!(crate::runtime::failure::model_unreachable_guidance(
-                            run["admin_contact"].as_str()
-                        ));
+                let contact = run["admin_contact"].as_str();
+                if let Some(email) = contact {
+                    content["contact"] = json!(email);
+                }
+                // These need a different next step than "write a new message".
+                match error {
+                    Some(failure::MODEL_UNREACHABLE) => {
+                        content["guidance"] = json!(failure::model_unreachable_guidance(contact));
+                    }
+                    Some(raw) if failure::needs_admin(raw) => {
+                        content["guidance"] = json!(failure::contact_administrator(contact));
+                    }
+                    _ => {}
                 }
                 crate::send_future(sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,?,?,'notice',?,strftime('%s','now')) ON CONFLICT(id) DO UPDATE SET content=excluded.content")
                     .bind(id.clone()).bind(run["session_id"].as_str().unwrap_or("").to_owned()).bind(rid.to_owned())

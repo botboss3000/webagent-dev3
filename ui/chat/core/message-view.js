@@ -41,9 +41,10 @@ function remedyAction(title,notice,item,{client,getSession,getAccess,note}){
   const outcome={approved:'Approved: this agent\'s compaction trigger is now '+to+' tokens. To continue, write a new message in the chat.',
     denied:'Declined. To continue, write a new message in the chat.'};
   if(outcome[fix.state])return createChatAction({title,message:outcome[fix.state]});
-  if(getAccess()?.agent_operator!==true)return createChatAction({title,message:fix.operator_notified
+  const contact=typeof notice.contact==='string'&&notice.contact?' Administrator contact: '+notice.contact+'.':'';
+  if(getAccess()?.agent_operator!==true)return createChatAction({title,message:(fix.operator_notified
     ?'An agent operator has been notified and can raise this agent\'s compaction trigger to '+to+' tokens. After that, write a new message to continue.'
-    :'Ask an agent operator to raise this agent\'s compaction trigger to '+to+' tokens, then write a new message to continue.'});
+    :'Ask an agent operator to raise this agent\'s compaction trigger to '+to+' tokens, then write a new message to continue.')+contact});
   let card;
   const decide=decision=>async()=>{
     card.querySelectorAll('button').forEach(button=>{button.disabled=true;});
@@ -69,7 +70,11 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
     const title=({failed:'Run failed',paused:'Paused'}[notice.status]||'Stopped')+(notice.error?' — '+notice.error:'');
     // The server sends its own next step when a new message would not help (unreachable model).
     const message=typeof notice.guidance==='string'&&notice.guidance?notice.guidance:'To continue, write a new message in the chat.';
-    row.append(remedyAction(title,notice,item,{client,getSession,getAccess,note})||createChatAction({title,message}));return row;
+    const card=remedyAction(title,notice,item,{client,getSession,getAccess,note})||createChatAction({title,message});
+    // The server sends the full cause only to agent operators and installation administrators.
+    if(typeof notice.detail==='string'&&notice.detail){const detail=document.createElement('p');detail.className='chat-action-message chat-action-admin-detail';
+      detail.textContent='Administrator detail: '+notice.detail;card.insertBefore(detail,card.querySelector('.chat-action-actions'));}
+    row.append(card);return row;
   }
   // Background notices (sub-agents, broker builds, background tool calls) show as compact activity rows, not user bubbles.
   const notices=item.message_kind==='agent_message'&&Array.isArray(item.platform_notice?.notices)?item.platform_notice.notices.slice(0,20):null;

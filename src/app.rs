@@ -199,8 +199,10 @@ fn uncertain_calls(run: &Value) -> Value {
     json!(calls)
 }
 
+// `error` is the chat user's wording; the full cause reaches operators through the notice.
 fn public_run(run: &Value) -> Value {
-    json!({"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
+    json!({"id":run["id"],"session_id":run["session_id"],"status":run["status"],
+        "error":run["error"].as_str().map(webagent_engine::runtime::failure::public_error),
         "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&run["component_pause"]["component"].as_str().is_some_and(crate::engine_components::working_component) {json!({"version":1,"component":run["component_pause"]["component"],"reason":"component_unavailable"})}else{Value::Null},
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
         "parked":run["parked"] == true,

@@ -173,6 +173,61 @@ pub fn model_unreachable_guidance(contact: Option<&str>) -> String {
     }
 }
 
+/// Chat text for a run stopped on a setup or internal error only an administrator can fix.
+pub const NEEDS_ADMIN: &str = "This agent needs its administrator's attention";
+
+/// Run errors a chat user can act on, or that name nothing internal, shown as written.
+const USER_ERRORS: [&str; 17] = [
+    MODEL_UNREACHABLE,
+    "Cancelled by user",
+    "Stopped by global shutoff",
+    "Approval withdrawn",
+    "Parallel write outcome",
+    "Background summary interrupted",
+    "This run reached its limit",
+    "The model used all",
+    "Access changed",
+    "Paused for app update",
+    "Recovered after interruption",
+    "Storage is full",
+    "Tool outcome",
+    "Build result awaits",
+    "Read tool interrupted",
+    "Provider request interrupted",
+    "Context summary interrupted",
+];
+
+/// What every chat reader sees of a run error. Setup, policy and internal errors become
+/// `NEEDS_ADMIN`; agent operators read the full text in the notice's `detail`. A retry keeps
+/// its count and drops the cause.
+pub fn public_error(error: &str) -> &str {
+    if error.starts_with("Retrying (") {
+        return error.find("): ").map_or(error, |end| &error[..=end]);
+    }
+    if error.starts_with("Transient provider failure") {
+        return "The model did not answer; retrying";
+    }
+    if USER_ERRORS.iter().any(|known| error.starts_with(known)) {
+        error
+    } else {
+        NEEDS_ADMIN
+    }
+}
+
+/// Whether a run error sends the chat user to the agent administrator.
+pub fn needs_admin(error: &str) -> bool {
+    error == MODEL_UNREACHABLE || public_error(error) == NEEDS_ADMIN
+}
+
+/// The step that sends a chat user to the agent administrator, naming the contact email
+/// (Identity → Profile) when one is set.
+pub fn contact_administrator(contact: Option<&str>) -> String {
+    match contact {
+        Some(email) => format!("Contact the administrator at {email}."),
+        None => "Contact the administrator.".into(),
+    }
+}
+
 /// The agent administrator's contact email (Identity → Profile), if one is set.
 pub async fn admin_contact(
     store: &impl crate::ports::AgentMetadata,
@@ -222,8 +277,10 @@ pub fn model_unreachable(run: &mut Value, stopped_by: &str) {
         error = run["last_model_error"].as_str().unwrap_or("none recorded"),
     );
     let item = json!({"type":"model_unreachable","model":model,"provider":provider,
-        "detail":detail});
+        "detail":&detail});
     run["error"] = json!(MODEL_UNREACHABLE);
+    // The chat notice shows this to agent operators only.
+    run["unreachable_detail"] = json!(detail);
     retry_activity(run, item);
 }
 pub use webagent_models::backup_policy::response_start_seconds as response_start;
@@ -440,4 +497,44 @@ pub fn trusted_model_failure<S, D: ModelDiagnostics<S>>(
         observer.failure(store, &evidence, error, action);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Chat users read the action they can take; setup and internal causes stay with operators.
+    #[test]
+    fn public_error_hides_internal_causes() {
+        assert_eq!(
+            public_error("Invalid workflow policy; administrator review required"),
+            NEEDS_ADMIN
+        );
+        assert_eq!(
+            public_error("Paused after 3 failed attempts: socket closed"),
+            NEEDS_ADMIN
+        );
+        assert_eq!(public_error(MODEL_UNREACHABLE), MODEL_UNREACHABLE);
+        assert_eq!(
+            public_error("This run reached its limit of 40 steps"),
+            "This run reached its limit of 40 steps"
+        );
+        assert_eq!(
+            public_error("Retrying (1 of 3 attempts failed): worker socket closed"),
+            "Retrying (1 of 3 attempts failed)"
+        );
+        assert_eq!(
+            public_error("Transient provider failure; bounded retry: HTTP 503"),
+            "The model did not answer; retrying"
+        );
+        assert_eq!(public_error("Cancelled by user"), "Cancelled by user");
+        assert!(!needs_admin("Cancelled by user"));
+        assert!(needs_admin(MODEL_UNREACHABLE));
+        assert!(!needs_admin("Access changed; run stopped"));
+        assert_eq!(
+            contact_administrator(Some("ops@example.com")),
+            "Contact the administrator at ops@example.com."
+        );
+        assert_eq!(contact_administrator(None), "Contact the administrator.");
+    }
 }

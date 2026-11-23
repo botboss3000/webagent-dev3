@@ -52,6 +52,13 @@ Other limits on model calls:
 | `workflow.max_attempts` | 3 | `config/engine/loop-runtime.json` | Model calls allowed within one turn; reaching it pauses the run: after failed calls the chat shows "The model is unreachable" (with the agent administrator's contact email from Identity → Profile, when set) and administrators get a `model_unreachable` activity row with the model, provider, recovery tried and last error |
 | `workflow.max_turns` | 80 | `config/engine/loop-runtime.json` | Turns allowed in one run (0 = no limit); reaching it pauses the run with "This run reached its limit of N steps" |
 
+Run errors shown in chat are split by reader (`failure::public_error`). Chat users read
+the action they can take; setup, policy and internal errors read "This agent needs its
+administrator's attention" with "Contact the administrator at <email>." Agent operators and
+installation administrators also see an "Administrator detail" line with the full cause
+(the server drops it from notices for everyone else). Send refusals from the chat send
+button (agent or model unavailable, provider not authorized, run limit) follow the same split.
+
 ### Staying on the backup model, and switching back
 
 Applies to every provider, not only bridges. Once a backup model has answered for a chat, the chat
