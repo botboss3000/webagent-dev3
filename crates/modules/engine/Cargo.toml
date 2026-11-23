@@ -26,6 +26,7 @@ hex = "0.4"
 futures-util = "0.3"
 tracing = "0.1"
 webagent-access = {path="../access"}
+webagent-storage = {path="../storage"}
 webagent-models = {path="../models"}
 webagent-configuration = {path="../configuration"}
 webagent-context = {path="../context",default-features=false}

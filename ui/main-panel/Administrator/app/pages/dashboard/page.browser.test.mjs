@@ -43,7 +43,8 @@ const server=http.createServer(async(req,res)=>{
   '/api/v3/admin/access/accounts':{accounts:[{role:'administrator',status:'active'}]},
   '/api/v3/auth/sessions':{sessions:[{current:true}]},
   '/api/v3/status':{model:'fixture-model',runs:[{id:'run',status:'running',context_controls:{trigger_tokens:100,tail_tokens:20}}]},
-  '/health/ready':{ready:true}
+  '/health/ready':{ready:true},
+  '/api/v3/admin/system/revision-shadow':{mode:'shadow',decides:'full recomputation',kinds:{fence:{checks:4,unchanged:3,changed:1,changed_without_effect:1,disagreements:0,last_example:null},tool_check:{checks:2,unchanged:2,changed:0,changed_without_effect:0,disagreements:0,last_example:null}}}
  };
  if(activity[url.pathname]){res.setHeader('content-type','application/json');res.end(JSON.stringify(activity[url.pathname]));return;}
  if(url.pathname==='/fixture'){
@@ -65,7 +66,7 @@ try{
   mode='live';delay=2000;
   await page.goto('http://127.0.0.1:'+server.address().port+'/fixture');
   const cpu=page.locator('[data-card=cpu]'),system=page.locator('[data-card=system_resources]');
-  await page.waitForFunction(()=>document.querySelectorAll('.dashboard-tile').length===26);
+  await page.waitForFunction(()=>document.querySelectorAll('.dashboard-tile').length===27);
   assert.deepEqual(await page.evaluate(()=>[...new Set([...document.querySelectorAll('.dashboard-tile')].map(tile=>tile.dataset.state))]),['loading']);
   assert.equal(await cpu.locator('.dashboard-pending').evaluate(el=>getComputedStyle(el,'::before').animationName),'dashboard-spin');
   assert.notEqual(await cpu.evaluate(el=>getComputedStyle(el).borderColor),await page.evaluate(()=>{const probe=document.createElement('div');probe.className='dashboard-tile';probe.dataset.state='unavailable';document.querySelector('.dashboard-grid').append(probe);const color=getComputedStyle(probe).borderColor;probe.remove();return color;}));
@@ -76,6 +77,8 @@ try{
   assert.match(await page.locator('[data-card=agents_panel]').innerText(),/Fixture agent/);
   assert.match(await page.locator('[data-card=tokens]').innerText(),/Reported input tokens/);
   assert.match(await page.locator('[data-card=cost]').innerText(),/0.12 USD/);
+  await page.waitForFunction(()=>document.querySelector('[data-card=revision_shadow]')?.dataset.state==='live');
+  assert.match(await page.locator('[data-card=revision_shadow]').innerText(),/Model dispatch fence: checks\s+4/);
   assert.match(await page.locator('[data-card=active_runs]').innerText(),/Current account across agents/);
   assert.match(await page.locator('[data-card=security]').innerText(),/current account/i);
   assert.equal(await page.locator('[data-card=user_mgmt] a').getAttribute('href'),'/app?tab=app&appView=users');
@@ -92,7 +95,7 @@ try{
   const health=page.locator('[data-card=health_board]');
   assert.equal(await health.getAttribute('data-state'),'live');
   for(const text of [/API readiness\s+Ready/,/CPU\s+24.5%/,/RAM\s+25.0%/,/Disk used on \/\s+25.0%/,/Database pools\s+1 \/ 1 responding/])assert.match(await health.innerText(),text);
-  assert.equal(await page.locator('.dashboard-tile').count(),26);
+  assert.equal(await page.locator('.dashboard-tile').count(),27);
   assert.equal(await system.getAttribute('data-state'),'partial');
   assert.equal(await system.locator('.dashboard-field[data-available="true"]').count(),8);
   assert.equal(await page.locator('[data-card=metric_chart] svg').count(),1);

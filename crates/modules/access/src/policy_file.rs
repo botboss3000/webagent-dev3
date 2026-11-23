@@ -29,13 +29,29 @@ fn fresh_install_tiers() -> [Tier; 2] {
     };
     [operator, basic]
 }
+/// The live policy file in processes that save live files; a state-root file in fixtures.
+pub fn policy_path(root: &std::path::Path) -> std::path::PathBuf {
+    if webagent_configuration::live::writable() {
+        return std::path::PathBuf::from(LIVE_POLICY);
+    }
+    root.join("config/access-policy.json")
+}
+fn parse_digested(bytes: &[u8]) -> Result<(Value, String)> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    validate_configuration(&value)?;
+    let digest = webagent_configuration::digest(&value);
+    Ok((value, digest))
+}
+/// The digest `live_access` records as the policy revision, from the same parser cache, for a
+/// revision comparison (stream B4) that needs no account or agent read.
+pub fn policy_digest(root: &std::path::Path) -> Result<String> {
+    webagent_configuration::live::parsed_path(&policy_path(root), POLICY_LIMIT, parse_digested)
+        .map(|(_, digest)| digest)
+}
 impl<C: RecordCodec> Repository<'_, C> {
     /// The live policy file in processes that save live files; a state-root file in fixtures.
     pub fn access_policy_path(&self) -> std::path::PathBuf {
-        if webagent_configuration::live::writable() {
-            return std::path::PathBuf::from(LIVE_POLICY);
-        }
-        self.root.join("config/access-policy.json")
+        policy_path(self.root)
     }
     fn policy_exists(&self) -> bool {
         let path = self.access_policy_path();
@@ -74,13 +90,11 @@ impl<C: RecordCodec> Repository<'_, C> {
     /// The live policy with its digest, computed once per version of the file (the live
     /// parser cache keeps both) instead of hashing the whole policy at every access check.
     pub fn read_access_policy_digested(&self) -> Result<(Value, String)> {
-        let parse = |bytes: &[u8]| -> Result<(Value, String)> {
-            let value: Value = serde_json::from_slice(bytes)?;
-            validate_configuration(&value)?;
-            let digest = webagent_configuration::digest(&value);
-            Ok((value, digest))
-        };
-        webagent_configuration::live::parsed_path(&self.access_policy_path(), POLICY_LIMIT, parse)
+        webagent_configuration::live::parsed_path(
+            &self.access_policy_path(),
+            POLICY_LIMIT,
+            parse_digested,
+        )
     }
     pub fn save_page_policy(&self, pages: Value, expected: u64) -> Result<Value> {
         validate_pages(&pages)?;

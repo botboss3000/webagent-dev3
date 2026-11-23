@@ -91,10 +91,19 @@ async fn metric(Path(name): Path<String>) -> Api {
     Ok(Json(value))
 }
 
+/// Revision shadow counts (stream B4): per check kind, how often the revision answer agreed
+/// with the full recomputation, and the newest disagreement's ids and parts. Content-free.
+async fn revision_shadow(State(app): State<App>) -> Api {
+    Ok(Json(
+        webagent_engine::runtime::revision_shadow::report(&app.store.app_pool).await,
+    ))
+}
+
 /// Mount beneath the existing administrator authentication boundary.
 pub(crate) fn router() -> Router<App> {
     Router::new()
         .route("/summary", get(summary))
+        .route("/revision-shadow", get(revision_shadow))
         .route("/dashboard", get(dashboard))
         .route("/dashboard/{section}", get(section))
         .route("/{metric}", get(metric))

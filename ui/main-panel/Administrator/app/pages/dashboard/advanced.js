@@ -1,13 +1,35 @@
 // The system module owns history and measurements; this renderer never fabricates missing samples.
-export const advancedIds=['metric_chart','devices','db_mode','db_latency','db_latency_chart','loop_split','token_rate','git_changes'];
+export const advancedIds=['metric_chart','devices','db_mode','db_latency','db_latency_chart','loop_split','token_rate','git_changes','revision_shadow'];
 export async function readDashboard(signal,window){
  try{
   const response=await fetch('/api/v3/admin/system/dashboard?window='+encodeURIComponent(window),{credentials:'same-origin',cache:'no-store',signal});
   if(!response.ok)throw Error(response.status===401?'Sign in required':response.status===403?'Administrator access required':'Dashboard measurements unavailable ('+response.status+')');
   const value=await response.json();
   if(value.schema_version!==1||value.window!==window||!Array.isArray(value.history?.points)||value.history.points.length>601||!value.history.points.every(point=>point&&numeric(point.at))||!Array.isArray(value.database?.probes)||!value.database.probes.every(probe=>probe&&typeof probe==='object')||!['scope','devices','git','loop','throughput','usage','runtime'].every(key=>value[key]&&typeof value[key]==='object'))throw Error('Invalid dashboard measurements');
+  value.revision_shadow=await readRevisionShadow(signal);
   return value;
  }catch(error){return {error:error.name==='AbortError'?'Dashboard request timed out':error.message};}
+}
+/** Revision shadow counts (stream B4); a failed read only marks its own tile unavailable. */
+async function readRevisionShadow(signal){
+ try{
+  const response=await fetch('/api/v3/admin/system/revision-shadow',{credentials:'same-origin',cache:'no-store',signal});
+  if(!response.ok)return null;
+  const value=await response.json();
+  return value&&value.kinds&&typeof value.kinds==='object'?value:null;
+ }catch(error){if(error.name==='AbortError')throw error;return null;}
+}
+const shadowKinds=[['fence','Model dispatch fence'],['tool_check','Tool execution check']];
+/** Rows for the shadow tile: checks, disagreements and the newest disagreement's ids. */
+function revisionShadowRows(shadow){
+ const rows=[];
+ for(const [id,label] of shadowKinds){
+  const kind=shadow.kinds[id]||{};
+  rows.push([label+': checks',kind.checks??0],[label+': disagreements',kind.disagreements??0],[label+': revisions moved',kind.changed??0]);
+ }
+ const last=shadowKinds.map(([id])=>shadow.kinds[id]?.last_example).filter(example=>example&&numeric(example.at)).sort((a,b)=>b.at-a.at)[0];
+ if(last)rows.push(['Last disagreement',new Date(last.at*1000).toLocaleString()+' · '+last.kind+' · '+(Array.isArray(last.parts)?last.parts.join(', '):'')],['Run',String(last.run_id||'')],['Session',String(last.session_id||'')],['Agent',String(last.agent_id||'')],['Account',String(last.requester_id||'')]);
+ return rows;
 }
 const numeric=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
 const fixed=(value,suffix='')=>numeric(value)?value.toFixed(2)+suffix:'Unavailable';
@@ -62,6 +84,9 @@ export function paintDashboard(views,data,metric,node){
  set('loop_split',[['Model phase',total?fixed(100*loop.model_samples/total,'%'):'No running samples'],['Tool phase',total?fixed(100*loop.tool_samples/total,'%'):'No running samples'],['Other running phase',total?fixed(100*loop.other_samples/total,'%'):'No running samples'],['Running phase observations',total]],loop.measurement+'. Current-agent runs only.');
  const throughput=data.throughput;
  set('token_rate',[['Reported output',fixed(throughput.output_tokens_per_second,' tokens/s')],['Reported calls',fixed(throughput.calls_per_second,' calls/s')],['Sample interval',fixed(throughput.interval_seconds,' s')]],throughput.measurement,throughput.available?'live':'warming');
+ const shadow=data.revision_shadow;
+ if(shadow)set('revision_shadow',revisionShadowRows(shadow),'Shadow only: the full recomputation still decides every check. A disagreement means an access record changed without moving its revision.');
+ else set('revision_shadow',[],'Revision check counts unavailable.','unavailable');
  const usage=data.usage,limited=data.scope.sessions_truncated||usage.sessions_without_usage>0||usage.unreported_calls>0;
  const note='Caller-owned active sessions with current access · '+usage.session_count+' sessions'+(data.scope.sessions_truncated?' · bounded at 2,000 sessions':'')+'. Only provider-reported usage is included.';
  set('tokens',[['Reported input tokens',usage.input_tokens],['Reported output tokens',usage.output_tokens],['Unreported calls',usage.unreported_calls],['Sessions without usage',usage.sessions_without_usage]],note,limited?'partial':'live');

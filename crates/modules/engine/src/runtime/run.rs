@@ -890,6 +890,29 @@ impl<
         )
         .await
     }
+    /// `dispatch_asset_key` read fresh, with the access part the revision shadow compares.
+    async fn dispatch_asset_key_parts(
+        app: &Self,
+        sid: &str,
+        agent_id: &str,
+        loaded: &Value,
+        selected: &Value,
+        skills: &Value,
+        optimization: &Value,
+        requester: &str,
+    ) -> Result<(String, String)> {
+        app.context_fingerprint_parts(
+            sid,
+            agent_id,
+            loaded,
+            selected,
+            skills,
+            optimization,
+            requester,
+            None,
+        )
+        .await
+    }
     /// Invalid host input pauses for review; unavailable pure services retain accepted work.
     /// The stage and error are logged for operators and kept as the run's visible error.
     /// Context preparation precedes every model dispatch and tool effect, so the
@@ -2054,6 +2077,16 @@ impl<
                 .as_str()
                 .unwrap_or("shared_default")
                 .to_owned();
+            // Shadow (stream B4): the revisions are read before this step's access inputs.
+            let shadow_vector = app
+                .revision_vector(
+                    run["requester_user_id"]
+                        .as_str()
+                        .unwrap_or(app.store.current_user_id()),
+                    run["session_id"].as_str().unwrap_or(""),
+                    &agent_id,
+                )
+                .await;
             let access = app
                 .chat
                 .live_access(
@@ -2136,6 +2169,9 @@ impl<
                     &access,
                 )
                 .await;
+            let shadow_baseline = call_context
+                .as_ref()
+                .map(|context| Self::shadow_baseline(context, shadow_vector, &run));
             let workflow_policy = match app.current_workflow_policy().await {
                 Ok(policy) => policy,
                 Err(_) => {
@@ -4021,7 +4057,17 @@ impl<
                     let _ = collector.await;
                     return Ok(());
                 }
-                if !app.run_model_authorized(&current).await {
+                // The full recomputation below decides; the shadow only records what it found.
+                let mut observed = super::revision_shadow::Observed::default();
+                let model_authorized = app.run_model_authorized(&current).await;
+                observed.model_authorized = Some(model_authorized);
+                if !model_authorized {
+                    app.shadow_check(
+                        super::revision_shadow::Kind::Fence,
+                        shadow_baseline.as_ref(),
+                        &observed,
+                    )
+                    .await;
                     current["status"] = json!("stopped");
                     current["error"] = json!("Access changed before model dispatch");
                     app.save(&mut current).await?;
@@ -4032,6 +4078,7 @@ impl<
                 }
                 // Refresh choices which arrived during credential retrieval before dispatch.
                 let live_mode = app.session_mode(&sid).await?;
+                observed.mode_revision = live_mode["revision"].as_u64();
                 let live_choice = app
                     .store
                     .get(&format!("session_chat_controls:{sid}"))
@@ -4043,12 +4090,18 @@ impl<
                         .unwrap_or(0)
                         != current["chat_model_revision"].as_u64().unwrap_or(0)
                 {
+                    app.shadow_check(
+                        super::revision_shadow::Kind::Fence,
+                        shadow_baseline.as_ref(),
+                        &observed,
+                    )
+                    .await;
                     drop(sender);
                     drop(dispatch_guard);
                     let _ = collector.await;
                     continue;
                 }
-                if !Self::dispatch_asset_key(
+                let fence_key = Self::dispatch_asset_key_parts(
                     &app,
                     &sid,
                     &agent_id,
@@ -4059,11 +4112,16 @@ impl<
                     current["requester_user_id"]
                         .as_str()
                         .unwrap_or(app.store.current_user_id()),
-                    None,
                 )
-                .await
-                .is_ok_and(|key| key == assembled_asset_key)
-                {
+                .await;
+                observed.access = fence_key.as_ref().ok().map(|(_, access)| access.clone());
+                app.shadow_check(
+                    super::revision_shadow::Kind::Fence,
+                    shadow_baseline.as_ref(),
+                    &observed,
+                )
+                .await;
+                if !fence_key.is_ok_and(|(key, _)| key == assembled_asset_key) {
                     let retry = Self::rebuild_context(&app, &mut current).await?;
                     drop(sender);
                     drop(dispatch_guard);

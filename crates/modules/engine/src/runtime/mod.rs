@@ -34,6 +34,7 @@ pub mod parked;
 pub mod policy;
 pub mod ports;
 pub mod recovery;
+pub mod revision_shadow;
 pub mod run;
 pub mod scheduler;
 pub mod scope;

@@ -365,6 +365,19 @@
       ],
       "fields": [],
       "backend": "connected"
+    },
+    {
+      "id": "revision_shadow",
+      "label": "Access revision check (shadow)",
+      "icon": "shield-check",
+      "w": 4,
+      "h": 4,
+      "order": 25,
+      "sections": [
+        "live"
+      ],
+      "fields": [],
+      "backend": "connected"
     }
   ]
 }

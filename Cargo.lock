@@ -2718,6 +2718,7 @@ dependencies = [
  "webagent-platform",
  "webagent-provider-contracts",
  "webagent-provider-projection",
+ "webagent-storage",
 ]
 
 [[package]]

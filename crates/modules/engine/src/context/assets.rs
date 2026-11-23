@@ -110,6 +110,33 @@ impl<
         requester: &str,
         context: Option<&crate::runtime::call_context::CallContext>,
     ) -> Result<String> {
+        Ok(self
+            .context_fingerprint_parts(
+                sid,
+                agent_id,
+                loaded,
+                selected,
+                skills,
+                optimization,
+                requester,
+                context,
+            )
+            .await?
+            .0)
+    }
+    /// The context key and, beside it, the access part the revision shadow compares
+    /// (`revision_shadow::access_part` of the same reads).
+    pub async fn context_fingerprint_parts(
+        &self,
+        sid: &str,
+        agent_id: &str,
+        loaded: &Value,
+        selected: &Value,
+        skills: &Value,
+        optimization: &Value,
+        requester: &str,
+        context: Option<&crate::runtime::call_context::CallContext>,
+    ) -> Result<(String, String)> {
         let app = self;
         // With the step's `CallContext` (context preparation) the step's own catalog and access
         // reads stand; without one (the dispatch fence, native tools) everything is read fresh.
@@ -144,7 +171,14 @@ impl<
         let engines = crate::components::catalog()?;
         let controls =
             crate::components::controls(crate::ports::AgentMetadata::root(app.store.records()))?;
-        Ok(crate::digest(&json!([
+        let access_part = crate::runtime::revision_shadow::access_part(
+            &access,
+            mode_revision,
+            &visibility,
+            &state,
+            &mode,
+        );
+        let key = crate::digest(&json!([
             fresh.version(),
             fresh.live_version(),
             mode_revision,
@@ -164,7 +198,8 @@ impl<
             main_chat,
             engines.revision,
             controls
-        ])))
+        ]));
+        Ok((key, access_part))
     }
     pub async fn prepare_capability(
         &self,

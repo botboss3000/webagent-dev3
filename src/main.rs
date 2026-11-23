@@ -136,6 +136,8 @@ mod publication;
 #[path = "engine/context/retained_recall.rs"]
 mod retained_recall;
 #[cfg(test)]
+mod revision_shadow_tests;
+#[cfg(test)]
 mod runtime_tests;
 #[path = "storage/mod.rs"]
 mod store;

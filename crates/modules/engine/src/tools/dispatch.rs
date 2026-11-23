@@ -425,7 +425,7 @@ impl<
                         object.remove("_execution_mode");
                         object.remove(crate::tools::retry_guard::REPEAT_ARG);
                     }
-                    run["session_id"] == sid
+                    let before_model = run["session_id"] == sid
                         && run["generation"] == generation
                         && run["status"] == "running"
                         && pending["state"] == "executing"
@@ -434,8 +434,34 @@ impl<
                         && pending["visibility_revision"] == visibility["revision"]
                         && pending["ability_state_revision"] == state["revision"]
                         && pending["access_revision"] == json!(access.revision.clone())
-                        && access.admitted()
-                        && app.run_model_authorized(&run).await
+                        && access.admitted();
+                    // Evaluated exactly when the chain above would have reached it.
+                    let model_authorized = if before_model {
+                        Some(app.run_model_authorized(&run).await)
+                    } else {
+                        None
+                    };
+                    // Shadow (stream B4): compare with the step's revision answer; never decides.
+                    let observed = crate::runtime::revision_shadow::Observed {
+                        model_authorized,
+                        mode_revision: Some(mode_revision),
+                        access: Some(crate::runtime::revision_shadow::access_part(
+                            &access,
+                            mode_revision,
+                            &visibility,
+                            &state,
+                            &mode,
+                        )),
+                    };
+                    let baseline = crate::runtime::revision_shadow::baseline(run_id, generation);
+                    app.shadow_check(
+                        crate::runtime::revision_shadow::Kind::ToolCheck,
+                        baseline.as_ref(),
+                        &observed,
+                    )
+                    .await;
+                    before_model
+                        && model_authorized == Some(true)
                         && effective.permission != access::Permission::Deny
                         && (effective.permission != access::Permission::Ask
                             || pending["human_approved"] == true)

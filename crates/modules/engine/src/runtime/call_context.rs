@@ -109,6 +109,79 @@ impl<
             _ => self.session_mode(sid).await,
         }
     }
+    /// The plain revisions behind an access decision for (`requester`, `sid`, `agent_id`);
+    /// unreadable parts are `None` and count as changed (`revision_shadow`).
+    pub async fn revision_vector(
+        &self,
+        requester: &str,
+        sid: &str,
+        agent_id: &str,
+    ) -> super::revision_shadow::RevisionVector {
+        use crate::ports::AgentMetadata;
+        let records = self.store.records();
+        let agent = AgentMetadata::for_agent(records, agent_id).await.ok();
+        let mut vector = super::revision_shadow::RevisionVector::read(
+            records.application_pool(),
+            records.user_pool(),
+            agent
+                .as_ref()
+                .map_or(records.agent_pool(), |a| a.agent_pool()),
+            AgentMetadata::root(records),
+            requester,
+            agent_id,
+            sid,
+        )
+        .await;
+        if agent.is_none() {
+            vector.agent = None;
+        }
+        vector
+    }
+    /// Reads the vector after a check's own reads and counts the shadow answer; never decides.
+    pub async fn shadow_check(
+        &self,
+        kind: super::revision_shadow::Kind,
+        baseline: Option<&super::revision_shadow::Baseline>,
+        observed: &super::revision_shadow::Observed,
+    ) {
+        let Some(baseline) = baseline else {
+            return;
+        };
+        let now = self
+            .revision_vector(
+                &baseline.requester,
+                &baseline.session_id,
+                &baseline.agent_id,
+            )
+            .await;
+        super::revision_shadow::record(kind, baseline, &now, observed);
+        super::revision_shadow::flush(self.store.records().application_pool()).await;
+    }
+    /// The step's shadow baseline: `vector` was read before `context`'s data.
+    pub fn shadow_baseline(
+        context: &CallContext,
+        vector: super::revision_shadow::RevisionVector,
+        run: &Value,
+    ) -> super::revision_shadow::Baseline {
+        let baseline = super::revision_shadow::Baseline {
+            vector,
+            access: super::revision_shadow::access_part(
+                &context.access,
+                context.mode_revision,
+                &context.visibility,
+                &context.ability_state,
+                &context.mode,
+            ),
+            mode_revision: context.mode_revision,
+            run_id: run["id"].as_str().unwrap_or_default().to_owned(),
+            generation: run["generation"].as_str().unwrap_or_default().to_owned(),
+            session_id: context.session_id.clone(),
+            agent_id: context.agent_id.clone(),
+            requester: context.requester.clone(),
+        };
+        super::revision_shadow::remember(baseline.clone());
+        baseline
+    }
     /// The live access for (`requester`, `sid`, `agent_id`), answered by `context` when it
     /// was read for exactly that identity.
     pub async fn live_access_in(
