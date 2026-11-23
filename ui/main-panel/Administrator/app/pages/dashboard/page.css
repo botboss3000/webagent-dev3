@@ -40,3 +40,5 @@
 .v3-dashboard .dashboard-findings ul { margin:6px 0 0;padding-left:18px;font-size:12px; }
 .v3-dashboard .dashboard-findings li { overflow-wrap:anywhere;padding:2px 0; }
 .v3-dashboard .dashboard-tile-actions { margin:10px 0 0; }
+/* Dependency scan labels are short words: wrap them between words, never inside one. */
+.v3-dashboard .dashboard-tile[data-card="supply_chain"] .dashboard-field span:first-child { flex:0 0 auto;max-width:45%;overflow-wrap:normal; }
