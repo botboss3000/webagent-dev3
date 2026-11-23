@@ -6,9 +6,9 @@ const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(new URL('../..',import.meta.url).pathname);
 const shared=path.join(root,'ui');
 const pages=[];
-for(const id of ['app','agents','builds','account','session-metrics']){
- const meta=JSON.parse(await fs.readFile(path.join(root,'ui/main-panel',id,'page.json'),'utf8'));
- const asset=name=>name?'/ui/main-panel/'+id+'/'+name:null;
+for(const dir of ['Administrator/app','agents','Administrator/builds','account','session-metrics']){
+ const meta=JSON.parse(await fs.readFile(path.join(root,'ui/main-panel',dir,'page.json'),'utf8'));
+ const asset=name=>name?'/ui/main-panel/'+dir+'/'+name:null;
  pages.push({...meta,entry:asset(meta.entry),html:asset(meta.html),css:(meta.css||[]).map(asset)});
 }
 pages.push({id:'automation',label:'Automations',entry:'/api/v3/modules/automation/assets/page.js',html:'/api/v3/modules/automation/assets/page.html',css:['/api/v3/modules/automation/assets/page.css']});

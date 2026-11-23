@@ -210,8 +210,9 @@ async function loadAgentRoster(){
   renderAgentCards();
 }
 let mainPages=[];
-// Main pages only administrators see; their APIs enforce this too.
-const adminPages=['builds','host-admin'];
+// Whose sign-in the page catalog was read with: undefined = this load's cookie, null = signed out.
+// The catalog lists administrator pages (marked admin) only to a signed-in administrator.
+let catalogUser;
 // Lucide names for the mobile sidebar; pages without an entry use a plain square.
 const mobileNavIcons={app:'layout-grid',agents:'bot',account:'user-cog',builds:'hammer',notifications:'bell','session-metrics':'chart-line',wiki:'book-open'};
 let activeMainPage='';
@@ -242,14 +243,26 @@ function startProtectedPage(page){
   });
   protectedPageStarts.set(page.id,pending);
 }
+// Reads the page catalog for the current sign-in, adding new pages and removing pages it no longer lists.
 async function loadMainPages(){
   const response=await fetch('/api/v3/pages/catalog',{credentials:'same-origin',cache:'no-store'});
   if(!response.ok)throw Error('Main page catalog unavailable');
   const catalog=await response.json();
   if(!Array.isArray(catalog.main)||!catalog.main.length)throw Error('No main pages configured');
+  const previous=mainPages;
   mainPages=catalog.main;
-  activeMainPage=mainPages.some(page=>page.id===initialTab)?initialTab:mainPages[0].id;
+  for(const page of previous.filter(old=>!mainPages.some(item=>item.id===old.id))){
+    for(const id of ['tab-button-','mobile-nav-','tab-'])$(id+page.id)?.remove();
+    $('main-tab-select').querySelector('option[value="'+page.id+'"]')?.remove();
+    for(const href of page.css||[])document.querySelector('link[rel="stylesheet"][href="'+href+'"]')?.remove();
+    mainPageLoads.delete(page.id);protectedPageStarts.delete(page.id);
+  }
+  const before=activeMainPage;
+  // A deep-linked page that only now became available (an administrator signed in) opens.
+  if(mainPages.some(page=>page.id===initialTab)&&!previous.some(page=>page.id===initialTab))activeMainPage=initialTab;
+  else if(!mainPages.some(page=>page.id===activeMainPage))activeMainPage=mainPages[0].id;
   for(const page of mainPages){
+    if(previous.some(old=>old.id===page.id))continue;
     for(const href of page.css||[]){
       if(protectedAsset(href))continue;
       const link=document.createElement('link');
@@ -276,6 +289,9 @@ async function loadMainPages(){
     $('main-panel').append(mount);
   }
   updateMainPageState();
+  if(before&&before!==activeMainPage){
+    const route=new URL(location.href);route.searchParams.set('tab',activeMainPage);history.replaceState(history.state,'',route);
+  }
 }
 // Main pages load on first navigation; startup only builds their empty mounts.
 const mainPageLoads=new Map();
@@ -559,7 +575,10 @@ function abilityDriftFor(me){
   abilityDrift=createAbilityDrift({request:api,render:view.render});abilityDrift.start();
 }
 // Signing out (or losing the session) also drops the browser's cached conversations.
-function out(){if(document.body.classList.contains('app-restricted'))return;void clearConversations();abilityDriftFor(null);issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);clearInterval(accessNoticePoll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+function out(){if(document.body.classList.contains('app-restricted'))return;
+  // Signing out drops administrator pages from the shell, not only from view.
+  catalogUser=null;if(mainPages.some(page=>page.admin))void loadMainPages().catch(()=>{});
+  void clearConversations();abilityDriftFor(null);issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);clearInterval(accessNoticePoll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;
 // The agent settings widgets belong to the agents page, which loads on first navigation.
 if($('connection')){$('shutoff').querySelector('span').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}}chat.runs(state.runs||[]);}
@@ -574,6 +593,10 @@ async function boot(){
   csrf=me.csrf_token;
   if(await authorizeEmbedPopup({request:api,me}))return;
   renderAccount(me);issues.start();abilityDriftFor(me);
+  // A sign-in in this tab (or a different account) reads the catalog again for its pages.
+  const user=me.user_id||me.user;
+  if(catalogUser!==undefined&&catalogUser!==user)try{await loadMainPages();}catch(error){note(error.message);}
+  catalogUser=user;
   window.dispatchEvent(new Event('v3-identity-changed'));
   privateVisible(false);
   const requested=new URL(location.href).searchParams.get('session_id');
@@ -781,14 +804,6 @@ document.addEventListener?.('keydown',event=>{if(event.key==='Escape')closeAccou
 let accountMe=null;
 function renderAccount(me){
   accountMe=me;
-  // Main-page visibility follows the authenticated identity, including on sign-in changes.
-  for(const page of mainPages.filter(page=>adminPages.includes(page.id))){
-    $('tab-button-'+page.id).hidden=!me.is_admin;
-    $('mobile-nav-'+page.id).hidden=!me.is_admin;
-    const option=$('main-tab-select').querySelector('option[value="'+page.id+'"]');
-    if(option) option.disabled=!me.is_admin;
-  }
-  if(!me.is_admin&&adminPages.includes(activeMainPage)) showMainPage('agents','replace');
   const guest=me.role==='guest';
   // Main pages mount lazily, so render only the nodes that exist now; the account
   // partial is filled again when it mounts (see ensureMainPage).
@@ -809,7 +824,7 @@ function renderAccount(me){
 }
 function showAccountPanel(routeMode='push'){showMainPage('account',routeMode);}
 function showMainPage(id,routeMode='push'){
-  if(!mainPages.some(page=>page.id===id)||adminPages.includes(id)&&!accountMe?.is_admin)return;
+  if(!mainPages.some(page=>page.id===id))return;
   closeMobileNav();
   activeMainPage=id;
   updateMainPageState();

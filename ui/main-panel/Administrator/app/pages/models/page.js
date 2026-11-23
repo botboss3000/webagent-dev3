@@ -1,8 +1,8 @@
 'use strict';
-import { mountModelTable } from '../../../../shared/models/model-table.js';
-import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
-import { usageFetch, usageQuery } from '../../../../shared/models/v3-adapter.js';
-import { showNotification } from '../../../../chat/core/chat-action-panel.js';
+import { mountModelTable } from '../../../../../shared/models/model-table.js';
+import { initModelAnalytics } from '../../../../../shared/models/model-analytics.js';
+import { usageFetch, usageQuery } from '../../../../../shared/models/v3-adapter.js';
+import { showNotification } from '../../../../../chat/core/chat-action-panel.js';
 const MISSING='NEED BACKEND CONTRACT';
 const unavailable=async()=>new Response(JSON.stringify({error:MISSING}),{status:501,headers:{'Content-Type':'application/json'}});
 
@@ -30,7 +30,7 @@ export async function mountAppModels(host) {
   if(!live())return()=>{};
   host.replaceChildren(template.content.querySelector('template').content.cloneNode(true));
   host.classList.add('v3-reference-models');host.querySelector('#settings-page-models').hidden=false;
-  for(const href of ['/ui/shared/models/reference.css','/ui/shared/models/pending.css','/ui/main-panel/app/pages/models/models.css']) {
+  for(const href of ['/ui/shared/models/reference.css','/ui/shared/models/pending.css','/ui/main-panel/Administrator/app/pages/models/models.css']) {
     const link=document.createElement('link');link.rel='stylesheet';link.href=href;host.prepend(link);
   }
   const q=selector=>host.querySelector(selector);

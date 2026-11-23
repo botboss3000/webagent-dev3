@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
-const root=path.resolve(new URL('../../..',import.meta.url).pathname);
+const root=path.resolve(new URL('../../../..',import.meta.url).pathname);
 const source=await fs.readFile(new URL('./app-page.js',import.meta.url),'utf8');
 const adapted=source.replace(/^import .* from '\.\/pages\/(?:users|user-policies|page-access|settings|functions|modules|models|actions|files)\/[^']+';$/gm,line=>line.replace(/from '[^']+'/,"from '/stubs.js'"));
 let preferences={page_ids:['config'],revision:0,configured:false};
@@ -17,7 +17,7 @@ const server=http.createServer(async(req,res)=>{
  }
  if(url.pathname==='/api/v3/file-manager'){res.end('{}');return;}
  if(url.pathname==='/stubs.js'){res.setHeader('content-type','text/javascript');res.end(stubs);return;}
- if(url.pathname==='/app'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/main-panel/app/app-page.css"><style>.agent-detail-content{display:flex;flex-direction:column;height:520px;min-height:0}.agent-detail-body{flex:1;min-height:0;overflow-y:auto}.agent-detail-body > :not(#sessions-section):not(#automations-section){box-sizing:border-box;width:min(100%,750px);margin-inline:auto}</style><main id="tab-app"></main><script type="module">import {start} from "/ui/main-panel/app/app-page.js";await start(document.getElementById("tab-app"));</script>');return;}
+ if(url.pathname==='/app'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/main-panel/Administrator/app/app-page.css"><style>.agent-detail-content{display:flex;flex-direction:column;height:520px;min-height:0}.agent-detail-body{flex:1;min-height:0;overflow-y:auto}.agent-detail-body > :not(#sessions-section):not(#automations-section){box-sizing:border-box;width:min(100%,750px);margin-inline:auto}</style><main id="tab-app"></main><script type="module">import {start} from "/ui/main-panel/Administrator/app/app-page.js";await start(document.getElementById("tab-app"));</script>');return;}
  try{const asset=path.resolve(root,'.'+url.pathname.replace(/^\/ui\//,'/ui/'));if(!asset.startsWith(root+'/'))throw Error('outside');res.setHeader('content-type',asset.endsWith('.js')?'text/javascript':asset.endsWith('.css')?'text/css':asset.endsWith('.json')?'application/json':'text/html');res.end(asset.endsWith('/app/app-page.js')?adapted:await fs.readFile(asset));}catch{res.statusCode=404;res.end('{}');}
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

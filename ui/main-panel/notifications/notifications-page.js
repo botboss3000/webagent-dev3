@@ -1,20 +1,13 @@
 'use strict';
 // Notifications: every signed-in user's own notifications (storage nearly full, what an
-// automatic cleanup removed), then, for administrators, security alerts raised under the
-// live admin-alerts.json with that file's event rules and delivery channels shown read-only.
+// automatic cleanup removed), then, for administrators, the security alerts section from
+// ../Administrator/notifications/alerts.js (served only to signed-in administrators).
 
-const LABELS = {
-  login_failed: 'Failed sign-ins',
-  login_blocked: 'Sign-in blocks',
-  rate_limited: 'Rate-limited requests',
-  host_approval: 'Host actions waiting for approval',
-};
 const NOTICE_LABELS = {
   storage_level: 'Storage',
   storage_full: 'Storage full',
   storage_cleanup: 'Automatic cleanup',
 };
-const CHANNELS = {in_app: 'In-app (this page)', ntfy: 'ntfy push', email: 'Email', twilio: 'SMS (Twilio)'};
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -25,11 +18,6 @@ function el(tag, className, text) {
 
 function when(seconds) {
   return new Date(seconds * 1000).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
-}
-
-function minutes(seconds) {
-  const value = Math.ceil(seconds / 60);
-  return value >= 60 && value % 60 === 0 ? (value / 60) + ' h' : value + ' min';
 }
 
 export function start(mount) {
@@ -108,42 +96,6 @@ export function start(mount) {
     return section;
   }
 
-  function renderAlerts(page) {
-    const wrap = el('section');
-    wrap.append(header('Administrator alerts', page.unread, '/api/v3/admin/alerts/read'));
-    wrap.append(page.alerts.length
-      ? list(page.alerts, '/api/v3/admin/alerts/read', item => item.severity + ' · ' + (LABELS[item.kind] || item.kind))
-      : el('p', 'alerts-empty', 'No alerts in the last ' + page.config.retention_days + ' days.'));
-
-    const rules = el('section');
-    rules.append(el('h2', '', 'What raises an alert'),
-      el('p', 'alerts-help', 'Set in config/notifications/admin-alerts.json (or ask the configuration assistant). Alerts are kept ' + page.config.retention_days + ' days.'));
-    const ruleRows = el('div', 'alerts-rows');
-    for (const [kind, rule] of Object.entries(page.config.events)) {
-      const row = el('div', 'alerts-row');
-      const pill = el('span', 'alerts-pill', rule.notify ? 'On' : 'Off');
-      pill.dataset.on = String(rule.notify);
-      row.append(el('strong', '', LABELS[kind] || kind),
-        el('span', '', rule.threshold + ' within ' + minutes(rule.window_seconds) + ' · ' + rule.severity), pill);
-      ruleRows.append(row);
-    }
-    rules.append(ruleRows);
-
-    const channels = el('section');
-    channels.append(el('h2', '', 'Delivery'));
-    const channelRows = el('div', 'alerts-rows');
-    for (const [name, channel] of Object.entries(page.config.channels)) {
-      const row = el('div', 'alerts-row');
-      const state = channel.available ? (channel.enabled ? 'On' : 'Off') : 'Not available yet';
-      const pill = el('span', 'alerts-pill', state);
-      pill.dataset.on = String(channel.enabled);
-      row.append(el('strong', '', CHANNELS[name] || name), pill);
-      channelRows.append(row);
-    }
-    channels.append(channelRows);
-    return [wrap, rules, channels];
-  }
-
   async function read(path) {
     const response = await fetch(path, {credentials: 'same-origin', cache: 'no-store'});
     if (!response.ok) throw Error('Notifications unavailable');
@@ -151,14 +103,17 @@ export function start(mount) {
   }
 
   async function load() {
-    const [notices, alerts] = await Promise.all([
+    const [notices, alerts, section] = await Promise.all([
       read('/api/v3/notices'),
       me.is_admin ? read('/api/v3/admin/alerts') : null,
+      // Missing for any sign-in the server does not treat as an administrator's own.
+      me.is_admin ? import('../Administrator/notifications/alerts.js').catch(() => null) : null,
     ]);
-    setUnread(notices.unread + (alerts ? alerts.unread : 0));
+    const shown = section ? alerts : null;
+    setUnread(notices.unread + (shown ? shown.unread : 0));
     const wrap = el('div', 'alerts-wrap');
     wrap.append(renderNotices(notices));
-    if (alerts) wrap.append(...renderAlerts(alerts));
+    if (shown) wrap.append(...section.renderAlerts(shown, {el, header, list}));
     mount.replaceChildren(wrap);
   }
 

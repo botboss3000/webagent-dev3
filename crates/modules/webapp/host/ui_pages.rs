@@ -1,8 +1,8 @@
 use axum::{
     extract::{Path as RoutePath, Request, State},
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde_json::Value;
@@ -10,11 +10,48 @@ use std::path::Path;
 use tower::ServiceExt;
 use webagent_accounts_host::AccountsStore;
 
+/// Whether this browser request carries a signed-in administrator's own sign-in. Bearer callers
+/// (chat widgets) and sessions the diagnostics (agent) browser signed in with never count.
+#[cfg(feature = "administrator")]
+pub(crate) async fn administrator_browser(app: &crate::App, headers: &HeaderMap) -> bool {
+    if headers.contains_key(header::AUTHORIZATION) {
+        return false;
+    }
+    let Ok(Some(candidate)) = app
+        .store
+        .accounts_repository()
+        .inspect_session(
+            webagent_accounts::session_token(headers),
+            webagent_host_core::now(),
+        )
+        .await
+    else {
+        return false;
+    };
+    crate::access::Principal::from_account(candidate.account_state())
+        .is_ok_and(|principal| principal.active() && principal.administrator())
+        && candidate.finish().is_some_and(|session| {
+            session.document["user_agent"] != webagent_accounts::DIAGNOSTICS_BROWSER_AGENT
+        })
+}
+/// Builds without the administrator feature serve no administrator pages to anyone.
+#[cfg(not(feature = "administrator"))]
+pub(crate) async fn administrator_browser(_app: &crate::App, _headers: &HeaderMap) -> bool {
+    false
+}
+
 pub(super) async fn live_ui(
     State(app): State<crate::App>,
     request: Request,
     next: Next,
 ) -> Response {
+    // Files in `ui/main-panel/Administrator/` get the missing-file 404 unless the caller is a
+    // signed-in administrator; checked first, so draft previews and the live root are gated too.
+    if webagent_webapp::pages::administrator_file(request.uri().path())
+        && !administrator_browser(&app, request.headers()).await
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let path = request.uri().path();
     if (path == "/app" || path.starts_with("/ui/"))
         && request
@@ -42,7 +79,10 @@ pub(super) async fn live_ui(
     }
     next.run(request).await
 }
-pub async fn catalog(State(_app): State<crate::App>) -> Result<Json<Value>, (StatusCode, String)> {
+pub async fn catalog(
+    State(app): State<crate::App>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, String)> {
     let ui = webagent_webapp::configuration::live_root(
         Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
         &webagent_configuration::paths::checkout().join("ui"),
@@ -55,11 +95,20 @@ pub async fn catalog(State(_app): State<crate::App>) -> Result<Json<Value>, (Sta
                 .into_owned()
         }))
     });
+    catalog_at(&app, &headers, &ui).await
+}
+/// The main page catalog under `ui`; administrator pages only for a signed-in administrator.
+async fn catalog_at(
+    app: &crate::App,
+    headers: &HeaderMap,
+    ui: &Path,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let administrator = administrator_browser(app, headers).await;
     let packages = crate::modules::package_ids()
         .into_iter()
         .filter(|id| crate::modules::available(id))
         .filter_map(|id| crate::modules::package_root(&id).map(|root| (id.to_owned(), root)));
-    webagent_webapp::pages::catalog(&ui, packages)
+    webagent_webapp::pages::catalog(ui, administrator, packages)
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
@@ -67,7 +116,6 @@ pub(crate) async fn module_asset(
     axum::Extension(app): axum::Extension<crate::App>,
     RoutePath((id, name)): RoutePath<(String, String)>,
 ) -> Response {
-    use axum::response::IntoResponse;
     if id == "outbound_notifications" {
         let allowed = app
             .store
@@ -94,10 +142,7 @@ pub(crate) async fn module_asset(
 /// over the live UI, so screenshots show the draft against the real API and sign-in.
 mod preview {
     use super::*;
-    use axum::{
-        http::{header, HeaderMap, HeaderValue},
-        response::{IntoResponse, Redirect},
-    };
+    use axum::{http::HeaderValue, response::Redirect};
     use serde_json::json;
     use std::{
         collections::HashMap,
@@ -410,3 +455,173 @@ mod preview {
 pub(crate) use preview::set as ui_preview_set;
 pub(crate) use preview::start as ui_preview_start;
 pub(crate) use preview::status as ui_preview_status;
+
+#[cfg(test)]
+mod administrator_pages_tests {
+    use super::*;
+    use axum::body::Body;
+    use serde_json::json;
+
+    /// Stores a browser session for `user` and returns its cookie header.
+    async fn session(app: &crate::App, user: &str, user_agent: &str) -> String {
+        let token = uuid::Uuid::new_v4().to_string();
+        let generation =
+            app.store.account_by_id(user).await.unwrap().unwrap()["generation"].clone();
+        app.store
+            .put(
+                &format!("auth:{}", webagent_configuration::digest(&json!(token))),
+                &json!({"user_id":user,"csrf":"fixture","expires":webagent_host_core::now()+3600,
+                    "generation":generation,"user_agent":user_agent}),
+            )
+            .await
+            .unwrap();
+        format!("v3_session={token}")
+    }
+
+    /// One UI tree with a public page and an administrator page (script and stylesheet).
+    fn ui_tree() -> tempfile::TempDir {
+        let ui = tempfile::tempdir().unwrap();
+        for (folder, id) in [
+            ("main-panel/wiki", "wiki"),
+            ("main-panel/Administrator/builds", "builds"),
+        ] {
+            let folder = ui.path().join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("page.js"), "export function start() {}").unwrap();
+            std::fs::write(folder.join("page.css"), "main{}").unwrap();
+            std::fs::write(
+                folder.join("page.json"),
+                format!(r#"{{"id":"{id}","label":"{id}","css":["page.css"],"entry":"page.js"}}"#),
+            )
+            .unwrap();
+        }
+        ui
+    }
+
+    /// The status, headers and body a UI file request gets through the administrator gate.
+    async fn fetch(
+        app: &crate::App,
+        ui: &Path,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, String, Vec<u8>) {
+        let mut request = Request::builder().uri(path);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = webagent_webapp::pages::routes::<crate::App>(ui)
+            .layer(axum::middleware::from_fn_with_state(app.clone(), live_ui))
+            .with_state(app.clone())
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let kind = format!("{:?}", response.headers().get(header::CONTENT_TYPE));
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, kind, body)
+    }
+
+    async fn catalog_ids(app: &crate::App, ui: &Path, headers: &[(&str, &str)]) -> Vec<String> {
+        let mut map = HeaderMap::new();
+        for (name, value) in headers {
+            map.insert(
+                header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                value.parse().unwrap(),
+            );
+        }
+        let Json(catalog) = catalog_at(app, &map, ui).await.unwrap();
+        catalog["main"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|page| page["id"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// Signed out, an ordinary member, a widget bearer and the diagnostics browser get the
+    /// missing-file 404 for administrator files and a catalog without administrator pages.
+    #[tokio::test]
+    async fn administrator_pages_are_refused_to_everyone_else() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let ui = ui_tree();
+        let member = app
+            .store
+            .create_user_account("pages_member", "fixture-only-password-hash")
+            .await
+            .unwrap();
+        let member = member["user_id"].as_str().unwrap().to_owned();
+        app.store
+            .update_account_access(&member, 1, crate::access::AccountStatus::Active, "free")
+            .await
+            .unwrap();
+        let member_cookie = session(&app, &member, "Fixture browser").await;
+        let admin_cookie = session(&app, "admin", "Fixture browser").await;
+        let diagnostics_cookie =
+            session(&app, "admin", webagent_accounts::DIAGNOSTICS_BROWSER_AGENT).await;
+        let missing = fetch(&app, ui.path(), "/ui/main-panel/wiki/missing.js", &[]).await;
+        assert_eq!(missing.0, StatusCode::NOT_FOUND);
+        let callers: [&[(&str, &str)]; 5] = [
+            &[],
+            &[("cookie", &member_cookie)],
+            &[("authorization", "Bearer widget-fixture-token")],
+            &[
+                ("cookie", &admin_cookie),
+                ("authorization", "Bearer widget-fixture-token"),
+            ],
+            &[("cookie", &diagnostics_cookie)],
+        ];
+        for caller in callers {
+            for path in [
+                "/ui/main-panel/Administrator/builds/page.js",
+                "/ui/main-panel/Administrator/builds/page.css",
+                "/ui/main-panel/%41dministrator/builds/page.js",
+            ] {
+                assert_eq!(
+                    fetch(&app, ui.path(), path, caller).await,
+                    missing,
+                    "{path} {caller:?}"
+                );
+            }
+            assert_eq!(
+                fetch(&app, ui.path(), "/ui/main-panel/wiki/page.js", caller)
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+            let ids = catalog_ids(&app, ui.path(), caller).await;
+            assert!(
+                ids.contains(&"wiki".into()) && !ids.contains(&"builds".into()),
+                "{caller:?}"
+            );
+        }
+    }
+
+    /// A signed-in administrator gets the administrator script, stylesheet and catalog entry.
+    #[cfg(feature = "administrator")]
+    #[tokio::test]
+    async fn administrator_pages_are_served_to_a_signed_in_administrator() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let ui = ui_tree();
+        let cookie = session(&app, "admin", "Fixture browser").await;
+        let caller = [("cookie", cookie.as_str())];
+        for (path, body) in [
+            (
+                "/ui/main-panel/Administrator/builds/page.js",
+                "export function start() {}",
+            ),
+            ("/ui/main-panel/Administrator/builds/page.css", "main{}"),
+        ] {
+            let (status, _, bytes) = fetch(&app, ui.path(), path, &caller).await;
+            assert_eq!(
+                (status, bytes.as_slice()),
+                (StatusCode::OK, body.as_bytes()),
+                "{path}"
+            );
+        }
+        let ids = catalog_ids(&app, ui.path(), &caller).await;
+        assert!(ids.contains(&"wiki".into()) && ids.contains(&"builds".into()));
+    }
+}

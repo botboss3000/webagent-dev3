@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
-const root=path.resolve(new URL('../../../../..',import.meta.url).pathname);
+const root=path.resolve(new URL('../../../../../..',import.meta.url).pathname);
 let mode='live',calls=0,delay=0;const windows=[];
 const sample=()=>({schema_version:1,sampled_at_unix_ms:Date.now(),metrics:{
  cpu:{available:true,logical_processors:8,utilization_available:mode!=='warm',utilization_percent:mode==='warm'?null:24.5},
@@ -47,7 +47,7 @@ const server=http.createServer(async(req,res)=>{
  };
  if(activity[url.pathname]){res.setHeader('content-type','application/json');res.end(JSON.stringify(activity[url.pathname]));return;}
  if(url.pathname==='/fixture'){
-  res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:8px;background:var(--bg-elev);color:var(--fg-1)}</style><section id="dashboard"></section><script type="module">import {mountDashboard} from "/ui/main-panel/app/pages/dashboard/page.js";window.mount=()=>mountDashboard(document.querySelector("#dashboard"));window.dispose=await window.mount();</script>');return;
+  res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:8px;background:var(--bg-elev);color:var(--fg-1)}</style><section id="dashboard"></section><script type="module">import {mountDashboard} from "/ui/main-panel/Administrator/app/pages/dashboard/page.js";window.mount=()=>mountDashboard(document.querySelector("#dashboard"));window.dispose=await window.mount();</script>');return;
  }
  try{
   const file=path.resolve(root,'.'+url.pathname);if(!file.startsWith(root+'/'))throw Error('outside');

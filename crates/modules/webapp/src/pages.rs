@@ -39,18 +39,87 @@ fn asset(folder: &Path, base: &str, name: &str) -> Result<String, String> {
     Ok(format!("{base}/{name}"))
 }
 
-pub fn discover(ui: &Path) -> Result<Value, String> {
+/// The folder under `ui/main-panel/` whose pages and files only signed-in administrators get.
+pub const ADMINISTRATOR_FOLDER: &str = "Administrator";
+
+/// Decodes `%XX` escapes as the file server does; malformed escapes stay as written.
+fn percent_decoded(path: &str) -> Vec<u8> {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match (bytes[i], bytes.get(i + 1), bytes.get(i + 2)) {
+            (b'%', Some(&hi), Some(&lo)) if hex(hi).is_some() && hex(lo).is_some() => {
+                out.push((hex(hi).unwrap() * 16 + hex(lo).unwrap()) as u8);
+                i += 3;
+            }
+            (b, _, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Whether a request path names something in the administrator pages folder, read the way the
+/// `/ui` file server resolves it (escapes decoded, empty and `.` segments skipped). A `..`
+/// segment counts as inside, failing closed; the file server refuses those paths anyway.
+pub fn administrator_file(path: &str) -> bool {
+    // Only the `/ui` tree serves files; the router matches that prefix undecoded.
+    if !path.starts_with("/ui") {
+        return false;
+    }
+    let decoded = percent_decoded(path);
+    let mut segments = decoded
+        .split(|&b| b == b'/')
+        .filter(|segment| !segment.is_empty() && *segment != b".");
+    if segments.next() != Some(b"ui".as_slice()) {
+        return false;
+    }
+    let rest: Vec<&[u8]> = segments.collect();
+    rest.contains(&b"..".as_slice())
+        || (rest.first() == Some(&b"main-panel".as_slice())
+            && rest
+                .get(1)
+                .is_some_and(|folder| folder.eq_ignore_ascii_case(ADMINISTRATOR_FOLDER.as_bytes())))
+}
+
+/// The main pages in `ui/main-panel/`, plus the administrator pages in its `Administrator/`
+/// folder when `administrator` is true; administrator pages carry `"admin": true`.
+pub fn discover(ui: &Path, administrator: bool) -> Result<Value, String> {
     let root = ui.join("main-panel");
     let mut pages = Vec::new();
-    for item in fs::read_dir(&root).map_err(|e| format!("Cannot read main page directory: {e}"))? {
+    collect_pages(&root, "/ui/main-panel", false, &mut pages)?;
+    let folder = root.join(ADMINISTRATOR_FOLDER);
+    if administrator && folder.is_dir() && !folder.is_symlink() {
+        let base = format!("/ui/main-panel/{ADMINISTRATOR_FOLDER}");
+        collect_pages(&folder, &base, true, &mut pages)?;
+    }
+    pages.sort_by(|a, b| {
+        a["order"]
+            .as_i64()
+            .cmp(&b["order"].as_i64())
+            .then_with(|| a["label"].as_str().cmp(&b["label"].as_str()))
+    });
+    Ok(json!({"main":pages}))
+}
+
+/// Adds the page described by each `<folder>/page.json` directly under `root`.
+fn collect_pages(
+    root: &Path,
+    base: &str,
+    admin: bool,
+    pages: &mut Vec<Value>,
+) -> Result<(), String> {
+    for item in fs::read_dir(root).map_err(|e| format!("Cannot read main page directory: {e}"))? {
         let folder = item.map_err(|e| e.to_string())?.path();
+        let name = folder.file_name().unwrap().to_string_lossy();
         if !folder.is_dir()
             || folder.is_symlink()
-            || folder
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with('_')
+            || name.starts_with('_')
+            || name.eq_ignore_ascii_case(ADMINISTRATOR_FOLDER)
         {
             continue;
         }
@@ -71,7 +140,10 @@ pub fn discover(ui: &Path) -> Result<Value, String> {
         {
             return Err(format!("Invalid page identity: {}", descriptor.display()));
         }
-        let base = format!("/ui/main-panel/{}", page.id);
+        if pages.iter().any(|known| known["id"] == page.id.as_str()) {
+            return Err(format!("Duplicate page id: {}", descriptor.display()));
+        }
+        let base = format!("{base}/{}", page.id);
         let html = page
             .html
             .as_deref()
@@ -89,15 +161,9 @@ pub fn discover(ui: &Path) -> Result<Value, String> {
             .map(|name| asset(&folder, &base, name))
             .transpose()?;
         pages.push(json!({"id":page.id,"label":page.label,"order":page.order,
-            "html":html,"css":css,"entry":entry}));
+            "html":html,"css":css,"entry":entry,"admin":admin}));
     }
-    pages.sort_by(|a, b| {
-        a["order"]
-            .as_i64()
-            .cmp(&b["order"].as_i64())
-            .then_with(|| a["label"].as_str().cmp(&b["label"].as_str()))
-    });
-    Ok(json!({"main":pages}))
+    Ok(())
 }
 
 const SEO_DESCRIPTION: &str =
@@ -259,9 +325,10 @@ fn ui_files(ui: &Path) -> tower::util::MapRequest<ServeDir, Strip> {
 /// Package availability is supplied by Extensions; Webapp validates descriptors and assets.
 pub fn catalog(
     ui: &Path,
+    administrator: bool,
     packages: impl IntoIterator<Item = (String, std::path::PathBuf)>,
 ) -> Result<Value, String> {
-    let mut catalog = discover(ui)?;
+    let mut catalog = discover(ui, administrator)?;
     // Package-owned assets disappear with their package; the shell has no module engine imports.
     for (id, folder) in packages {
         let descriptor = folder.join("page.json");
@@ -480,7 +547,7 @@ mod tests {
             )
             .unwrap();
         }
-        let pages = discover(root.path()).unwrap();
+        let pages = discover(root.path(), false).unwrap();
         assert_eq!(pages["main"][0]["id"], "first");
         assert_eq!(pages["main"][1]["entry"], "/ui/main-panel/later/page.js");
     }
@@ -494,7 +561,72 @@ mod tests {
             r#"{"id":"agents","label":"Agents","entry":"../app.js"}"#,
         )
         .unwrap();
-        assert!(discover(root.path()).is_err());
+        assert!(discover(root.path(), false).is_err());
+    }
+
+    #[test]
+    fn administrator_pages_are_listed_only_for_administrators() {
+        let root = tempfile::tempdir().unwrap();
+        for (folder, id) in [
+            ("main-panel/agents", "agents"),
+            ("main-panel/Administrator/builds", "builds"),
+        ] {
+            let folder = root.path().join(folder);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(folder.join("page.js"), "export function start() {}").unwrap();
+            fs::write(
+                folder.join("page.json"),
+                format!(r#"{{"id":"{id}","label":"{id}","entry":"page.js"}}"#),
+            )
+            .unwrap();
+        }
+        let ids = |pages: Value| -> Vec<String> {
+            pages["main"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|page| page["id"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(ids(discover(root.path(), false).unwrap()), ["agents"]);
+        let pages = discover(root.path(), true).unwrap();
+        assert_eq!(ids(pages.clone()), ["agents", "builds"]);
+        assert_eq!(
+            pages["main"][1]["entry"],
+            "/ui/main-panel/Administrator/builds/page.js"
+        );
+        assert_eq!(pages["main"][1]["admin"], true);
+        assert_eq!(pages["main"][0]["admin"], false);
+        // An administrator page may not reuse a public page's id.
+        let twin = root.path().join("main-panel/Administrator/agents");
+        fs::create_dir_all(&twin).unwrap();
+        fs::write(twin.join("page.json"), r#"{"id":"agents","label":"Twin"}"#).unwrap();
+        assert!(discover(root.path(), true).is_err());
+        assert!(discover(root.path(), false).is_ok());
+    }
+
+    #[test]
+    fn administrator_files_are_recognised_however_the_path_is_spelled() {
+        for path in [
+            "/ui/main-panel/Administrator/builds/builds-page.js",
+            "/ui/main-panel/Administrator",
+            "/ui/main-panel/administrator/app/app-page.css",
+            "/ui//main-panel/./Administrator/x.js",
+            "/ui/main-panel/%41dministrator/x.js",
+            "/ui/main%2Dpanel/Administrator/x.js",
+            "/ui/main-panel/agents/../Administrator/x.js",
+        ] {
+            assert!(administrator_file(path), "{path}");
+        }
+        for path in [
+            "/ui/main-panel/agents/agents.css",
+            "/ui/main-panel/notifications/notifications-page.js",
+            "/ui/shared/Administrator/x.js",
+            "/app",
+            "/api/v3/pages/catalog",
+        ] {
+            assert!(!administrator_file(path), "{path}");
+        }
     }
 }
 
@@ -514,7 +646,7 @@ mod package_tests {
         .unwrap();
         let packages = vec![("demo".into(), package.path().to_path_buf())];
         assert_eq!(
-            catalog(root.path(), packages.clone()).unwrap()["main"][0]["entry"],
+            catalog(root.path(), false, packages.clone()).unwrap()["main"][0]["entry"],
             "/api/v3/modules/demo/assets/page.js"
         );
         let response = module_asset(package.path(), "page.js").await;
@@ -529,7 +661,7 @@ mod package_tests {
             r#"{"id":"demo","label":"Demo","entry":"../page.js"}"#,
         )
         .unwrap();
-        assert!(catalog(root.path(), packages).unwrap()["main"]
+        assert!(catalog(root.path(), false, packages).unwrap()["main"]
             .as_array()
             .unwrap()
             .is_empty());

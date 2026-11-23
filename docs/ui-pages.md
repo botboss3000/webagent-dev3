@@ -1,6 +1,10 @@
 # Main-panel pages — authoring conventions
 
-A main-panel page is a folder `ui/main-panel/<id>/` containing a `page.json`. Nothing else registers it: the catalog is derived from these folders by `src/api/ui_pages.rs` and served at `GET /api/v3/pages/catalog`; `ui/shell/app.js` builds the tab, loads the page CSS, and mounts the page from the catalog. Read this file before authoring a page — exemplar pages do not need to be read to learn these conventions.
+A main-panel page is a folder `ui/main-panel/<id>/` containing a `page.json`. Nothing else registers it: the catalog is derived from these folders by `crates/modules/webapp/src/pages.rs` (route in `crates/modules/webapp/host/ui_pages.rs`) and served at `GET /api/v3/pages/catalog`; `ui/shell/app.js` builds the tab, loads the page CSS, and mounts the page from the catalog. Read this file before authoring a page — exemplar pages do not need to be read to learn these conventions.
+
+## Administrator pages
+
+A page only administrators may use goes in `ui/main-panel/Administrator/<id>/` instead (today: App, Builds, Host Admin). Everything under `ui/main-panel/Administrator/` is served only to a signed-in administrator's own browser sign-in; anyone else, including a chat widget and the diagnostics (agent) browser, gets the same 404 as a missing file, and the catalog lists these pages (with `"admin": true`) only to that administrator. Builds without the `administrator` feature never serve the folder. A public page's administrator-only section goes in its own file there and is loaded with a dynamic `import()` only for administrators (example: `notifications/` imports `../Administrator/notifications/alerts.js`). Page ids stay unique across both folders. The administrator APIs keep their own role checks.
 
 ## page.json (required)
 

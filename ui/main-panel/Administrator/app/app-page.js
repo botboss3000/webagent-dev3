@@ -1,5 +1,5 @@
 'use strict';
-import { renderPageDirectory } from '../../shared/page-directory/page-directory.js';
+import { renderPageDirectory } from '../../../shared/page-directory/page-directory.js';
 import { mountDashboard } from './pages/dashboard/page.js';
 import { loadAppPages } from './pages/catalog.js';
 import { createPagePreferences } from './pages/preferences.js';
@@ -11,8 +11,8 @@ import { mountFunctions } from './pages/functions/page.js';
 import { mountModules } from './pages/modules/page.js';
 import { mountAppModels } from './pages/models/page.js';
 import { mountAppActions } from './pages/actions/page.js';
-import { mountSettingsPage } from '../../shared/config-rows/settings-page.js';
-import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../../shared/page-tabs/page-tabs.js';
+import { mountSettingsPage } from '../../../shared/config-rows/settings-page.js';
+import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../../../shared/page-tabs/page-tabs.js';
 import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './pages/file-manager/page.js';
 
 export async function start(mount) {
@@ -90,7 +90,7 @@ export async function start(mount) {
         body:JSON.stringify({action:'tree',path:''})
       });
       if (!probe.ok) throw Error('V3 File Manager backend is not ready ('+probe.status+')');
-      const response=await fetch('/ui/main-panel/app/pages/file-manager/files.html',{credentials:'same-origin'});
+      const response=await fetch('/ui/main-panel/Administrator/app/pages/file-manager/files.html',{credentials:'same-origin'});
       if (!response.ok) throw Error('File Manager view unavailable');
       const markup=await response.text();
       if (!active() || selected!=='files') return;

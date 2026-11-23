@@ -129,6 +129,9 @@ pub use authentication::VerifiedCredentials;
 
 pub mod authentication_api;
 pub mod browser_login_api;
+/// The `user_agent` recorded on sessions the diagnostics (agent) browser signs in with, so
+/// administrator-only pages can refuse them.
+pub const DIAGNOSTICS_BROWSER_AGENT: &str = "Diagnostics v3 development browser";
 pub mod registration_api;
 pub mod self_service;
 pub use sessions::SessionCandidate;

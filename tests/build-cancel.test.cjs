@@ -12,7 +12,7 @@ const flush = async () => { for (let i=0;i<5;i++) await new Promise(setImmediate
 function fixture(mode='build_stop', affected=['job'], preflight=null, leftovers=[]) {
   const panel = new Element('main'), calls = [], warnings = [];
   const state = {confirm:true, fail:false, requested:false, hold:null, reviewed:false, admin:true};
-  const source = fs.readFileSync(path.join(__dirname,'../ui/main-panel/app/builds.js'),'utf8');
+  const source = fs.readFileSync(path.join(__dirname,'../ui/main-panel/Administrator/app/builds.js'),'utf8');
   const context = {URL, location:{href:'https://dev.webagent.live/app?tab=builds'},
     document:{hidden:false,createElement:tag=>new Element(tag),createTextNode:text=>({textContent:text})},
     localStorage:{getItem(){return null;},setItem(){}},crypto:{randomUUID:()=> 'stable-id'},

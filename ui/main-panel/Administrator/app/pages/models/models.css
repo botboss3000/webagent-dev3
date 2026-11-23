@@ -77,4 +77,3 @@
 .model-credential-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); color: var(--fg-3); font-size: 12px; }
 .model-credential-state.is-configured { color: var(--success); }
 .model-credential-state.is-missing { color: var(--warning); }
-

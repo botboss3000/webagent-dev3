@@ -71,7 +71,7 @@ pub async fn login<C: RecordCodec, H: Host>(
             &identity,
             generation,
             now,
-            "Diagnostics v3 development browser",
+            crate::DIAGNOSTICS_BROWSER_AGENT,
             duration,
         )
         .await?;

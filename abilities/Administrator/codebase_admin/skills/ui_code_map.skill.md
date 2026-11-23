@@ -49,7 +49,8 @@ search this checkout instead.
 | Styles | `chat.css` plus `panel.css`, `header.css`, `composer.css` (with `composer-footer.css` and `composer-above.css`), `chat-shared.css`, `controls/footer-controls.css`, `core/messages.css`, `core/turns.css`, `core/markdown.css`, `core/zoom-chip.css`, `controls/session-dropdown/menu.css` and `session-list.css`; tokens in `ui/shared/css/design-system.css` |
 | Mobile soft keyboard | `ui/boot/viewport.js` tracks the visual viewport and sets `body.kb-open` (see `ui_design`) |
 
-Other areas: shell `ui/shell/app.js`, `ui/index.html`; main-panel pages `ui/main-panel/<id>/`
+Other areas: shell `ui/shell/app.js`, `ui/index.html`; main-panel pages `ui/main-panel/<id>/`, administrator-only pages and sections
+`ui/main-panel/Administrator/` (served only to signed-in administrators)
 (`docs/ui-pages.md`); shared assets `ui/shared/`. Routes for browser checks are in
 `docs/ui-journeys.md`. Design rules (tap highlight, mobile and desktop, theming) are in
 the `ui_design` skill.

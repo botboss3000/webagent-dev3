@@ -1,9 +1,9 @@
 'use strict';
 
-import { pushBackHandler } from '../../../../shared/history-back/history-back.js';
+import { pushBackHandler } from '../../../../../shared/history-back/history-back.js';
 // The shared copy falls back to a hidden textarea on plain-HTTP pages (phones on the LAN).
-export { copyText } from '../../../../shared/models/clipboard.js';
-export { applyRubberBand } from '../../../../shared/rubber-band/rubber-band.js';
+export { copyText } from '../../../../../shared/models/clipboard.js';
+export { applyRubberBand } from '../../../../../shared/rubber-band/rubber-band.js';
 
 let menu = null;
 let cleanup = null;

@@ -15,4 +15,3 @@ export async function mountPageAccess(host){
     }
   }catch(error){status.textContent='Page audiences unavailable: '+error.message;}
 }
-
