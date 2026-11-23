@@ -47,7 +47,13 @@ pub struct Request {
     pub timeout: Duration,
 }
 
-/// Save a real model call's request for later pings.
+/// Held while a session's timing is saved and while the service reads an account's timings and
+/// stores its next check, so a timing saved meanwhile is never left without its deadline.
+static TIMINGS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Save a real model call's request for later pings. The account's `account_due` row comes
+/// first, so the service never misses a saved timing (a crash between leaves only an early
+/// look).
 pub async fn record(store: &impl ScopedStorage, session: &str, mut request: Request, now: u64) {
     if let Some(run) = request.token_run.as_object_mut() {
         run.remove("input");
@@ -58,7 +64,16 @@ pub async fn record(store: &impl ScopedStorage, session: &str, mut request: Requ
         "token_run":request.token_run});
     let timing = json!({"session_id":session,"run_id":request.run_id,"agent_id":request.agent_id,
         "timeout_seconds":request.timeout.as_secs(),"last_call":now,"real_call":now,"visit":false});
+    let due = now.saturating_add(ping_after(request.timeout).as_secs());
+    let _timings = TIMINGS.lock().await;
     let result = async {
+        crate::due::earlier(
+            store.application_pool(),
+            store.current_user_id(),
+            crate::due::KEEP_ALIVE,
+            due,
+        )
+        .await?;
         store.put(&request_key(session), &saved).await?;
         store.put(&timing_key(session), &timing).await
     }
@@ -130,6 +145,10 @@ pub fn decide(timing: &Value, now: u64, limit: Duration, state: &State) -> Actio
     }
 }
 
+fn earliest(next: &mut Option<u64>, at: u64) {
+    *next = Some(next.map_or(at, |n| n.min(at)));
+}
+
 /// A visit counts while the cache is still warm: it lets the next due ping go out.
 pub fn apply_visit(timing: &mut Value, visit_at: u64) {
     let timeout = timing["timeout_seconds"].as_u64().unwrap_or(0);
@@ -195,29 +214,83 @@ impl<
             + super::native::NativeDispatch<S, C, B, H::Binding>,
     > Runtime<S, C, B, A, H, M, X>
 {
-    /// Ping saved sessions shortly before their cache times out, until the loop stops.
+    /// Ping saved sessions shortly before their cache times out, until the loop stops. The
+    /// first pass reads every account (timings saved before deadlines existed); after it, each
+    /// tick opens only accounts whose keep-alive deadline in `app.db` has passed.
     pub fn keep_alive_service(self) -> impl std::future::Future<Output = ()> + Send {
         async move {
             let app = self;
+            let mut every = true;
             loop {
                 tokio::select! {
                     () = app.stop.cancelled() => break,
                     () = tokio::time::sleep(TICK) => {}
                 }
-                let Ok(views) = app.user_views(true).await else {
+                let pool = ScopedStorage::application_pool(app.store.records()).clone();
+                let views = if every {
+                    app.user_views(true).await
+                } else {
+                    match crate::due::passed(&pool, crate::due::KEEP_ALIVE, crate::now()).await {
+                        Ok(users) => {
+                            let mut views = Vec::new();
+                            for user in users {
+                                match app.for_user_view(&user).await {
+                                    Ok(view) => views.push(view),
+                                    // A deleted or unreadable account keeps no deadline.
+                                    Err(_) => {
+                                        let _ = crate::due::set(
+                                            &pool,
+                                            &user,
+                                            crate::due::KEEP_ALIVE,
+                                            None,
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                            Ok(views)
+                        }
+                        Err(error) => Err(error),
+                    }
+                };
+                let Ok(views) = views else {
                     continue;
                 };
+                let mut complete = true;
                 for view in views {
                     if let Err(error) = view.keep_alive_tick().await {
+                        complete = false;
                         tracing::warn!(error = %error, "keep-alive scan failed");
                     }
                 }
+                every = every && !complete;
             }
         }
     }
 
-    /// One pass over one account's saved sessions.
+    /// One pass over one account's saved sessions, then store when it next needs a look.
     async fn keep_alive_tick(&self) -> anyhow::Result<()> {
+        let _timings = TIMINGS.lock().await;
+        let next = self.keep_alive_sessions().await;
+        // A failed pass looks again on the next tick.
+        let at = match &next {
+            Ok(next) => *next,
+            Err(_) => Some(crate::now()),
+        };
+        crate::due::set(
+            ScopedStorage::application_pool(self.store.records()),
+            crate::ports::Records::current_user_id(self.store.records()),
+            crate::due::KEEP_ALIVE,
+            at,
+        )
+        .await?;
+        next.map(|_| ())
+    }
+
+    /// Ping or stop each saved session that is due; returns the earliest next check of the
+    /// sessions still kept (`None`: nothing left to ping).
+    async fn keep_alive_sessions(&self) -> anyhow::Result<Option<u64>> {
+        let mut next: Option<u64> = None;
         let keys: Vec<String> =
             sqlx::query_scalar("SELECT key FROM docs WHERE key >= ? AND key < ?")
                 .bind("keep_alive:")
@@ -233,6 +306,8 @@ impl<
             if timing["stopped"] == true {
                 continue;
             }
+            // Looked at again when its ping is due, or on the next tick once that has passed.
+            let timeout = Duration::from_secs(timing["timeout_seconds"].as_u64().unwrap_or(0));
             let session = timing["session_id"].as_str().unwrap_or_default().to_owned();
             let agent = timing["agent_id"].as_str().unwrap_or_default().to_owned();
             if !settings.contains_key(&agent) {
@@ -259,12 +334,20 @@ impl<
             }
             let run_id = timing["run_id"].as_str().unwrap_or_default().to_owned();
             // The newest run, not the one behind the saved request: a new message's run counts
-            // as live from admission, before its first model call saves a new request.
+            // as live from admission, before its first model call saves a new request. Only
+            // its status is needed, read from the plain run index (an approval wait the user
+            // steered is indexed `parked`).
             let newest = self.store.newest_run_id(&session).await?;
-            let run = self
-                .run(newest.as_deref().unwrap_or(&run_id))
-                .await
-                .unwrap_or(Value::Null);
+            let status: Option<String> =
+                sqlx::query_scalar("SELECT status FROM run_index WHERE id=?")
+                    .bind(newest.as_deref().unwrap_or(&run_id))
+                    .fetch_optional(ScopedStorage::user_pool(self.store.records()))
+                    .await?;
+            let run = match status.as_deref() {
+                Some("parked") => json!({"status":"waiting_approval"}),
+                Some(status) => json!({ "status": status }),
+                None => Value::Null,
+            };
             let record = self
                 .store
                 .get(&format!("session:{session}"))
@@ -272,14 +355,22 @@ impl<
                 .unwrap_or(Value::Null);
             let limit =
                 Duration::from_secs(60 * keep.limit_minutes.min(KeepAlive::MAX_LIMIT_MINUTES));
+            let last_call = timing["last_call"].as_u64().unwrap_or(0);
             match decide(&timing, now, limit, &state(&keep, &run, &record)) {
                 Action::Stop => self.keep_alive_stop(&session).await?,
                 Action::Wait => {
+                    earliest(
+                        &mut next,
+                        last_call
+                            .saturating_add(ping_after(timeout).as_secs())
+                            .max(now),
+                    );
                     if timing["visit"] == true {
                         self.store.put(&key, &timing).await?;
                     }
                 }
                 Action::Ping => {
+                    earliest(&mut next, now.saturating_add(ping_after(timeout).as_secs()));
                     let visit = timing["visit"] == true;
                     timing["last_call"] = json!(now);
                     timing["visit"] = json!(false);
@@ -304,7 +395,7 @@ impl<
                 }
             }
         }
-        Ok(())
+        Ok(next)
     }
 
     /// Stop pinging a session and drop its saved conversation copy.

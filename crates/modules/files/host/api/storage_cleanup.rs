@@ -496,7 +496,8 @@ pub(crate) async fn policy_put(app: &App, body: &Value) -> Api {
 pub(crate) async fn service(app: App) {
     let mut checked: HashMap<String, u64> = HashMap::new();
     loop {
-        if let Ok(users) = app.store.all_user_ids().await {
+        // The cached account list: one counting statement unless an account was added.
+        if let Ok(users) = app.store.account_ids().await {
             for user in users {
                 if app.stop.is_cancelled() {
                     return;

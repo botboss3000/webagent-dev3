@@ -38,9 +38,12 @@ impl Store {
         Ok(())
     }
     /// The first reconcile of a process reads every account (nothing is marked applied yet);
-    /// run it once at start-up so no request waits for it. A failure only leaves that work to
-    /// the first admission, as before.
+    /// run it once soon after start-up so no request waits for it. It waits a minute so it
+    /// does not open every account while the start-up passes (the scan's first look, storage
+    /// limits) still hold theirs: each open connection is a thread, and together they reached
+    /// the container's task limit. A failure only leaves that work to the first admission.
     pub(crate) async fn prime_requester_slots(&self) {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         if let Err(error) = self.reconcile_requester_slots().await {
             tracing::warn!("Requester slot reconciliation deferred: {error}");
         }

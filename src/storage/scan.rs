@@ -351,7 +351,12 @@ impl Store {
     /// found to have no work now, until its periodic revisit or one of its deadlines.
     async fn scan_user_ids_now(&self) -> Result<(Vec<String>, Vec<(String, u64)>)> {
         let now = Instant::now();
-        let rows = due::all(&self.app_pool).await?;
+        // Only the deadlines of work the scan's consumers do; keep-alive reads its own.
+        let rows: Vec<_> = due::all(&self.app_pool)
+            .await?
+            .into_iter()
+            .filter(|(_, kind, _)| kind == due::APPROVAL || kind == due::AUTOMATION)
+            .collect();
         let mut kinds: HashMap<&str, HashSet<&str>> = HashMap::new();
         for (user, kind, _) in &rows {
             kinds

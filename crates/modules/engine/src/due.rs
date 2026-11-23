@@ -10,6 +10,8 @@ use sqlx::SqlitePool;
 pub const APPROVAL: &str = "approval";
 /// The automation package's next tick (written by its module service).
 pub const AUTOMATION: &str = "automation";
+/// The earliest keep-alive check of the account's saved sessions.
+pub const KEEP_ALIVE: &str = "keep_alive";
 
 /// Create the table and its time index; idempotent.
 pub async fn schema(pool: &SqlitePool) -> Result<()> {
@@ -42,6 +44,29 @@ pub async fn set(pool: &SqlitePool, user: &str, kind: &str, at: Option<u64>) -> 
         }
     }
     Ok(())
+}
+
+/// Bring one account's deadline of `kind` forward to `at` (never later): for writers that add
+/// work, so a deadline another session of the account already holds is kept.
+pub async fn earlier(pool: &SqlitePool, user: &str, kind: &str, at: u64) -> Result<()> {
+    sqlx::query("INSERT INTO account_due(user_id,kind,next_due_at) VALUES(?,?,?) ON CONFLICT(user_id,kind) DO UPDATE SET next_due_at=min(next_due_at,excluded.next_due_at)")
+        .bind(user)
+        .bind(kind)
+        .bind(i64::try_from(at).unwrap_or(i64::MAX))
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Accounts whose deadline of `kind` has passed by `now` (one indexed read).
+pub async fn passed(pool: &SqlitePool, kind: &str, now: u64) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT user_id FROM account_due WHERE next_due_at<=? AND kind=? ORDER BY next_due_at",
+    )
+    .bind(i64::try_from(now).unwrap_or(i64::MAX))
+    .bind(kind)
+    .fetch_all(pool)
+    .await?)
 }
 
 /// Every stored deadline: `(account, kind, time)`. The table holds one row per account that
@@ -120,6 +145,23 @@ mod tests {
                 ("u2".into(), "automation".into(), 5)
             ]
         );
+        super::earlier(&pool, "u2", super::AUTOMATION, 9)
+            .await
+            .unwrap();
+        super::earlier(&pool, "u2", super::AUTOMATION, 3)
+            .await
+            .unwrap();
+        assert_eq!(
+            super::passed(&pool, super::AUTOMATION, 4).await.unwrap(),
+            vec!["u2"]
+        );
+        assert!(super::passed(&pool, super::APPROVAL, 4)
+            .await
+            .unwrap()
+            .is_empty());
+        super::set(&pool, "u2", super::AUTOMATION, Some(5))
+            .await
+            .unwrap();
         let written = super::Written::default();
         written
             .set(&pool, "u1", super::APPROVAL, None)

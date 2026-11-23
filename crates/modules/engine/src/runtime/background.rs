@@ -981,6 +981,12 @@ impl<
             Ok(())
         }
     }
+    /// One account's view (the account must exist).
+    pub async fn for_user_view(&self, user_id: &str) -> Result<Self> {
+        let mut view = self.clone();
+        view.store = self.store.for_user(user_id).await?;
+        Ok(view)
+    }
     /// Per-account views: every account when `every`, otherwise only those a periodic scan must visit.
     pub async fn user_views(&self, every: bool) -> Result<Vec<Self>> {
         let mut views = Vec::new();
