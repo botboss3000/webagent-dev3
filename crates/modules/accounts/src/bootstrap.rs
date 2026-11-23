@@ -45,12 +45,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         if existing.is_some() {
             return Err(anyhow!("Admin account already exists"));
         }
-        sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES(?,?,?)")
-            .bind(ADMIN_ID)
-            .bind(username)
-            .bind(self.seal(&account)?)
-            .execute(&mut **tx)
-            .await?;
+        crate::account_rows::insert(tx, ADMIN_ID, username, &self.seal(&account)?, false).await?;
         sqlx::query("INSERT INTO user_profiles(user_id,value) VALUES(?,?)")
             .bind(ADMIN_ID)
             .bind(self.seal(&profile)?)
@@ -88,11 +83,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let account = json!({"user_id":"admin","username":username,"password_hash":legacy["password_hash"],"generation":legacy["generation"],"is_approved":true});
         let profile = json!({"user_id":"admin","display_name":username,"is_admin":true,"default_agent_id":"shared_default","last_login_at":null});
         let mut tx = self.app_pool.begin().await?;
-        sqlx::query("INSERT OR IGNORE INTO user_accounts(user_id,username,value) VALUES(?,?,?)")
-            .bind("admin")
-            .bind(username)
-            .bind(self.seal(&account)?)
-            .execute(&mut *tx)
+        crate::account_rows::insert(&mut tx, "admin", username, &self.seal(&account)?, true)
             .await?;
         sqlx::query("INSERT OR IGNORE INTO user_profiles(user_id,value) VALUES(?,?)")
             .bind("admin")

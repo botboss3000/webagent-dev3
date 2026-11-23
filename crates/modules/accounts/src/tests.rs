@@ -1906,3 +1906,129 @@ async fn login_protection_blocks_pairs_and_slows_accounts_from_live_policy() {
         StatusCode::TOO_MANY_REQUESTS
     );
 }
+
+#[tokio::test]
+async fn every_identity_change_raises_auth_epoch_and_a_missing_account_has_none() {
+    let f = Fixture::new().await;
+    let r = f.repo();
+    let a = f.active("member").await;
+    let b = f.active("bystander").await;
+    let epoch = |id: String| {
+        let r = f.repo();
+        async move { r.auth_epoch(&id).await.unwrap().unwrap() }
+    };
+    let mut last = epoch(a.clone()).await;
+    let other = epoch(b.clone()).await;
+    let mut raised = |now: i64, what: &str| {
+        assert!(now > last, "{what} did not raise auth_epoch");
+        last = now;
+    };
+    r.update_user_profile(&a, "renamed", "Member")
+        .await
+        .unwrap();
+    raised(epoch(a.clone()).await, "username change");
+    let generation = r.account_by_id(&a).await.unwrap().unwrap()["generation"].clone();
+    r.replace_user_password(
+        &a,
+        generation.as_str().unwrap(),
+        "replacement-hash-placeholder",
+        "next",
+    )
+    .await
+    .unwrap();
+    raised(epoch(a.clone()).await, "password change");
+    let mut tx = f.pool.begin().await.unwrap();
+    let revision = r.account_state_in(&mut tx, &a).await.unwrap().unwrap()["access_revision"]
+        .as_u64()
+        .unwrap();
+    r.apply_access_in(
+        &mut tx,
+        &a,
+        AccessMutation {
+            expected_revision: revision,
+            status: AccountStatus::Disabled,
+            role: "user",
+            tier_id: "free",
+            profile_is_admin: false,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    raised(
+        epoch(a.clone()).await,
+        "status, role, tier or approval change",
+    );
+    let mut tx = f.pool.begin().await.unwrap();
+    r.bump_access_version_in(&mut tx, &a, revision + 1)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    raised(epoch(a.clone()).await, "tier edit");
+    let mut tx = f.pool.begin().await.unwrap();
+    r.initialize_tier_assignment_in(&mut tx, "user", "repaired")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    raised(epoch(a.clone()).await, "tier repair");
+    // A rolled-back change leaves the epoch where it was.
+    let mut tx = f.pool.begin().await.unwrap();
+    r.bump_access_version_in(&mut tx, &a, revision + 3)
+        .await
+        .unwrap();
+    drop(tx);
+    assert_eq!(epoch(a.clone()).await, last);
+    // The repair changed every account of the role, so the bystander moved too.
+    assert!(epoch(b).await > other);
+    assert_eq!(r.auth_epoch("nobody").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn admin_assignment_raises_auth_epoch_and_old_databases_gain_the_column() {
+    let f = Fixture::new().await;
+    let r = f.repo();
+    let mut tx = f.pool.begin().await.unwrap();
+    r.fixture_admin_in(
+        &mut tx,
+        "root",
+        "fixture-password-hash-placeholder",
+        "generation",
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let mut account = r.account_by_id("admin").await.unwrap().unwrap();
+    account.as_object_mut().unwrap().remove("access_revision");
+    f.save("admin", &account).await;
+    let before = r.auth_epoch("admin").await.unwrap().unwrap();
+    let mut tx = f.pool.begin().await.unwrap();
+    assert!(r
+        .initialize_admin_assignment_in(
+            &mut tx,
+            AccountStatus::Active,
+            "administrator",
+            "administrator"
+        )
+        .await
+        .unwrap());
+    tx.commit().await.unwrap();
+    assert!(r.auth_epoch("admin").await.unwrap().unwrap() > before);
+    // A database made before the column existed gets it, with existing rows at 0.
+    let old = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(f._root.path().join("old.db"))
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    sqlx::raw_sql("CREATE TABLE user_accounts(user_id TEXT PRIMARY KEY,username TEXT NOT NULL UNIQUE,value BLOB NOT NULL); INSERT INTO user_accounts VALUES('x','x',x'00');")
+        .execute(&old)
+        .await
+        .unwrap();
+    let repo = Repository::new(&old, &f.codec);
+    repo.initialize().await.unwrap();
+    repo.initialize().await.unwrap();
+    assert_eq!(repo.auth_epoch("x").await.unwrap(), Some(0));
+}

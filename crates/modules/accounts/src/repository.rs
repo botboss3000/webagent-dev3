@@ -99,11 +99,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             .await?;
         let mut account = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
         account["username"] = json!(username);
-        sqlx::query("UPDATE user_accounts SET username=?,value=? WHERE user_id=?")
-            .bind(username)
-            .bind(self.seal(&account)?)
-            .bind(user_id)
-            .execute(&mut *tx)
+        crate::account_rows::update(&mut tx, user_id, Some(username), &self.seal(&account)?)
             .await?;
         let row = sqlx::query("SELECT value FROM user_profiles WHERE user_id=?")
             .bind(user_id)
@@ -227,11 +223,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         }
         account["password_hash"] = json!(password_hash);
         account["generation"] = json!(generation);
-        sqlx::query("UPDATE user_accounts SET value=? WHERE user_id=?")
-            .bind(self.seal(&account)?)
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
+        crate::account_rows::update(&mut tx, user_id, None, &self.seal(&account)?).await?;
         if user_id == ADMIN_ID {
             let legacy = json!({"username":account["username"],
                 "password_hash":password_hash,"generation":generation});
@@ -262,12 +254,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let profile = json!({"user_id":id,"display_name":"Guest","is_admin":initial.profile_is_admin,
             "default_agent_id":null,"last_login_at":null,"source_channel":"web_public"});
         let mut tx = self.app_pool.begin().await?;
-        sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES(?,?,?)")
-            .bind(&id)
-            .bind(&id)
-            .bind(self.seal(&account)?)
-            .execute(&mut *tx)
-            .await?;
+        crate::account_rows::insert(&mut tx, &id, &id, &self.seal(&account)?, false).await?;
         sqlx::query("INSERT INTO user_profiles(user_id,value) VALUES(?,?)")
             .bind(&id)
             .bind(self.seal(&profile)?)
@@ -301,12 +288,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let profile = json!({"user_id":id,"display_name":username,"is_admin":initial.profile_is_admin,
             "default_agent_id":null,"last_login_at":null});
         let mut tx = self.app_pool.begin().await?;
-        sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES(?,?,?)")
-            .bind(&id)
-            .bind(username)
-            .bind(self.seal(&account)?)
-            .execute(&mut *tx)
-            .await?;
+        crate::account_rows::insert(&mut tx, &id, username, &self.seal(&account)?, false).await?;
         sqlx::query("INSERT INTO user_profiles(user_id,value) VALUES(?,?)")
             .bind(&id)
             .bind(self.seal(&profile)?)

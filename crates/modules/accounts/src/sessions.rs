@@ -333,11 +333,7 @@ impl<C: RecordCodec> Repository<'_, C> {
                 .unwrap_or(0)
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("Account revision overflow"))?);
-            sqlx::query("UPDATE user_accounts SET value=? WHERE user_id=?")
-                .bind(self.seal(&account)?)
-                .bind(id)
-                .execute(&mut **tx)
-                .await?;
+            crate::account_rows::update(tx, &id, None, &self.seal(&account)?).await?;
         }
         Ok(())
     }

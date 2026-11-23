@@ -135,7 +135,7 @@ impl Fixture {
             .unwrap();
         sqlx::raw_sql("CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB);
             CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,kind TEXT,payload BLOB);
-            CREATE TABLE user_accounts(user_id TEXT PRIMARY KEY,username TEXT,value BLOB);
+            CREATE TABLE user_accounts(user_id TEXT PRIMARY KEY,username TEXT,value BLOB,auth_epoch INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE user_profiles(user_id TEXT PRIMARY KEY,value BLOB);
             CREATE TABLE agent_directory(id TEXT PRIMARY KEY,owner_id TEXT);
             CREATE TABLE agent_memberships(user_id TEXT,agent_id TEXT,value BLOB,PRIMARY KEY(user_id,agent_id));
@@ -164,7 +164,7 @@ impl Fixture {
             ("alice", "user", "free"),
         ] {
             let value = json!({"user_id":id,"username":id,"status":"active","role":role,"tier_id":tier,"access_revision":1,"generation":"initial","is_approved":true});
-            sqlx::query("INSERT INTO user_accounts VALUES(?,?,?)")
+            sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES(?,?,?)")
                 .bind(id)
                 .bind(id)
                 .bind(f.storage.seal(&value).unwrap())

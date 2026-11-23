@@ -75,11 +75,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             .transpose()
     }
     pub async fn lock_account_in(&self, tx: &mut Transaction<'_, Sqlite>, id: &str) -> Result<()> {
-        sqlx::query("UPDATE user_accounts SET value=value WHERE user_id=?")
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
-        Ok(())
+        crate::account_rows::lock(tx, id).await
     }
     pub async fn all_account_states_in(
         &self,
@@ -131,11 +127,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             account["generation"] = json!(uuid::Uuid::new_v4().to_string());
         }
         account["is_approved"] = json!(update.status == AccountStatus::Active);
-        sqlx::query("UPDATE user_accounts SET value=? WHERE user_id=?")
-            .bind(self.seal(&account)?)
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
+        crate::account_rows::update(tx, id, None, &self.seal(&account)?).await?;
         let blob: Vec<u8> = sqlx::query_scalar("SELECT value FROM user_profiles WHERE user_id=?")
             .bind(id)
             .fetch_one(&mut **tx)
@@ -172,11 +164,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         account["access_revision"] = json!(expected
             .checked_add(1)
             .ok_or_else(|| anyhow!("Account revision overflow"))?);
-        sqlx::query("UPDATE user_accounts SET value=? WHERE user_id=?")
-            .bind(self.seal(&account)?)
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
+        crate::account_rows::update(tx, id, None, &self.seal(&account)?).await?;
         Ok(())
     }
     /// Existing startup import only: Access owns which initial grant is supplied.
@@ -203,10 +191,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             account["role"] = json!(role);
             account["tier_id"] = json!(tier);
             account["access_revision"] = json!(1);
-            sqlx::query("UPDATE user_accounts SET value=? WHERE user_id='admin'")
-                .bind(self.seal(&account)?)
-                .execute(&mut **tx)
-                .await?;
+            crate::account_rows::update(tx, "admin", None, &self.seal(&account)?).await?;
         }
         Ok(true)
     }

@@ -1,5 +1,6 @@
 //! Account identity, encrypted persistence and authentication lifecycle.
 //! The host supplies its existing application pool and Storage codec.
+mod account_rows;
 mod authentication;
 mod repository;
 mod sessions;
@@ -67,7 +68,12 @@ impl<'a, C: RecordCodec> Repository<'a, C> {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS user_accounts(user_id TEXT PRIMARY KEY,username TEXT NOT NULL UNIQUE,value BLOB NOT NULL);
    CREATE TABLE IF NOT EXISTS user_profiles(user_id TEXT PRIMARY KEY REFERENCES user_accounts(user_id),value BLOB NOT NULL);")
    .execute(self.app_pool).await?;
-        Ok(())
+        account_rows::ensure_auth_epoch_column(self.app_pool).await
+    }
+    /// The account's plain `auth_epoch`, raised by every change to its row. `None` (no row, or
+    /// no value) means the caller must treat any remembered identity as changed.
+    pub async fn auth_epoch(&self, id: &str) -> Result<Option<i64>> {
+        account_rows::auth_epoch(self.app_pool, id).await
     }
 }
 fn identity(v: &Value) -> Result<Identity> {
