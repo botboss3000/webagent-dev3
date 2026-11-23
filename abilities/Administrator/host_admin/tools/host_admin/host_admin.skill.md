@@ -26,6 +26,9 @@
   (after a broker_install that changed `host_helper.py`); the old copy comes back if the
   new one does not answer within 30 seconds.
 - `{"action":"check","request_id":"..."}` reads one request.
+- Not offered here: `rotate_browser_login_token` (new Diagnostics browser sign-in key). If the
+  user asks for it, tell them to run `buildctl host request rotate_browser_login_token` over
+  SSH and approve it; never ask for, read or repeat the key.
 
 Results: `output.state` is pending, running, done, failed or denied (expired only if the host profile sets a request time limit); `note` says
 what to do next. A refusal (path not editable, unit not listed) changed nothing; explain it

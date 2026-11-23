@@ -54,7 +54,8 @@ Boot loader and disk changes (paths in the host profile's `boot_disk_paths`, suc
 `/etc/fstab`, `/etc/default/grub` and `/boot/*`), File Manager grants and root-equivalent
 actions (`file_write`, `host_revert`, `broker_install`, `supervisor_update`,
 `packages_upgrade`) need this passphrase on the approval card, and so does opening an
-allow-all window from the page. The root host helper checks it; the app never stores it. It
+allow-all window from the page. `rotate_browser_login_token` always needs it from the page (or
+`sudo buildctl host approve ID`): no allow-all window covers it. The root host helper checks it; the app never stores it. It
 is separate from every login and `sudo` password, but it is root-equivalent: treat it like
 the root password.
 
