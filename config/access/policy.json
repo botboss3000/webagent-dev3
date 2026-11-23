@@ -54,7 +54,7 @@
     "max_active_runs_per_agent": null,
     "reserved_admin_runs": 1
   },
-  "revision": 62,
+  "revision": 63,
   "storage": {
     "compress_idle_days": 7,
     "compression": {
@@ -90,6 +90,11 @@
         "agent_storage_mb": 50,
         "max_published_agents": 5,
         "user_storage_mb": 100
+      },
+      "plus": {
+        "agent_storage_mb": 50,
+        "max_published_agents": 10,
+        "user_storage_mb": 20480
       }
     },
     "trim_idle_days": 7,
@@ -98,10 +103,12 @@
   "tier_names": {
     "administrator": "Administrator",
     "anonymous": "Anonymous",
-    "free": "Free"
+    "free": "Free",
+    "plus": "Plus"
   },
   "tier_order": [
     "administrator",
+    "plus",
     "free",
     "anonymous"
   ],
@@ -139,6 +146,16 @@
       "max_sessions": 10,
       "model_policy": null,
       "revision": 8
+    },
+    "plus": {
+      "allowed_models": [
+        "*"
+      ],
+      "id": "plus",
+      "max_active_runs": 25,
+      "max_sessions": 100,
+      "model_policy": null,
+      "revision": 1
     }
   }
 }

@@ -10,6 +10,9 @@ pub struct AccessMutation<'a> {
     pub status: AccountStatus,
     pub role: &'a str,
     pub tier_id: &'a str,
+    /// When the tier ends (Unix seconds) and the account returns to Free; `None` keeps it
+    /// until changed. The `account_due` row that brings the change is the caller's.
+    pub tier_until: Option<u64>,
     pub profile_is_admin: bool,
 }
 pub(crate) fn state(value: &Value) -> Value {
@@ -20,6 +23,7 @@ pub(crate) fn state(value: &Value) -> Value {
         "status",
         "role",
         "tier_id",
+        "tier_until",
         "access_revision",
         "generation",
         "is_approved",
@@ -129,6 +133,14 @@ impl<C: RecordCodec> Repository<'_, C> {
         account["status"] = json!(update.status);
         account["role"] = json!(update.role);
         account["tier_id"] = json!(update.tier_id);
+        match update.tier_until {
+            Some(until) => account["tier_until"] = json!(until),
+            None => {
+                if let Some(record) = account.as_object_mut() {
+                    record.remove("tier_until");
+                }
+            }
+        }
         account["access_revision"] = json!(revision
             .checked_add(1)
             .ok_or_else(|| anyhow!("Account revision overflow"))?);

@@ -42,8 +42,8 @@ it, naming exactly its tool folders. `<tool>.tool.json` holds:
   `require_approval` or `deny`. A level with no saved permission for the tool uses its
   role's value, then the next role down. With no role named, a read allows and a write
   requires approval. Agent operators can change it on the Abilities page.
-- `owner_tier` (optional): the tiers whose owners' agents may have the tool. It overrides
-  the ability's list.
+- `owner_tier` (optional): the tiers whose owners' agents may have the tool, with every tier
+  ranked above them. It overrides the ability's list.
 - `role_access` (optional): the built-in roles that may ever have the tool, for example
   `["operator"]`. A hard limit: no level setting widens it, and the tool is hidden from
   other roles. Without it the ability's list applies, then every role. A custom level
@@ -104,8 +104,12 @@ existing agents until an Operator switches it on. Once on, its tools without a s
 permission use their `<tool>.tool.json` defaults and its skills their `default_mode`.
 
 Every ability manifest must declare `owner_tier`, the app tiers whose owners' agents may
-have it (for example `["free", "administrator"]`); a manifest without it is reported and
-the ability works for no one. The agent owner's tier decides: an ability the owner's
+have it (for example `["free", "administrator"]`, or `["plus", "administrator"]` for a
+Plus-only ability); a manifest without it is reported and the ability works for no one.
+A tier also gets every ability a tier ranked below it gets (the access policy's
+`tier_order`, highest first), so a listed tier grants every tier above it and a new tier
+needs no manifest change; an unknown tier counts as the lowest one. The agent owner's tier
+decides: an ability the owner's
 tier lacks stays offered but its tools fail with the tier reason (its saved settings are
 kept and return on an upgrade). A `<tool>.tool.json` may declare its own `owner_tier`, which
 overrides its ability's list; a tool several abilities provide works through any the

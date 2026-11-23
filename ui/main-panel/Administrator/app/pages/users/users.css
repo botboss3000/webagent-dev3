@@ -669,6 +669,24 @@ body.light-mode .members-policy-opt-label { color: var(--fg-1); }
   transition: background 0.12s, border-color 0.12s;
 }
 .members-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* A tier's optional end date, stacked under its tier drop-down; wraps on narrow screens. */
+.members-tier-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.members-tier-end label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 0;
+}
+.members-tier-end-date {
+  min-width: 0;
+  max-width: 100%;
+}
 .members-btn.authorize {
   color: var(--success);
   border-color: rgba(var(--success-rgb),0.4);

@@ -90,6 +90,7 @@
       "parameters": {
         "tier": [
           "administrator",
+          "plus",
           "free",
           "anonymous"
         ]
@@ -118,6 +119,7 @@
       "parameters": {
         "tier": [
           "administrator",
+          "plus",
           "free",
           "anonymous"
         ]
@@ -144,6 +146,7 @@
       "parameters": {
         "tier": [
           "administrator",
+          "plus",
           "free",
           "anonymous"
         ]
@@ -174,6 +177,7 @@
       "parameters": {
         "tier": [
           "administrator",
+          "plus",
           "free",
           "anonymous"
         ]
@@ -205,6 +209,7 @@
       "parameters": {
         "tier": [
           "administrator",
+          "plus",
           "free",
           "anonymous"
         ]
@@ -235,6 +240,7 @@
       "parameters": {
         "tier": [
           "administrator",
+          "plus",
           "free",
           "anonymous"
         ]

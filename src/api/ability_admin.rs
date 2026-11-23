@@ -73,15 +73,16 @@ pub(super) async fn grant_ceiling(
     let principal = crate::access::Principal::from_account(&account)?;
     // The editor's own tier caps what they may grant, as it would on their own agent.
     let tier = principal.tier_id.as_str();
+    let tiers = crate::access::account_ladder::inherited(&app.store.read_access_policy()?, tier);
     let ability_ceiling = |id: &str| {
-        if crate::access::ability_tier_allowed(id, tier, tier) {
+        if crate::access::ability_tier_allowed(id, &tiers, tier) {
             Permission::Auto
         } else {
             Permission::Deny
         }
     };
     let tool_ceiling = |name: &str| {
-        if crate::access::tool_tier_allowed(name, tier) {
+        if crate::access::tool_tier_allowed(name, &tiers) {
             Permission::Auto
         } else {
             Permission::Deny

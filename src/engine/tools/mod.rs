@@ -255,14 +255,15 @@ pub(crate) fn install_tool_defaults() {
     );
 }
 
-/// A tool's own `owner_tier` for an owner tier; live checkout edits apply at once.
-fn tool_tiers(name: &str, tier: &str) -> bool {
+/// A tool's own `owner_tier` for an owner holding `owner_tiers` (the owner's tier and every
+/// tier below it): any of them listed admits it. Live checkout edits apply at once.
+fn tool_tiers(name: &str, owner_tiers: &[String]) -> bool {
     let current = crate::ability_drift::current();
     current
         .definition(name)
         .or_else(|| webagent_abilities::tool_definitions::get(name))
         .and_then(|definition| definition.owner_tier.as_ref())
-        .is_none_or(|tiers| tiers.iter().any(|allowed| allowed == tier))
+        .is_none_or(|tiers| tiers.iter().any(|allowed| owner_tiers.contains(allowed)))
 }
 
 /// A tool's own `role_access` for a level's rungs; `None` when the tool sets none, so its

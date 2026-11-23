@@ -1221,6 +1221,7 @@ async fn serve_api(app: App, close_pools: bool, stop: CancellationToken) -> Resu
     ));
     tokio::spawn(crate::phase3_api::sweep_browser_folders(app.clone()));
     tokio::spawn(api::storage_cleanup::service(app.clone()));
+    tokio::spawn(crate::phase3_api::tier_end_service(app.clone()));
     #[cfg(unix)]
     tokio::spawn(api::host_admin::watch(app.clone()));
     tokio::spawn(api::host_admin::production_watch(app.clone()));

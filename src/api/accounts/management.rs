@@ -61,7 +61,7 @@ impl webagent_accounts::api::Host for App {
     fn account_view(&self, record: &Value) -> webagent_accounts::api::Result<Value> {
         let principal = access::Principal::from_account(record)?;
         Ok(
-            json!({"user_id":principal.user_id,"username":record["username"],"status":principal.status,"role":principal.role,"tier_id":principal.tier_id,"access_revision":principal.access_revision}),
+            json!({"user_id":principal.user_id,"username":record["username"],"status":principal.status,"role":principal.role,"tier_id":principal.tier_id,"tier_until":record["tier_until"],"access_revision":principal.access_revision}),
         )
     }
     fn user_counts<'a>(

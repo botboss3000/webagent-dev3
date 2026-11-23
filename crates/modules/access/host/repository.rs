@@ -22,6 +22,18 @@ impl Store {
             .update_account_access(id, expected_revision, status, tier_id)
             .await
     }
+    pub async fn update_account_tier(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        status: AccountStatus,
+        tier_id: &str,
+        tier_until: Option<u64>,
+    ) -> Result<Value> {
+        self.access_repository()
+            .update_account_tier(id, expected_revision, status, tier_id, tier_until)
+            .await
+    }
     /// Test-only non-administrator tier with the administrator tier's grants, for tests
     /// that need a fully entitled ordinary user.
     #[cfg(test)]

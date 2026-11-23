@@ -99,12 +99,13 @@ pub struct ModelPolicy {
     pub allow_byo: bool,
     pub max_byo_entries: u32,
 }
-/// Whether an ability works on an agent owned on a tier for a caller on a tier
-/// (id, owner tier, caller tier), from the ability manifests' `owner_tier`.
-pub type AbilityTiers = fn(&str, &str, &str) -> bool;
-/// Whether a tool's own `owner_tier` admits an owner tier (name, owner tier); a tool
-/// without one inherits its abilities' lists.
-pub type ToolTiers = fn(&str, &str) -> bool;
+/// Whether an ability works on an agent whose owner holds these tiers for a caller on a tier
+/// (id, owner tiers, caller tier), from the ability manifests' `owner_tier`. The owner tiers
+/// are `account_ladder::inherited`: the owner's own tier first, then every tier below it.
+pub type AbilityTiers = fn(&str, &[String], &str) -> bool;
+/// Whether a tool's own `owner_tier` admits an owner holding these tiers (name, owner tiers as
+/// above); a tool without one inherits its abilities' lists.
+pub type ToolTiers = fn(&str, &[String]) -> bool;
 /// Whether an ability is in the Administrator group (id).
 pub type AdministratorAbility = fn(&str) -> bool;
 static ABILITY_TIERS: std::sync::OnceLock<AbilityTiers> = std::sync::OnceLock::new();
@@ -149,19 +150,19 @@ pub fn administrator_ability(id: &str) -> bool {
         .get()
         .is_none_or(|administrator| administrator(id))
 }
-/// Fails closed: no installed manifests grant no ability.
+/// Fails closed: no installed manifests grant no ability. `owner_tiers` as in [`AbilityTiers`].
 #[must_use]
-pub fn ability_tier_allowed(id: &str, owner_tier: &str, caller_tier: &str) -> bool {
+pub fn ability_tier_allowed(id: &str, owner_tiers: &[String], caller_tier: &str) -> bool {
     ABILITY_TIERS
         .get()
-        .is_some_and(|allowed| allowed(id, owner_tier, caller_tier))
+        .is_some_and(|allowed| allowed(id, owner_tiers, caller_tier))
 }
 /// Narrowing only: without installed manifests a tool adds no limit of its own.
 #[must_use]
-pub fn tool_tier_allowed(name: &str, owner_tier: &str) -> bool {
+pub fn tool_tier_allowed(name: &str, owner_tiers: &[String]) -> bool {
     TOOL_TIERS
         .get()
-        .is_none_or(|allowed| allowed(name, owner_tier))
+        .is_none_or(|allowed| allowed(name, owner_tiers))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -674,8 +675,9 @@ mod tests {
             "tools":{"*":"auto"},"max_sessions":10,"max_active_runs":2});
         assert!(serde_json::from_value::<Tier>(tier).is_err());
         // Without installed manifests no ability is granted and tools add no limit.
-        assert!(!ability_tier_allowed("web_access", "free", "free"));
-        assert!(tool_tier_allowed("file_write", "free"));
+        let free = [FREE_TIER.to_owned()];
+        assert!(!ability_tier_allowed("web_access", &free, "free"));
+        assert!(tool_tier_allowed("file_write", &free));
     }
 }
 

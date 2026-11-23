@@ -115,8 +115,8 @@ pub struct ToolDefinition {
     /// requires approval.
     #[serde(default)]
     pub default_policy: BTreeMap<String, Permission>,
-    /// Tiers whose owners' agents may have this tool; absent inherits its ability's
-    /// `owner_tier`, and a list may only narrow it.
+    /// Tiers whose owners' agents may have this tool, with every tier ranked above them;
+    /// absent inherits its ability's `owner_tier`, and a list may only narrow it.
     #[serde(default)]
     pub owner_tier: Option<Vec<String>>,
     /// Built-in roles that may ever have this tool; absent inherits its ability's

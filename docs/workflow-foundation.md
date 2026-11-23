@@ -36,7 +36,8 @@ No session database inspection or alternate state access path is introduced.
 ## Agent ability authority and migration
 
 Application access-policy tiers hold no ability or tool grants. Each ability
-manifest's `owner_tier` lists the tiers whose owners' agents may have it; the
+manifest's `owner_tier` lists the lowest tiers whose owners' agents may have it (every
+tier ranked above a listed one has it too); the
 agent owner's tier decides, and Administrator abilities also need an
 administrator caller (see `docs/drop-in-abilities.md`).
 

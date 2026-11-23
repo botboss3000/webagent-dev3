@@ -1236,6 +1236,90 @@ mod tests {
             StatusCode::FORBIDDEN
         );
     }
+    /// A Plus account's widget keeps the widget's limits: no administrator routes, no settings
+    /// changes, whatever the account's tier allows elsewhere.
+    #[tokio::test]
+    async fn a_plus_members_widget_keeps_widget_limits() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let source_key = format!("auth:{}", digest(&json!(uuid())));
+        app.store
+            .put(
+                &source_key,
+                &json!({"generation":"fixture-generation","expires":now()+3600}),
+            )
+            .await
+            .unwrap();
+        let admin = json!({"_user_id":"admin","generation":"fixture-generation","_auth_key":source_key,"expires":now()+3600});
+        config_put(State(app.clone()),Extension(admin),Path("shared_default".into()),Json(json!({"expected_revision":0,"config":{"enabled":true,"allowed_origins":["https://example.com"]}}))).await.unwrap();
+        app.store
+            .save_entitlement_tier(
+                crate::access::Tier {
+                    id: "plus".into(),
+                    revision: 0,
+                    allowed_models: vec!["*".into()],
+                    model_policy: None,
+                    max_sessions: 100,
+                    max_active_runs: 25,
+                    daily_turns: None,
+                    daily_cost_usd: None,
+                },
+                0,
+            )
+            .await
+            .unwrap();
+        let member = widget_member(&app, "plus-widget").await;
+        app.store
+            .update_account_access(&member, 2, crate::access::AccountStatus::Active, "plus")
+            .await
+            .unwrap();
+        let generation =
+            app.store.account_by_id(&member).await.unwrap().unwrap()["generation"].clone();
+        let token = format!("{}{}", uuid(), uuid());
+        let credential_key = format!("embed:credential:{}", digest(&json!(token)));
+        let config = allowed(&app, "shared_default", "https://example.com")
+            .await
+            .unwrap();
+        app.store
+            .put(
+                &credential_key,
+                &json!({"id":"c","credential_key":credential_key,"agent_id":"shared_default",
+                    "origin":"https://example.com","revision":config["revision"],
+                    "user_id":member,"generation":generation,"expires":now()+3600}),
+            )
+            .await
+            .unwrap();
+        let send = |method: &str, uri: String| {
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from("{}"))
+                .unwrap()
+        };
+        use tower::ServiceExt;
+        let status = |request: Request<axum::body::Body>| {
+            let app = app.clone();
+            async move { router(app).oneshot(request).await.unwrap().status() }
+        };
+        assert_eq!(
+            status(send("GET", "/api/v3/auth/me".into())).await,
+            StatusCode::OK
+        );
+        let sid = uuid();
+        for (method, uri) in [
+            ("GET", "/api/v3/admin/access/accounts".to_owned()),
+            ("GET", "/api/v3/status".to_owned()),
+            ("PUT", format!("/api/v3/sessions/{sid}/mode")),
+            ("PUT", format!("/api/v3/sessions/{sid}/model")),
+        ] {
+            assert_eq!(
+                status(send(method, uri.clone())).await,
+                StatusCode::FORBIDDEN,
+                "{method} {uri}"
+            );
+        }
+    }
     #[tokio::test]
     async fn a_disabled_widget_guest_is_refused_on_every_route() {
         use tower::ServiceExt;

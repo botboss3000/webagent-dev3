@@ -46,6 +46,39 @@ pub fn order(policy: &Value) -> Result<Vec<String>> {
     }
     Ok(order)
 }
+/// The tiers whose ability and tool grants `tier` gets: itself, then every tier ranked below
+/// it in `tier_order`. An unknown or missing tier gets only the most restricted (lowest) tier's
+/// grants; an invalid ladder gets none.
+#[must_use]
+pub fn inherited(policy: &Value, tier: &str) -> Vec<String> {
+    let Ok(mut ids) = order(policy) else {
+        return Vec::new();
+    };
+    match ids.iter().position(|id| id == tier) {
+        Some(index) => ids.split_off(index),
+        None => ids.pop().into_iter().collect(),
+    }
+}
+/// The latest end date a tier may be given (the last second of the year 9999, Unix seconds).
+const LATEST_TIER_END: u64 = 253_402_300_799;
+/// Whether `tier` may be given the end date `until` (Unix seconds) at `now`: only a tier ranked
+/// above Free and below Administrator ends, and only in the future, since an ended tier
+/// returns the account to Free.
+pub fn tier_end_allowed(policy: &Value, tier: &str, until: u64, now: u64) -> Result<()> {
+    let ids = order(policy)?;
+    let rank = |id: &str| ids.iter().position(|v| v == id);
+    let ends = matches!(
+        (rank(tier), rank(crate::FREE_TIER)),
+        (Some(tier_rank), Some(free)) if tier_rank < free && tier != crate::ADMINISTRATOR_TIER
+    );
+    if !ends {
+        bail!("Only a tier above Free and below Administrator can have an end date");
+    }
+    if until <= now || until > LATEST_TIER_END {
+        bail!("A tier's end date must be in the future");
+    }
+    Ok(())
+}
 pub fn effective(policy: &Value, id: &str) -> Result<Tier> {
     let ids = order(policy)?;
     let index = ids
@@ -105,6 +138,70 @@ mod tests {
         let model = effective(&policy, "free").unwrap().model_policy.unwrap();
         assert!(!model.allow_byo);
         assert_eq!(model.max_byo_entries, 2);
+    }
+    #[test]
+    fn a_tier_inherits_the_grants_of_every_tier_ranked_below_it() {
+        let tier = |id: &str| json!({"id":id,"revision":1,"allowed_models":["*"],"max_sessions":8,"max_active_runs":2});
+        let mut policy = json!({"tiers":{"administrator":tier("administrator"),"plus":tier("plus"),
+            "free":tier("free"),"anonymous":tier("anonymous")},
+            "tier_order":["administrator","plus","free","anonymous"]});
+        let names = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            inherited(&policy, "administrator"),
+            names(&["administrator", "plus", "free", "anonymous"])
+        );
+        assert_eq!(
+            inherited(&policy, "plus"),
+            names(&["plus", "free", "anonymous"])
+        );
+        assert_eq!(inherited(&policy, "free"), names(&["free", "anonymous"]));
+        // Unknown and missing tiers fall to the most restricted tier, never above it.
+        assert_eq!(inherited(&policy, "gold"), names(&["anonymous"]));
+        assert_eq!(inherited(&policy, ""), names(&["anonymous"]));
+        // A broken ladder grants nothing.
+        policy["tier_order"] = json!(["free", "administrator", "plus", "anonymous"]);
+        assert!(inherited(&policy, "plus").is_empty());
+    }
+    /// The shipped policy ranks Plus between Administrator and Free, with every catalog model.
+    #[test]
+    fn the_shipped_policy_ranks_plus_above_free() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../config/access/policy.json"
+        );
+        let policy: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        crate::configuration::validate_configuration(&policy).unwrap();
+        assert_eq!(
+            order(&policy).unwrap(),
+            ["administrator", "plus", "free", "anonymous"]
+        );
+        assert_eq!(policy["tier_names"]["plus"], "Plus");
+        let plus = effective(&policy, "plus").unwrap();
+        assert!(plus.allows_model("any-catalog-model"));
+        assert_eq!(plus.max_active_runs, 25);
+        assert_eq!(inherited(&policy, "plus"), ["plus", "free", "anonymous"]);
+    }
+    #[test]
+    fn only_a_tier_between_free_and_administrator_ends_and_only_later() {
+        let tier = |id: &str| json!({"id":id,"revision":1,"allowed_models":["*"],"max_sessions":8,"max_active_runs":2});
+        let policy = json!({"tiers":{"administrator":tier("administrator"),"plus":tier("plus"),
+            "free":tier("free"),"anonymous":tier("anonymous")},
+            "tier_order":["administrator","plus","free","anonymous"]});
+        tier_end_allowed(&policy, "plus", 101, 100).unwrap();
+        for (id, until) in [
+            ("administrator", 101),
+            ("free", 101),
+            ("anonymous", 101),
+            ("gold", 101),
+            ("plus", 100),
+            ("plus", 99),
+            ("plus", LATEST_TIER_END + 1),
+        ] {
+            assert!(
+                tier_end_allowed(&policy, id, until, 100).is_err(),
+                "{id} {until}"
+            );
+        }
     }
     #[test]
     fn upper_account_ceiling_limits_models_and_quotas() {

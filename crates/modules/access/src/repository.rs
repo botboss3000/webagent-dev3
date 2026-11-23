@@ -11,7 +11,8 @@ fn account_view(value: &Value) -> Result<Value> {
     Ok(
         json!({"user_id":principal.user_id,"username":value["username"],
         "status":principal.status,"role":principal.role,
-        "tier_id":principal.tier_id,"access_revision":principal.access_revision}),
+        "tier_id":principal.tier_id,"tier_until":value["tier_until"],
+        "access_revision":principal.access_revision}),
     )
 }
 async fn audit(
@@ -54,6 +55,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             })
             .collect()
     }
+    /// Set an account's status and tier with no end date (see [`Self::update_account_tier`]).
     pub async fn update_account_access(
         &self,
         id: &str,
@@ -61,8 +63,35 @@ impl<C: RecordCodec> Repository<'_, C> {
         status: AccountStatus,
         tier_id: &str,
     ) -> Result<Value> {
+        self.update_account_tier(id, expected_revision, status, tier_id, None)
+            .await
+    }
+    /// Set an account's status and tier, with an optional end date (Unix seconds) after which
+    /// it returns to Free. Only a tier ranked above Free and below Administrator may end, and
+    /// only in the future. Writes through the one account writer, so `auth_epoch` rises; the
+    /// caller stores the `account_due` row that brings the end, before calling this.
+    pub async fn update_account_tier(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        status: AccountStatus,
+        tier_id: &str,
+        tier_until: Option<u64>,
+    ) -> Result<Value> {
         if !access::valid_id(id) || !access::valid_id(tier_id) || expected_revision == 0 {
             bail!("Invalid account update");
+        }
+        if let Some(until) = tier_until {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs())
+                .unwrap_or(u64::MAX);
+            crate::account_ladder::tier_end_allowed(
+                &self.read_access_policy()?,
+                tier_id,
+                until,
+                now,
+            )?;
         }
         let role = Role::for_tier(tier_id);
         if id == "admin"
@@ -98,6 +127,7 @@ impl<C: RecordCodec> Repository<'_, C> {
                     status,
                     role: role_value.as_str().ok_or_else(|| anyhow!("Invalid role"))?,
                     tier_id,
+                    tier_until,
                     profile_is_admin: status == AccountStatus::Active
                         && role == Role::Administrator,
                 },
@@ -108,7 +138,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             self,
             "account_access_changed",
             &json!({"user_id":id,
-            "status":status,"role":role,"tier_id":tier_id,
+            "status":status,"role":role,"tier_id":tier_id,"tier_until":tier_until,
             "access_revision":expected_revision+1}),
         )
         .await?;
@@ -621,6 +651,7 @@ impl<C: RecordCodec> Repository<'_, C> {
                         status,
                         role: role.as_str().unwrap_or("user"),
                         tier_id: tier,
+                        tier_until: account["tier_until"].as_u64(),
                         profile_is_admin: status == AccountStatus::Active
                             && tier == access::ADMINISTRATOR_TIER,
                     },

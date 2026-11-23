@@ -3,7 +3,9 @@
 //! owners' agents may have it) and `role_access` (the built-in roles that may ever have
 //! it). Read once per process from the same abilities folder as the tool definitions. The
 //! default is shown, not applied: an ability stays closed until a level grants it. A
-//! manifest without `owner_tier` grants no tier and is reported.
+//! manifest without `owner_tier` grants no tier and is reported. A listed tier also grants
+//! every tier ranked above it in the policy's `tier_order` (a tier gets what any tier below it
+//! gets), so a new tier needs no manifest change.
 use crate::tool_definitions::ROLES;
 use serde_json::Value;
 use std::{
@@ -17,14 +19,16 @@ use webagent_access::{Permission, ADMINISTRATOR_TIER};
 /// The group whose abilities only an administrator owner and caller may use.
 pub const ADMINISTRATOR_GROUP: &str = "Administrator";
 
-/// Tiers whose owners' agents get the built-in Base ability, which has no manifest.
-pub const BUILT_IN_TIERS: [&str; 2] = [webagent_access::FREE_TIER, ADMINISTRATOR_TIER];
+/// The lowest tier whose owners' agents get the built-in Base ability, which has no manifest;
+/// every tier ranked above it gets Base too.
+pub const BUILT_IN_TIER: &str = webagent_access::FREE_TIER;
 
 /// One ability's declared access.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AbilityAccess {
     pub default_policy: BTreeMap<String, Permission>,
-    /// Tiers whose owners' agents may have this ability; empty grants none.
+    /// Tiers whose owners' agents may have this ability, with every tier ranked above them;
+    /// empty grants none.
     pub owner_tier: Vec<String>,
     /// Built-in roles that may ever have this ability; `None` means every role. A hard
     /// limit: no level setting widens it.
@@ -44,14 +48,19 @@ impl AbilityAccess {
             .copied()
     }
 
-    /// Whether an agent owned on `owner_tier` may use this ability for a caller on
-    /// `caller_tier`. Administrator abilities need both on the administrator tier.
+    /// Whether an agent whose owner holds `owner_tiers` (the owner's tier first, then every
+    /// tier ranked below it) may use this ability for a caller on `caller_tier`: it may when
+    /// the ability lists any of them. Administrator abilities need both on the administrator
+    /// tier itself, whatever the ranking.
     #[must_use]
-    pub fn allows(&self, owner_tier: &str, caller_tier: &str) -> bool {
+    pub fn allows(&self, owner_tiers: &[String], caller_tier: &str) -> bool {
         if self.administrator {
-            owner_tier == ADMINISTRATOR_TIER && caller_tier == ADMINISTRATOR_TIER
+            owner_tiers.first().map(String::as_str) == Some(ADMINISTRATOR_TIER)
+                && caller_tier == ADMINISTRATOR_TIER
         } else {
-            self.owner_tier.iter().any(|tier| tier == owner_tier)
+            self.owner_tier
+                .iter()
+                .any(|tier| owner_tiers.contains(tier))
         }
     }
 }
@@ -102,6 +111,17 @@ pub fn load_all(root: &Path) -> Registry {
                 registry.problems.push(format!(
                     "{id}: owner_tier must be [\"{ADMINISTRATOR_TIER}\"]"
                 ));
+            }
+            // Administrator-only abilities live in the Administrator group, whose code check
+            // also needs an administrator caller; elsewhere such a list is refused.
+            if !administrator
+                && !owner_tier.is_empty()
+                && owner_tier.iter().all(|tier| tier == ADMINISTRATOR_TIER)
+            {
+                registry.problems.push(format!(
+                    "{id}: only Administrator-group abilities may name only \"{ADMINISTRATOR_TIER}\""
+                ));
+                continue;
             }
             registry.abilities.insert(
                 id,
@@ -203,17 +223,17 @@ pub fn default_for(id: &str, rungs: &[String]) -> Option<Permission> {
     registry().abilities.get(id)?.default_for(rungs)
 }
 
-/// Whether ability `id` works on an agent owned on `owner_tier` for a caller on
+/// Whether ability `id` works on an agent whose owner holds `owner_tiers` for a caller on
 /// `caller_tier` (installed into the access layer). Unknown abilities never do.
-pub fn ability_allows(id: &str, owner_tier: &str, caller_tier: &str) -> bool {
+pub fn ability_allows(id: &str, owner_tiers: &[String], caller_tier: &str) -> bool {
     // Built-in Base has no manifest; it is a normal ability for every signed-in tier.
     if id == webagent_access::BUILT_IN_ABILITY {
-        return BUILT_IN_TIERS.contains(&owner_tier);
+        return owner_tiers.iter().any(|tier| tier == BUILT_IN_TIER);
     }
     registry()
         .abilities
         .get(id)
-        .is_some_and(|ability| ability.allows(owner_tier, caller_tier))
+        .is_some_and(|ability| ability.allows(owner_tiers, caller_tier))
 }
 
 /// The built-in role a capability level counts as: the first built-in role among its
@@ -277,6 +297,11 @@ mod tests {
             "Administrator/shell/shell.json",
             r#"{"owner_tier":["free","administrator"]}"#,
         );
+        write(
+            root,
+            "Web/admin_only/admin_only.json",
+            r#"{"owner_tier":["administrator"]}"#,
+        );
         let registry = load_all(root);
         let search = &registry.abilities["web_search"];
         let rungs = |names: &[&str]| {
@@ -290,16 +315,80 @@ mod tests {
             Some(Permission::Ask)
         );
         assert_eq!(search.default_for(&rungs(&["visitor"])), None);
-        assert!(search.allows("free", "anonymous"));
-        assert!(!search.allows("administrator", "administrator"));
+        assert!(search.allows(&rungs(&["free", "anonymous"]), "anonymous"));
+        // Ranked above free: plus and administrator owners inherit it.
+        assert!(search.allows(&rungs(&["plus", "free", "anonymous"]), "free"));
+        assert!(search.allows(&rungs(&["administrator", "plus", "free"]), "administrator"));
+        // Ranked below it, unknown (the lowest tier) or no tier at all: refused.
+        assert!(!search.allows(&rungs(&["anonymous"]), "anonymous"));
+        assert!(!search.allows(&[], "free"));
         // Missing and wrong lists are reported; the abilities stay closed.
         assert!(!registry.abilities.contains_key("plain"));
         assert!(!registry.abilities.contains_key("broken"));
         let shell = &registry.abilities["shell"];
-        assert!(shell.allows("administrator", "administrator"));
-        assert!(!shell.allows("administrator", "free"));
-        assert!(!shell.allows("free", "administrator"));
-        assert_eq!(registry.problems.len(), 3, "{:?}", registry.problems);
+        let admin = rungs(&["administrator", "plus", "free", "anonymous"]);
+        assert!(shell.allows(&admin, "administrator"));
+        assert!(!shell.allows(&admin, "free"));
+        assert!(!shell.allows(&admin, "plus"));
+        // Plus never reaches an Administrator ability, whatever its manifest lists.
+        assert!(!shell.allows(&rungs(&["plus", "free", "anonymous"]), "administrator"));
+        assert!(!shell.allows(&rungs(&["free", "anonymous"]), "administrator"));
+        // Outside the Administrator group, an administrator-only list fails at load.
+        assert!(!registry.abilities.contains_key("admin_only"));
+        assert_eq!(registry.problems.len(), 4, "{:?}", registry.problems);
+    }
+
+    #[test]
+    fn a_plus_only_ability_works_for_plus_and_above_and_never_below() {
+        let root = tempfile::tempdir().unwrap();
+        write(
+            root.path(),
+            "Developer/github/github.json",
+            r#"{"owner_tier":["plus","administrator"]}"#,
+        );
+        let registry = load_all(root.path());
+        let github = &registry.abilities["github"];
+        let rungs = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(github.allows(&rungs(&["plus", "free", "anonymous"]), "free"));
+        assert!(github.allows(&rungs(&["administrator", "plus", "free"]), "plus"));
+        assert!(!github.allows(&rungs(&["free", "anonymous"]), "plus"));
+        assert!(!github.allows(&rungs(&["anonymous"]), "plus"));
+    }
+
+    /// The shipped Plus-only groups name `plus` as their lowest tier: Plus owners have them,
+    /// Free owners do not.
+    #[test]
+    fn shipped_plus_only_groups_need_a_plus_owner() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../abilities");
+        let registry = load_all(&root);
+        let plus = ["plus", "free", "anonymous"].map(String::from);
+        let free = ["free", "anonymous"].map(String::from);
+        let mut seen = 0;
+        for group in [
+            "Commerce",
+            "CRM",
+            "Social",
+            "Communication",
+            "Productivity",
+            "Developer",
+            "Payments",
+        ] {
+            for ability in fs::read_dir(root.join(group)).unwrap().flatten() {
+                let id = ability.file_name().to_string_lossy().into_owned();
+                let Some(access) = registry.abilities.get(&id) else {
+                    continue;
+                };
+                seen += 1;
+                assert!(access.allows(&plus, "free"), "{group}/{id}");
+                assert!(!access.allows(&free, "free"), "{group}/{id}");
+            }
+        }
+        assert!(seen >= 7, "{seen}");
     }
 
     /// Release check: every shipped ability declares its tiers, and Administrator

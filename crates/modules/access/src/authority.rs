@@ -90,6 +90,9 @@ pub struct LiveAccess {
     pub agent_administrator: bool,
     /// The agent owner's app tier: it decides which of the agent's abilities work.
     pub owner_tier_id: String,
+    /// The owner's tier and every tier ranked below it, from the same policy read: a tier
+    /// gets each ability and tool any tier below it gets (`account_ladder::inherited`).
+    pub owner_tiers: Vec<String>,
     pub revision: AccessRevision,
     pub capability_level: crate::capabilities::CapabilityLevel,
     /// The policy's run-sharing limits, read with the tier from the same policy document.
@@ -118,6 +121,7 @@ impl LiveAccess {
             self.revision,
             self.agent_administrator,
             self.owner_tier_id,
+            self.owner_tiers,
             self.capability_level,
             self.tool_permissions,
             self.ability_permissions,
@@ -193,7 +197,7 @@ impl LiveAccess {
     /// The owner's tier, from the ability's `owner_tier`; Administrator abilities also need
     /// an administrator caller. Paused, not removed: the agent keeps its saved design.
     pub fn tier_ability_permission(&self, ability_id: &str) -> Permission {
-        if access::ability_tier_allowed(ability_id, &self.owner_tier_id, &self.principal.tier_id) {
+        if access::ability_tier_allowed(ability_id, &self.owner_tiers, &self.principal.tier_id) {
             Permission::Auto
         } else {
             Permission::Deny
@@ -201,7 +205,7 @@ impl LiveAccess {
     }
     /// A tool's own `owner_tier` for the owner's tier, narrowing its abilities' lists.
     pub fn tier_tool_permission(&self, name: &str) -> Permission {
-        if access::tool_tier_allowed(name, &self.owner_tier_id) {
+        if access::tool_tier_allowed(name, &self.owner_tiers) {
             Permission::Auto
         } else {
             Permission::Deny
@@ -524,6 +528,11 @@ impl<C: RecordCodec> Repository<'_, C> {
             },
             None => String::new(),
         };
+        let owner_tiers = if owner_tier_id.is_empty() {
+            Vec::new()
+        } else {
+            crate::account_ladder::inherited(&policy, &owner_tier_id)
+        };
         // `agent_authority`'s checks of the stored membership, then its `can_manage`.
         if raw.as_ref().is_some_and(|v| {
             v["user_id"] != user_id
@@ -561,6 +570,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             agent_enabled,
             agent_administrator,
             owner_tier_id,
+            owner_tiers,
             revision,
             capability_level,
             run_limits,

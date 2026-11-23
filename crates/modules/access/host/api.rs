@@ -360,6 +360,9 @@ struct AccountChange {
     expected_revision: u64,
     status: AccountStatus,
     tier_id: String,
+    /// When the tier ends and the account returns to Free (Unix seconds); absent: no end.
+    #[serde(default)]
+    tier_until: Option<u64>,
 }
 async fn change_account(
     State(app): State<App>,
@@ -375,12 +378,26 @@ async fn change_account(
         &body.tier_id,
     )
     .map_err(|_| invalid("You cannot restrict or demote your own administrator account"))?;
+    if let Some(until) = body.tier_until {
+        crate::access::account_ladder::tier_end_allowed(
+            &app.store.read_access_policy()?,
+            &body.tier_id,
+            until,
+            crate::now(),
+        )
+        .map_err(|error| invalid(&error.to_string()))?;
+    }
     let _guard = app.gate.lock().await;
-    let account = app
-        .store
-        .update_account_access(&id, body.expected_revision, body.status, &body.tier_id)
-        .await
-        .map_err(|_| stale("Account update rejected; reload the account and tier"))?;
+    let account = set_account_tier(
+        &app,
+        &id,
+        body.expected_revision,
+        body.status,
+        &body.tier_id,
+        body.tier_until,
+    )
+    .await
+    .map_err(|_| stale("Account update rejected; reload the account and tier"))?;
     stop_user_runs(
         &app,
         &id,
@@ -389,6 +406,97 @@ async fn change_account(
     )
     .await?;
     Ok(Json(json!({"account":account})))
+}
+/// The `account_due` kind whose time is when an account's tier ends (its `tier_until`).
+pub(crate) const TIER_END_DUE: &str = "tier_end";
+/// How often the API looks for accounts whose tier has ended.
+const TIER_END_TICK: std::time::Duration = std::time::Duration::from_secs(60);
+/// How long a tier end that could not be written waits before it is tried again (seconds).
+const TIER_END_RETRY: u64 = 3600;
+/// Change an account's status and tier through the account writer, with an optional end
+/// date. The `account_due` row comes first and is only brought earlier, so a write that
+/// fails or races leaves at worst an early visit that finds nothing to do, never a missed
+/// end; after the write it holds the stored end exactly (none: removed).
+async fn set_account_tier(
+    app: &App,
+    id: &str,
+    expected_revision: u64,
+    status: AccountStatus,
+    tier_id: &str,
+    tier_until: Option<u64>,
+) -> anyhow::Result<Value> {
+    let pool = &app.store.app_pool;
+    if let Some(until) = tier_until {
+        webagent_engine::due::earlier(pool, id, TIER_END_DUE, until).await?;
+    }
+    let account = app
+        .store
+        .update_account_tier(id, expected_revision, status, tier_id, tier_until)
+        .await?;
+    webagent_engine::due::set(pool, id, TIER_END_DUE, tier_until).await?;
+    Ok(account)
+}
+/// Return accounts whose tier has ended to Free, every minute until the API stops. Each pass
+/// reads only the `account_due` rows that are due, never every account.
+pub(crate) async fn tier_end_service(app: App) {
+    loop {
+        tokio::select! {
+            () = app.stop.cancelled() => break,
+            () = tokio::time::sleep(TIER_END_TICK) => {}
+        }
+        if let Err(error) = end_due_tiers(&app, crate::now()).await {
+            tracing::warn!(%error, "Tier end pass failed");
+        }
+    }
+}
+/// One pass at `now`: each account whose tier-end row is due is read again, and one whose end
+/// date has passed returns to Free through the account writer (its `auth_epoch` rises, its
+/// runs stop as for any tier change; its settings and data stay). Returns how many ended.
+pub(crate) async fn end_due_tiers(app: &App, now: u64) -> anyhow::Result<usize> {
+    let pool = &app.store.app_pool;
+    let mut ended = 0;
+    for id in webagent_engine::due::passed(pool, TIER_END_DUE, now).await? {
+        let _guard = app.gate.lock().await;
+        let account = app.store.account_by_id(&id).await?;
+        let until = account
+            .as_ref()
+            .and_then(|account| account["tier_until"].as_u64());
+        let next = match (account, until) {
+            (Some(_), Some(until)) if until > now => Some(until),
+            (Some(account), Some(_)) => {
+                let principal = crate::access::Principal::from_account(&account)?;
+                match app
+                    .store
+                    .update_account_tier(
+                        &id,
+                        principal.access_revision,
+                        principal.status,
+                        crate::access::FREE_TIER,
+                        None,
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        ended += 1;
+                        if let Err(error) =
+                            stop_user_runs(app, &id, None, "the account's tier ended").await
+                        {
+                            tracing::warn!(error = %error.1, "Runs not stopped after a tier end");
+                        }
+                        None
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "Tier end not written; trying again later");
+                        Some(now.saturating_add(TIER_END_RETRY))
+                    }
+                }
+            }
+            // No account or no end date (changed since): nothing left to do.
+            _ => None,
+        };
+        webagent_engine::due::set(pool, &id, TIER_END_DUE, next).await?;
+    }
+    Ok(ended)
 }
 async fn tiers(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
     administrator(&app, &identity).await?;
@@ -753,6 +861,9 @@ pub fn router() -> Router<App> {
         .route("/audit", get(access_audit))
 }
 #[cfg(test)]
+#[path = "plus_tier_tests.rs"]
+mod plus_tier_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime_tests::fixture;
@@ -786,6 +897,7 @@ mod tests {
                 expected_revision: 1,
                 status: AccountStatus::Active,
                 tier_id: "free".into(),
+                tier_until: None,
             }),
         )
         .await
@@ -804,6 +916,7 @@ mod tests {
                 expected_revision: 2,
                 status: AccountStatus::Active,
                 tier_id: "administrator".into(),
+                tier_until: None,
             }),
         )
         .await

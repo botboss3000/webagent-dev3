@@ -1681,7 +1681,7 @@ impl<H: Host> Catalog<H> {
             "kind":ability.kind,"readiness":ability.readiness,"config":ability.config,
             "skill_summary":ability.skill_summary,"migration_note":ability.migration_note,
             "role_access":crate::ability_access::registry().abilities.get(&ability.id).and_then(|access| access.role_access.clone()),
-            "owner_tier":crate::ability_access::registry().abilities.get(&ability.id).map(|access| access.owner_tier.clone()).unwrap_or_else(|| if ability.id == webagent_access::BUILT_IN_ABILITY { crate::ability_access::BUILT_IN_TIERS.map(String::from).to_vec() } else { Vec::new() }),
+            "owner_tier":crate::ability_access::registry().abilities.get(&ability.id).map(|access| access.owner_tier.clone()).unwrap_or_else(|| if ability.id == webagent_access::BUILT_IN_ABILITY { vec![crate::ability_access::BUILT_IN_TIER.to_owned()] } else { Vec::new() }),
             "icon":ability.icon,"color":ability.color,"tools":tools,
             "has_skill":Self::core_skill(ability).is_some(),
             "selectable_skills":ability.selectable_skills.iter().filter_map(|(name,cached)| Self::asset_text(ability,"selectable",name,cached).filter(|text|Self::skill_live(ability,"selectable",name,text) && Self::selectable_metadata(name,text).is_some() && Self::selectable_mode(visibility,&ability.id,name,text)!="off").map(|_|name)).collect::<Vec<_>>(),
