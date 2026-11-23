@@ -105,6 +105,8 @@ struct State {
     last_action: String,
     last_action_at: Option<Instant>,
     signed_in: bool,
+    /// The test account a test-account browser is signed in as ([`Trusted::signed_in_as`]).
+    signed_in_as: Option<String>,
     sites: Option<Sites>,
     sites_raw: Value,
     /// Signed in: the app pages it may show, as of the latest call.
@@ -718,6 +720,7 @@ impl Service {
             last_action: String::new(),
             last_action_at: None,
             signed_in,
+            signed_in_as: trusted.signed_in_as.clone(),
             sites: if signed_in {
                 None
             } else {
@@ -779,7 +782,8 @@ impl Service {
         let text = cut(&wd::text(driver, &body).await?, 16384);
         let identity: Value =
             serde_json::from_str(&text).map_err(|_| Fault::backend("JSONDecodeError"))?;
-        if identity["user_id"] != state.user.as_str() {
+        let expected = state.signed_in_as.as_deref().unwrap_or(&state.user);
+        if identity["user_id"] != expected {
             return Err(Fault::rejected("Authenticated browser identity mismatch"));
         }
         let csrf = match identity.get("csrf_token") {

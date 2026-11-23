@@ -687,9 +687,11 @@ async fn persona_authority(
         return Ok(None);
     }
     let end = persona["expires_at"].as_u64().unwrap_or(0);
+    // The chat's own caller owns the browser folder; the cookie signs in as the test account.
     Ok(Some(json!({
         "session_id": sid,
-        "user_id": persona["user_id"],
+        "user_id": host.actor(),
+        "signed_in_as": persona["user_id"],
         "agent_id": host.session_agent_id(sid).await?,
         "cookie": persona["cookie"],
         "generation": persona["generation"],

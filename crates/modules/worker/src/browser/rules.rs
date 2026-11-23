@@ -240,6 +240,9 @@ pub struct Trusted {
     pub agent_id: String,
     /// The app session cookie when signed in; `None` signed out.
     pub cookie: Option<String>,
+    /// A test-account browser (Diagnostics `test_login`): the account its cookie signs in as.
+    /// `user_id` stays the chat's own caller, who owns the browser folder.
+    pub signed_in_as: Option<String>,
     /// The signed-out site lists; `None` signed in.
     pub sites: Option<Sites>,
     /// The app pages a signed-in browser may show; required signed in.
@@ -334,6 +337,16 @@ pub fn validate_trusted(base: &Path, trusted: &Value) -> Result<Trusted, Fault> 
         None => return Err(Fault::rejected("Invalid trusted page rules")),
     }
     .unwrap_or_default();
+    // Only a test-account browser names another account, and only with its cookie.
+    let signed_in_as = match map.get("signed_in_as") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(account))
+            if cookie.is_some() && pages.persona && shaped(account, 1, 64, lower_id) =>
+        {
+            Some(account.clone())
+        }
+        Some(_) => return Err(Fault::rejected("Invalid trusted test account")),
+    };
     let generation = text("generation")
         .filter(|generation| (1..=128).contains(&generation.chars().count()))
         .ok_or_else(|| Fault::rejected("Invalid trusted generation"))?;
@@ -363,6 +376,7 @@ pub fn validate_trusted(base: &Path, trusted: &Value) -> Result<Trusted, Fault> 
         user_id: user.to_owned(),
         agent_id: agent.to_owned(),
         cookie,
+        signed_in_as,
         sites,
         pages,
         sites_raw,

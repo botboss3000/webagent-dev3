@@ -1886,6 +1886,39 @@ async fn session_frames_reject_unknown_tools_and_other_owners() {
 }
 
 #[test]
+fn a_test_account_browser_names_its_account_but_the_folder_stays_the_callers() {
+    let sid = "2244991a-c2e3-415b-ae5c-054570c91d32";
+    let base = Path::new("/workspaces").join(sid);
+    let persona = json!({"session_id":sid,"user_id":"admin","agent_id":"shared_default",
+        "cookie":"9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d","generation":"g",
+        "expires_at":super::now() + 60.0,"allowed_session_ids":[sid],
+        "signed_in_as":"test_free",
+        "pages":{"landing_tab":"app","app_pages":[{"tab":"*"}],"persona":true}});
+    let trusted = validate_trusted(&base, &persona).unwrap();
+    assert_eq!(trusted.user_id, "admin");
+    assert_eq!(trusted.signed_in_as.as_deref(), Some("test_free"));
+    // Refused: naming another account without the persona rules, or without a cookie.
+    let mut plain = persona.clone();
+    plain["pages"] = json!({"landing_tab":"wiki","app_pages":[{"tab":"wiki"}]});
+    assert!(validate_trusted(&base, &plain).is_err());
+    let mut signed_out = persona.clone();
+    signed_out["cookie"] = Value::Null;
+    signed_out["sites"] = json!({"allow":[],"block":[]});
+    signed_out.as_object_mut().unwrap().remove("pages");
+    assert!(validate_trusted(&base, &signed_out).is_err());
+    let mut bad = persona.clone();
+    bad["signed_in_as"] = json!("Not An Id");
+    assert!(validate_trusted(&base, &bad).is_err());
+    // Without it, as before: the caller is who the browser signs in as.
+    let mut ordinary = persona;
+    ordinary.as_object_mut().unwrap().remove("signed_in_as");
+    assert_eq!(
+        validate_trusted(&base, &ordinary).unwrap().signed_in_as,
+        None
+    );
+}
+
+#[test]
 fn trusted_authority_rules() {
     let sid = "2244991a-c2e3-415b-ae5c-054570c91d32";
     let base = Path::new("/workspaces").join(sid);
