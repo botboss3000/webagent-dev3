@@ -613,7 +613,6 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&touched);
         self.context_cache
             .lock()
             .unwrap()

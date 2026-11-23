@@ -3,7 +3,7 @@ use crate::StoreCore;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use webagent_storage::cache::{Cache, ContextCache};
+use webagent_storage::cache::ContextCache;
 use webagent_storage::codec::{AgentKeys, Codec};
 
 /// Open a handle for `user` and agent `shared_default` under `root`, with a fixed
@@ -47,7 +47,6 @@ pub async fn store_core(root: &Path, user: &str) -> StoreCore {
         codec: Codec::new(&[7; 32]).expect("fixture key"),
         agent_cipher: None,
         agent_keys: AgentKeys::default(),
-        cache: Arc::new(Mutex::new(Cache::new(16))),
         context_cache: Arc::new(Mutex::new(ContextCache::new(16))),
         context_gate: Arc::default(),
     }

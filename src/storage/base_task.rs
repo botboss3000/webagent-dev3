@@ -315,10 +315,6 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .invalidate(&[key, notes_key]);
         Ok(true)
     }
 

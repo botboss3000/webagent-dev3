@@ -403,7 +403,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             return Err(anyhow!("Account identity conflict"));
         }
         // Guest policy is rechecked by the loop as well as HTTP authentication.
-        let policy = self.read_access_policy()?;
+        let (policy, policy_digest) = self.read_access_policy_digested()?;
         if principal.role == access::Role::Guest {
             if policy["registration"] != "open" {
                 return Err(anyhow!("Guest access is not enabled"));
@@ -414,7 +414,31 @@ impl<C: RecordCodec> Repository<'_, C> {
         if tier.id != principal.tier_id {
             return Err(anyhow!("Tier identity conflict"));
         }
-        let membership = self.resolved_membership(user_id, agent_id).await?;
+        // Each record is read once here (the owner, the agent record, the membership and
+        // the account); the checks are those of `resolved_membership`, `agent_owner`,
+        // `agent_authority` and `capability_levels`, which used to read them again.
+        let owner: String = sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
+            .bind(agent_id)
+            .fetch_one(self.app_pool)
+            .await?;
+        let agent = sqlx::query("SELECT status,metadata,revision FROM agents WHERE id=?")
+            .bind(agent_id)
+            .fetch_one(agent_view.agent_pool)
+            .await?;
+        let metadata = self.unseal_agent(&agent.get::<Vec<u8>, _>("metadata"))?;
+        if metadata["owner_id"].as_str() != Some(owner.as_str())
+            && !(agent_id == "shared_default" && owner == "admin" && metadata["owner_id"].is_null())
+        {
+            return Err(anyhow!("Agent owner conflict"));
+        }
+        let raw = self.agent_membership(user_id, agent_id).await?;
+        let membership =
+            crate::membership::membership_from(user_id, agent_id, &owner, raw.clone(), || {
+                Ok((
+                    principal.clone(),
+                    crate::membership::MemberAccess::from_metadata(&metadata)?,
+                ))
+            })?;
         if let Some(value) = &membership {
             if value["user_id"] != user_id
                 || value["agent_id"] != agent_id
@@ -436,10 +460,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             .as_ref()
             .and_then(|value| value["revision"].as_u64())
             .unwrap_or(0);
-        let agent = sqlx::query("SELECT status,metadata,revision FROM agents WHERE id=?")
-            .bind(agent_id)
-            .fetch_optional(agent_view.agent_pool)
-            .await?;
+        let agent = Some(agent);
         let (
             agent_enabled,
             agent_revision,
@@ -448,16 +469,10 @@ impl<C: RecordCodec> Repository<'_, C> {
             tool_callers,
             owner,
         ) = if let Some(agent) = agent {
-            let metadata = self.unseal_agent(&agent.get::<Vec<u8>, _>("metadata"))?;
             if !metadata.is_object() {
                 return Err(anyhow!("Invalid agent metadata"));
             }
-            let owner: Option<String> =
-                sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
-                    .bind(agent_id)
-                    .fetch_optional(self.app_pool)
-                    .await?;
-            let owner = owner.ok_or_else(|| anyhow!("Agent directory entry missing"))?;
+            let owner = owner.clone();
             if (agent_id == "shared_default" && owner != "admin")
                 || metadata["owner_id"].as_str().is_some_and(|id| id != owner)
                 || (agent_id != "shared_default"
@@ -488,6 +503,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         } else {
             (false, 0, Value::Null, Value::Null, Value::Null, None)
         };
+        let owner_id = owner.clone().unwrap_or_default();
         // A missing owner account leaves no tier, so no ability works.
         let owner_tier_id = match owner {
             Some(owner) if owner == principal.user_id => principal.tier_id.clone(),
@@ -497,9 +513,23 @@ impl<C: RecordCodec> Repository<'_, C> {
             },
             None => String::new(),
         };
-        let agent_administrator =
-            self.agent_authority(user_id, agent_id).await?["can_manage"] == true;
-        let levels = self.capability_levels(agent_id).await?;
+        // `agent_authority`'s checks of the stored membership, then its `can_manage`.
+        if raw.as_ref().is_some_and(|v| {
+            v["user_id"] != user_id
+                || v["agent_id"] != agent_id
+                || v["revision"].as_u64().is_none_or(|r| r == 0)
+        }) {
+            return Err(anyhow!("Invalid membership record"));
+        }
+        raw.as_ref()
+            .map(|v| serde_json::from_value::<Relationship>(v["relationship"].clone()))
+            .transpose()?;
+        let agent_operator = owner_id == user_id
+            || raw
+                .as_ref()
+                .is_some_and(|v| v["agent_administrator"] == true && v["relationship"] == "member");
+        let agent_administrator = principal.active() && agent_operator;
+        let levels = crate::capabilities::CapabilityLevels::from_metadata(&metadata)?;
         let level_id = crate::capabilities::membership_level(membership.as_ref(), relationship)?;
         let capability_level = levels.effective(&level_id)?;
         let revision = AccessRevision {
@@ -507,7 +537,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             tier: tier.revision,
             membership: membership_revision,
             agent: agent_revision,
-            policy: webagent_configuration::digest(&policy),
+            policy: policy_digest,
             capability_level: levels.revision,
         };
         let agent_enabled = agent_enabled

@@ -123,6 +123,7 @@ impl Context {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cache {
+    /// Retired document cache budget: accepted and validated, no longer used.
     pub document_budget_bytes: usize,
     pub context_budget_bytes: usize,
 }

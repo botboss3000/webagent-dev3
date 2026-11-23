@@ -79,7 +79,6 @@ impl RecordEffects for Fixture {
         v.clone()
     }
     fn record_usage(&self, _: &mut Value, _: &Value) {}
-    fn invalidate_documents(&self, _: &[String]) {}
     async fn agent_pool<'a>(&'a self, id: &'a str) -> Result<SqlitePool> {
         if id != "agent" {
             return Err(anyhow!("Unknown fixture agent"));
@@ -433,7 +432,6 @@ mod independent_runtime_io {
             assert_eq!(self.agent_scope, AGENT);
             self.usage.fetch_add(1, Ordering::SeqCst);
         }
-        fn invalidate_documents(&self, _: &[String]) {}
         async fn agent_pool<'a>(&'a self, id: &'a str) -> Result<SqlitePool> {
             RuntimeStorage::agent_pool(self, id).await
         }

@@ -296,6 +296,13 @@ impl webagent_engine::runtime::followup::FollowupQueue<Store> for NativePolicy {
     ) -> impl std::future::Future<Output = Result<Value>> + Send + 'a {
         store.followup_queue(sid)
     }
+    fn followup_revision<'a>(
+        &'a self,
+        store: &'a Store,
+        sid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<[Option<i64>; 2]>>> + Send + 'a {
+        async move { store.followup_revision(sid).await.map(Some) }
+    }
     fn followup_consume<'a>(
         &'a self,
         store: &'a Store,

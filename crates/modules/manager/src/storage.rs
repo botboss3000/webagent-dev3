@@ -9,7 +9,6 @@ pub trait RecordEffects:Sync {
     fn encode_user_record(&self,value:&Value)->Result<Vec<u8>>;
     fn public_usage(&self,value:&Value)->Value;
     fn record_usage(&self,record:&mut Value,response:&Value);
-    fn invalidate_documents(&self,keys:&[String]);
     fn agent_pool<'a>(&'a self,id:&'a str)->impl Future<Output=Result<SqlitePool>>+Send+'a;
     fn list_documents<'a>(&'a self,prefix:&'a str)->impl Future<Output=Result<Vec<Value>>>+Send+'a;
     fn read_document<'a>(&'a self,key:&'a str)->impl Future<Output=Result<Option<Value>>>+Send+'a;

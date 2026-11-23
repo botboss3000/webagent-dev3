@@ -1,6 +1,6 @@
 //! Scoped SQLite authorities: one WAL pool per application, user and agent
 //! database, with profile permissions and the plane schema their owners need.
-use crate::cache::{Cache, ContextCache};
+use crate::cache::ContextCache;
 use anyhow::{anyhow, Result};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
@@ -220,7 +220,6 @@ async fn widen_chat_roles(pool: &SqlitePool) -> Result<()> {
 #[derive(Clone)]
 pub struct UserPlane {
     pub pool: SqlitePool,
-    pub cache: Arc<Mutex<Cache>>,
     pub context_cache: Arc<Mutex<ContextCache>>,
     pub context_gate: Arc<RwLock<()>>,
     /// Set once this process has verified the account's one-time migration markers.
@@ -232,7 +231,6 @@ impl UserPlane {
     pub fn new(pool: SqlitePool) -> Self {
         Self {
             pool,
-            cache: Arc::new(Mutex::new(Cache::new(64 * 1024 * 1024))),
             context_cache: Arc::new(Mutex::new(ContextCache::new(16 * 1024 * 1024))),
             context_gate: Arc::new(RwLock::new(())),
             migrated: Arc::new(AtomicBool::new(false)),

@@ -99,6 +99,5 @@ pub(crate) async fn ingest(
     )
     .await?;
     tx.commit().await?;
-    store.cache.lock().unwrap_or_else(|error| error.into_inner()).invalidate(&[log_key]);
     Ok(json!({"accepted":true,"duplicate":false,"seq":seq}))
 }

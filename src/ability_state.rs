@@ -11,9 +11,8 @@ impl axum::extract::FromRequestParts<App> for State<App> {
         let mut app=state.clone();app.abilities=catalog;
         if let Ok(config)=loop_runtime::Config::read(&app.runtime_path) {
             let mut previous=app.runtime.write().await;
-            if previous.cache.document_budget_bytes!=config.cache.document_budget_bytes
-                ||previous.cache.context_budget_bytes!=config.cache.context_budget_bytes {
-                app.store.configure_cache(config.cache.document_budget_bytes,config.cache.context_budget_bytes);
+            if previous.cache.context_budget_bytes!=config.cache.context_budget_bytes {
+                app.store.configure_cache(config.cache.context_budget_bytes);
             }
             *previous=config;
         }

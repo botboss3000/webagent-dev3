@@ -71,6 +71,17 @@ impl<C: RecordCodec> Repository<'_, C> {
         };
         webagent_configuration::live::parsed_path(&self.access_policy_path(), POLICY_LIMIT, parse)
     }
+    /// The live policy with its digest, computed once per version of the file (the live
+    /// parser cache keeps both) instead of hashing the whole policy at every access check.
+    pub fn read_access_policy_digested(&self) -> Result<(Value, String)> {
+        let parse = |bytes: &[u8]| -> Result<(Value, String)> {
+            let value: Value = serde_json::from_slice(bytes)?;
+            validate_configuration(&value)?;
+            let digest = webagent_configuration::digest(&value);
+            Ok((value, digest))
+        };
+        webagent_configuration::live::parsed_path(&self.access_policy_path(), POLICY_LIMIT, parse)
+    }
     pub fn save_page_policy(&self, pages: Value, expected: u64) -> Result<Value> {
         validate_pages(&pages)?;
         let _lock = self.policy_lock()?;

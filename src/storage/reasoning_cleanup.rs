@@ -163,10 +163,6 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.cache
-            .lock()
-            .unwrap()
-            .invalidate(&[format!("session:{sid}")]);
         Ok(true)
     }
 }

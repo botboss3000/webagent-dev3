@@ -320,7 +320,6 @@ impl Store {
         self.write_document(&mut tx, &receipt, &json!({"input":input,"result":current}))
             .await?;
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[]);
         self.context_cache
             .lock()
             .unwrap()
@@ -441,7 +440,6 @@ impl Store {
                 .await?;
         }
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[]);
         self.context_cache
             .lock()
             .unwrap()
@@ -622,7 +620,6 @@ impl Store {
             self.write_document(&mut tx, &format!("session:{sid}"), &latest)
                 .await?;
             tx.commit().await?;
-            self.cache.lock().unwrap().invalidate(&[]);
             self.context_cache
                 .lock()
                 .unwrap()

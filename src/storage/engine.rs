@@ -29,9 +29,8 @@ impl Records for Store {
     fn context_gate(&self) -> &tokio::sync::RwLock<()> {
         &self.context_gate
     }
-    fn invalidate(&self, keys: &[String]) {
-        self.cache.lock().unwrap().invalidate(keys);
-    }
+    // The retired document cache is gone; run writes have nothing else to invalidate.
+    fn invalidate(&self, _keys: &[String]) {}
     fn invalidate_context(&self, sid: &str) {
         self.context_cache
             .lock()
@@ -308,12 +307,8 @@ impl webagent_usage::SessionRecords for Store {
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(format!("session_usage:{sid}")).bind(self.encode_user_record(total)?).execute(&mut **tx).await?;
         Ok(())
     }
-    fn invalidate_total(&self, sid: &str) {
-        self.cache
-            .lock()
-            .unwrap()
-            .invalidate(&[format!("session_usage:{sid}")]);
-    }
+    // Session totals were only held by the retired document cache.
+    fn invalidate_total(&self, _sid: &str) {}
 }
 
 impl webagent_engine::runtime::ports::ScopedStorage for Store {
@@ -326,8 +321,8 @@ impl webagent_engine::runtime::ports::ScopedStorage for Store {
     fn agent_id(&self) -> &str {
         &self.agent_id
     }
-    fn configure_cache(&self, documents: usize, contexts: usize) {
-        StoreCore::configure_cache(self, documents, contexts)
+    fn configure_cache(&self, contexts: usize) {
+        StoreCore::configure_cache(self, contexts)
     }
     fn for_user<'a>(
         &'a self,

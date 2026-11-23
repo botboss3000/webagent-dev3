@@ -10,7 +10,7 @@ pub trait ScopedStorage:
     fn user_pool(&self) -> &SqlitePool;
     fn application_pool(&self) -> &SqlitePool;
     fn agent_id(&self) -> &str;
-    fn configure_cache(&self, documents: usize, contexts: usize);
+    fn configure_cache(&self, contexts: usize);
     fn for_user<'a>(&'a self, user: &'a str) -> impl Future<Output = Result<Self>> + Send + 'a;
     fn all_user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
     /// Accounts a periodic scan must visit now; idle, unchanged accounts are left closed.

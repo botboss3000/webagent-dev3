@@ -208,10 +208,6 @@ impl StoreCore {
 
     /// Drop the document's cache entry and, for a session, its assembled context.
     pub fn invalidate_document(&self, key: &str) {
-        self.cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .invalidate(&[key.into()]);
         if let Some(sid) = key.strip_prefix("session:") {
             self.context_cache
                 .lock()

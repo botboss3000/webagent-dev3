@@ -20,7 +20,7 @@ async fn primitives_keep_the_handle_identity_and_codec() {
     assert_eq!(store.unseal(&encoded).unwrap(), value);
     assert!(std::ptr::eq(store.pool_for("session:s1"), &store.pool));
     assert!(store.validate_agent_doc_key("agent:other:model").is_err());
-    store.configure_cache(1, 1);
+    store.configure_cache(1);
 }
 
 #[tokio::test]

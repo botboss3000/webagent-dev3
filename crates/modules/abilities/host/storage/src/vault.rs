@@ -108,7 +108,6 @@ pub(crate) async fn save_credential(
     )
     .await?;
     tx.commit().await?;
-    store.cache.lock().unwrap_or_else(|error| error.into_inner()).invalidate(&[key, receipt_key, ui_key]);
     Ok(output)
 }
 

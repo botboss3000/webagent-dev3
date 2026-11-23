@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
-use webagent_storage::cache::{Cache, ContextCache};
+use webagent_storage::cache::ContextCache;
 use webagent_storage::codec::{AgentCipher, AgentKeys, Codec};
 use webagent_storage::pool::UserPlane;
 use webagent_storage::routing::Planes;
@@ -35,7 +35,6 @@ pub struct StoreCore {
     // Store views share immutable expanded keys instead of copying large key schedules into futures.
     pub agent_cipher: Option<AgentCipher>,
     pub agent_keys: AgentKeys,
-    pub cache: Arc<Mutex<Cache>>,
     pub context_cache: Arc<Mutex<ContextCache>>,
     pub context_gate: Arc<RwLock<()>>,
 }
@@ -102,12 +101,10 @@ impl StoreCore {
         self.codec.unseal_for(&self.root, &self.user_id, data)
     }
 
-    /// Reset the shared disposable caches, applying limits to existing and future
+    /// Reset the shared disposable context cache, applying the limit to existing and future
     /// user handles alike. Database pools and active request copies are not covered.
-    pub fn configure_cache(&self, documents: usize, contexts: usize) {
-        // Both caches are replaced wholesale, so a poisoned lock is simply rebuilt.
-        *self.cache.lock().unwrap_or_else(|error| error.into_inner()) = Cache::new(documents);
-        self.cache.clear_poison();
+    pub fn configure_cache(&self, contexts: usize) {
+        // Replaced wholesale, so a poisoned lock is simply rebuilt.
         *self
             .context_cache
             .lock()

@@ -41,7 +41,6 @@ impl StoreCore {
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(&key).bind(self.seal(&next)?).execute(&mut *tx).await?;
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key]);
         Ok(())
     }
 }

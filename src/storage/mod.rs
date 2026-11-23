@@ -178,7 +178,6 @@ impl Store {
                 codec,
                 agent_cipher: None,
                 agent_keys: AgentKeys::default(),
-                cache: admin_state.cache,
                 context_cache: admin_state.context_cache,
                 context_gate: admin_state.context_gate,
             },
@@ -263,7 +262,6 @@ impl Store {
                     let mut state = UserPlane::new(open_pool(&path, true, true).await?);
                     // Every user shares one retained-cache budget per Store family.
                     // User-qualified context keys prevent cross-account collisions.
-                    state.cache = self.cache.clone();
                     state.context_cache = self.context_cache.clone();
                     states.insert(user_id.to_owned(), state.clone());
                     state
@@ -285,7 +283,6 @@ impl Store {
                 codec: self.codec.clone(),
                 agent_cipher: self.agent_cipher.clone(),
                 agent_keys: self.agent_keys.clone(),
-                cache: state.cache,
                 context_cache: state.context_cache,
                 context_gate: state.context_gate,
             },
@@ -342,7 +339,6 @@ impl Store {
                 codec: self.codec.clone(),
                 agent_cipher: None,
                 agent_keys: self.agent_keys.clone(),
-                cache: self.cache.clone(),
                 context_cache: self.context_cache.clone(),
                 context_gate: self.context_gate.clone(),
             },
@@ -1690,7 +1686,6 @@ impl Store {
                     "run_id":run_id,"kind":kind}))?).execute(&mut *tx).await?;
         }
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&touched);
         if touches_session {
             let mut context_cache = self.context_cache.lock().unwrap();
             for key in &touched {
@@ -3653,7 +3648,6 @@ mod tests {
             .unwrap();
         let other = store.for_user("other").await.unwrap();
         assert!(Arc::ptr_eq(&store.context_cache, &other.context_cache));
-        assert!(Arc::ptr_eq(&store.cache, &other.cache));
         for (handle, text) in [(&store, "admin text"), (&other, "other text")] {
             handle.put("session:s",&json!({"id":"s","checkpoint_input":[{"role":"user","content":text}],"checkpoint_through":0})).await.unwrap();
             assert_eq!(handle.context("s").await.unwrap()[0]["content"], text);
@@ -3675,7 +3669,7 @@ mod tests {
             .unwrap()
             .get(&store.context_cache_key("s"), 0, 0)
             .is_some());
-        other.configure_cache(0, 0);
+        other.configure_cache(0);
         assert!(store
             .context_cache
             .lock()
@@ -3972,9 +3966,6 @@ impl webagent_manager::storage::RecordEffects for Store {
     }
     fn record_usage(&self, record: &mut Value, response: &Value) {
         crate::usage::record(record, response)
-    }
-    fn invalidate_documents(&self, keys: &[String]) {
-        self.cache.lock().unwrap().invalidate(keys)
     }
     async fn agent_pool<'a>(&'a self, id: &'a str) -> Result<SqlitePool> {
         Ok(self.for_agent(id).await?.agent_pool.clone())

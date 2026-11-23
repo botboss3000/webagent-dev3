@@ -30,7 +30,6 @@ impl<E:RecordEffects> Repository<'_,E> {
         record["deadline"] = json!(now() + 50);
         crate::runtime::send_future(self.effects.write_document_in(&mut tx, &key, &record)).await?;
         tx.commit().await?;
-        self.effects.invalidate_documents(&[key]);
         Ok(Some(record))
     }
     }
@@ -114,13 +113,6 @@ impl<E:RecordEffects> Repository<'_,E> {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.effects.invalidate_documents(&[
-            key,
-            pointer,
-            format!("run:{id}"),
-            format!("run_view:{id}"),
-            format!("session:{sid}"),
-        ]);
         if state!="acceptable" {self.effects.reconcile_requester_slots().await?;}
         Ok(true)
     }

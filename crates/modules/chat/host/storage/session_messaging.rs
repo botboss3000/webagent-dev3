@@ -192,7 +192,6 @@ impl Store {
         if let Some(k) = remember["key"].as_str() {
             keys.push(k.to_owned());
         }
-        self.cache.lock().unwrap().invalidate(&keys);
         Ok(())
     }
     /// The image captures of a finished reply, bounded for a notice row.
@@ -445,7 +444,6 @@ impl Store {
         )
         .await?;
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key, receipt]);
         Ok(r)
     }
 }

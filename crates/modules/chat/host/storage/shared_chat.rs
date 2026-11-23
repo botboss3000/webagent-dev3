@@ -125,7 +125,6 @@ impl Store {
         };
         self.write_document(&mut tx, &receipt, &value).await?;
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key, receipt]);
         Ok(value)
     }
 }
@@ -418,7 +417,6 @@ impl Store {
                 .await?;
         }
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key]);
         Ok(value)
     }
 }

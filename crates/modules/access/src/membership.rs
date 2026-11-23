@@ -29,16 +29,55 @@ impl<C: RecordCodec> Repository<'_, C> {
             .bind(agent)
             .fetch_one(self.agent_pool)
             .await?;
-        let metadata = self.unseal_agent(&bytes)?;
+        MemberAccess::from_metadata(&self.unseal_agent(&bytes)?)
+    }
+    pub async fn resolved_membership(&self, user: &str, agent: &str) -> Result<Option<Value>> {
+        let owner = self.agent_owner(agent).await?;
+        let raw = self.agent_membership(user, agent).await?;
+        if user != owner
+            && !raw.as_ref().is_some_and(|value| {
+                !["removed", "app_login", "visitor"]
+                    .contains(&value["origin"].as_str().unwrap_or("explicit"))
+            })
+        {
+            let account = self
+                .account_by_id(user)
+                .await?
+                .ok_or_else(|| anyhow!("Account not found"))?;
+            let principal = Principal::from_account(&account)?;
+            let policy = self.member_access(agent).await?;
+            return Ok(membership_from(user, agent, &owner, raw, || {
+                Ok((principal, policy))
+            })?);
+        }
+        membership_from(user, agent, &owner, raw, || {
+            unreachable!("owner and explicit members need no account read")
+        })
+    }
+}
+
+impl MemberAccess {
+    /// The agent's joining policy from its metadata record.
+    pub fn from_metadata(metadata: &Value) -> Result<Self> {
         Ok(if metadata["member_access"].is_null() {
             MemberAccess::default()
         } else {
             serde_json::from_value(metadata["member_access"].clone())?
         })
     }
-    pub async fn resolved_membership(&self, user: &str, agent: &str) -> Result<Option<Value>> {
-        let owner = self.agent_owner(agent).await?;
-        let raw = self.agent_membership(user, agent).await?;
+}
+
+/// `resolved_membership` from records already read: `raw` is the stored membership and
+/// `fallback` supplies the account and joining policy, asked for only when neither the
+/// owner nor an explicit membership decides.
+pub(crate) fn membership_from(
+    user: &str,
+    agent: &str,
+    owner: &str,
+    raw: Option<Value>,
+    fallback: impl FnOnce() -> Result<(Principal, MemberAccess)>,
+) -> Result<Option<Value>> {
+    {
         if user == owner {
             return Ok(Some(
                 json!({"user_id":user,"agent_id":agent,"relationship":"owner","capability_level_id":"operator","revision":raw.as_ref().and_then(|v|v["revision"].as_u64()).unwrap_or(1),"origin":"owner"}),
@@ -51,12 +90,7 @@ impl<C: RecordCodec> Repository<'_, C> {
                 return Ok(raw);
             }
         }
-        let account = self
-            .account_by_id(user)
-            .await?
-            .ok_or_else(|| anyhow!("Account not found"))?;
-        let principal = Principal::from_account(&account)?;
-        let policy = self.member_access(agent).await?;
+        let (principal, policy) = fallback()?;
         let level = if principal.role != Role::Guest && policy.app_login_members {
             "member"
         } else if policy.visitor_access {

@@ -39,7 +39,75 @@ impl Store {
             // Reuse the account's cached pool: a fresh connection per account on every admission
             // spawned a thread and reopened the database. Range bounds use the docs key index.
             let pool = self.for_user(&owner).await?.pool.clone();
-            let rows=sqlx::query("SELECT key,value FROM docs WHERE (key>='run:' AND key<'run;') OR (key>='manager_review:' AND key<'manager_review;') OR (key>='followup_queue:' AND key<'followup_queue;')").fetch_all(&pool).await?;
+            // Runs come from the plain run index (its status is saved with the run): a
+            // finished run releases its unreleased slot, and only an unfinished run without a
+            // slot is decrypted, to name its requester. This is what decrypting every run
+            // record and releasing or inserting each did, since both writes were idempotent.
+            let unreleased: Vec<String> = sqlx::query_scalar(
+                "SELECT run_id FROM requester_run_slots WHERE owner_id=? AND released=0",
+            )
+            .bind(&owner)
+            .fetch_all(&self.app_pool)
+            .await?;
+            for rid in unreleased {
+                let status: Option<String> =
+                    sqlx::query_scalar("SELECT status FROM run_index WHERE id=?")
+                        .bind(&rid)
+                        .fetch_optional(&pool)
+                        .await?;
+                if matches!(
+                    status.as_deref(),
+                    Some("completed" | "cancelled" | "failed")
+                ) {
+                    records.push((rid, owner.clone(), owner.clone(), String::new(), true));
+                }
+            }
+            let open: Vec<String> = sqlx::query_scalar(
+                "SELECT id FROM run_index WHERE status NOT IN ('completed','cancelled','failed')",
+            )
+            .fetch_all(&pool)
+            .await?;
+            for rid in open {
+                let slotted: Option<i64> =
+                    sqlx::query_scalar("SELECT 1 FROM requester_run_slots WHERE run_id=?")
+                        .bind(&rid)
+                        .fetch_optional(&self.app_pool)
+                        .await?;
+                if slotted.is_some() {
+                    continue;
+                }
+                let Some(raw) =
+                    sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                        .bind(format!("run:{rid}"))
+                        .fetch_optional(&pool)
+                        .await?
+                else {
+                    continue;
+                };
+                let run = self.unseal(&raw)?;
+                if run["id"].as_str() != Some(rid.as_str())
+                    || matches!(
+                        run["status"].as_str(),
+                        Some("completed" | "cancelled" | "failed")
+                    )
+                {
+                    continue;
+                }
+                let Some(sid) = run["session_id"].as_str() else {
+                    continue;
+                };
+                records.push((
+                    rid.clone(),
+                    run["requester_user_id"]
+                        .as_str()
+                        .unwrap_or(&owner)
+                        .to_owned(),
+                    owner.clone(),
+                    sid.to_owned(),
+                    false,
+                ));
+            }
+            let rows=sqlx::query("SELECT key,value FROM docs WHERE (key>='manager_review:' AND key<'manager_review;') OR (key>='followup_queue:' AND key<'followup_queue;')").fetch_all(&pool).await?;
             for row in rows {
                 let key: String = row.get("key");
                 let value = self.unseal(&row.get::<Vec<u8>, _>("value"))?;

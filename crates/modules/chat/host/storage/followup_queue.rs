@@ -102,6 +102,20 @@ impl Store {
             None => Ok(None),
         }
     }
+    /// Plain integers that change whenever the session's follow-up queue changes, read
+    /// without decrypting it: the newest `queue_updated` event (every queue write adds one,
+    /// `seq` never repeats) and the queue record's row (deleting the record clears it).
+    pub(crate) async fn followup_revision(&self, s: &str) -> Result<[Option<i64>; 2]> {
+        let (event, row): (Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT (SELECT MAX(seq) FROM events WHERE session_id=? AND kind='queue_updated'),
+                    (SELECT rowid FROM docs WHERE key=?)",
+        )
+        .bind(s)
+        .bind(format!("followup_queue:{s}"))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok([event, row])
+    }
     pub(crate) async fn followup_queue(&self, s: &str) -> Result<Value> {
         let mut t = self.pool.begin().await?;
         let q = self.queue_read_tx(&mut t, s).await?;
@@ -195,10 +209,6 @@ impl Store {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate(&self.context_cache_key(s));
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .invalidate(&[format!("session:{s}"), key]);
         Ok(result.clone())
     }
     pub(crate) async fn followup_choice(
@@ -291,10 +301,6 @@ impl Store {
         )
         .await?;
         t.commit().await?;
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .invalidate(&[key]);
         Ok(result)
     }
     pub(crate) async fn followup_review_cas(
@@ -593,10 +599,6 @@ impl Store {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate(&self.context_cache_key(s));
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .invalidate(&[format!("run:{rid}"), format!("run_view:{rid}")]);
         Ok(true)
     }
 }

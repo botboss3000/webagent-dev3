@@ -269,15 +269,9 @@ impl<
                 match config::Config::<C>::read(&app.runtime_path) {
                     Ok(config) => {
                         let mut previous = crate::send_future(app.runtime.write()).await;
-                        if previous.cache.document_budget_bytes
-                            != config.cache.document_budget_bytes
-                            || previous.cache.context_budget_bytes
-                                != config.cache.context_budget_bytes
+                        if previous.cache.context_budget_bytes != config.cache.context_budget_bytes
                         {
-                            app.store.configure_cache(
-                                config.cache.document_budget_bytes,
-                                config.cache.context_budget_bytes,
-                            );
+                            app.store.configure_cache(config.cache.context_budget_bytes);
                         }
                         let background_changed = previous.scheduler.background_rescan_interval_ms
                             != config.scheduler.background_rescan_interval_ms;

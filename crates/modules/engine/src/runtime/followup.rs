@@ -14,6 +14,14 @@ pub trait FollowupQueue<S: Sync>: Clone + Send + Sync + 'static {
         store: &'a S,
         sid: &'a str,
     ) -> impl Future<Output = Result<Value>> + Send + 'a;
+    /// Plain numbers that change whenever the queue changes (`None`: not known, read it).
+    fn followup_revision<'a>(
+        &'a self,
+        _store: &'a S,
+        _sid: &'a str,
+    ) -> impl Future<Output = Result<Option<[Option<i64>; 2]>>> + Send + 'a {
+        async { Ok(None) }
+    }
     fn followup_consume<'a>(
         &'a self,
         store: &'a S,
@@ -22,6 +30,13 @@ pub trait FollowupQueue<S: Sync>: Clone + Send + Sync + 'static {
         run: &'a mut Value,
     ) -> impl Future<Output = Result<bool>> + Send + 'a;
 }
+
+/// The last queue each session's poll decrypted, with the revision it had. A running run
+/// asks four times a second whether a message waits; the queue is decrypted again only
+/// when its revision moved, so every answer still reflects the stored queue.
+type SeenQueues = std::collections::HashMap<String, ([Option<i64>; 2], Value)>;
+static SEEN_QUEUES: std::sync::LazyLock<std::sync::Mutex<SeenQueues>> =
+    std::sync::LazyLock::new(Default::default);
 
 pub fn successor_id(owner: &str, sid: &str, entry: &Value) -> Result<String> {
     let id = entry["id"]
@@ -84,13 +99,41 @@ impl<
         {
             return Ok(None);
         }
-        let q = self
+        let sid = run["session_id"].as_str().unwrap_or("");
+        let revision = self
             .native
-            .followup_queue(
-                self.store.records(),
-                run["session_id"].as_str().unwrap_or(""),
-            )
+            .followup_revision(self.store.records(), sid)
             .await?;
+        let seen_key = format!("{}\0{sid}", self.store.current_user_id());
+        let seen = revision.and_then(|revision| {
+            let seen = SEEN_QUEUES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            seen.get(&seen_key)
+                .filter(|(at, _)| *at == revision)
+                .map(|(_, queue)| queue.clone())
+        });
+        let q = match seen {
+            Some(queue) => queue,
+            None => {
+                let queue = self
+                    .native
+                    .followup_queue(self.store.records(), sid)
+                    .await?;
+                // Read after the revision: a write in between leaves an older revision
+                // beside newer contents, so the next poll reads again.
+                if let Some(revision) = revision {
+                    let mut seen = SEEN_QUEUES
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if seen.len() >= 1024 {
+                        seen.clear();
+                    }
+                    seen.insert(seen_key, (revision, queue.clone()));
+                }
+                queue
+            }
+        };
         if q["held"] == true {
             return Ok(None);
         }

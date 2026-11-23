@@ -301,7 +301,6 @@ impl Store {
             .await?;
         }
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[session_key]);
         self.context_cache
             .lock()
             .unwrap()
@@ -545,7 +544,6 @@ impl Store {
                 .await?;
         }
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key]);
         self.context_cache
             .lock()
             .unwrap()
@@ -858,7 +856,6 @@ impl Store {
         tx.commit().await?;
         self.remove_blobs(removed.iter().filter_map(|k| k.strip_prefix("attachment:")));
         removed.push(key);
-        self.cache.lock().unwrap().invalidate(&removed);
         self.context_cache
             .lock()
             .unwrap()

@@ -112,7 +112,6 @@ impl Store {
                 .iter()
                 .filter_map(|key| key.strip_prefix("attachment:")),
         );
-        self.cache.lock().unwrap().invalidate(&removed);
         Ok((count, bytes))
     }
 

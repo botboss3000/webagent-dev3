@@ -182,7 +182,6 @@ impl Store {
         if let Some(agent) = record["agent_id"].as_str() {
             keys.push(webagent_files::agent_quota_key(agent));
         }
-        self.cache.lock().unwrap().invalidate(&keys);
         self.remove_blobs([aid]);
         Ok(())
     }
@@ -242,7 +241,6 @@ impl Store {
                     .await?;
             }
             tx.commit().await?;
-            self.cache.lock().unwrap().invalidate(&keys);
             let _ = std::fs::remove_dir_all(self.blob_dir());
         }
         let (runs_trimmed, progress_removed) = self.prune_finished_runs().await?;
@@ -386,7 +384,6 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
             tx.commit().await?;
-            self.cache.lock().unwrap().invalidate(&[key]);
             trimmed += 1;
         }
         // Updates written before the run id column carry their run only inside the payload.
@@ -507,7 +504,6 @@ impl Store {
                     .execute(&mut *tx)
                     .await?;
                 tx.commit().await?;
-                self.cache.lock().unwrap().invalidate(&[key]);
                 refreshed += 1;
             }
         }

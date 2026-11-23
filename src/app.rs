@@ -1006,10 +1006,7 @@ async fn run_process() -> Result<()> {
     let compaction_config_path = context_compaction::Config::configured_path();
     context_compaction::Config::configured()?;
     crate::engine_components::initialize(&root)?;
-    store.configure_cache(
-        runtime.cache.document_budget_bytes,
-        runtime.cache.context_budget_bytes,
-    );
+    store.configure_cache(runtime.cache.context_budget_bytes);
     // The temporary development bootstrap credential had no generation. Retire it
     // once so this installation follows the same first-run setup flow as v2.
     if store

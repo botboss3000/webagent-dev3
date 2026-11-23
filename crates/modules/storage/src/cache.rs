@@ -1,17 +1,6 @@
 //! Disposable caches. Runtime documents remain authoritative.
 use serde_json::Value;
 use std::collections::HashMap;
-/// The retired document cache. Nothing ever read from or wrote to it, so it holds
-/// nothing; `invalidate` stays a no-op only so the existing call sites compile until
-/// they are removed with the `document_budget_bytes` setting.
-pub struct Cache;
-impl Cache {
-    pub fn new(_budget: usize) -> Self {
-        Self
-    }
-    pub fn invalidate(&mut self, _keys: &[String]) {}
-}
-
 /// Disposable, bounded assembled context. SQLite checkpoints and interactions
 /// remain authoritative; this only avoids decrypting old interaction rows.
 pub struct ContextCache {

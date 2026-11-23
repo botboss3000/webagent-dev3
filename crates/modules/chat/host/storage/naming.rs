@@ -177,10 +177,6 @@ impl Store {
                     self.skip_naming_configuration(&mut tx, sid, &mut session)
                         .await?;
                     tx.commit().await?;
-                    self.cache
-                        .lock()
-                        .unwrap()
-                        .invalidate(&[format!("session:{sid}")]);
                     return Ok(None);
                 }
             };
@@ -198,10 +194,6 @@ impl Store {
                 .await?;
             self.naming_save(&mut tx, sid, &mut session, true).await?;
             tx.commit().await?;
-            self.cache
-                .lock()
-                .unwrap()
-                .invalidate(&[format!("session:{sid}")]);
             return Ok(None);
         }
         let attempts = session["auto_naming"]["attempts"]
@@ -215,10 +207,6 @@ impl Store {
         session["auto_naming"]["attempts"] = json!(attempts);
         self.naming_save(&mut tx, sid, &mut session, true).await?;
         tx.commit().await?;
-        self.cache
-            .lock()
-            .unwrap()
-            .invalidate(&[format!("session:{sid}")]);
         Ok(Some(session))
     }
     pub(crate) async fn naming_pin_plan(
@@ -245,10 +233,6 @@ impl Store {
         session["auto_naming"]["system_plan"] = plan.clone();
         self.naming_save(&mut tx, sid, &mut session, false).await?;
         tx.commit().await?;
-        self.cache
-            .lock()
-            .unwrap()
-            .invalidate(&[format!("session:{sid}")]);
         Ok(true)
     }
     pub(crate) async fn naming_owned(&self, sid: &str, claim: &str) -> Result<bool> {
@@ -269,10 +253,6 @@ impl Store {
         session["auto_naming"]["lease_until"] = json!(crate::now() + 30);
         self.naming_save(&mut tx, sid, &mut session, false).await?;
         tx.commit().await?;
-        self.cache
-            .lock()
-            .unwrap()
-            .invalidate(&[format!("session:{sid}")]);
         Ok(true)
     }
     pub(crate) async fn naming_finish(
@@ -329,10 +309,6 @@ impl Store {
         }
         self.naming_save(&mut tx, sid, &mut session, true).await?;
         tx.commit().await?;
-        self.cache
-            .lock()
-            .unwrap()
-            .invalidate(&[format!("session:{sid}")]);
         Ok(true)
     }
 }
@@ -382,11 +358,6 @@ mod participation_tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        app.store
-            .cache
-            .lock()
-            .unwrap()
-            .invalidate(&[format!("session:{sid}")]);
         let saved = app
             .store
             .get(&format!("session:{sid}"))

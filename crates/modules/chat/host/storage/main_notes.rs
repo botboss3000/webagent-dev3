@@ -182,18 +182,6 @@ impl Store {
                 .bind(PENDING)
                 .execute(&mut *agent_tx)
                 .await?;
-            let keys: Vec<String> = pending["extra"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|p| p[0].as_str().map(str::to_owned))
-                .chain(
-                    pending["previous_session"]
-                        .as_str()
-                        .map(|s| format!("session:{s}")),
-                )
-                .collect();
-            owner.cache.lock().unwrap().invalidate(&keys);
         }
         agent_tx.commit().await?;
         self.emit_main_notes().await
