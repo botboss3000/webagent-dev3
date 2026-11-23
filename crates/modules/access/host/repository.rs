@@ -144,6 +144,69 @@ mod tests {
             .unwrap();
         id.to_owned()
     }
+    /// A test account (created at start-up) manages only agents it owns itself.
+    #[tokio::test]
+    async fn a_test_account_manages_only_its_own_agents() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .create_admin_account("root", "long-hash-placeholder", "generation")
+            .await
+            .unwrap();
+        assert_eq!(
+            store.account_by_id("test_free").await.unwrap().unwrap()["is_test_account"],
+            true
+        );
+        let owner = active_user(&store, "owner").await;
+        let manager = active_user(&store, "manager").await;
+        tenant_fixture(&store, "tenant-real", &owner).await;
+        // Refused: a test account appointed Operator of a person's agent.
+        let refused = store
+            .assign_agent_membership(
+                &owner,
+                "test_free",
+                "tenant-real",
+                Relationship::Member,
+                true,
+                0,
+            )
+            .await
+            .unwrap_err();
+        assert!(refused.to_string().contains("test account"));
+        // Allowed: the same account as an ordinary member, and a person as Operator.
+        let member = store
+            .assign_agent_membership(
+                &owner,
+                "test_free",
+                "tenant-real",
+                Relationship::Member,
+                false,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(member["agent_administrator"], false);
+        assert!(store
+            .assign_agent_membership(
+                &owner,
+                &manager,
+                "tenant-real",
+                Relationship::Member,
+                true,
+                0
+            )
+            .await
+            .is_ok());
+        // Allowed: a test account owns (and so manages) an agent it created itself.
+        tenant_fixture(&store, "tenant-test", "test_free").await;
+        assert_eq!(
+            store
+                .agent_authority("test_free", "tenant-test")
+                .await
+                .unwrap()["can_manage"],
+            true
+        );
+    }
     // TENANT-BOUNDARY-TEST: separate owners and delegated membership authority never merge.
     #[tokio::test]
     async fn tenant_owner_and_delegated_roster_authority_are_separate() {

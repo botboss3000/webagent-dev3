@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use sqlx::Row;
 const ADMIN_ID: &str = "admin";
-async fn audit(
+pub(crate) async fn audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     store: &Repository<'_, impl RecordCodec>,
     kind: &str,
@@ -98,6 +98,14 @@ impl<C: RecordCodec> Repository<'_, C> {
             .fetch_one(&mut *tx)
             .await?;
         let mut account = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
+        // A test account keeps its reserved name; nobody else may take one.
+        if crate::is_test_account(&account) {
+            if account["username"] != username {
+                bail!("A test account keeps its username");
+            }
+        } else if crate::reserved_username(username) && account["username"] != username {
+            bail!("Usernames starting with test- are reserved");
+        }
         account["username"] = json!(username);
         crate::account_rows::update(&mut tx, user_id, Some(username), &self.seal(&account)?)
             .await?;
@@ -221,6 +229,9 @@ impl<C: RecordCodec> Repository<'_, C> {
         if account["generation"] != expected_generation {
             bail!("Account changed; sign in again");
         }
+        if crate::is_test_account(&account) {
+            bail!("{}", crate::TEST_ACCOUNT_NO_PASSWORD);
+        }
         account["password_hash"] = json!(password_hash);
         account["generation"] = json!(generation);
         crate::account_rows::update(&mut tx, user_id, None, &self.seal(&account)?).await?;
@@ -245,16 +256,37 @@ impl<C: RecordCodec> Repository<'_, C> {
 
     /// Guests are durable independent identities, never password accounts.
     pub async fn create_guest_account(&self, initial: crate::InitialAccess<'_>) -> Result<Value> {
+        self.create_guest(initial, false).await
+    }
+
+    /// A guest exactly like a visitor's (same tier and path), flagged as a test account.
+    pub async fn create_test_guest_account(
+        &self,
+        initial: crate::InitialAccess<'_>,
+    ) -> Result<Value> {
+        self.create_guest(initial, true).await
+    }
+
+    async fn create_guest(&self, initial: crate::InitialAccess<'_>, test: bool) -> Result<Value> {
         initial.validate()?;
         let id = format!("guest_{}", uuid::Uuid::new_v4().simple());
-        let account = json!({"user_id":id,"username":id,"password_hash":null,
+        let mut account = json!({"user_id":id,"username":id,"password_hash":null,
             "generation":uuid::Uuid::new_v4().to_string(),"is_approved":true,
             "status":"active","role":initial.role,"tier_id":initial.tier_id,
             "access_revision":1});
-        let profile = json!({"user_id":id,"display_name":"Guest","is_admin":initial.profile_is_admin,
+        let mut profile = json!({"user_id":id,"display_name":"Guest","is_admin":initial.profile_is_admin,
             "default_agent_id":null,"last_login_at":null,"source_channel":"web_public"});
+        if test {
+            account["is_test_account"] = json!(true);
+            profile["display_name"] = json!("Test visitor");
+            profile["source_channel"] = json!("test_account");
+        }
         let mut tx = self.app_pool.begin().await?;
-        crate::account_rows::insert(&mut tx, &id, &id, &self.seal(&account)?, false).await?;
+        if test {
+            crate::account_rows::insert_test(&mut tx, &id, &id, &self.seal(&account)?).await?;
+        } else {
+            crate::account_rows::insert(&mut tx, &id, &id, &self.seal(&account)?, false).await?;
+        }
         sqlx::query("INSERT INTO user_profiles(user_id,value) VALUES(?,?)")
             .bind(&id)
             .bind(self.seal(&profile)?)
@@ -279,6 +311,9 @@ impl<C: RecordCodec> Repository<'_, C> {
         initial.validate()?;
         if !crate::username_ok(username) || password_hash.len() < 20 || password_hash.len() > 1024 {
             bail!("Invalid account input");
+        }
+        if crate::reserved_username(username) {
+            bail!("Usernames starting with test- are reserved");
         }
         let id = uuid::Uuid::new_v4().simple().to_string();
         let account = json!({"user_id":id,"username":username,"password_hash":password_hash,

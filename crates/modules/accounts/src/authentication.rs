@@ -88,9 +88,10 @@ impl<C: RecordCodec> Repository<'_, C> {
         password: String,
     ) -> Result<Option<VerifiedCredentials>> {
         let account = self.account_by_username(username).await?;
-        // Unknown names and guests still pay for one Argon2 verification, so the answer
+        // Unknown names, guests and test accounts (no password) still pay for one Argon2 verification, so the answer
         // time does not reveal which usernames exist.
-        let Some(account) = account.filter(|a| a["role"] != "guest") else {
+        let Some(account) = account.filter(|a| a["role"] != "guest" && !crate::is_test_account(a))
+        else {
             verify_password(dummy_hash().await?, password).await?;
             return Ok(None);
         };

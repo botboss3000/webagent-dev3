@@ -98,6 +98,28 @@ pub fn valid_id(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
+/// Usernames of test accounts start with this; people cannot register or take one.
+pub const TEST_USERNAME_PREFIX: &str = "test-";
+/// Refusal when a change would alter a test account's role or tier.
+pub const TEST_ACCOUNT_FIXED: &str =
+    "A test account keeps the tier of its definition and is never an administrator";
+/// Refusal for any password or password sign-in on a test account.
+pub const TEST_ACCOUNT_NO_PASSWORD: &str =
+    "Test accounts have no password; only the Diagnostics test_login tool signs in as one";
+/// Whether `username` is reserved for test accounts (case-insensitive `test-` prefix).
+#[must_use]
+pub fn reserved_username(value: &str) -> bool {
+    value
+        .get(..TEST_USERNAME_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(TEST_USERNAME_PREFIX))
+}
+/// Whether an account record (or its projected state) is a test account.
+#[must_use]
+pub fn is_test_account(account: &Value) -> bool {
+    account["is_test_account"] == true
+}
+mod test_accounts;
+pub use test_accounts::{test_account_id, test_username};
 fn username_ok(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128

@@ -473,6 +473,10 @@ impl<C: RecordCodec> Repository<'_, C> {
                 .is_some_and(|v| v["agent_administrator"] == true)
                 && relationship == Relationship::Member
         };
+        // A test account manages only agents it owns itself (which are test agents).
+        if operator && user != owner && webagent_accounts::is_test_account(&target) {
+            bail!("A test account cannot manage another account's agent");
+        }
         let revision = expected
             .checked_add(1)
             .ok_or_else(|| anyhow!("Membership revision overflow"))?;

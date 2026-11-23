@@ -6,18 +6,28 @@
 use anyhow::{ensure, Result};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
-/// Adds the column to databases created before it existed; new rows start at 0.
+/// Adds the plain columns to databases created before they existed: `auth_epoch` (new rows
+/// start at 0) and `is_test_account` (0 for every existing account).
 pub(crate) async fn ensure_auth_epoch_column(pool: &SqlitePool) -> Result<()> {
     let columns = sqlx::query("PRAGMA table_info(user_accounts)")
         .fetch_all(pool)
         .await?;
-    if !columns
-        .iter()
-        .any(|row| row.get::<String, _>("name") == "auth_epoch")
-    {
+    let has = |name: &str| {
+        columns
+            .iter()
+            .any(|row| row.get::<String, _>("name") == name)
+    };
+    if !has("auth_epoch") {
         sqlx::query("ALTER TABLE user_accounts ADD COLUMN auth_epoch INTEGER NOT NULL DEFAULT 0")
             .execute(pool)
             .await?;
+    }
+    if !has("is_test_account") {
+        sqlx::query(
+            "ALTER TABLE user_accounts ADD COLUMN is_test_account INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }
@@ -72,6 +82,34 @@ pub(crate) async fn insert(
         .execute(conn)
         .await?;
     Ok(())
+}
+
+/// Creates a test account's row: the plain `is_test_account` flag is set here, once, and no
+/// other statement changes it (its sealed record carries the same flag).
+pub(crate) async fn insert_test(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    username: &str,
+    sealed: &[u8],
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO user_accounts(user_id,username,value,is_test_account) VALUES(?,?,?,1)",
+    )
+    .bind(user_id)
+    .bind(username)
+    .bind(sealed)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Every test account's id, from the plain flag (no decryption).
+pub(crate) async fn test_account_ids(pool: &SqlitePool) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT user_id FROM user_accounts WHERE is_test_account=1 ORDER BY user_id",
+    )
+    .fetch_all(pool)
+    .await?)
 }
 
 /// The account's record and `auth_epoch` read in one statement, so the pair is consistent.

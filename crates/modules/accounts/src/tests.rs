@@ -1932,3 +1932,236 @@ fn fixture_binding() -> AgentBrowserBinding<'static> {
         allowed_session_ids: &[],
     }
 }
+
+fn test_access(status: AccountStatus, role: &str, tier: &str) -> AccessMutation<'static> {
+    AccessMutation {
+        expected_revision: 1,
+        status,
+        role: if role == "administrator" {
+            "administrator"
+        } else {
+            "user"
+        },
+        tier_id: match tier {
+            "administrator" => "administrator",
+            "pro" => "pro",
+            _ => "free",
+        },
+        profile_is_admin: role == "administrator",
+    }
+}
+
+#[tokio::test]
+async fn test_accounts_are_created_once_per_tier_flagged_and_passwordless() {
+    let f = Fixture::new().await;
+    let r = f.repo();
+    let account = r
+        .ensure_test_account("free", "user")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(account["user_id"], "test_free");
+    assert_eq!(account["username"], "test-free");
+    assert_eq!(account["tier_id"], "free");
+    assert_eq!(account["is_test_account"], true);
+    // Idempotent: the same row, no epoch change.
+    let epoch = crate::account_rows::auth_epoch(&f.pool, "test_free")
+        .await
+        .unwrap();
+    r.ensure_test_account("free", "user")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        crate::account_rows::auth_epoch(&f.pool, "test_free")
+            .await
+            .unwrap(),
+        epoch
+    );
+    assert_eq!(r.test_account_ids().await.unwrap(), ["test_free"]);
+    assert!(r.is_test_account_id("test_free").await.unwrap());
+    let member = f.active("member").await;
+    assert!(!r.is_test_account_id(&member).await.unwrap());
+    // Never for the administrator or anonymous tiers.
+    assert!(r
+        .ensure_test_account("administrator", "user")
+        .await
+        .is_err());
+    assert!(r.ensure_test_account("pro", "administrator").await.is_err());
+    assert!(r.ensure_test_account("anonymous", "guest").await.is_err());
+    // A repaired tier raises the epoch (one writer) and keeps the flag.
+    let mut record = r.account_by_id("test_free").await.unwrap().unwrap();
+    record["tier_id"] = json!("pro");
+    f.save("test_free", &record).await;
+    let repaired = r
+        .ensure_test_account("free", "user")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(repaired["tier_id"], "free");
+    assert!(
+        crate::account_rows::auth_epoch(&f.pool, "test_free")
+            .await
+            .unwrap()
+            > epoch
+    );
+    // No password sign-in: even an empty password is refused, like an unknown name.
+    assert!(r
+        .verify_credentials("test-free", String::new())
+        .await
+        .unwrap()
+        .is_none());
+    let generation = repaired["generation"].as_str().unwrap().to_owned();
+    let refused = r
+        .replace_user_password(
+            "test_free",
+            &generation,
+            "replacement-hash-placeholder",
+            "next",
+        )
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("no password"));
+    // The visitor test guest is a guest of the anonymous tier, flagged.
+    let guest = r
+        .create_test_guest_account(crate::InitialAccess {
+            role: "guest",
+            tier_id: "anonymous",
+            profile_is_admin: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(guest["is_test_account"], true);
+    assert_eq!(guest["role"], "guest");
+    let real_guest = r
+        .create_guest_account(crate::InitialAccess {
+            role: "guest",
+            tier_id: "anonymous",
+            profile_is_admin: false,
+        })
+        .await
+        .unwrap();
+    assert!(real_guest.get("is_test_account").is_none());
+    assert_eq!(r.test_account_ids().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_taken_reserved_name_is_left_alone_and_people_cannot_take_one() {
+    let f = Fixture::new().await;
+    let r = f.repo();
+    // Registration and administrator creation refuse the reserved prefix, any case.
+    for name in ["test-free", "Test-pro", "TEST-x"] {
+        assert!(r
+            .create_user_account(
+                name,
+                "fixture-password-hash-placeholder",
+                crate::InitialAccess {
+                    role: "user",
+                    tier_id: "free",
+                    profile_is_admin: false
+                }
+            )
+            .await
+            .is_err());
+    }
+    assert!(r
+        .create_user_account(
+            "tester",
+            "fixture-password-hash-placeholder",
+            crate::InitialAccess {
+                role: "user",
+                tier_id: "free",
+                profile_is_admin: false
+            }
+        )
+        .await
+        .is_ok());
+    // A person renaming to a reserved name is refused; keeping an older such name is not.
+    let member = f.active("member").await;
+    assert!(r
+        .update_user_profile(&member, "test-pro", "M")
+        .await
+        .is_err());
+    assert!(r.update_user_profile(&member, "member2", "M").await.is_ok());
+    // A legacy account that already holds the name keeps it, and no test account is made.
+    let legacy = f.active("legacy").await;
+    let mut record = r.account_by_id(&legacy).await.unwrap().unwrap();
+    record["username"] = json!("test-pro");
+    f.save(&legacy, &record).await;
+    sqlx::query("UPDATE user_accounts SET username='test-pro' WHERE user_id=?")
+        .bind(&legacy)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(r
+        .update_user_profile(&legacy, "test-pro", "L")
+        .await
+        .is_ok());
+    assert!(r
+        .ensure_test_account("pro", "user")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!r.is_test_account_id(&legacy).await.unwrap());
+    // The test account itself keeps its name but may change its display name.
+    r.ensure_test_account("free", "user")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(r
+        .update_user_profile("test_free", "test-free", "Renamed")
+        .await
+        .is_ok());
+    assert!(r
+        .update_user_profile("test_free", "someone", "Renamed")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn a_test_account_keeps_its_tier_and_is_never_an_administrator() {
+    let f = Fixture::new().await;
+    let r = f.repo();
+    r.ensure_test_account("free", "user")
+        .await
+        .unwrap()
+        .unwrap();
+    for (role, tier) in [("administrator", "administrator"), ("user", "pro")] {
+        let mut tx = f.pool.begin().await.unwrap();
+        let refused = r
+            .apply_access_in(
+                &mut tx,
+                "test_free",
+                test_access(AccountStatus::Active, role, tier),
+            )
+            .await
+            .unwrap_err();
+        assert!(refused.to_string().contains("never an administrator"));
+        tx.rollback().await.unwrap();
+    }
+    // Allowed: a status change that keeps the tier (an administrator may disable it).
+    let mut tx = f.pool.begin().await.unwrap();
+    let disabled = r
+        .apply_access_in(
+            &mut tx,
+            "test_free",
+            test_access(AccountStatus::Disabled, "user", "free"),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(disabled["status"], "disabled");
+    // A person's tier and role still change as before.
+    let member = f.active("member").await;
+    let mut tx = f.pool.begin().await.unwrap();
+    let promoted = r
+        .apply_access_in(
+            &mut tx,
+            &member,
+            test_access(AccountStatus::Active, "administrator", "administrator"),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(promoted["role"], "administrator");
+}

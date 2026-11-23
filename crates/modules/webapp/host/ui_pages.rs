@@ -543,8 +543,8 @@ mod administrator_pages_tests {
             .collect()
     }
 
-    /// Signed out, an ordinary member, a widget bearer and the diagnostics browser get the
-    /// missing-file 404 for administrator files and a catalog without administrator pages.
+    /// Signed out, an ordinary member, a widget bearer, the diagnostics browser and a test
+    /// account get the missing-file 404 for administrator files and a catalog without administrator pages.
     #[tokio::test]
     async fn administrator_pages_are_refused_to_everyone_else() {
         let (_root, app) = crate::runtime_tests::fixture().await;
@@ -563,9 +563,11 @@ mod administrator_pages_tests {
         let admin_cookie = session(&app, "admin", "Fixture browser").await;
         let diagnostics_cookie =
             session(&app, "admin", webagent_accounts::DIAGNOSTICS_BROWSER_AGENT).await;
+        // The free tier's test account, created at start-up: a member like any other.
+        let test_cookie = session(&app, "test_free", "Fixture browser").await;
         let missing = fetch(&app, ui.path(), "/ui/main-panel/wiki/missing.js", &[]).await;
         assert_eq!(missing.0, StatusCode::NOT_FOUND);
-        let callers: [&[(&str, &str)]; 5] = [
+        let callers: [&[(&str, &str)]; 6] = [
             &[],
             &[("cookie", &member_cookie)],
             &[("authorization", "Bearer widget-fixture-token")],
@@ -574,6 +576,7 @@ mod administrator_pages_tests {
                 ("authorization", "Bearer widget-fixture-token"),
             ],
             &[("cookie", &diagnostics_cookie)],
+            &[("cookie", &test_cookie)],
         ];
         for caller in callers {
             for path in [

@@ -186,6 +186,10 @@ async fn join(Extension(app): Extension<App>, Path(sid): Path<String>) -> Api {
     if !shared_chat::staff(&app.store, user, &rights.agent_id).await? {
         return Err(no_access());
     }
+    app.store
+        .refuse_test_mix(&rights.owner_id, user)
+        .await
+        .map_err(|_| no_access())?;
     let store = app.store.for_user(&rights.owner_id).await?;
     store.operator_join(&sid, user).await?;
     let profile = app.store.user_profile(user).await?.unwrap_or(json!({}));
@@ -420,6 +424,58 @@ mod tests {
             .execute(&app.store.agent_pool)
             .await
             .unwrap();
+    }
+    /// Test accounts and people never share a conversation, either way round; people with
+    /// people and test accounts with test accounts still do.
+    #[tokio::test]
+    async fn test_accounts_and_people_never_share_a_conversation() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let alice = active_user(&app, "mix-alice").await;
+        let bob = active_user(&app, "mix-bob").await;
+        let visitor = app
+            .store
+            .accounts_repository()
+            .create_test_guest_account(crate::access::initial_guest_access())
+            .await
+            .unwrap();
+        let visitor = visitor["user_id"].as_str().unwrap().to_owned();
+        for (owner, sid) in [(alice.as_str(), "mix-real"), ("test_free", "mix-test")] {
+            app.store
+                .register_shared_session(owner, sid, "shared_default")
+                .await
+                .unwrap();
+        }
+        assert!(app
+            .store
+            .shared_join("mix-real", "test_free")
+            .await
+            .is_err());
+        assert!(app.store.shared_join("mix-test", &bob).await.is_err());
+        assert!(app.store.shared_join("mix-real", &bob).await.unwrap());
+        assert!(app.store.shared_join("mix-test", &visitor).await.unwrap());
+        let issued = app
+            .store
+            .shared_invite_issue("mix-real", &alice, "mix-request", 3600)
+            .await
+            .unwrap();
+        let token = issued["token"].as_str().unwrap();
+        assert!(app
+            .store
+            .shared_invite_redeem(token, "test_free")
+            .await
+            .is_err());
+        // The refusal used nothing: a person still redeems the same invitation.
+        let carol = active_user(&app, "mix-carol").await;
+        assert_eq!(
+            app.store.shared_invite_redeem(token, &carol).await.unwrap(),
+            ("mix-real".to_owned(), true)
+        );
+        assert!(app
+            .store
+            .refuse_test_mix("test_free", "admin")
+            .await
+            .is_err());
+        assert!(app.store.refuse_test_mix(&alice, "admin").await.is_ok());
     }
     async fn active_user(app: &App, name: &str) -> String {
         let account = app

@@ -30,9 +30,22 @@ impl Store {
         self.directory_repository().participants(sid).await
     }
     pub async fn shared_join(&self, sid: &str, user: &str) -> Result<bool> {
+        if let Some(directory) = self.directory_repository().directory(sid).await? {
+            self.refuse_test_mix(directory["owner_id"].as_str().unwrap_or(""), user)
+                .await?;
+        }
         self.directory_repository()
             .join(sid, user, crate::now())
             .await
+    }
+    /// Test accounts and real accounts never share a conversation: refused when exactly one
+    /// of `owner` and `user` is a test account (plain flag, no decryption).
+    pub(crate) async fn refuse_test_mix(&self, owner: &str, user: &str) -> Result<()> {
+        let accounts = self.accounts_repository();
+        if accounts.is_test_account_id(owner).await? != accounts.is_test_account_id(user).await? {
+            bail!("Test accounts and other accounts cannot share a conversation");
+        }
+        Ok(())
     }
     pub async fn shared_invite_issue(
         &self,
@@ -54,6 +67,14 @@ impl Store {
             .await
     }
     pub async fn shared_invite_redeem(&self, token: &str, user: &str) -> Result<(String, bool)> {
+        let directory = match self.shared_invite_session(token).await? {
+            Some(sid) => self.directory_repository().directory(&sid).await?,
+            None => None,
+        };
+        if let Some(directory) = directory {
+            self.refuse_test_mix(directory["owner_id"].as_str().unwrap_or(""), user)
+                .await?;
+        }
         self.directory_repository()
             .invite_redeem(token, user, crate::now())
             .await

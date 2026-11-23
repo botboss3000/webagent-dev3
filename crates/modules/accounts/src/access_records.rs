@@ -23,6 +23,7 @@ pub(crate) fn state(value: &Value) -> Value {
         "access_revision",
         "generation",
         "is_approved",
+        "is_test_account",
     ] {
         if let Some(value) = value.get(field) {
             result.insert(field.into(), value.clone());
@@ -115,6 +116,16 @@ impl<C: RecordCodec> Repository<'_, C> {
             revision == update.expected_revision,
             "Account revision changed"
         );
+        // A test account keeps the role and tier of its definition: never administrator.
+        if crate::is_test_account(&account) {
+            ensure!(
+                update.role != "administrator"
+                    && account["role"] == update.role
+                    && account["tier_id"] == update.tier_id,
+                "{}",
+                crate::TEST_ACCOUNT_FIXED
+            );
+        }
         account["status"] = json!(update.status);
         account["role"] = json!(update.role);
         account["tier_id"] = json!(update.tier_id);

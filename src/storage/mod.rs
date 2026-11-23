@@ -216,6 +216,7 @@ impl Store {
         store.init_policy_tiers().await?;
         store.access_repository().ensure_account_ladder()?;
         store.reconcile_guest_account_levels().await?;
+        store.ensure_test_accounts().await?;
         store.init_agent_tables().await?;
         store.ensure_default_agent_directory().await?;
         store.initialize_agent_encryption().await?;
@@ -2610,10 +2611,12 @@ mod tests {
         migrated.agent_pool.close().await;
         let reopened = Store::open(root.path()).await.unwrap();
         assert_eq!(reopened.events("old", 0).await.unwrap().len(), 6);
-        let app_count: i64 = sqlx::query_scalar("SELECT count(*) FROM events")
-            .fetch_one(&reopened.app_pool)
-            .await
-            .unwrap();
+        // Start-up's own audit events (the test accounts it creates) are not migrated ones.
+        let app_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM events WHERE kind!='account_created'")
+                .fetch_one(&reopened.app_pool)
+                .await
+                .unwrap();
         assert_eq!(app_count, 3);
     }
     /// Verify bounded state inspection preserves session isolation and omits pending/provider secrets.
