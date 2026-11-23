@@ -180,12 +180,6 @@
             "element_size": "36px",
             "enabled": true
           },
-          "mic_send": {
-            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
-            "container_size": "42px",
-            "element_size": "36px",
-            "enabled": true
-          },
           "send": {
             "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
             "container_size": "42px",
@@ -221,7 +215,7 @@
             "padding": "20px 20px 0px 20px"
           }
         },
-        "description": "Shared two-row composer. Row 1: full-width textarea. Row 2: left=attach, center=carousel(stats), right=stop/continue/send.",
+        "description": "Shared two-row composer. Row 1: full-width textarea. Row 2: left=attach, center=carousel(stats), right=stop/continue/mic/send.",
         "pill_radius": "41px",
         "pill_width": "500px",
         "rows": [
@@ -256,7 +250,8 @@
               "controls": [
                 "stop",
                 "continue",
-                "mic_send"
+                "mic",
+                "send"
               ],
               "padding": "4px 20px 20px 0"
             }
@@ -480,12 +475,6 @@
             "element_size": "36px",
             "enabled": true
           },
-          "mic_send": {
-            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
-            "container_size": "42px",
-            "element_size": "36px",
-            "enabled": true
-          },
           "send": {
             "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
             "container_size": "42px",
@@ -533,7 +522,8 @@
               "controls": [
                 "stop",
                 "continue",
-                "mic_send"
+                "mic",
+                "send"
               ],
               "padding": "20px 20px 20px 0"
             }
@@ -1441,15 +1431,6 @@
         "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
         "description": "Always-visible voice input button",
         "display_name": "Microphone Button",
-        "icon": "mic",
-        "targets": [
-          "pill"
-        ]
-      },
-      "mic_send": {
-        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
-        "description": "Switching control: microphone while empty, send when the input has text",
-        "display_name": "Microphone / Send Button",
         "icon": "mic",
         "targets": [
           "pill"

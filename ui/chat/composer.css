@@ -316,19 +316,16 @@
     height: 0;
     display: none;
   }
-/* Send / mic swap driven by .has-text on the row */
+/* Microphone and send are separate buttons. Both stay visible side by side; dictation
+   temporarily withdraws Send while the microphone shows its stop state. */
 .chat-pill .chat-pill-send  { display: none; }
-.chat-pill.has-text .chat-pill-send  { display: inline-flex; }
-.chat-pill.has-text .chat-pill-voice { display: none; }
-.chat-pill.dictating .chat-pill-voice { display: inline-flex !important; }
-.chat-pill.dictating .chat-pill-send  { display: none !important; }
-/* Configurable composer action modes. mic_send keeps the stateful swap above;
-   distinct mic/send controls stay side by side, while the single-action modes
-   keep their selected control visible regardless of input contents. */
-.chat-pill.chat-pill-distinct-buttons .chat-pill-voice,
-.chat-pill.chat-pill-distinct-buttons .chat-pill-send {
+.chat-pill.chat-pill-distinct-buttons:not(.dictating) .chat-pill-voice,
+.chat-pill.chat-pill-distinct-buttons:not(.dictating) .chat-pill-send {
     display: inline-flex !important;
   }
+.chat-pill.dictating .chat-pill-voice { display: inline-flex !important; }
+.chat-pill.dictating .chat-pill-send  { display: none !important; }
+/* Single-action modes keep their selected control visible and hide the other. */
 .chat-pill.chat-pill-mic-only .chat-pill-voice {
     display: inline-flex !important;
   }
@@ -340,15 +337,6 @@
   }
 .chat-pill.chat-pill-send-only .chat-pill-send {
     display: inline-flex !important;
-  }
-/* Cell (1,3) — buttons container: stacks voice/send vertically, top-aligned. */
-.chat-pill-buttons {
-    grid-column: 3;
-    grid-row: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    align-items: flex-end;
   }
 /* Cell (2,2) — row: stats on the left, stop/continue controls on the right. */
 .chat-pill-stats-row {

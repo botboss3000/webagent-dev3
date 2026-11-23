@@ -19,7 +19,6 @@ const ZONES = ['left', 'center', 'right'];
 const ALIGN_VALUES = { top: 'flex-start', center: 'center', bottom: 'flex-end' };
 const CONTROL_ALIASES = { voice: 'mic' };
 const MODE_CLASSES = [
-  'chat-pill-mic-send',
   'chat-pill-distinct-buttons',
   'chat-pill-mic-only',
   'chat-pill-send-only',
@@ -97,28 +96,30 @@ function placeLegacyControl(rows, cell, name) {
   rows[row][zone].controls.push(name);
 }
 
-/** Removes duplicate controls and individual mic/send entries shadowed by mic_send. */
+/** Expands a legacy combined mic/send control into two separate buttons in place. */
+function splitCombinedActions(rows) {
+  const split = names => names.flatMap(name => name === 'mic_send' ? ['mic', 'send'] : [name]);
+  for (const row of rows) {
+    for (const zone of ZONES) {
+      row[zone].controls = split(row[zone].controls);
+      if (row[zone].carousel) row[zone].carousel = split(row[zone].carousel);
+    }
+  }
+  return rows;
+}
+
+/** Removes duplicate controls across all zones, keeping the first placement. */
 function finalizeRows(rows) {
-  const hasCombined = rows.some(row => ZONES.some(
-    zone => row[zone].controls.includes('mic_send') || (row[zone].carousel || []).includes('mic_send'),
-  ));
   const seen = new Set();
   for (const row of rows) {
     for (const zone of ZONES) {
-      row[zone].controls = row[zone].controls.filter(name => {
-        if (hasCombined && (name === 'mic' || name === 'send')) return false;
+      const unique = names => names.filter(name => {
         if (seen.has(name)) return false;
         seen.add(name);
         return true;
       });
-      if (row[zone].carousel) {
-        row[zone].carousel = row[zone].carousel.filter(name => {
-          if (hasCombined && (name === 'mic' || name === 'send')) return false;
-          if (seen.has(name)) return false;
-          seen.add(name);
-          return true;
-        });
-      }
+      row[zone].controls = unique(row[zone].controls);
+      if (row[zone].carousel) row[zone].carousel = unique(row[zone].carousel);
     }
   }
   return rows;
@@ -136,21 +137,22 @@ export function normalizeChatPill(pill = {}) {
     legacyButtons.voice,
   );
   const sendCfg = mergeObjects(canonicalControls.send, legacyButtons.send);
-  const combinedCfg = mergeObjects(micCfg, sendCfg);
+  const combinedCfg = mergeObjects(
+    canonicalControls.mic_send,
+    mergeObjects(micCfg, sendCfg),
+  );
   const controls = {
     ...canonicalControls,
     textarea: mergeObjects(canonicalControls.textarea, pill.textarea),
     stats: mergeObjects(canonicalControls.stats, pill.stats),
     attach: mergeObjects(canonicalControls.attach, pill.attach),
-    mic: micCfg,
-    send: sendCfg,
-    // A switching control uses one common box. Preserve old configurations
-    // by preferring the send dimensions when the two legacy buttons differ.
-    mic_send: hasLegacyShape
-      ? mergeObjects(canonicalControls.mic_send, combinedCfg)
-      : mergeObjects(combinedCfg, canonicalControls.mic_send),
+    // A legacy combined setting sizes both distinct buttons; each button's
+    // own settings still win.
+    mic: mergeObjects(combinedCfg, micCfg),
+    send: mergeObjects(combinedCfg, sendCfg),
   };
   delete controls.voice;
+  delete controls.mic_send;
 
   let rows;
   if (hasLegacyShape) {
@@ -168,7 +170,7 @@ export function normalizeChatPill(pill = {}) {
     rows = normalizeRows([]);
   }
 
-  return { ...pill, rows: finalizeRows(rows), controls };
+  return { ...pill, rows: finalizeRows(splitCombinedActions(rows)), controls };
 }
 
 /** Lists enabled controls in row order for renderer visibility decisions. */
@@ -325,11 +327,9 @@ function applyControlLock(el, cfg = {}) {
 /** Sets the pill class matching the configured combined/individual action controls. */
 function setButtonMode(pillEl, names) {
   pillEl.classList.remove(...MODE_CLASSES);
-  const hasCombined = names.includes('mic_send');
   const hasMic = names.includes('mic');
   const hasSend = names.includes('send');
-  if (hasCombined) pillEl.classList.add('chat-pill-mic-send');
-  else if (hasMic && hasSend) pillEl.classList.add('chat-pill-distinct-buttons');
+  if (hasMic && hasSend) pillEl.classList.add('chat-pill-distinct-buttons');
   else if (hasMic) pillEl.classList.add('chat-pill-mic-only');
   else if (hasSend) pillEl.classList.add('chat-pill-send-only');
   else pillEl.classList.add('chat-pill-no-action');
@@ -500,7 +500,7 @@ export function applyChatPillLayout(els, rawPill = {}) {
   const pillEl = els?.pill;
   if (!pillEl) return pill;
   const state = pillLayouts.get(pillEl) || createPillLayout(els);
-  const controls = {textarea: els.input, stats: els.stats, mic_send: els.pillButtons,
+  const controls = {textarea: els.input, stats: els.stats,
     mic: els.mic, send: els.send, attach: els.attach, stop: els.stop, continue: els.continue};
   const names = configuredRowControls(pill);
   const desired = new Map();
@@ -511,9 +511,6 @@ export function applyChatPillLayout(els, rawPill = {}) {
   for (let index = 0; index < state.zones.length; index++) {
     for (const name of zoneNames[index]) desired.set(controls[name], index);
   }
-  if (names.includes('mic_send')) {
-    desired.set(els.mic, 'buttons'); desired.set(els.send, 'buttons');
-  }
   const focused = document.activeElement;
   // A focused editor may stay focused after OS dismissal. Never restore focus automatically.
   // Without moveBefore, defer any structural operation that disconnects/hides that editor.
@@ -521,7 +518,6 @@ export function applyChatPillLayout(els, rawPill = {}) {
     if (node !== focused && !node.contains(focused)) return false;
     const target = desired.get(node);
     if (target === undefined) return true;
-    if (target === 'buttons') return node.parentNode !== els.pillButtons;
     const zone = state.zones[target];
     const carousel = Boolean(pill.rows[Math.floor(target / 3)][ZONES[target % 3]].carousel);
     const siblings = zoneNames[target].map(name => controls[name]).filter(el => desired.get(el) === target);
@@ -545,10 +541,6 @@ export function applyChatPillLayout(els, rawPill = {}) {
         if (pillEl.contains(node) && node.parentNode !== pillEl) placeControl(pillEl, node);
         hideElement(node);
       } else showElement(node);
-    }
-    if (names.includes('mic_send')) {
-      placeControl(els.pillButtons, els.mic, els.pillButtons.firstChild);
-      placeControl(els.pillButtons, els.send);
     }
     for (let index = 0; index < state.zones.length; index++) {
       const zone = state.zones[index], cfg = pill.rows[Math.floor(index / 3)][ZONES[index % 3]];
@@ -592,8 +584,8 @@ export function applyChatPillLayout(els, rawPill = {}) {
   sizeControl(els.attach, pill.controls.attach);
   sizeControl(els.stop, pill.controls.stop);
   sizeControl(els.continue, pill.controls.continue);
-  sizeControl(els.mic, names.includes('mic_send') ? pill.controls.mic_send : pill.controls.mic);
-  sizeControl(els.send, names.includes('mic_send') ? pill.controls.mic_send : pill.controls.send);
+  sizeControl(els.mic, pill.controls.mic);
+  sizeControl(els.send, pill.controls.send);
 
   // Clear stale inline display values left by older/static shell versions.
   pillEl.style.removeProperty('display');

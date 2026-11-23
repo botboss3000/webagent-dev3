@@ -325,3 +325,23 @@ test('browser chrome, zoom, rotation and desktop resizing do not dismiss the com
  await p.evaluate(()=>{keyboardScale=1;visualViewport.dispatchEvent(new Event('resize'));});assert.equal((await stable(p)).focused,true);
  await p.setViewportSize({width:1200,height:844});await keyboardResize(p,844,'content');await keyboardResize(p,500,'content');assert.equal((await stable(p)).focused,true);
 });
+
+test('microphone and send render as separate side-by-side controls',async t=>{
+ const p=await fixture(t);
+ const split=await p.evaluate(()=>pillApi.normalizeChatPill({rows:[{center:{controls:['textarea']}},{right:{controls:['mic_send']}}]}));
+ assert.deepEqual(split.rows[1].right.controls,['mic','send']);
+ assert.equal('mic_send' in split.controls,false);
+ const read=()=>p.evaluate(()=>{
+  const mic=document.querySelector('#chat-voice-btn'),send=document.querySelector('#chat-send'),pill=document.querySelector('#chat-input-row');
+  const m=mic.getBoundingClientRect(),s=send.getBoundingClientRect(),r=pill.getBoundingClientRect();
+  return {mic:getComputedStyle(mic).display,send:getComputedStyle(send).display,micRight:m.right,sendLeft:s.left,sendRight:s.right,pillRight:r.right};
+ });
+ const idle=await read();
+ assert.notEqual(idle.mic,'none');assert.notEqual(idle.send,'none');
+ assert.ok(idle.micRight<=idle.sendLeft+.5,'microphone sits left of send');
+ assert.ok(idle.sendRight<=idle.pillRight+.5,'send stays inside the pill');
+ await p.locator('#chat-input').fill('hello');await p.evaluate(()=>api.applyChatConfig());await settle(p);
+ const typed=await read();
+ assert.notEqual(typed.mic,'none');assert.notEqual(typed.send,'none');
+ assert.ok(typed.micRight<=typed.sendLeft+.5,'typing does not merge the buttons');
+});

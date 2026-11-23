@@ -78,9 +78,9 @@ function applyComposerState() {
   const {pill, input, stop, continue: continuation, send, mic} = footerNodes;
   const text = !!input.value.trim() || !!Number(pill.dataset.attachmentCount);
   const dictating = /\bdictating\b/.test(String(pill?.className||''));
-  pill.classList.toggle('has-text', text);
-  if (dictating) { send.style.display = 'none'; mic.style.display = ''; }
-  else { send.style.display = text ? '' : 'none'; mic.style.display = text ? 'none' : ''; }
+  // Microphone and send are separate controls; dictation only withdraws Send.
+  send.style.display = dictating ? 'none' : '';
+  mic.style.display = '';
   // Stop also stays for background work left running after a conversation stop.
   stop.hidden = !(stop.dataset.run || stop.dataset.background === 'true') || stop.dataset.configEnabled === 'false';
   stop.style.display = stop.hidden ? 'none' : '';
@@ -248,7 +248,7 @@ function applyFooter(profile, mode) {
     const area = byId('chat-input-area');
     if (!footerNodes) {
       footerNodes = { pill: byId('chat-input-row'), input: byId('chat-input'),
-        stats: byId('chat-pill-stats-row'), pillButtons: document.querySelector('#chat-input-row .chat-pill-buttons'),
+        stats: byId('chat-pill-stats-row'),
         mic: byId('chat-voice-btn'), send: byId('chat-send'), attach: byId('chat-attach-btn'),
         stop: byId('chat-stop-btn'), continue: byId('chat-continue-btn') };
       for (const [node, feature] of [[footerNodes.attach,'Attachments'],[footerNodes.mic,'Voice']]) {
