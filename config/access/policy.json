@@ -28,15 +28,15 @@
   },
   "registration": "open",
   "request_limits": {
-    "new_accounts_per_day": 50,
+    "new_accounts_per_day": 2000,
     "pairing_failures_per_minute": 20,
     "per_address_per_minute": {
-      "api": 600,
+      "api": 100000,
       "guest": 30,
-      "login": 120,
+      "login": 5000,
       "pairing": 10,
       "password_change": 5,
-      "registration": 10
+      "registration": 2000
     },
     "per_user_per_minute": {
       "chat_send": 20,
@@ -118,13 +118,14 @@
     },
     "free": {
       "allowed_models": [
-        "deepseek-flash"
+        "deepseek-flash",
+        "loadtest-echo"
       ],
       "id": "free",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 6
+      "revision": 7
     }
   }
 }
