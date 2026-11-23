@@ -2313,23 +2313,32 @@ impl<
                 } else {
                     Value::Null
                 };
-                run["plugin_bindings"] = json!(app
-                    .abilities
-                    .all_schemas()
+                // Tool schemas are built once for this step: bindings, gating and core tools.
+                let all_schemas = app.abilities.all_schemas();
+                // Plugin bindings are pinned now and stored on the run only for the tools
+                // this step's answer calls (below), not for every tool on every save.
+                let plugin_bindings = all_schemas
                     .iter()
-                    .filter_map(|s| s["name"].as_str().and_then(|name| app
-                        .abilities
-                        .plugin_binding(name)
-                        .map(|binding| (name.to_owned(), binding))))
-                    .collect::<std::collections::BTreeMap<_, _>>());
+                    .filter_map(|s| {
+                        s["name"].as_str().and_then(|name| {
+                            app.abilities
+                                .plugin_binding(name)
+                                .map(|binding| (name.to_owned(), binding))
+                        })
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                if let Some(fields) = run.as_object_mut() {
+                    fields.remove("plugin_bindings");
+                }
                 let assembled_asset_key = prepared_asset_key;
                 // Every enabled tool is decided below; gate them all in one pass.
                 let gates =
                     app.abilities
                         .tool_gates(&visibility, &ability_state, &run["loaded_abilities"]);
-                let mut schemas = app.abilities.schemas_gated(&gates);
+                let mut schemas =
+                    webagent_abilities::ToolGate::offered(all_schemas.clone(), &gates);
                 // Core tools are offered without loading their ability.
-                for schema in app.abilities.all_schemas() {
+                for schema in all_schemas {
                     let name = schema["name"].as_str().unwrap_or("");
                     if always_on(name) && !schemas.iter().any(|s| s["name"] == name) {
                         schemas.push(schema);
@@ -4292,6 +4301,18 @@ impl<
                         };
                         let calls =
                             engine_output::tool_calls(output, crate::tool_output::CONTROL_NAME);
+                        let called: std::collections::BTreeMap<_, _> = calls
+                            .iter()
+                            .filter_map(|call| call["name"].as_str())
+                            .filter_map(|name| {
+                                plugin_bindings
+                                    .get(name)
+                                    .map(|binding| (name.to_owned(), binding.clone()))
+                            })
+                            .collect();
+                        if !called.is_empty() {
+                            run["plugin_bindings"] = json!(called);
+                        }
                         for item in output {
                             run["input"]
                                 .as_array_mut()

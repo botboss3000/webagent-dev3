@@ -178,14 +178,32 @@ pub struct ToolGate {
     pub abilities: Vec<String>,
 }
 
+impl ToolGate {
+    /// The `schemas` (from `Catalog::all_schemas`) that `gates` leaves available and visible.
+    pub fn offered(schemas: Vec<Value>, gates: &BTreeMap<String, ToolGate>) -> Vec<Value> {
+        schemas
+            .into_iter()
+            .filter(|tool| {
+                gates
+                    .get(tool["name"].as_str().unwrap_or(""))
+                    .is_some_and(|gate| gate.available && gate.visible)
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone)]
 pub struct Catalog<H: Host> {
     host: std::marker::PhantomData<H>,
     optimization_generation: Option<String>,
     root: PathBuf,
     published: bool,
-    native_schemas: Vec<Value>,
-    abilities: Vec<Ability>,
+    // Shared read-only parts: a catalog is handed out once per use (`snapshot_current`),
+    // so cloning it must not copy every ability, icon and schema.
+    native_schemas: std::sync::Arc<Vec<Value>>,
+    abilities: std::sync::Arc<Vec<Ability>>,
+    /// Tool name → indexes in `abilities` of the plugins declaring it, in catalog order.
+    plugin_tools: std::sync::Arc<BTreeMap<String, Vec<usize>>>,
     version: String,
 }
 
@@ -427,10 +445,7 @@ impl<H: Host> Catalog<H> {
     /// Freeze a completely validated catalog for one immutable publication revision.
     pub fn load_snapshot(root: &Path) -> Result<Self> {
         let mut catalog = Self::load_mode(root, false, true)?;
-        catalog.published = true;
-        for ability in &mut catalog.abilities {
-            ability.frozen = true;
-        }
+        catalog.freeze();
         Ok(catalog)
     }
     /// The catalog of the selected publication `root`: `self` when it was loaded from that
@@ -448,21 +463,37 @@ impl<H: Host> Catalog<H> {
     }
     pub(crate) fn freeze(&mut self) {
         self.published = true;
-        for ability in &mut self.abilities {
+        for ability in std::sync::Arc::make_mut(&mut self.abilities) {
             ability.frozen = true;
         }
     }
     /// Bind only a currently executable isolated owner; pending declarations cannot dispatch.
     pub fn plugin_binding(&self, name: &str) -> Option<Value> {
-        self.abilities
+        self.plugin_tools
+            .get(name)?
             .iter()
+            .map(|&index| &self.abilities[index])
             .filter_map(|a| a.plugin.as_ref().filter(|_| Self::executable(a)))
             .find_map(|p| p.binding(name))
+    }
+    fn plugin_tools(abilities: &[Ability]) -> BTreeMap<String, Vec<usize>> {
+        let mut index: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (position, ability) in abilities.iter().enumerate() {
+            for schema in ability.plugin.iter().flat_map(|p| p.schemas.iter()) {
+                if let Some(name) = schema["name"].as_str() {
+                    let owners = index.entry(name.to_owned()).or_default();
+                    if owners.last() != Some(&position) {
+                        owners.push(position);
+                    }
+                }
+            }
+        }
+        index
     }
     /// Combine compiled contracts with present isolated schemas without probing unrelated modules.
     pub fn all_schemas(&self) -> Vec<Value> {
         let mut schemas = H::native_schemas_without_administrator();
-        schemas.extend(self.native_schemas.clone());
+        schemas.extend(self.native_schemas.iter().cloned());
         schemas.extend(
             self.abilities
                 .iter()
@@ -536,11 +567,12 @@ impl<H: Host> Catalog<H> {
                 return Ok(Self {
                     host: std::marker::PhantomData,
                     optimization_generation,
-                    abilities,
+                    plugin_tools: std::sync::Arc::new(Self::plugin_tools(&abilities)),
+                    abilities: std::sync::Arc::new(abilities),
                     version,
                     root: root.to_owned(),
                     published: false,
-                    native_schemas,
+                    native_schemas: std::sync::Arc::new(native_schemas),
                 });
             }
             Err(error) => {
@@ -961,11 +993,12 @@ impl<H: Host> Catalog<H> {
         Ok(Self {
             host: std::marker::PhantomData,
             optimization_generation,
-            abilities,
+            plugin_tools: std::sync::Arc::new(Self::plugin_tools(&abilities)),
+            abilities: std::sync::Arc::new(abilities),
             version,
             root: root.to_owned(),
             published: false,
-            native_schemas,
+            native_schemas: std::sync::Arc::new(native_schemas),
         })
     }
 
@@ -975,8 +1008,9 @@ impl<H: Host> Catalog<H> {
             optimization_generation: None,
             root: PathBuf::new(),
             published: false,
-            native_schemas: Vec::new(),
-            abilities: Vec::new(),
+            native_schemas: Default::default(),
+            abilities: Default::default(),
+            plugin_tools: Default::default(),
             version: hex::encode(Sha256::digest(b"[]")),
         }
     }
@@ -995,7 +1029,7 @@ impl<H: Host> Catalog<H> {
     /// Recheck the Administrator schemas at the final dispatch fence: reread this
     /// snapshot's own tool folders and compare.
     pub fn native_snapshot_current(&self) -> Result<bool> {
-        Ok(H::native_schemas_for_catalog(&self.root, self.published)? == self.native_schemas)
+        Ok(H::native_schemas_for_catalog(&self.root, self.published)? == *self.native_schemas)
     }
     pub fn version(&self) -> &str {
         &self.version
@@ -1840,7 +1874,7 @@ impl<H: Host> Catalog<H> {
         let supported = self.installed(name);
         let mut available = false;
         let mut visible = false;
-        for ability in &self.abilities {
+        for ability in self.abilities.iter() {
             if !Self::executable(ability) || !ability.tools.iter().any(|tool| tool == name) {
                 continue;
             }
@@ -1936,14 +1970,7 @@ impl<H: Host> Catalog<H> {
 
     /// The schemas `gates` (from `tool_gates`) leaves available and visible.
     pub fn schemas_gated(&self, gates: &BTreeMap<String, ToolGate>) -> Vec<Value> {
-        self.all_schemas()
-            .into_iter()
-            .filter(|tool| {
-                gates
-                    .get(tool["name"].as_str().unwrap_or(""))
-                    .is_some_and(|gate| gate.available && gate.visible)
-            })
-            .collect()
+        ToolGate::offered(self.all_schemas(), gates)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1978,7 +2005,7 @@ impl<H: Host> Catalog<H> {
         supplied_tool: impl Fn(&str) -> bool,
     ) -> String {
         let mut text = String::new();
-        for ability in &self.abilities {
+        for ability in self.abilities.iter() {
             if !Self::executable(ability)
                 || !allow_ability(&ability.id)
                 || Self::is_off(visibility, &ability.id)
@@ -2051,7 +2078,7 @@ impl<H: Host> Catalog<H> {
             selected = json!({});
         }
         let mut active = state["active"].as_array().cloned().unwrap_or_default();
-        for ability in &self.abilities {
+        for ability in self.abilities.iter() {
             if !Self::contains_id(loaded, &ability.id)
                 || !Self::executable(ability)
                 || Self::is_off(visibility, &ability.id)
@@ -2094,7 +2121,7 @@ impl<H: Host> Catalog<H> {
         let mut guidance = Vec::new();
         // Core skills lead the skills section, whatever the ability order.
         let mut core = HashSet::new();
-        for ability in &self.abilities {
+        for ability in self.abilities.iter() {
             let id = ability.id.as_str();
             let Some(entry) = entries.iter().find(|entry| entry["id"] == id) else {
                 continue;
@@ -3590,8 +3617,7 @@ pub mod registered_tests {
             ] {
                 let mut catalog = catalog::<H>();
                 let settings = defaults::<H>(&catalog);
-                let ability = catalog
-                    .abilities
+                let ability = std::sync::Arc::make_mut(&mut catalog.abilities)
                     .iter_mut()
                     .find(|ability| ability.id == "automation")
                     .unwrap();

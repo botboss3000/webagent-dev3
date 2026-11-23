@@ -221,13 +221,75 @@ fn prune(cache: &Path, keep: &Path) {
 /// checkout's ability JSON and Markdown match it, else a snapshot under `cache` with the
 /// checkout's versions. `valid` decides whether a new snapshot loads; one that does not
 /// keeps the previous choice.
+///
+/// The walk runs off the caller's path: while callers keep asking, a background thread
+/// repeats it before the last answer is a `RECHECK` old, so callers normally take the last
+/// choice. A caller still walks itself when that answer is older than `RECHECK` (first use,
+/// after an idle spell), so no caller gets an older choice than before.
 pub fn overlay(
     base: &Path,
     checkout: &Path,
     cache: &Path,
-    valid: impl Fn(&Path) -> bool,
+    valid: impl Fn(&Path) -> bool + Send + Sync + 'static,
 ) -> PathBuf {
-    overlay_every(RECHECK, base, checkout, cache, valid)
+    let valid: Validator = std::sync::Arc::new(valid);
+    *refresh() = Some(Refresh {
+        base: base.to_path_buf(),
+        checkout: checkout.to_path_buf(),
+        cache: cache.to_path_buf(),
+        valid: valid.clone(),
+        asked: Instant::now(),
+    });
+    static REFRESHER: std::sync::Once = std::sync::Once::new();
+    REFRESHER.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("ability-live-walk".into())
+            .spawn(refresh_loop);
+    });
+    overlay_every(RECHECK, base, checkout, cache, |root| valid(root))
+}
+
+type Validator = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
+/// The last caller's arguments, for the background walk.
+struct Refresh {
+    base: PathBuf,
+    checkout: PathBuf,
+    cache: PathBuf,
+    valid: Validator,
+    asked: Instant,
+}
+
+static REFRESH: Mutex<Option<Refresh>> = Mutex::new(None);
+
+fn refresh() -> std::sync::MutexGuard<'static, Option<Refresh>> {
+    REFRESH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Walks a little before callers would (every `REFRESH_EVERY`), and only while someone
+/// asked within `REFRESH_IDLE`, so an idle process does not walk.
+const REFRESH_EVERY: Duration = Duration::from_millis(800);
+const REFRESH_IDLE: Duration = Duration::from_secs(10);
+
+fn refresh_loop() {
+    loop {
+        std::thread::sleep(REFRESH_EVERY);
+        let args = refresh().as_ref().and_then(|r| {
+            (r.asked.elapsed() < REFRESH_IDLE).then(|| {
+                (
+                    r.base.clone(),
+                    r.checkout.clone(),
+                    r.cache.clone(),
+                    r.valid.clone(),
+                )
+            })
+        });
+        if let Some((base, checkout, cache, valid)) = args {
+            overlay_every(REFRESH_EVERY, &base, &checkout, &cache, |root| valid(root));
+        }
+    }
 }
 
 fn overlay_every(

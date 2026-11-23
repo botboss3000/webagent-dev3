@@ -86,12 +86,15 @@ impl webagent_abilities::Host for NativeHost {
             &base,
             &checkout,
             &live_cache(),
-            |root| {
-                let problems = live_problems(root, &base);
-                for problem in problems.iter().take(5) {
-                    eprintln!("Live ability edit refused: {problem}");
+            {
+                let base = base.clone();
+                move |root| {
+                    let problems = live_problems(root, &base);
+                    for problem in problems.iter().take(5) {
+                        eprintln!("Live ability edit refused: {problem}");
+                    }
+                    problems.is_empty()
                 }
-                problems.is_empty()
             },
         )))
     }
