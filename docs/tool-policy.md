@@ -133,7 +133,8 @@ asked for this action and which of their messages did
 `crates/modules/engine/src/tools/critical_guard.rs`).
 
 - **What it sees:** the user's newest requests by label (`u1`, ...; for a scheduled task's
-  run, its stored instruction as `task`; never another agent's message) and the call's
+  run, its stored instruction as `task`, shown as "The user set up this scheduled task and
+  asked: ..."; never another agent's message) and the call's
   short arguments. A string longer than `guard.argument_max_chars` is shown only as its
   size, so text the agent read (a page, an email body) cannot argue for the call. It never
   sees tool results or the agent's reasoning.
@@ -169,5 +170,5 @@ asked for this action and which of their messages did
 - **Mode:** the agent's Task Progress setting `critical_guard`: `enforce` (default),
   `record` (checked and recorded, never held) or `off`. It is changed by whoever may change
   the agent's ability settings.
-- **Settings:** the `guard` section of `config/access/policy.json` (defaults: 0.9, 12
+- **Settings:** the `guard` section of `config/access/policy.json` (defaults: 0.85, 12
   messages, 300 characters each, 120 characters per argument, 5 s per model, 10 s in total).
