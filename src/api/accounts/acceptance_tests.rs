@@ -312,54 +312,44 @@ async fn sign_in_duration_and_session_revocation_use_the_app_store() {
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 }
 #[tokio::test]
-async fn diagnostics_browser_route_uses_host_state_and_accounts_cookie() {
-    let (_root, mut app) = fixture().await;
-    let credential = "d".repeat(32);
-    app.browser_login_bridge =
-        browser_login::Bridge::configure(&credential, "fixture-diagnostics-owner").unwrap();
-    let request = |origin: bool| {
+async fn retired_browser_login_route_is_gone_and_its_variables_are_ignored() {
+    let (_root, app) = fixture().await;
+    let bearer = "d".repeat(32);
+    let post = |cookie: Option<String>| {
         let mut builder = Request::builder()
             .method("POST")
             .uri("/api/v3/diagnostics/browser-login")
             .header("content-type", "application/json")
-            .header("authorization", format!("Bearer {credential}"));
-        if origin {
-            builder = builder.header("origin", "https://fixture.invalid");
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("x-csrf-token", "fixture-csrf");
+        if let Some(cookie) = cookie {
+            builder = builder.header("cookie", format!("v3_session={cookie}"));
         }
         builder
-            .body(Body::from(
-                json!({"caller_id":"fixture-diagnostics-owner"}).to_string(),
-            ))
+            .body(Body::from(json!({"caller_id":"admin"}).to_string()))
             .unwrap()
     };
-    assert_eq!(
-        router(app.clone())
-            .oneshot(request(true))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    let response = router(app.clone()).oneshot(request(false)).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let cookie = response.headers()["set-cookie"]
-        .to_str()
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap()
-        .to_owned();
-    let response = router(app)
-        .oneshot(
-            Request::builder()
-                .uri("/api/v3/auth/me")
-                .header("cookie", cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
+    // Without a sign-in the bearer no longer signs anyone in.
+    let anonymous = router(app.clone()).oneshot(post(None)).await.unwrap();
+    assert!(anonymous.headers().get("set-cookie").is_none());
+    assert!(matches!(
+        anonymous.status(),
+        StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED
+    ));
+    // A signed-in administrator reaches the router's end: the route does not exist.
+    let admin = sign_in_as(&app, "admin").await;
+    let signed_in = router(app.clone())
+        .oneshot(post(Some(admin)))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(signed_in.status(), StatusCode::NOT_FOUND);
+    assert!(signed_in.headers().get("set-cookie").is_none());
+    // Present variables are named in one warning and otherwise ignored; absent ones are silent.
+    assert_eq!(
+        crate::warn_retired_environment(|_| true),
+        ["V3_BROWSER_LOGIN_TOKEN", "V3_BROWSER_LOGIN_CALLER_ID"]
+    );
+    assert!(crate::warn_retired_environment(|_| false).is_empty());
 }
 
 /// A sign-in record for `user` at the account's current generation; returns the cookie value.

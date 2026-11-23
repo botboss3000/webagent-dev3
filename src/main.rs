@@ -33,8 +33,6 @@ mod agent_storage;
 mod agents_api;
 mod background_followup;
 mod background_tasks;
-#[path = "api/browser_login.rs"]
-mod browser_login;
 #[path = "../crates/modules/access/host/capabilities.rs"]
 mod capabilities;
 #[path = "../crates/modules/chat/host/agent_config.rs"]

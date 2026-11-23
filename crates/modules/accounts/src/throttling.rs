@@ -170,8 +170,6 @@ pub struct RequestLimits {
     pub per_user_per_minute: UserLimits,
     /// Wrong pairing codes from all clients together.
     pub pairing_failures_per_minute: u32,
-    /// Wrong diagnostics browser-login bearer tokens from all clients together.
-    pub browser_login_failures_per_minute: u32,
     /// Registered and guest accounts created, from all clients together.
     pub new_accounts_per_day: u32,
 }
@@ -181,7 +179,6 @@ impl Default for RequestLimits {
             per_address_per_minute: AddressLimits::default(),
             per_user_per_minute: UserLimits::default(),
             pairing_failures_per_minute: 20,
-            browser_login_failures_per_minute: 5,
             new_accounts_per_day: 50,
         }
     }
@@ -212,10 +209,6 @@ impl RequestLimits {
             (
                 "pairing_failures_per_minute",
                 limits.pairing_failures_per_minute,
-            ),
-            (
-                "browser_login_failures_per_minute",
-                limits.browser_login_failures_per_minute,
             ),
             ("new_accounts_per_day", limits.new_accounts_per_day),
         ] {

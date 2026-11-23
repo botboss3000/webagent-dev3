@@ -144,25 +144,6 @@ pub(crate) async fn logout(
         .await
         .map_err(Into::into)
 }
-pub(crate) async fn diagnostics_browser_login(
-    State(app): State<App>,
-    headers: HeaderMap,
-    Json(body): Json<webagent_accounts::browser_login_api::LoginRequest>,
-) -> std::result::Result<Response, ApiError> {
-    webagent_accounts::browser_login_api::login(
-        &app.store.accounts_repository(),
-        &app,
-        &app.login_attempts,
-        app.browser_login_bridge.as_ref(),
-        &headers,
-        body,
-        app.secure,
-        now(),
-    )
-    .await
-    .map_err(Into::into)
-}
-
 pub(crate) fn throttle_client(
     app: &App,
     peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,

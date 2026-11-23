@@ -110,7 +110,7 @@ pub use authentication::{
 pub use sessions::{session_key, AgentBrowserBinding, IssuedSession};
 pub use sessions::{AuthenticatedSession, RegistrationMode};
 mod protection;
-pub use protection::{session_cookie, session_token, valid_csrf, valid_origin, BrowserLoginBridge};
+pub use protection::{session_cookie, session_token, valid_csrf, valid_origin};
 
 mod bootstrap;
 
@@ -134,9 +134,8 @@ pub fn account_status(account: &Value) -> Result<AccountStatus> {
 pub use authentication::VerifiedCredentials;
 
 pub mod authentication_api;
-pub mod browser_login_api;
-/// The `user_agent` recorded on sessions the diagnostics (agent) browser signs in with, so
-/// administrator-only pages can refuse them.
+/// The `user_agent` of sign-ins the retired diagnostics browser-login bridge issued (route removed
+/// 2026-11-23). Kept so administrator-only pages keep refusing any such record.
 pub const DIAGNOSTICS_BROWSER_AGENT: &str = "Diagnostics v3 development browser";
 /// Sign-in record `kind` of a sign-in issued to an agent's own browser (Browser Control).
 pub const AGENT_BROWSER_KIND: &str = "agent_browser";

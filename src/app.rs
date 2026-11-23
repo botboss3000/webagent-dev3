@@ -28,7 +28,6 @@ struct App {
     secure: bool,
     chat_ui_config_path: PathBuf,
     message_api_token_hash: Option<[u8; 32]>,
-    browser_login_bridge: Option<browser_login::Bridge>,
 }
 use webagent_configuration::digest;
 use webagent_host_core::key;
@@ -1039,14 +1038,11 @@ async fn run_process() -> Result<()> {
     let catalog = abilities::Catalog::load(&PathBuf::from(abilities_root))?;
     store.ensure_agent_connections(&catalog.ids()).await?;
     let bridge = Arc::new(harness_bridge::Queue(store.clone()));
+    warn_retired_environment(|name| std::env::var_os(name).is_some());
     let app = App {
         runtime: Arc::new(RwLock::new(runtime)),
         runtime_path,
         compaction_config_path,
-        browser_login_bridge: browser_login::Bridge::configure(
-            &std::env::var("V3_BROWSER_LOGIN_TOKEN").unwrap_or_default(),
-            &std::env::var("V3_BROWSER_LOGIN_CALLER_ID").unwrap_or_default(),
-        )?,
         message_api_token_hash: message_api_token_hash(
             &std::env::var("V3_MESSAGE_API_TOKEN").unwrap_or_default(),
         )?,
@@ -1340,7 +1336,6 @@ struct EngineHostState {
     pub(crate) secure: bool,
     pub(crate) chat_ui_config_path: PathBuf,
     pub(crate) message_api_token_hash: Option<[u8; 32]>,
-    pub(crate) browser_login_bridge: Option<browser_login::Bridge>,
 }
 impl EngineHostState {
     pub(crate) fn new(app: &App) -> Self {
@@ -1349,7 +1344,6 @@ impl EngineHostState {
             secure: app.secure,
             chat_ui_config_path: app.chat_ui_config_path.clone(),
             message_api_token_hash: app.message_api_token_hash,
-            browser_login_bridge: app.browser_login_bridge.clone(),
         }
     }
 }
@@ -1389,7 +1383,6 @@ impl EngineHostState {
             secure: self.secure,
             chat_ui_config_path: self.chat_ui_config_path.clone(),
             message_api_token_hash: self.message_api_token_hash,
-            browser_login_bridge: self.browser_login_bridge.clone(),
         }
     }
 }
@@ -1436,4 +1429,24 @@ mod engine_host_tests {
             .login_attempts
             .shares_state_with(&captured.login_attempts));
     }
+}
+
+/// Environment variables of the retired diagnostics browser-login bridge (removed 2026-11-23).
+/// Old containers may still carry them; they are ignored.
+const RETIRED_ENVIRONMENT: [&str; 2] = ["V3_BROWSER_LOGIN_TOKEN", "V3_BROWSER_LOGIN_CALLER_ID"];
+
+/// Warn once, naming only the variables (never their values), when retired ones are present.
+/// Returns the names it warned about.
+pub(crate) fn warn_retired_environment(present: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    let names: Vec<&'static str> = RETIRED_ENVIRONMENT
+        .into_iter()
+        .filter(|name| present(name))
+        .collect();
+    if !names.is_empty() {
+        tracing::warn!(
+            variables = %names.join(", "),
+            "Ignoring retired environment variables; the diagnostics browser-login bridge was removed"
+        );
+    }
+    names
 }

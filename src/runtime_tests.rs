@@ -206,7 +206,6 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
         runtime_path,
         compaction_config_path,
         message_api_token_hash: None,
-        browser_login_bridge: None,
         store,
         chat_actor: None,
         chat_access: None,

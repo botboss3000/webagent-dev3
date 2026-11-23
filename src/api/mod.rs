@@ -552,7 +552,6 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/auth/register",post(registration::register))
         .route("/api/v3/auth/guest-login",post(registration::guest_login))
         .route("/api/v3/auth/access-mode",get(registration::access_mode))
-        .route("/api/v3/diagnostics/browser-login",post(browser_login::login))
         .route("/api/v3/auth/setup-status",get(setup_status))
         .route("/api/v3/auth/setup-admin",post(setup_admin))
         .nest("/api/v3",api)
