@@ -1,4 +1,4 @@
-FROM cloudflare/cloudflared@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba AS preview_tunnel
+FROM cloudflare/cloudflared@sha256:55c7e3e8d89d5e8d20b75a82f3602cbf98e06db406e73e282073cfdc5a9a3af6 AS preview_tunnel
 FROM rust:1.99-bookworm@sha256:e9da6f6c3ed5095fd5d33bf7cdf309830a178a8147888f1b2f76d5769bd9306c AS tested_builder
 RUN mkdir -p /usr/local/share/webagent/compiler \
     && dpkg-query -W -f='${binary:Package}\t${Version}\n' | LC_ALL=C sort > /usr/local/share/webagent/compiler/before.tsv \
@@ -63,7 +63,7 @@ RUN --mount=type=cache,id=webagent-v3-target,target=/build/target,sharing=locked
     awk 'FNR==1 {sub(/^[^:]*: /,"");print}' /build/target/release/deps/webagent_v3-*.d /build/target/release/deps/webagent_context_contracts-*.d /build/target/release/deps/webagent_assets_contracts-*.d /build/target/release/deps/webagent_capability_contracts-*.d /build/target/release/deps/webagent_provider_contracts-*.d \
       | tr ' ' '\n' | LC_ALL=C sort -u > /out/core-inputs.txt
 RUN test -s /out/core-inputs.txt
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS voice
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS voice
 # Voice (webagent_media::recognizer and ::speaker load these at run time; python3 here only
 # unpacks archives): the sherpa-onnx 2.0.1 C API with ONNX Runtime (Apache-2.0/MIT, the version
 # its C layouts mirror); NVIDIA Parakeet TDT 0.6B v3 int8 (CC-BY-4.0) and Kokoro v1.0 in full
@@ -109,7 +109,7 @@ RUN mkdir -p /opt/inference/models/bge-small-en-v1.5 && cd /opt/inference/models
     && printf '%s\n' 'bge-small-en-v1.5/: BAAI bge-small-en-v1.5 (https://huggingface.co/BAAI/bge-small-en-v1.5), MIT.' >> /opt/inference/models/NOTICE \
     && chmod -R a+rX /opt/inference/models/bge-small-en-v1.5
 
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS api
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini git ripgrep build-essential pkg-config chromium chromium-driver valgrind heaptrack linux-perf \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3app \
@@ -170,7 +170,7 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 CMD curl 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/usr/local/bin/webagent-v3","--launch"]
 
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS loop
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS loop
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3loop
