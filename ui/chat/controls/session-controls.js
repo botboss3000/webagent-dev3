@@ -4,6 +4,14 @@ import {createEffortSlider} from '../../shared/models/effort-slider.js';
 // Compact role markers on picker rows (V2 footer picker).
 const ROLE_ICONS={standard:['T','Text'],vision:['👁','Vision'],image:['🖼','Image generation'],
   system:['⚙','System'],voice:['🎤','Voice'],decision:['D','Decision']};
+/** Model picker rows and the row that shows the saved selection, hiding the mode-default row when a roster model is the same model. */
+export function modelRows(models=[],selected=null) {
+  const fallback=models.find(item=>item.entry_id==null)||null;
+  const duplicate=fallback&&models.find(item=>item.entry_id!=null&&item.model===fallback.model&&item.display===fallback.display);
+  const rows=duplicate?models.filter(item=>item!==fallback):models.slice();
+  const selectedId=selected?.entry_id??duplicate?.entry_id??null;
+  return {rows,selectedId};
+}
 /** Wording of the transcript row for mode and model changes since the last message, as [text, name] pairs; empty once both are back where they started. */
 export function changeParts(before,now) {
   const parts=[];
@@ -104,6 +112,8 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
     // Persist the selected connected model with the snapshot revision and a unique request ID; it applies at the next model-call boundary; an already-dispatched call retains its pinned model.
   async function choose(entry){
     if(busy)return;
+    // The hidden mode-default row is the model the mode already follows; choosing it keeps that default instead of pinning the model.
+    if(state.model.entry_id==null&&entry.entry_id===modelRows(state.models,state.model).selectedId){close();return;}
     const sid=session,epoch=generation,revision=state.model.revision,before=current();
     busy=true;paint();
     let changed=false;
@@ -122,10 +132,10 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
     // Populate and position the permitted-model picker, disabling disconnected entries and preserving composer focus on pointer activation.
   function show(){
     picker.replaceChildren();
-    const header=document.createElement('div');header.className='csp-header';header.textContent='Models';picker.append(header);
     const list=document.createElement('div');list.className='csp-list';picker.append(list);
-    for(const entry of state.models){
-      const active=entry.entry_id===state.model.entry_id;
+    const {rows,selectedId}=modelRows(state.models,state.model);
+    for(const entry of rows){
+      const active=entry.entry_id===selectedId;
       const button=document.createElement('button');button.type='button';button.className='cml-item'+(active?' cml-active csp-active':'');
       const name=document.createElement('span');name.className='cml-name';
       name.textContent=entry.label+(entry.connected?'':' · Connection required');button.append(name);
@@ -142,7 +152,7 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
     const selected=state.models.find(item=>item.entry_id===state.model.entry_id);
     effort.set({levels:selected?.efforts||[],value:state.model.effort||null,defaultEffort:selected?.default_effort||'',disabled:busy||!canWrite()});
     picker.append(effort.element);
-    if(!state.models.length){const text=document.createElement('p');text.className='csp-empty';text.textContent='No permitted chat models. Add one on this agent’s Models page.';list.append(text);}
+    if(!rows.length){const text=document.createElement('p');text.className='csp-empty';text.textContent='No permitted chat models. Add one on this agent’s Models page.';list.append(text);}
     const rect=model.getBoundingClientRect();
     picker.style.bottom=Math.max(8,innerHeight-rect.top+6)+'px';
     picker.style.right=Math.max(8,innerWidth-rect.right)+'px';
