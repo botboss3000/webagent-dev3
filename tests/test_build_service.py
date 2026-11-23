@@ -119,6 +119,30 @@ class LiveFileTests(unittest.TestCase):
                 fixtures.host.Runner.commit_live(runner,patterns,now=time.time()+60,released=released)
             self.assertEqual(git("show","--name-only","--format=","HEAD").split(),["ui/edited.json"])
             self.assertIn("ui/released.json",git("status","--porcelain"))
+    def test_committer_commits_a_restore_to_the_released_bytes(self):
+        # A capacity test raises a live value (auto-committed), then restores the released
+        # bytes: the restore differs from HEAD and must be committed too.
+        import subprocess,threading
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder)
+            git=lambda *args:subprocess.run(["git","-C",folder,"-c","user.name=t","-c","user.email=t@example.test",*args],check=True,capture_output=True,text=True).stdout
+            git("init","-q");(root/"config").mkdir();(root/"config/loop.json").write_text('{"max":10}')
+            git("add","-A");git("commit","-q","-m","release")
+            def command(argv,timeout=None,private_raw=False,**_):
+                return subprocess.run([argv[0],"-c","user.name=t","-c","user.email=t@example.test",*argv[1:]],check=True,capture_output=True,text=True).stdout
+            runner=types.SimpleNamespace(command=command,git_lock=threading.Lock())
+            patterns=("v3/config/*.json",)
+            released=lambda path:{"config/loop.json":b'{"max":10}'}.get(path)
+            commit_live=lambda:fixtures.host.Runner.commit_live(runner,patterns,now=time.time()+60,released=released)
+            with patch.dict(fixtures.host.CONFIG,{"checkout_root":folder}):
+                (root/"config/loop.json").write_text('{"max":64}')
+                self.assertIsNotNone(commit_live())
+                self.assertEqual(git("show","HEAD:config/loop.json"),'{"max":64}')
+                (root/"config/loop.json").write_text('{"max":10}')
+                self.assertIsNotNone(commit_live())
+                self.assertIsNone(commit_live())
+            self.assertEqual(git("show","HEAD:config/loop.json"),'{"max":10}')
+            self.assertEqual(git("status","--porcelain"),"")
 class LiveFileAccessTests(unittest.TestCase):
     def setUp(self):
         self.release=fixtures.host.release
@@ -397,6 +421,9 @@ class InstalledWorkspacePublicationTests(unittest.TestCase):
      self.assertFalse(broker.host_source_only(changed,blob,{}))
      self.assertFalse(broker.host_source_only(changed+["v3/sandbox.py"],blob,{"local_caller":True}))
      (root/"workspace.py").write_bytes(b"different")
+     self.assertFalse(broker.host_source_only(changed,blob,{"local_caller":True}))
+     # A module that was never installed is not installed code: refused, not a crash.
+     (root/"workspace.py").unlink()
      self.assertFalse(broker.host_source_only(changed,blob,{"local_caller":True}))
    finally:broker.shutdown()
 

@@ -2192,7 +2192,9 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         """Commit settled in-place live-file edits as one commit; never stage or commit other paths.
 
         `released(path)` returns the published release's bytes (None when absent); a file that
-        still matches its release was promoted by that release, and the release commit owns it."""
+        still matches its release was promoted by that release, and the release commit owns it,
+        unless HEAD's copy came from an earlier live edit: then the file was restored to the
+        release (a test's temporary value put back) and nothing else would commit it."""
         if not patterns:
             return None
         root = CONFIG["checkout_root"]
@@ -2207,7 +2209,11 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 def current(path):
                     target = Path(root) / path
                     return target.read_bytes() if target.is_file() and not target.is_symlink() else None
-                rows = [(state, path) for state, path in rows if current(path) != released(path)]
+                def live_committed(path):
+                    subject = self.command([*git, "log", "-1", "--format=%s", "--", path], timeout=30)
+                    return subject.startswith("Live config edit: ")
+                rows = [(state, path) for state, path in rows
+                        if current(path) != released(path) or live_committed(path)]
             if not rows:
                 return None
             now = time.time() if now is None else now
@@ -5293,7 +5299,9 @@ class Broker:
         selected=sorted(n for n in review_modules if "v3/build-service/"+n in changed)+["host.py"]+[name for name in ("ownership.py","boot_host.py")if "v3/build-service/"+name in changed]
         for name in selected:
             path=Path(CONFIG["service_dir"])/("bootstrap.py"if name=="install.py"else name)
-            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+            # A module never installed yet is not "already installed": take the full path.
+            try:fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+            except FileNotFoundError:return False
             try:
                 meta=os.fstat(fd)
                 if not stat.S_ISREG(meta.st_mode)or meta.st_uid!=0 or meta.st_mode&0o022 or meta.st_nlink!=1:raise PermissionError("Protected installed broker code required")
