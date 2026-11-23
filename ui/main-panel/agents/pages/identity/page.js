@@ -107,7 +107,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     minHeight:80, disabled:!agent.can_manage, onSave: value => saveField('description', value)});
   descriptionRow.editor.area.dataset.field = 'description';
   const contactRow = createTextRow(profileList, {title:'Administrator contact email', value:agent.admin_contact_email||'',
-    placeholder:'admin@example.com', maxLength:254, disabled:!agent.can_manage,
+    placeholder:'admin@example.com', maxLength:254, disabled:!agent.can_manage, stacked:true,
     hint:'Shown to chat users when this agent\'s model cannot be reached. Leave blank to show no address.',
     onSave: value => saveField('admin_contact_email', value.trim())});
   contactRow.control.dataset.field = 'admin_contact_email';
