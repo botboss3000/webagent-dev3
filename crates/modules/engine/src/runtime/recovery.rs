@@ -365,7 +365,7 @@ impl<
             };
             let mut owner = None;
             for user in &users {
-                // One account at a time; an unreadable one is skipped, as `user_views` does.
+                // One account at a time; an unreadable one is skipped.
                 let Ok(view) = app.for_user_view(user).await else {
                     continue;
                 };

@@ -697,8 +697,13 @@ impl<
                     crate::ports::AgentMetadata::root(app.store.records()),
                     crate::components::BACKGROUND,
                 ) {
-                    if let Ok(users) = crate::send_future(app.user_views(false)).await {
+                    if let Ok(users) = crate::send_future(app.user_ids(false)).await {
                         for user in users {
+                            // One account at a time (see `user_ids`).
+                            let Ok(user) = crate::send_future(app.for_user_view(&user)).await
+                            else {
+                                continue;
+                            };
                             if let Ok(tasks) =
                                 crate::send_future(user.store.background_scan(None)).await
                             {
@@ -987,35 +992,17 @@ impl<
         view.store = self.store.for_user(user_id).await?;
         Ok(view)
     }
-    /// Every account when `every`, otherwise only those a periodic scan must visit. A pass over
-    /// every account opens each one in turn ([`Self::for_user_view`]) and lets it go before the
-    /// next, so the storage bound on connected account databases can close the idle ones;
-    /// holding a view of every account at once kept a thread per account open.
+    /// Every account when `every`, otherwise only those a periodic scan must visit (at start-up
+    /// that is every account too, since none has been evaluated yet). Every pass opens each one
+    /// in turn ([`Self::for_user_view`]) and lets it go before the next, so the storage bound on
+    /// connected account databases can close the idle ones; a list of views of every account
+    /// held a thread per account open and reached the loop's 1,024-task limit.
     pub async fn user_ids(&self, every: bool) -> Result<Vec<String>> {
         if every {
             self.store.all_user_ids().await
         } else {
             self.store.scan_user_ids().await
         }
-    }
-    /// Per-account views: every account when `every`, otherwise only those a periodic scan must visit.
-    pub async fn user_views(&self, every: bool) -> Result<Vec<Self>> {
-        let mut views = Vec::new();
-        let users = self.user_ids(every).await?;
-        for user_id in users {
-            // One unreadable account must not stop every other account's work.
-            let store = match self.store.for_user(&user_id).await {
-                Ok(store) => store,
-                Err(error) => {
-                    tracing::warn!(%error, "Account skipped: its storage could not be opened");
-                    continue;
-                }
-            };
-            let mut view = self.clone();
-            view.store = store;
-            views.push(view);
-        }
-        Ok(views)
     }
 }
 pub async fn wait_for_background_retry(milliseconds: u64) {

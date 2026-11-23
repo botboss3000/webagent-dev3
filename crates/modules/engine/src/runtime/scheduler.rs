@@ -226,12 +226,16 @@ impl<
             if app.stop.is_cancelled() {
                 break;
             }
-            match app.user_views(false).await {
+            match app.user_ids(false).await {
                 Ok(users) => {
                     for user in users {
                         if app.stop.is_cancelled() {
                             break;
                         }
+                        // One account at a time (see `user_ids`).
+                        let Ok(user) = app.for_user_view(&user).await else {
+                            continue;
+                        };
                         if let Err(error) = user.store.cleanup_one_reasoning().await {
                             tracing::warn!("Reasoning cleanup deferred: {error}");
                         }
@@ -392,16 +396,24 @@ impl<
                 drop(_guard);
                 if let Ok(false) = shutoff {
                     progress.at(Stage::UserScan);
-                    let users = match crate::send_future(app.user_views(false)).await {
+                    let users = match crate::send_future(app.user_ids(false)).await {
                         Ok(users) => users,
                         Err(error) => {
                             tracing::error!("User queue scan failed: {}", error);
                             Vec::new()
                         }
                     };
-                    // Queued runs of every account, claimed after all accounts' own work.
+                    // Queued runs of every account, claimed after all accounts' own work. Each
+                    // account is opened in turn and let go (only queued runs keep a view).
                     let mut candidates = Vec::new();
-                    for user_app in users {
+                    for user in users {
+                        let user_app = match crate::send_future(app.for_user_view(&user)).await {
+                            Ok(view) => view,
+                            Err(error) => {
+                                tracing::warn!(%error, "Account skipped: its storage could not be opened");
+                                continue;
+                            }
+                        };
                         progress.at(Stage::DispatchGate);
                         let _account_gate = crate::send_future(app.handles.gate.lock()).await;
                         progress.at(Stage::Commands);
