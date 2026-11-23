@@ -22,6 +22,7 @@
 <link rel="stylesheet" href="/ui/shared/search-field/search-field.css">
 <link rel="stylesheet" href="/ui/main-panel/agents/pages/sessions/sessions-search.css">
 <link rel="stylesheet" href="/ui/main-panel/account/account.css">
+<link rel="stylesheet" href="/ui/shell/feedback/feedback.css">
 <link rel="stylesheet" href="/ui/chat/panel.css">
 <link rel="stylesheet" href="/ui/chat/header.css">
 <link rel="stylesheet" href="/ui/chat/composer-footer.css">
@@ -189,6 +190,7 @@
 <link rel="modulepreload" href="/ui/shared/vibrate/vibrate.js">
 <link rel="modulepreload" href="/ui/shell/ability-drift/ability-drift.js">
 <link rel="modulepreload" href="/ui/shell/background-issues/background-issues.js">
+<link rel="modulepreload" href="/ui/shell/feedback/feedback.js">
 <link rel="modulepreload" href="/ui/shell/header-carousel/header-carousel.js">
 <script src="/ui/shared/scrollbars/scrollbars.js" defer></script>
 <link rel="stylesheet" href="/ui/boot/boot.css">
@@ -258,8 +260,22 @@
         </div>
       </div>
       <div class="user-dropdown-divider"></div>
+      <button id="send-feedback" class="user-dropdown-action" type="button" hidden><svg class="lucide-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Send feedback</span></button>
       <button id="shutoff" class="user-dropdown-action" type="button"><svg class="lucide-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg><span>Shut off execution</span></button>
       <button id="logout" class="user-dropdown-action" type="button"><svg class="lucide-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9"/></svg>Sign Out</button>
+      <form id="feedback-view" aria-label="Send feedback" hidden>
+        <h2>Send feedback</h2>
+        <fieldset class="feedback-types" aria-label="Feedback type">
+          <label><input type="radio" name="feedback-type" value="bug" checked>Bug</label>
+          <label><input type="radio" name="feedback-type" value="feature">Idea</label>
+          <label><input type="radio" name="feedback-type" value="message">Message</label>
+        </fieldset>
+        <textarea id="feedback-body" maxlength="8000" placeholder="What happened, or what would you like?" aria-label="Feedback"></textarea>
+        <input id="feedback-email" type="email" maxlength="254" autocomplete="email" placeholder="Email for a reply (optional)" aria-label="Email for a reply (optional)">
+        <div class="feedback-hint"><span>Sent to the WebAgent developers as an issue. Your account name is not included.</span><span><span id="feedback-count">0</span>/8000</span></div>
+        <p id="feedback-status" role="status" aria-live="polite"></p>
+        <div class="feedback-buttons"><button id="feedback-cancel" type="button">Cancel</button><button id="feedback-send" type="submit">Send</button></div>
+      </form>
     </div>
   </div>
   <!-- app.js builds #main-panel from the page catalog and mounts chat/core/panel.js into #chat-panel. -->

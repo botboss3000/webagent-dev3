@@ -64,6 +64,7 @@ pub fn validate_app_settings(settings: &Value) -> Result<()> {
     chat_panel(settings)?;
     pull_refresh_start_zone(settings)?;
     mobile_full_height(settings)?;
+    crate::feedback::settings(settings)?;
     if let Some(dev) = settings.get("development") {
         if !dev.is_object() || dev.get("live_ui_editing").is_some_and(|v| !v.is_boolean()) {
             return Err(anyhow!("Invalid development settings"));
@@ -125,8 +126,12 @@ pub async fn ui_config(chat_path: &Path, settings: &Path) -> Result<Value, Error
     let start_zone_px = pull_refresh_start_zone(&settings).map_err(Error::Settings)?;
     let panel = chat_panel(&settings).map_err(Error::Settings)?;
     let full_height = mobile_full_height(&settings).map_err(Error::Settings)?;
+    // Only the switch reaches the UI; the relay address stays server-side.
+    let feedback = crate::feedback::settings(&settings)
+        .map_err(Error::Settings)?
+        .enabled;
     Ok(
-        json!({"chat_ui":chat_ui,"app_ui":{"chat_panel":panel,"pull_to_refresh":{"start_zone_px":start_zone_px},"mobile_mode":{"full_height":full_height}}}),
+        json!({"chat_ui":chat_ui,"app_ui":{"chat_panel":panel,"pull_to_refresh":{"start_zone_px":start_zone_px},"mobile_mode":{"full_height":full_height},"feedback":{"enabled":feedback}}}),
     )
 }
 
@@ -219,7 +224,7 @@ mod tests {
             let result = ui_config(&chat, &settings).await.unwrap();
             assert_eq!(
                 result["app_ui"],
-                json!({"chat_panel":{"width":45.0,"unit":"%"},"pull_to_refresh":{"start_zone_px":zone},"mobile_mode":{"full_height":false}})
+                json!({"chat_panel":{"width":45.0,"unit":"%"},"pull_to_refresh":{"start_zone_px":zone},"mobile_mode":{"full_height":false},"feedback":{"enabled":true}})
             );
             assert_eq!(
                 result["chat_ui"]["chat_common"]["execution_mode"]["default_mode"],
@@ -240,6 +245,15 @@ mod tests {
             ui_config(&chat, &settings).await.unwrap()["app_ui"]["mobile_mode"],
             json!({"full_height":true})
         );
+        std::fs::write(
+            &settings,
+            json!({"feedback":{"enabled":false,"relay_url":"https://relay.example/submit"}})
+                .to_string(),
+        )
+        .unwrap();
+        let result = ui_config(&chat, &settings).await.unwrap();
+        assert_eq!(result["app_ui"]["feedback"], json!({"enabled":false}));
+        assert!(!result.to_string().contains("relay.example"));
         for value in [
             json!({"ui":false}),
             json!({"ui":{"pull_to_refresh":{"start_zone_px":-1}}}),

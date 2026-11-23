@@ -69,6 +69,25 @@
       "min": 0,
       "recommended_max": 300,
       "bounds": "validator (min only)"
+    },
+    {
+      "id": "app_ui.feedback.enabled",
+      "description": "Show Send feedback in the account menu, which files reports as issues in the project's feedback repository.",
+      "type": "boolean",
+      "pointer": "/feedback/enabled",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "turn off send feedback",
+        "hide the feedback form",
+        "let users report bugs"
+      ],
+      "areas": [
+        "feedback",
+        "account menu"
+      ],
+      "bounds": "validator"
     }
   ],
   "excluded": {

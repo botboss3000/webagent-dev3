@@ -1,6 +1,7 @@
 import {createBackgroundIssues} from './background-issues/background-issues.js';
 import {createAbilityDrift,abilityDriftView} from './ability-drift/ability-drift.js';
 import {requestTouchVibration} from '../shared/vibrate/vibrate.js';
+import {mountFeedback} from './feedback/feedback.js';
 // Port of V2 private-access shell; authentication remains exclusively V3.
 const privateResponse=await fetch('/ui/private-access/private-access-page/private-access-page.html');
 if(!privateResponse.ok)throw Error('Private access page failed to load');
@@ -610,6 +611,7 @@ async function boot(){
     if(data){
       const panel=data.app_ui?.chat_panel||{width:45,unit:'%'};
       applyMobileFullHeight(data.app_ui?.mobile_mode?.full_height===true);
+      feedback.setEnabled(data.app_ui?.feedback?.enabled===true);
       desktopChatVisible=panel.width!==0;
       if(!desktopChatVisible){mobileView='main';widget.hide();}
       chatResize.configure(panel);
@@ -793,7 +795,8 @@ function positionAccountMenu(){
   accountMenu.style.top=Math.max(8,Math.min(top,innerHeight-height-8))+'px';
   accountMenu.style.left=Math.max(8,Math.min(Math.round(anchor.left),innerWidth-accountMenu.offsetWidth-8))+'px';
 }
-function closeAccountMenu(){accountMenu.hidden=true;$('top-user-id').setAttribute('aria-expanded','false');}
+const feedback=mountFeedback(accountMenu,api);
+function closeAccountMenu(){accountMenu.hidden=true;feedback.reset();$('top-user-id').setAttribute('aria-expanded','false');}
 $('top-user-id').onclick=event=>{event.stopPropagation();accountMenu.hidden=!accountMenu.hidden;$('top-user-id').setAttribute('aria-expanded',String(!accountMenu.hidden));positionAccountMenu();};
 const closeOutsideAccountMenu=event=>{if(!accountMenu.hidden&&!event.target.closest('#user-dropdown-menu, #top-user-id'))closeAccountMenu();};
 document.addEventListener('pointerdown',closeOutsideAccountMenu,true);
@@ -1011,6 +1014,7 @@ function setupHeaderPullRefresh(){
       const value=appUi?.pull_to_refresh?.start_zone_px;
       if(typeof value==='number'&&Number.isFinite(value)&&value>=0)pullZone=value;
       applyMobileFullHeight(appUi?.mobile_mode?.full_height===true);
+      feedback.setEnabled(appUi?.feedback?.enabled===true);
     }catch{}finally{configLoading=false;}
   }
   setInterval(refreshPullZone,5000);

@@ -74,6 +74,8 @@ mod file_manager;
 #[path = "../../crates/modules/chat/host/api/followup_queue.rs"]
 pub(crate) mod followup_queue;
 // The root host helper is a Linux service reached over a Unix socket.
+#[path = "../../crates/modules/webapp/host/feedback.rs"]
+mod feedback;
 #[cfg(unix)]
 #[path = "../../crates/modules/administration/host/api/host_admin.rs"]
 pub(crate) mod host_admin;
@@ -296,6 +298,8 @@ pub(super) fn router(app: App) -> Router {
         .route("/config/propose", post(composer::propose))
         .route("/config/apply", post(composer::apply))
         .route("/config/settings", get(composer::settings))
+        // Send feedback: any signed-in caller's report goes to the feedback relay as an issue.
+        .route("/feedback", post(feedback::submit))
         .route("/browser/devices", get(crate::browser::devices))
         .route(
             "/browser/devices/{id}",
