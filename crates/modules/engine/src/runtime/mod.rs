@@ -126,9 +126,15 @@ impl<
             run["updated_at"] = json!(crate::now());
         }
         let public = self.store.records().present_run(run);
-        self.store
+        let started = std::time::Instant::now();
+        let saved = self
+            .store
             .save_run_observed(run, "run_status", &public)
-            .await
+            .await;
+        if let Some(session) = run["session_id"].as_str() {
+            cache_estimate::run_saved(session, started.elapsed());
+        }
+        saved
     }
     pub async fn save_override(&self, run: &mut Value) -> Result<()> {
         run["updated_at"] = json!(crate::now());

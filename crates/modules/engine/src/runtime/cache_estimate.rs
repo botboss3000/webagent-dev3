@@ -146,8 +146,59 @@ pub fn forget(session: &str) {
     guard.1.retain(|known| known != session);
 }
 
+/// What the loop did between a session's model reply and its next request: when the reply
+/// arrived, and how many run saves it made since and how long they took.
+struct Between {
+    reply: Instant,
+    saves: u32,
+    save_time: Duration,
+}
+
+fn between() -> &'static Mutex<HashMap<String, Between>> {
+    static BETWEEN: OnceLock<Mutex<HashMap<String, Between>>> = OnceLock::new();
+    BETWEEN.get_or_init(Default::default)
+}
+
+/// A model reply arrived for the session: start timing the work before its next request.
+pub fn reply_received(session: &str) {
+    let mut guard = between().lock().unwrap_or_else(|p| p.into_inner());
+    if guard.len() >= MAX_SESSIONS {
+        guard.clear();
+    }
+    guard.insert(
+        session.to_owned(),
+        Between {
+            reply: Instant::now(),
+            saves: 0,
+            save_time: Duration::ZERO,
+        },
+    );
+}
+
+/// One run save of the session took `took`; counted only between a reply and the next request.
+pub fn run_saved(session: &str, took: Duration) {
+    let mut guard = between().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(entry) = guard.get_mut(session) {
+        entry.saves += 1;
+        entry.save_time += took;
+    }
+}
+
+/// Log the time from the previous model reply to this request, and the saves inside it.
+fn log_between(session: &str) {
+    let entry = between()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(session);
+    if let Some(entry) = entry {
+        tracing::info!(session_id=%session, between_ms=entry.reply.elapsed().as_millis() as u64,
+            saves=entry.saves, save_ms=entry.save_time.as_millis() as u64, "between model calls");
+    }
+}
+
 /// Estimate this session's request against its previous one and remember it for the next.
 pub fn observe(session: &str, current: Fingerprint) -> Value {
+    log_between(session);
     let mut guard = last_requests()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

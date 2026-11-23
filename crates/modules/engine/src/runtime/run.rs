@@ -4218,6 +4218,7 @@ impl<
                     Ok(response) => {
                         X::record_usage(&mut run, &response);
                         super::cache_estimate::log_call(&sid, &id, &run);
+                        super::cache_estimate::reply_received(&sid);
                         let usage_row = super::cache_estimate::activity_item(&run);
                         compaction_activity(
                             &mut run,
