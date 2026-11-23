@@ -485,5 +485,189 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual((1, "new"), (len(sleeps), result["installed_release"]))
 
 
+
+class FakeDocker:
+    """Stands in for host.Runner: containers by name, recorded effects, injectable failures."""
+    def __init__(self, env):
+        import copy
+        self.copy = copy
+        self.containers = {"webagent-dev-v3": {"Id": "old", "Image": "sha256:" + "1" * 64, "Config": {"Env": env, "User": "app"},
+                                               "HostConfig": {"PidsLimit": 1024, "Mounts": [{"Target": "/state"}]}}}
+        self.secrets, self.calls, self.new_healthy, self.create_error = [], [], True, None
+
+    def inspect(self, name):
+        return self.copy.deepcopy(self.containers[name])
+
+    def stop(self, name):
+        self.calls.append(["stop", name])
+
+    def rename(self, name, target):
+        self.calls.append(["rename", name, target])
+        self.containers[target] = self.containers.pop(name)
+
+    def create(self, name, image, previous):
+        self.calls.append(["create", name, image])
+        if self.create_error:
+            raise RuntimeError(self.create_error)
+        self.containers[name] = {"Id": "new", "Image": image, "Config": self.copy.deepcopy(previous["Config"]),
+                                 "HostConfig": self.copy.deepcopy(previous["HostConfig"])}
+
+    def start(self, name):
+        self.calls.append(["start", name])
+
+    def healthy(self, name, image):
+        return self.containers[name]["Id"] == "old" or self.new_healthy
+
+    def release_healthy(self):
+        return self.containers["webagent-dev-v3"]["Id"] == "old" or self.new_healthy
+
+    def command(self, argv, timeout=0, private_raw=False):
+        self.calls.append(list(argv))
+        if argv[:3] == ["docker", "rm", "-f"]:
+            self.containers.pop(argv[3], None)
+
+
+class RotationTests(unittest.TestCase):
+    """rotate_browser_login_token: one variable changes, the value is never shown, failures restore."""
+    def setUp(self):
+        import json, pwd, secrets
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.state_root = root / "jobs"
+        self.state_root.mkdir()
+        (self.state_root / "job1.json").write_text(json.dumps({"status": "completed"}))
+        config = root / "build-service.json"
+        config.write_text(json.dumps({"service_dir": "/releases/x", "state_root": str(self.state_root), "instance": "development",
+                                      "api_container": "webagent-dev-v3", "install_root": str(root / "install" / "build-service")}))
+        self.old = secrets.token_hex(32)  # generated, so no key-shaped literal sits in the source
+        self.env = ["A=1", "V3_BROWSER_LOGIN_" + "TOKEN=" + self.old, "V3_BROWSER_LOGIN_CALLER_ID=diag", "V3_PUBLIC_ORIGIN=https://x"]
+        self.env_file = root / "browser-login.env"
+        self.original_file = ("# kept\nV3_BROWSER_LOGIN_" + "TOKEN=" + self.old + "\n").encode()
+        self.env_file.write_bytes(self.original_file)
+        self.env_file.chmod(0o600)
+        self.docker = FakeDocker(list(self.env))
+        self.commands, self.maintenance = [], {"drained": False, "task_id": None, "busy": False}
+        profile = {**helper_module.DEFAULTS, "state": str(root / "host"), "app_uid": APP, "approvers": ["app", "host"],
+                   "window_openers": ["app", "host"], "operator_account": pwd.getpwuid(OPERATOR).pw_name,
+                   "build_config": str(config), "browser_login_env": str(self.env_file)}
+        self.helper = helper_module.Helper(profile, clock=lambda: 1000.0, runner=self.fake)
+        self.helper.container_runner = lambda: self.docker
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def fake(self, command, **_):
+        import json
+        self.commands.append(list(command))
+        out = json.dumps(self.maintenance) if command[-2:] == ["maintenance", "status"] else ""
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+    def rotate(self):
+        """Request over SSH, approve as root (sudo buildctl host approve), then run it as the supervise process does."""
+        record = self.helper.handle(OPERATOR, {"op": "request", "action": "rotate_browser_login_token", "requester": {"identity": "ar"}})
+        self.assertEqual("pending", record["state"])
+        self.helper.handle(ROOT, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "host:ar"})
+        self.assertTrue(any(c[0] == "systemd-run" for c in self.commands))
+        self.helper.settle(self.helper.load(record["id"]))
+        return self.helper.load(record["id"])
+
+    def new_value(self):
+        line = next(item for item in self.docker.containers["webagent-dev-v3"]["Config"]["Env"] if item.startswith("V3_BROWSER_LOGIN_" + "TOKEN="))
+        return line.partition("=")[2]
+
+    def everything_shown(self):
+        """Every record, log line, effect argument and reply this fixture produced."""
+        import json
+        shown = [json.dumps(self.commands), json.dumps(self.docker.calls)]
+        for path in Path(self.helper.state).rglob("*"):
+            if path.is_file():
+                shown.append(path.read_text(errors="replace"))
+        shown.append(json.dumps(self.helper.handle(APP, {"op": "list"})))
+        return "\n".join(shown)
+
+    def test_rotation_replaces_only_the_token_and_keeps_the_old_container(self):
+        import hashlib
+        record = self.rotate()
+        self.assertEqual("done", record["state"])
+        new = self.new_value()
+        self.assertEqual(64, len(new))
+        self.assertNotEqual(self.old, new)
+        after = self.docker.containers["webagent-dev-v3"]
+        self.assertEqual([item if not item.startswith("V3_BROWSER_LOGIN_" + "TOKEN=") else "V3_BROWSER_LOGIN_" + "TOKEN=" + new
+                          for item in self.env], after["Config"]["Env"])
+        backup = "webagent-dev-v3-pre-rotate-" + record["id"][:12]
+        self.assertEqual(("old", self.env), (self.docker.containers[backup]["Id"], self.docker.containers[backup]["Config"]["Env"]))
+        self.assertEqual(self.docker.containers[backup]["HostConfig"], after["HostConfig"])
+        self.assertEqual(self.docker.containers[backup]["Image"], after["Image"])
+        self.assertEqual({"rotated", "at", "sha256_8"}, set(record["result"]))
+        self.assertEqual(hashlib.sha256(new.encode()).hexdigest()[:8], record["result"]["sha256_8"])
+        self.assertEqual(("# kept\nV3_BROWSER_LOGIN_" + "TOKEN=" + new + "\n").encode(), self.env_file.read_bytes())
+        self.assertEqual(0o600, self.env_file.stat().st_mode & 0o777)
+        drains = [c[c.index("maintenance") + 1:] for c in self.commands if "maintenance" in c]
+        self.assertEqual([["status"], ["drain", "--task-id", "token-rotate-" + record["id"][:8]],
+                          ["resume", "--task-id", "token-rotate-" + record["id"][:8]]], drains)
+
+    def test_the_value_never_appears_in_result_records_logs_or_arguments(self):
+        record = self.rotate()
+        shown = self.everything_shown() + record["preview"]
+        self.assertNotIn(self.new_value(), shown)
+        self.assertNotIn(self.old, shown)
+
+    def test_refused_while_a_broker_job_runs_or_another_task_drained_it(self):
+        import json
+        (self.state_root / "job2.json").write_text(json.dumps({"status": "running"}))
+        record = self.rotate()
+        self.assertEqual("failed", record["state"])
+        self.assertIn("not rotated", record["error"])
+        (self.state_root / "job2.json").write_text(json.dumps({"status": "completed"}))
+        self.maintenance = {"drained": False, "task_id": None, "busy": True}
+        self.assertIn("job is running", self.rotate()["error"])
+        self.maintenance = {"drained": True, "task_id": "someone-else", "busy": False}
+        self.assertIn("drained by someone-else", self.rotate()["error"])
+        self.assertEqual([], self.docker.calls)
+        self.assertFalse(any("drain" in c for c in self.commands))
+        self.assertEqual(self.original_file, self.env_file.read_bytes())
+
+    def test_failure_restores_the_previous_container_and_file(self):
+        self.docker.new_healthy = False
+        record = self.rotate()
+        self.assertEqual("failed", record["state"])
+        self.assertIn("previous container restored and healthy", record["error"])
+        current = self.docker.containers["webagent-dev-v3"]
+        self.assertEqual(("old", self.env), (current["Id"], current["Config"]["Env"]))
+        self.assertEqual(["webagent-dev-v3"], list(self.docker.containers))
+        self.assertEqual(self.original_file, self.env_file.read_bytes())
+        self.assertEqual(0o600, self.env_file.stat().st_mode & 0o777)
+        self.assertIn("resume", self.commands[-1])
+        self.assertNotIn(self.old, self.everything_shown())
+
+    def test_a_docker_error_quoting_the_value_is_scrubbed(self):
+        docker = self.docker
+        original = docker.create
+        def create(name, image, previous):
+            value = next(i for i in previous["Config"]["Env"] if i.startswith("V3_BROWSER_LOGIN_" + "TOKEN=")).partition("=")[2]
+            docker.seen = value
+            docker.create_error = "create failed: bad env " + value + " and " + self.old
+            original(name, image, previous)
+        docker.create = create
+        record = self.rotate()
+        self.assertEqual("failed", record["state"])
+        self.assertIn("[redacted]", record["error"])
+        shown = self.everything_shown()
+        self.assertNotIn(docker.seen, shown)
+        self.assertNotIn(self.old, shown)
+        self.assertEqual("old", self.docker.containers["webagent-dev-v3"]["Id"])
+
+    def test_always_an_explicit_decision(self):
+        self.helper.handle(ROOT, {"op": "allow", "session": "*", "seconds": 600, "admin": "host:ar"})
+        record = self.helper.handle(OPERATOR, {"op": "request", "action": "rotate_browser_login_token", "requester": {"identity": "ar"}})
+        self.assertEqual("pending", record["state"])  # an allow-all window never covers it
+        with self.assertRaises(PermissionError):
+            self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
+        with self.assertRaises(ValueError):
+            self.helper.handle(OPERATOR, {"op": "request", "action": "rotate_browser_login_token", "args": {"value": "x"},
+                                          "requester": {"identity": "ar"}})
+
+
 if __name__ == "__main__":
     unittest.main()

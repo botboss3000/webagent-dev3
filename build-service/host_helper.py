@@ -10,11 +10,15 @@ passphrase, and only where the profile lists "app": approvers for those approval
 window_openers for windows (HOSTACT-5). Every request, decision and result is appended to the log. Host-specific values
 come from the host profile.
 """
+import contextlib
+import copy
 import difflib
+import fcntl
 import getpass
 import hashlib
 import hmac
 import fnmatch
+import importlib.util
 import json
 import os
 import pwd
@@ -54,7 +58,10 @@ DEFAULTS = {"host_id": socket.gethostname(), "socket": "/home/ar/webagent-dev3/r
             # (listed restarts, noop) are not limited by it.
             "approvers": ["host"],
             # Root-owned wrapper for the SSH route, installed with the helper by supervisor_update.
-            "operator_command": "/usr/local/sbin/buildctl"}
+            "operator_command": "/usr/local/sbin/buildctl",
+            # rotate_browser_login_token: the root-only stored copy of the Diagnostics browser
+            # sign-in key (nothing reads it; the API container's environment is the live copy).
+            "browser_login_env": "/etc/webagent/development/browser-login.env"}
 CALLERS = ("app", "host")
 # Grant actions and the file each one's live grants are kept in (host_files.py reads them too).
 GRANTS = {"files_grant": "file-grants.json", "terminal_grant": "terminal-grants.json"}
@@ -105,8 +112,14 @@ ACTIONS = {
     # The same for a terminal in the File Manager: a shell as the operator account without the
     # docker group (sudo asks for its password).
     "terminal_grant": {"read": False, "undo": "exact", "boot_disk": False, "passphrase": True},
+    # Replaces the API container's Diagnostics browser sign-in key with a fresh one made here.
+    # Always an explicit decision: the passphrase from the app, or sudo buildctl host approve.
+    "rotate_browser_login_token": {"read": False, "undo": "best_effort", "boot_disk": False, "root": True,
+                                   "passphrase": True},
 }
-SUPERVISED = ("broker_install", "supervisor_update")
+SUPERVISED = ("broker_install", "supervisor_update", "rotate_browser_login_token")
+# The one variable rotate_browser_login_token replaces; its value never leaves the helper process.
+BROWSER_LOGIN_TOKEN = "V3_BROWSER_LOGIN_TOKEN"
 MAX_FILE = 1024 * 1024
 MAX_REQUEST = 256 * 1024
 
@@ -268,6 +281,14 @@ class Helper:
                     "File Manager " + limit + ", with the file permissions of " + self.profile["operator_account"]
                     + "; anything needing root asks for its sudo password (app data and sockets stay locked). "
                     "Revoke it here any time.")
+        if action == "rotate_browser_login_token":
+            api = self.build_config().get("api_container", "the API container")
+            return ("Rotate the Diagnostics development browser sign-in key (" + BROWSER_LOGIN_TOKEN + "). The helper makes "
+                    "a new random key itself, saves it in " + self.profile["browser_login_env"] + " (root only, mode 600) and "
+                    "recreates " + api + " with only that value changed: brief app interruption (about a minute). Refused "
+                    "while a broker job runs; the broker is drained meanwhile. The old container stays stopped as "
+                    + api + "-pre-rotate-<request id> and comes back if the new one is not healthy and ready. Nobody "
+                    "sees the key: the result shows only the first 8 characters of its SHA-256.")
         if action == "unit_restart":
             return "Restart systemd unit " + args["unit"] + "."
         if action == "container_restart":
@@ -325,6 +346,8 @@ class Helper:
             return self.install_broker(args, request_id, run)
         if action == "supervisor_update":
             return self.update_helper(request_id)
+        if action == "rotate_browser_login_token":
+            return self.rotate_browser_login(request_id)
         if action in GRANTS:
             seconds = args.get("seconds", self.profile["grant_default_seconds"])
             with self.grants_lock:
@@ -431,14 +454,17 @@ class Helper:
         self.runner(["systemctl", "daemon-reload"], check=True, timeout=60)
         self.runner(["systemctl", "restart", meta["unit_name"]], check=True, timeout=120)
 
-    def maintenance(self, action, task_id):
-        """Drain or resume the broker through its CLI as the operator; the broker socket admits only that uid."""
+    def maintenance(self, action, task_id=None):
+        """Drain, resume or read (task_id None) the broker through its CLI as the operator; the broker
+        socket admits only that uid."""
         command = ["runuser", "-u", self.profile["operator_account"], "--", "env",
                    "WEBAGENT_BUILD_CONFIG=" + self.profile["build_config"], "python3", "-B",
-                   str(Path(self.build_config()["service_dir"]) / "buildctl.py"), "maintenance", action, "--task-id", task_id]
+                   str(Path(self.build_config()["service_dir"]) / "buildctl.py"), "maintenance", action,
+                   *(["--task-id", task_id] if task_id else [])]
         result = self.runner(command, capture_output=True, text=True, timeout=60)
         if result.returncode:
             raise RuntimeError("maintenance " + action + " failed: " + (result.stderr or result.stdout)[-300:])
+        return result.stdout
 
     def install_broker(self, args, request_id, run):
         """Drain only once approved, so the broker keeps building while the request waits for a decision."""
@@ -488,6 +514,164 @@ class Helper:
             raise RuntimeError("health test failed (" + health["problem"] + "); restored release " + Path(previous).name[:12])
         installed = json.loads(output.splitlines()[-1])
         return {"installed_release": installed.get("version"), "previous_release": previous, "health": health}
+
+    # Diagnostics browser sign-in key rotation --------------------------------------------
+    def container_runner(self):
+        """The installed broker release's container recreation (host.Runner), as reconfigure.py uses it.
+        Its Docker create goes over the Docker socket, so no environment value is ever a process argument."""
+        os.environ["WEBAGENT_BUILD_CONFIG"] = self.profile["build_config"]
+        spec = importlib.util.spec_from_file_location("rotation_host", Path(self.build_config()["service_dir"]) / "host.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.Runner()
+
+    @contextlib.contextmanager
+    def boot_effect_lease(self):
+        """Hold the boot supervisor's effect lock, as deploys do, so it never restarts the container mid-swap."""
+        path = Path(self.build_config()["install_root"]).parent / "boot-supervisor/effects.lock"
+        if not path.exists():
+            if path.with_name("ui.sock").exists():
+                raise RuntimeError("the boot supervisor's effect lock is missing")
+            yield
+            return
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            deadline = self.clock() + 120
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if self.clock() >= deadline:
+                        raise RuntimeError("the boot supervisor held its effect lock for 2 minutes") from None
+                    time.sleep(1)
+            yield
+        finally:
+            os.close(fd)
+
+    def rotate_browser_login(self, request_id):
+        """Refuse while a broker job runs; otherwise drain under this request's own label, swap, resume."""
+        label = "token-rotate-" + request_id[:8]
+        state = json.loads(self.maintenance("status") or "{}")
+        if state.get("drained"):
+            raise RuntimeError("not rotated: the broker is drained by " + str(state.get("task_id")) + "; ask again once it resumes")
+        if state.get("busy"):
+            raise RuntimeError("not rotated: a broker job is running; ask again when the broker is idle")
+        try:
+            self.require_idle()
+        except RuntimeError as error:
+            raise RuntimeError("not rotated: " + str(error)) from None
+        self.maintenance("drain", label)
+        resumed = True
+        try:
+            try:
+                # A job that started between the first check and the drain also refuses.
+                self.require_idle()
+            except RuntimeError as error:
+                raise RuntimeError("not rotated: " + str(error)) from None
+            with self.boot_effect_lease():
+                result = self.rotate_drained(request_id)
+        finally:
+            # A failed resume must not hide the outcome; it is logged and, after a rotation, reported.
+            try:
+                self.maintenance("resume", label)
+            except Exception:
+                resumed = False
+                self.log({"event": "resume_failed", "id": request_id, "task_id": label})
+        if not resumed:
+            result["broker_resumed"] = False  # run: buildctl maintenance resume --task-id <label>
+        return result
+
+    @staticmethod
+    def write_secret(path, data):
+        """Atomic replace as root:root 0600; the temporary file is created 0600, never wider."""
+        temporary = path.with_name("." + path.name + ".webagent-host")
+        temporary.unlink(missing_ok=True)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            if os.geteuid() == 0:
+                os.fchown(fd, 0, 0)
+            os.fchmod(fd, 0o600)
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, path)
+
+    def rotate_drained(self, request_id):
+        """Replace only BROWSER_LOGIN_TOKEN in the env file and the API container; restore both on failure.
+        No message this raises carries the old or the new value."""
+        runner = self.container_runner()
+        name = self.build_config()["api_container"]
+        before = runner.inspect(name)
+        prefix = BROWSER_LOGIN_TOKEN + "="
+        env = list(before["Config"].get("Env") or [])
+        if sum(item.startswith(prefix) for item in env) != 1:
+            raise RuntimeError("not rotated: " + name + " has no single " + BROWSER_LOGIN_TOKEN + "; the browser sign-in is not configured")
+        old_value = next(item for item in env if item.startswith(prefix))[len(prefix):]
+        new_value = secrets.token_hex(32)
+        hidden = [old_value, new_value]
+        runner.secrets.extend(hidden)
+        env_path = Path(self.profile["browser_login_env"])
+        if env_path.is_symlink():
+            raise RuntimeError("not rotated: " + str(env_path) + " is a symlink")
+        old_file = env_path.read_bytes() if env_path.exists() else None
+        lines = (old_file or b"").decode().splitlines(True)
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        line = (prefix + new_value + "\n").encode()
+        index = next((i for i, item in enumerate(lines) if item.startswith(prefix)), None)
+        new_file = b"".join(line if i == index else item.encode() for i, item in enumerate(lines)) if index is not None \
+            else b"".join(item.encode() for item in lines) + line
+        selected = copy.deepcopy(before)
+        selected["Config"]["Env"] = [prefix + new_value if item.startswith(prefix) else item for item in env]
+        backup = name + "-pre-rotate-" + request_id[:12]
+        renamed = created = False
+        try:
+            self.write_secret(env_path, new_file)
+            runner.stop(name)
+            runner.rename(name, backup)
+            renamed = True
+            runner.create(name, before["Image"], selected)
+            created = True
+            runner.start(name)
+            if not runner.healthy(name, before["Image"]) or not runner.release_healthy():
+                raise RuntimeError("the new " + name + " did not become healthy and ready")
+        except Exception as error:
+            reason = self.hide(type(error).__name__ + ": " + str(error), hidden)
+            outcome = self.restore_api(runner, name, backup, renamed, created, env_path, old_file, before["Image"], hidden)
+            self.log({"event": "browser_login_restored", "id": request_id, "outcome": outcome})
+            raise RuntimeError("not rotated (" + reason[:200] + "); " + outcome) from None
+        return {"rotated": True, "at": self.clock(), "sha256_8": hashlib.sha256(new_value.encode()).hexdigest()[:8]}
+
+    @staticmethod
+    def hide(text, hidden):
+        for value in hidden:
+            text = text.replace(value, "[redacted]")
+        return text
+
+    def restore_api(self, runner, name, backup, renamed, created, env_path, old_file, image, hidden):
+        """Put the previous container and env file back; returns a value-free outcome sentence."""
+        try:
+            if old_file is None:
+                env_path.unlink(missing_ok=True)
+            else:
+                self.write_secret(env_path, old_file)
+            if created:
+                runner.command(["docker", "rm", "-f", name], timeout=60, private_raw=True)
+            if renamed:
+                try:
+                    runner.inspect(name)
+                    runner.command(["docker", "rm", "-f", name], timeout=60, private_raw=True)
+                except Exception:
+                    pass  # no new container under the name: nothing to clear
+                runner.rename(backup, name)
+            runner.start(name)
+            healthy = runner.healthy(name, image) and runner.release_healthy()
+            return "previous container restored" + (" and healthy" if healthy else " but not yet healthy: check " + name)
+        except Exception as error:
+            return ("restoring the previous container failed (" + self.hide(type(error).__name__ + ": " + str(error), hidden)[:150]
+                    + "); it is kept as " + (backup if renamed else name))
 
     def helper_answers(self):
         try:
