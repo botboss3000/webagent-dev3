@@ -8,4 +8,3 @@ webagent-provider-contracts={path="../provider-contracts"}
 webagent-provider-projection={path="../provider-projection"}
 webagent-engine-service={path="../engine-service"}
 serde_json="1"
-anyhow="1"

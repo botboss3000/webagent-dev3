@@ -8,4 +8,3 @@ webagent-background-contracts={path="../background-contracts"}
 webagent-background-dispatch={path="../background-dispatch"}
 webagent-engine-service={path="../engine-service"}
 serde_json="1"
-anyhow="1"

@@ -8,4 +8,3 @@ webagent-boot-contracts={path="../boot-contracts"}
 webagent-boot-supervisor={path="../boot-supervisor"}
 webagent-engine-service={path="../engine-service"}
 serde_json="1"
-anyhow="1"

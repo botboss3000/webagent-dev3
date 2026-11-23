@@ -428,7 +428,13 @@ pub(crate) fn library(root: &Path, name: &str) -> Result<Library, String> {
     // SAFETY: loads a checksum-pinned library from the image (sherpa-onnx, whose initializers
     // only set up ONNX Runtime, or espeak-ng, which has none); nothing else is loaded from there.
     unsafe { Library::new(&path) }
-        .map_err(|error| format!("cannot load {}: {error}", path.display()))
+        .map_err(|error| format!("cannot load {}: {}", path.display(), loader_error(&error)))
+}
+
+/// The loader's own message, as libloading 0.8 displayed it: 0.9 shows only "dlopen failed"
+/// and carries the system's reason (missing file, missing symbol) as the error's source.
+fn loader_error(error: &libloading::Error) -> String {
+    std::error::Error::source(error).map_or_else(|| error.to_string(), ToString::to_string)
 }
 
 /// Resolve one entry point; the caller declares `T` with its C signature.
@@ -440,7 +446,7 @@ pub(crate) unsafe fn symbol<T: Copy>(library: &Library, name: &str) -> Result<T,
     // `library` stays loaded, which its owners keep for the process lifetime.
     unsafe { library.get::<T>(name.as_bytes()) }
         .map(|symbol| *symbol)
-        .map_err(|error| format!("{name}: {error}"))
+        .map_err(|error| format!("{name}: {}", loader_error(&error)))
 }
 
 /// sherpa-onnx from `root/lib`, refused unless it is the release [`ffi`] mirrors.
