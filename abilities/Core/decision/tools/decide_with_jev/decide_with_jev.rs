@@ -247,7 +247,9 @@ async fn work(host: &dyn NativeHost, sid: &str, run_id: &str, args: &Value) -> R
     if candidate.transport != Transport::Typesafe {
         bail!("Decision tool requires a TypeSafe model");
     }
-    if candidate.platform.is_none() && !access.model_allowed(&candidate.upstream_model) {
+    if candidate.platform.is_none()
+        && !access.model_allowed(&candidate.upstream_model, &candidate.connection_owner_id)
+    {
         bail!("Decision model outside account tier");
     }
     let body = validate(&input.request_json, &candidate.upstream_model)?;

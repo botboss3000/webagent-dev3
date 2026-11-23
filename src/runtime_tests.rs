@@ -6708,20 +6708,8 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
     .unwrap();
     let sid = session["id"].as_str().unwrap();
     let message_path = format!("/api/v3/sessions/{sid}/messages");
-    assert_eq!(
-        router(app.clone())
-            .oneshot(request(
-                &user_token,
-                "user-csrf",
-                "POST",
-                &message_path,
-                json!({"client_message_id":"denied","text":"hello"})
-            ))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::FORBIDDEN
-    );
+    // Models follow the agent owner's tier (here the administrator's), not the caller's: the
+    // refused side is `plus_tier_tests::the_owners_tier_decides_which_models_run_on_its_agent…`.
     let granted_model = app.selection().await.unwrap().model;
     let response = router(app.clone())
         .oneshot(request(

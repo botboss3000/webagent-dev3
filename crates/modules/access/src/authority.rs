@@ -88,8 +88,13 @@ pub struct LiveAccess {
     pub relationship: Relationship,
     pub agent_enabled: bool,
     pub agent_administrator: bool,
+    /// The agent's owner (directory record); empty when unreadable.
+    pub agent_owner_id: String,
     /// The agent owner's app tier: it decides which of the agent's abilities work.
     pub owner_tier_id: String,
+    /// The owner's effective tier, from the same policy read: the owner pays, so it decides
+    /// which models the agent may run. `None` (no owner, unknown tier) allows no model.
+    pub owner_tier: Option<Tier>,
     /// The owner's tier and every tier ranked below it, from the same policy read: a tier
     /// gets each ability and tool any tier below it gets (`account_ladder::inherited`).
     pub owner_tiers: Vec<String>,
@@ -120,7 +125,9 @@ impl LiveAccess {
             self.agent_enabled,
             self.revision,
             self.agent_administrator,
+            self.agent_owner_id,
             self.owner_tier_id,
+            self.owner_tier,
             self.owner_tiers,
             self.capability_level,
             self.tool_permissions,
@@ -135,8 +142,23 @@ impl LiveAccess {
             && self.agent_enabled
     }
 
-    pub fn model_allowed(&self, model: &str) -> bool {
-        self.admitted() && self.tier.allows_byo_model(model)
+    /// Whether a run on this agent may use `model` through a connection `model_owner` owns.
+    /// The agent's owner pays, so the owner's tier decides for every caller: the owner's own
+    /// connected models need only the tier's own-model permission, any other (catalog) model
+    /// must be in the tier's allowed models.
+    pub fn model_allowed(&self, model: &str, model_owner: &str) -> bool {
+        self.admitted() && self.owner_tier_allows_model(model, model_owner)
+    }
+    /// The owner's-tier half of [`Self::model_allowed`], for model administration, which
+    /// also serves agents that are not admitting runs (disabled, or the editor's own access).
+    pub fn owner_tier_allows_model(&self, model: &str, model_owner: &str) -> bool {
+        self.owner_tier.as_ref().is_some_and(|tier| {
+            if !self.agent_owner_id.is_empty() && model_owner == self.agent_owner_id {
+                tier.allows_own_models()
+            } else {
+                tier.allows_model(model)
+            }
+        })
     }
 
     pub fn max_sessions(&self) -> u32 {
@@ -528,10 +550,20 @@ impl<C: RecordCodec> Repository<'_, C> {
             },
             None => String::new(),
         };
-        let owner_tiers = if owner_tier_id.is_empty() {
-            Vec::new()
+        let (owner_tiers, owner_tier) = if owner_tier_id.is_empty() {
+            (Vec::new(), None)
+        } else if owner_tier_id == principal.tier_id {
+            (
+                crate::account_ladder::inherited(&policy, &owner_tier_id),
+                Some(tier.clone()),
+            )
         } else {
-            crate::account_ladder::inherited(&policy, &owner_tier_id)
+            (
+                crate::account_ladder::inherited(&policy, &owner_tier_id),
+                crate::account_ladder::effective(&policy, &owner_tier_id)
+                    .ok()
+                    .filter(|owner| owner.validate().is_ok()),
+            )
         };
         // `agent_authority`'s checks of the stored membership, then its `can_manage`.
         if raw.as_ref().is_some_and(|v| {
@@ -569,7 +601,9 @@ impl<C: RecordCodec> Repository<'_, C> {
             relationship,
             agent_enabled,
             agent_administrator,
+            agent_owner_id: owner_id,
             owner_tier_id,
+            owner_tier,
             owner_tiers,
             revision,
             capability_level,

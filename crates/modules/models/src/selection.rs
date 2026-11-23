@@ -244,6 +244,7 @@ impl Catalog {
                 entry_revision: entry.revision,
                 connection_id: connection.id.clone(),
                 connection_revision: connection.revision,
+                connection_owner_id: connection.owner_id.clone(),
                 credential_ref: connection.credential_ref.clone(),
                 transport: connection.transport.clone(),
                 upstream_model: entry.upstream_model.clone(),
@@ -634,6 +635,11 @@ pub struct Candidate {
     pub entry_revision: u64,
     pub connection_id: String,
     pub connection_revision: u64,
+    /// Who added the connection, when the plan was made: the agent owner's own models and
+    /// catalog models follow different tier rules (`LiveAccess::model_allowed`). Checks of a
+    /// stored plan read the live catalog instead.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connection_owner_id: String,
     pub credential_ref: String,
     pub transport: Transport,
     pub upstream_model: String,

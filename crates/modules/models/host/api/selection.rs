@@ -1133,18 +1133,35 @@ mod tests {
             connection_authorize(State(app.clone()), Extension(identity), Path("one".into())).await,
             Err(ApiError(StatusCode::FORBIDDEN, _))
         ));
-        let revision = app.store.account_by_id(&member).await.unwrap().unwrap()["access_revision"]
-            .as_u64()
-            .unwrap();
-        app.store
-            .update_account_access(
-                &member,
-                revision,
-                crate::access::AccountStatus::Active,
-                "free",
-            )
-            .await
-            .unwrap();
+        // The agent owner pays: the member's own tier does not decide, the owner's does.
+        let lower = |user: String| {
+            let app = app.clone();
+            async move {
+                let revision = app.store.account_by_id(&user).await.unwrap().unwrap()
+                    ["access_revision"]
+                    .as_u64()
+                    .unwrap();
+                app.store
+                    .update_account_access(
+                        &user,
+                        revision,
+                        crate::access::AccountStatus::Active,
+                        "free",
+                    )
+                    .await
+                    .unwrap();
+            }
+        };
+        lower(member.clone()).await;
+        assert!(connection_status(
+            State(app.clone()),
+            Extension(member_identity.clone()),
+            Path("one".into()),
+            agent_query(agent)
+        )
+        .await
+        .is_ok());
+        lower(owner.clone()).await;
         assert!(connection_status(
             State(app.clone()),
             Extension(member_identity.clone()),

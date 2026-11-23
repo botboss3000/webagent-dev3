@@ -187,7 +187,7 @@ mod tests {
         assert_ne!(admin.context_fingerprint(), changed.context_fingerprint());
         assert_eq!(admin.revision, changed.revision);
         assert!(admin.admitted());
-        assert!(admin.model_allowed("gpt-6-luna"));
+        assert!(admin.model_allowed("gpt-6-luna", "admin"));
         assert_ne!(
             admin.tool_decision("file_write", true, true).permission,
             Permission::Deny
@@ -299,13 +299,14 @@ mod tests {
             .unwrap();
         let active = store.live_access(id, "shared_default").await.unwrap();
         assert!(active.admitted());
-        assert!(!active.model_allowed("gpt-6-luna"));
+        // The agent's owner (the administrator) pays: its tier decides, not the caller's.
+        assert!(active.model_allowed("gpt-6-luna", "admin"));
         assert_ne!(pending.revision, active.revision);
         let mut tier = store.entitlement_tier("free").await.unwrap().unwrap();
         tier.allowed_models.push("gpt-6-luna".into());
         store.save_entitlement_tier(tier, 1).await.unwrap();
         let granted = store.live_access(id, "shared_default").await.unwrap();
-        assert!(granted.model_allowed("gpt-6-luna"));
+        assert!(granted.model_allowed("gpt-6-luna", "admin"));
         assert_eq!(
             granted.tool_decision("file_read", true, true).permission,
             Permission::Auto

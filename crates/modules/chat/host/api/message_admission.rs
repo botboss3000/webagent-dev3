@@ -653,7 +653,9 @@ async fn prepare_message_inner(
         .chain(system_plan.iter())
         .flat_map(|p| &p.candidates)
     {
-        if candidate.platform.is_none() && !access.model_allowed(&candidate.upstream_model) {
+        if candidate.platform.is_none()
+            && !access.model_allowed(&candidate.upstream_model, &candidate.connection_owner_id)
+        {
             return Err(ApiError(StatusCode::FORBIDDEN, "Model unavailable".into()));
         }
     }
@@ -673,10 +675,14 @@ async fn prepare_message_inner(
             agent_app.selection().await?
         }
     };
+    // Without a plan the legacy selection has no connection owner: the catalog rule applies.
+    let selection_owner = plan
+        .as_ref()
+        .map_or("", |p| p.candidates[0].connection_owner_id.as_str());
     if plan
         .as_ref()
         .is_none_or(|p| p.candidates[0].platform.is_none())
-        && !access.model_allowed(&selection.model)
+        && !access.model_allowed(&selection.model, selection_owner)
     {
         return Err(ApiError(StatusCode::FORBIDDEN, "Model unavailable".into()));
     }

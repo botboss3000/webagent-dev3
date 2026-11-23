@@ -401,7 +401,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
                         {
                             continue;
                         }
-                    } else if !access.model_allowed(&entry.upstream_model) {
+                    } else if !access.model_allowed(&entry.upstream_model, &connection.owner_id) {
                         continue;
                     }
                 }
@@ -809,6 +809,95 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
             catalog.platform_sources.entry(id).or_insert(pin);
         }
         Ok(())
+    }
+}
+
+impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
+    /// Catalog models an agent's owner may choose on its Models page: each model an active
+    /// administrator added whose name `owner_tier` allows, except bridge links (they answer
+    /// only their own account) and the test model. Adds `agent` to each one's grants in
+    /// `catalog`, as [`Self::with_local_sources`] does; nothing is stored here, and a saved
+    /// roster keeps only the ones it uses ([`drop_catalog_offers`]). Returns the offered ids.
+    pub async fn with_catalog_offers(
+        &self,
+        owner: &str,
+        owner_tier: &Tier,
+        agent: &str,
+        catalog: &mut crate::model_selection::Catalog,
+    ) -> Result<BTreeSet<String>> {
+        let mut administrators = BTreeMap::new();
+        let mut offered = BTreeSet::new();
+        for (id, entry) in &catalog.entries {
+            if entry.owner_id == owner
+                || entry.allowed_agents.contains(agent)
+                || !owner_tier.allows_model(&entry.upstream_model)
+            {
+                continue;
+            }
+            let Some(connection) = catalog.connections.get(&entry.connection_id) else {
+                continue;
+            };
+            if connection.revoked
+                || connection.owner_id != entry.owner_id
+                || connection.transport.provider_id().is_bridge()
+                || catalog.platform_sources.contains_key(id)
+            {
+                continue;
+            }
+            if !administrators.contains_key(&entry.owner_id) {
+                let administrator = match self.access().account_by_id(&entry.owner_id).await? {
+                    Some(account) => Principal::from_account(&account)
+                        .is_ok_and(|principal| principal.active() && principal.administrator()),
+                    None => false,
+                };
+                administrators.insert(entry.owner_id.clone(), administrator);
+            }
+            if administrators.get(&entry.owner_id) == Some(&true) {
+                offered.insert(id.clone());
+            }
+        }
+        for id in &offered {
+            if let Some(entry) = catalog.entries.get_mut(id) {
+                entry.allowed_agents.insert(agent.into());
+                let connection_id = entry.connection_id.clone();
+                if let Some(connection) = catalog.connections.get_mut(&connection_id) {
+                    connection.allowed_agents.insert(agent.into());
+                }
+            }
+        }
+        Ok(offered)
+    }
+}
+
+/// Undo [`Repository::with_catalog_offers`] in `next` for each offered entry `keep` rejects:
+/// its grant to `agent` goes back to the saved one in `stored`, and so does its connection's
+/// once no kept entry of that connection is granted to `agent`.
+pub fn drop_catalog_offers(
+    stored: &crate::model_selection::Catalog,
+    next: &mut crate::model_selection::Catalog,
+    agent: &str,
+    offered: &BTreeSet<String>,
+    keep: impl Fn(&str) -> bool,
+) {
+    let mut connections = BTreeSet::new();
+    for id in offered.iter().filter(|id| !keep(id)) {
+        if let (Some(entry), Some(saved)) = (next.entries.get_mut(id), stored.entries.get(id)) {
+            entry.allowed_agents = saved.allowed_agents.clone();
+            connections.insert(entry.connection_id.clone());
+        }
+    }
+    for id in connections {
+        let used = next
+            .entries
+            .values()
+            .any(|e| e.connection_id == id && e.allowed_agents.contains(agent));
+        if let (false, Some(connection), Some(saved)) = (
+            used,
+            next.connections.get_mut(&id),
+            stored.connections.get(&id),
+        ) {
+            connection.allowed_agents = saved.allowed_agents.clone();
+        }
     }
 }
 

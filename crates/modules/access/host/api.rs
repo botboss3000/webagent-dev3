@@ -388,6 +388,13 @@ async fn change_account(
         .map_err(|error| invalid(&error.to_string()))?;
     }
     let _guard = app.gate.lock().await;
+    let before = app
+        .store
+        .account_by_id(&id)
+        .await?
+        .map(|account| crate::access::Principal::from_account(&account))
+        .transpose()
+        .map_err(|_| stale("Account update rejected; reload the account and tier"))?;
     let account = set_account_tier(
         &app,
         &id,
@@ -398,13 +405,22 @@ async fn change_account(
     )
     .await
     .map_err(|_| stale("Account update rejected; reload the account and tier"))?;
-    stop_user_runs(
-        &app,
-        &id,
-        None,
-        "the account's status, role or tier changed",
-    )
-    .await?;
+    // A lower tier lets running work finish (new work follows its limits, checked fresh at
+    // every model call and tool); only disabling the account or removing administrator
+    // power stops it now.
+    let removes_administrator = before.as_ref().is_none_or(|principal| {
+        principal.tier_id == crate::access::ADMINISTRATOR_TIER
+            && body.tier_id != crate::access::ADMINISTRATOR_TIER
+    });
+    if body.status != crate::access::AccountStatus::Active || removes_administrator {
+        stop_user_runs(
+            &app,
+            &id,
+            None,
+            "the account's status, role or tier changed",
+        )
+        .await?;
+    }
     Ok(Json(json!({"account":account})))
 }
 /// The `account_due` kind whose time is when an account's tier ends (its `tier_until`).
@@ -476,13 +492,9 @@ pub(crate) async fn end_due_tiers(app: &App, now: u64) -> anyhow::Result<usize> 
                     )
                     .await
                 {
+                    // Running work finishes; new work follows Free's limits.
                     Ok(_) => {
                         ended += 1;
-                        if let Err(error) =
-                            stop_user_runs(app, &id, None, "the account's tier ended").await
-                        {
-                            tracing::warn!(error = %error.1, "Runs not stopped after a tier end");
-                        }
                         None
                     }
                     Err(error) => {

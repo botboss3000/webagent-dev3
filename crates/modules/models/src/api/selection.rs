@@ -42,16 +42,18 @@ pub async fn response<C: RuntimeStorage>(
 ) -> Api {
     let rights = authority(app, identity, agent, false).await?;
     let caller = principal(app, identity).await?;
-    // Whoever manages the agent is offered every published local model to assign.
+    let access = app.store.live_access(&caller.user_id, agent).await.ok();
+    // Whoever manages the agent is offered every published local model to assign, and its
+    // owner every catalog model the owner's tier allows.
     let mut offered = catalog.clone();
     if rights["can_manage"] == true {
         app.store
             .with_local_sources(&caller.user_id, agent, &mut offered)
             .await?;
+        catalog_offers(app, &caller, &rights, access.as_ref(), agent, &mut offered).await?;
     }
     let catalog = &offered;
     let mut view = scoped(catalog, &caller.user_id, agent);
-    let access = app.store.live_access(&caller.user_id, agent).await.ok();
     let mut available = Vec::new();
     for entry in view.entries.values() {
         if !entry.allowed_agents.contains(agent)
@@ -81,7 +83,7 @@ pub async fn response<C: RuntimeStorage>(
         } else {
             access
                 .as_ref()
-                .is_some_and(|a| a.model_allowed(&entry.upstream_model))
+                .is_some_and(|a| a.model_allowed(&entry.upstream_model, &entry.owner_id))
         };
         if allowed {
             available.push(entry.id.clone());
@@ -114,6 +116,24 @@ pub async fn response<C: RuntimeStorage>(
         "can_create_agent":caller.role != webagent_access::Role::Guest,"agent_owner_id":rights["owner_id"],
         "available_entries":available,"supported_transports":["typesafe","local","openai_subscription","deepseek","openai_api","openrouter","abacus","gemini","groq","together","mistral","fireworks","xai","perplexity","deepinfra"]}),
     ))
+}
+/// Add the catalog models the agent's owner may choose (see `with_catalog_offers`) when
+/// `caller` is that owner; agent administrators and everyone else are offered none.
+async fn catalog_offers<C: RuntimeStorage>(
+    app: &Runtime<'_, C>,
+    caller: &Principal,
+    rights: &Value,
+    access: Option<&webagent_access::authority::LiveAccess>,
+    agent: &str,
+    catalog: &mut Catalog,
+) -> Result<std::collections::BTreeSet<String>, ApiError> {
+    match access.and_then(|a| a.owner_tier.as_ref()) {
+        Some(tier) if rights["owner_id"].as_str() == Some(caller.user_id.as_str()) => Ok(app
+            .store
+            .with_catalog_offers(&caller.user_id, tier, agent, catalog)
+            .await?),
+        _ => Ok(Default::default()),
+    }
 }
 pub fn scoped(catalog: &Catalog, caller: &str, agent: &str) -> Catalog {
     let mut view = catalog.clone();
@@ -210,14 +230,21 @@ pub async fn save<C: RuntimeStorage>(
     let rights = authority(&app, &identity, agent, true).await?;
     let caller = principal(&app, &identity).await?;
     let stored = app.store.model_catalog().await?;
-    // The published local models this page was offered and sent back count as adopted.
+    let access = app
+        .store
+        .live_access(&caller.user_id, agent)
+        .await
+        .map_err(|_| denied())?;
+    // The published local and catalog models this page was offered and sent back count as
+    // adopted.
     let mut old = stored.clone();
     app.store
         .with_local_sources(&caller.user_id, agent, &mut old)
         .await?;
-    crate::account_catalog::drop_local_sources(&stored, &mut old, agent, |id| {
-        input.entries.contains_key(id)
-    });
+    let offered = catalog_offers(app, &caller, &rights, Some(&access), agent, &mut old).await?;
+    let sent = |id: &str| input.entries.contains_key(id);
+    crate::account_catalog::drop_local_sources(&stored, &mut old, agent, sent);
+    crate::account_catalog::drop_catalog_offers(&stored, &mut old, agent, &offered, sent);
     if old.revision != input.revision {
         return Err(super::conflict(
             "Model catalog revision changed; reload before saving",
@@ -345,7 +372,8 @@ pub async fn save<C: RuntimeStorage>(
                 || entry.connection_id != previous.connection_id
                 || !entry.allowed_agents.is_subset(&previous.allowed_agents)
         });
-        if increased_use && !tier.allows_byo_model(&entry.upstream_model) {
+        // The caller's own connected models, whatever their name (owners pay their provider).
+        if increased_use && !tier.allows_own_models() {
             return Err(denied());
         }
     }
@@ -386,7 +414,8 @@ pub async fn save<C: RuntimeStorage>(
                     .entries
                     .get(id)
                     .ok_or_else(|| super::bad("Role entry missing"))?;
-                if !tier.allows_byo_model(&entry.upstream_model) {
+                // The agent's owner pays: its tier decides, whoever edits the roster.
+                if !access.owner_tier_allows_model(&entry.upstream_model, &entry.owner_id) {
                     return Err(denied());
                 }
             }
@@ -395,11 +424,11 @@ pub async fn save<C: RuntimeStorage>(
     } else if view.agent_models.contains_key(agent) {
         return Err(super::bad("Clear roles explicitly"));
     }
-    // Keep only the offered local models the saved roster uses.
+    // Keep only the offered local and catalog models the saved roster uses.
     let roster = next.agent_models.get(agent).cloned();
-    crate::account_catalog::drop_local_sources(&stored, &mut next, agent, |id| {
-        crate::account_catalog::roster_uses(roster.as_ref(), id)
-    });
+    let used = |id: &str| crate::account_catalog::roster_uses(roster.as_ref(), id);
+    crate::account_catalog::drop_local_sources(&stored, &mut next, agent, used);
+    crate::account_catalog::drop_catalog_offers(&stored, &mut next, agent, &offered, used);
     let saved = app
         .store
         .save_model_catalog(&next, input.revision)
@@ -445,7 +474,7 @@ pub async fn connection_status<C: RuntimeStorage>(
                     catalog.entries.get(entry_id).is_some_and(|entry| {
                         entry.connection_id == id
                             && entry.allowed_agents.contains(agent)
-                            && access.model_allowed(&entry.upstream_model)
+                            && access.model_allowed(&entry.upstream_model, &entry.owner_id)
                     })
                 })
             });

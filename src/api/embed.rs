@@ -1312,6 +1312,14 @@ mod tests {
             ("GET", "/api/v3/status".to_owned()),
             ("PUT", format!("/api/v3/sessions/{sid}/mode")),
             ("PUT", format!("/api/v3/sessions/{sid}/model")),
+            (
+                "GET",
+                "/api/v3/models/catalog?agent_id=shared_default".to_owned(),
+            ),
+            (
+                "PUT",
+                "/api/v3/models/catalog?agent_id=shared_default".to_owned(),
+            ),
         ] {
             assert_eq!(
                 status(send(method, uri.clone())).await,

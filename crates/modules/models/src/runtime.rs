@@ -168,8 +168,13 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
                 &plan.agent_id,
             )
             .await?;
+        let model_owner = catalog
+            .connections
+            .get(&candidate.connection_id)
+            .map_or("", |connection| connection.owner_id.as_str());
         if !access.admitted()
-            || (candidate.platform.is_none() && !access.model_allowed(&candidate.upstream_model))
+            || (candidate.platform.is_none()
+                && !access.model_allowed(&candidate.upstream_model, model_owner))
         {
             return Err(anyhow!("Model grant revoked"));
         }
@@ -255,7 +260,7 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
                 }
                 None => self.store.live_access(actor, &plan.agent_id).await?,
             }
-            .model_allowed(&candidate.upstream_model)
+            .model_allowed(&candidate.upstream_model, &candidate.connection_owner_id)
             {
                 return Err(anyhow!("BYO model outside tier"));
             }

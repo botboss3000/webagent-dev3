@@ -219,6 +219,13 @@ impl Tier {
             .is_none_or(|policy| policy.allow_byo)
             && self.allows_model(model)
     }
+    /// Whether an owner on this tier may run models through connections they added themselves
+    /// (no limit on which; the number of entries keeps `max_byo_entries`' hard cap).
+    pub fn allows_own_models(&self) -> bool {
+        self.model_policy
+            .as_ref()
+            .is_none_or(|policy| policy.allow_byo)
+    }
     /// Downgrades must permit removals/revocations, never new over-quota entries.
     pub fn allows_byo_growth(&self, previous: usize, next: usize) -> bool {
         if next <= previous {
