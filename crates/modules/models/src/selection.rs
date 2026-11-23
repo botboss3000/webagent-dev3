@@ -396,6 +396,48 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         tx.commit().await?;
         Ok(saved)
     }
+
+    /// Takes a deleted agent out of the catalog: its roster record (roles and models) and its
+    /// grants on model entries and connections, as one catalog revision. Only agent deletion
+    /// calls this, after the agent owner was authorized; `save_model_catalog` keeps refusing
+    /// to drop an agent's record. Returns the saved catalog, or `None` when nothing named the
+    /// agent (no write, no new revision).
+    pub async fn remove_agent_from_catalog(&self, agent: &str) -> Result<Option<Catalog>> {
+        let mut tx = self.app_pool.begin().await?;
+        sqlx::query("UPDATE docs SET value=value WHERE key=?")
+            .bind(CATALOG_KEY)
+            .execute(&mut *tx)
+            .await?;
+        let previous = self.read_catalog_connection(&mut tx).await?;
+        let mut saved = previous.clone();
+        let mut changed = saved.agent_models.remove(agent).is_some();
+        let bump = |revision: &mut u64| -> Result<()> {
+            *revision = revision
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("Model record revision exhausted"))?;
+            Ok(())
+        };
+        for connection in saved.connections.values_mut() {
+            if connection.allowed_agents.remove(agent) {
+                bump(&mut connection.revision)?;
+                changed = true;
+            }
+        }
+        for entry in saved.entries.values_mut() {
+            if entry.allowed_agents.remove(agent) {
+                bump(&mut entry.revision)?;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(None);
+        }
+        saved.validate()?;
+        bump(&mut saved.revision)?;
+        self.stage_catalog_connection(&mut tx, &saved).await?;
+        tx.commit().await?;
+        Ok(Some(saved))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

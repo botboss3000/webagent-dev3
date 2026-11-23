@@ -17,6 +17,12 @@ impl Store {
     pub async fn model_catalog(&self) -> Result<Catalog> {
         self.models_repository().model_catalog().await
     }
+    /// Takes a deleted agent's roster and grants out of the catalog (agent deletion only).
+    pub async fn remove_agent_from_catalog(&self, agent: &str) -> Result<Option<Catalog>> {
+        self.models_repository()
+            .remove_agent_from_catalog(agent)
+            .await
+    }
 }
 #[cfg(test)]
 mod tests {

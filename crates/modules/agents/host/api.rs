@@ -1983,6 +1983,250 @@ mod tests {
         .await
         .is_err());
     }
+    /// An owner deletes its archived agent that has a catalog model and its own model: the
+    /// agent's roster and grants leave the catalog in one new revision and nothing of other
+    /// agents changes. A member, a visitor, the owner's agent browser and a widget cannot.
+    #[tokio::test]
+    async fn an_owner_deletes_its_agent_with_models_and_no_one_else_can() {
+        use crate::model_selection::{AgentModels, Connection, ModelEntry, ModelRole, Transport};
+        use std::collections::{BTreeMap, BTreeSet};
+        use tower::ServiceExt;
+        let (_root, app) = fixture().await;
+        selection_fixture(&app).await;
+        let owner_id = tenant_user(&app, "delete-owner").await;
+        let owner = json!({"_user_id":owner_id});
+        let Json(created) = create_agent(
+            State(app.clone()),
+            Extension(owner.clone()),
+            Json(NewAgent {
+                client_request_id: "delete-agent".into(),
+                name: "Delete agent".into(),
+                description: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let id = created["id"].as_str().unwrap().to_owned();
+        // A catalog model granted to it, and the owner's own model.
+        let mut catalog = app.store.model_catalog().await.unwrap();
+        catalog
+            .connections
+            .get_mut("one")
+            .unwrap()
+            .allowed_agents
+            .insert(id.clone());
+        catalog
+            .entries
+            .get_mut("one")
+            .unwrap()
+            .allowed_agents
+            .insert(id.clone());
+        catalog.connections.insert(
+            "own".into(),
+            Connection {
+                id: "own".into(),
+                owner_id: owner_id.clone(),
+                transport: Transport::OpenaiSubscription,
+                credential_ref: "credential:own".into(),
+                allowed_agents: BTreeSet::from([id.clone()]),
+                revision: 1,
+                revoked: false,
+            },
+        );
+        catalog.entries.insert(
+            "own".into(),
+            ModelEntry {
+                id: "own".into(),
+                owner_id: owner_id.clone(),
+                connection_id: "own".into(),
+                upstream_model: "own-model".into(),
+                display_name: "own-model".into(),
+                capabilities: BTreeSet::from(["text".into()]),
+                allowed_agents: BTreeSet::from([id.clone()]),
+                bridge_clients: Vec::new(),
+                revision: 1,
+            },
+        );
+        catalog.agent_models.insert(
+            id.clone(),
+            AgentModels {
+                retired_limits: Default::default(),
+                efforts: BTreeMap::new(),
+                agent_id: id.clone(),
+                owner_id: owner_id.clone(),
+                entry_ids: vec!["one".into(), "own".into()],
+                revision: 1,
+                roles: BTreeMap::from([(
+                    ModelRole::Standard,
+                    crate::model_selection::RoleAssignment::new("one"),
+                )]),
+                mode_models: Default::default(),
+                aliases: BTreeMap::new(),
+            },
+        );
+        let revision = catalog.revision;
+        let before = app
+            .store
+            .save_model_catalog(&catalog, revision)
+            .await
+            .unwrap();
+        // Archive it first, as deleting requires.
+        let view = app.store.for_agent(&id).await.unwrap();
+        let status = |view: &crate::Store| {
+            let (view, id) = (view.clone(), id.clone());
+            async move {
+                status_value(&view, &id).await.unwrap()["revision"]
+                    .as_u64()
+                    .unwrap()
+            }
+        };
+        remove_agent(
+            State(app.clone()),
+            Extension(owner.clone()),
+            Path(id.clone()),
+            Json(ArchiveChange {
+                expected_revision: status(&view).await,
+            }),
+        )
+        .await
+        .unwrap();
+        let expected_revision = status(&view).await;
+        let delete = |identity: Value| {
+            let (app, id) = (app.clone(), id.clone());
+            async move {
+                delete_agent(
+                    State(app),
+                    Extension(identity),
+                    Path(id),
+                    Json(ArchiveChange { expected_revision }),
+                )
+                .await
+            }
+        };
+
+        // Refused: a member, a visitor (caller), the owner's agent browser and a widget.
+        let member = tenant_user(&app, "delete-member").await;
+        let visitor = tenant_user(&app, "delete-visitor").await;
+        for (user, relationship) in [
+            (&member, crate::access::Relationship::Member),
+            (&visitor, crate::access::Relationship::Caller),
+        ] {
+            app.store
+                .set_agent_membership(user, &id, relationship, 0)
+                .await
+                .unwrap();
+            assert_eq!(
+                delete(json!({"_user_id":user})).await.unwrap_err().0,
+                StatusCode::FORBIDDEN
+            );
+        }
+        let generation = app.store.account_by_id(&owner_id).await.unwrap().unwrap()["generation"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let browser = app
+            .store
+            .accounts_repository()
+            .issue_trusted_browser_session(
+                &owner_id,
+                &generation,
+                crate::now(),
+                "Browser Control signed-in browser",
+                600,
+                webagent_accounts::AgentBrowserBinding {
+                    agent_id: &id,
+                    allowed_session_ids: &[],
+                },
+            )
+            .await
+            .unwrap();
+        let body = json!({ "expected_revision": expected_revision }).to_string();
+        let response = crate::router(app.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v3/models/agents/{id}"))
+                    .header("cookie", format!("v3_session={}", browser.token))
+                    .header("x-csrf-token", browser.csrf.clone())
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        // A widget credential of the member on this agent never reaches agent routes.
+        let member_generation =
+            app.store.account_by_id(&member).await.unwrap().unwrap()["generation"].clone();
+        let token = format!("{}{}", crate::uuid(), crate::uuid());
+        let credential_key = format!("embed:credential:{}", crate::digest(&json!(token)));
+        app.store
+            .put(
+                &credential_key,
+                &json!({"id":"delete-widget","credential_key":credential_key,"agent_id":id,
+                    "origin":"https://example.com","revision":1,"user_id":member,
+                    "generation":member_generation,"expires":crate::now()+3600}),
+            )
+            .await
+            .unwrap();
+        let response = crate::router(app.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v3/models/agents/{id}"))
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                response.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ),
+            "{}",
+            response.status()
+        );
+        assert_eq!(app.store.model_catalog().await.unwrap(), before);
+
+        // Allowed: the owner. The roster and its grants go; other agents' records stay.
+        // Adding the member and the visitor moved the agent's revision.
+        let Json(deleted) = delete_agent(
+            State(app.clone()),
+            Extension(owner),
+            Path(id.clone()),
+            Json(ArchiveChange {
+                expected_revision: status(&view).await,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted["deleted"], true);
+        let after = app.store.model_catalog().await.unwrap();
+        assert_eq!(after.revision, before.revision + 1);
+        assert!(!after.agent_models.contains_key(&id));
+        for record in ["one", "own"] {
+            assert!(!after.entries[record].allowed_agents.contains(&id));
+            assert!(!after.connections[record].allowed_agents.contains(&id));
+        }
+        for agent in ["shared_default", "agent-a"] {
+            assert_eq!(after.agent_models[agent], before.agent_models[agent]);
+        }
+        assert_eq!(after.entries["two"], before.entries["two"]);
+        assert_eq!(
+            after.entries["one"].allowed_agents,
+            BTreeSet::from(["shared_default".to_owned(), "agent-a".to_owned()])
+        );
+        // Nothing left to remove: no new revision.
+        assert!(app
+            .store
+            .remove_agent_from_catalog(&id)
+            .await
+            .unwrap()
+            .is_none());
+    }
 }
 #[cfg(test)]
 mod manager_identity_tests {
