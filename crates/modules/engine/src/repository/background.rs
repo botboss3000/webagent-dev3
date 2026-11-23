@@ -33,18 +33,28 @@ impl<
             .await?;
         Ok(())
     }
+    /// Reads the task document only, so it needs no index table.
     pub async fn background_get(&self, id: &str) -> Result<Option<Value>> {
-        self.background_index().await?;
         let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
             .bind(format!("background_task:{id}"))
             .fetch_optional(self.pool)
             .await?;
         raw.map(|raw| self.records.unseal(&raw)).transpose()
     }
+    /// The index tables are created when the account database opens; a database opened
+    /// another way gets them on the first failed read, then is read again.
     pub async fn background_scan(&self, sid: Option<&str>) -> Result<Vec<Value>> {
-        self.background_index().await?;
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM background_task_index WHERE (? IS NULL OR session_id=?) AND (status IN ('queued','running') OR (status='completed' AND NOT EXISTS (SELECT 1 FROM background_task_delivery d WHERE d.id=background_task_index.id))) ORDER BY CASE WHEN status IN ('queued','running') THEN 0 ELSE 1 END,rowid LIMIT 256")
-            .bind(sid).bind(sid).fetch_all(self.pool).await?;
+        let select = || {
+            sqlx::query_scalar("SELECT id FROM background_task_index WHERE (? IS NULL OR session_id=?) AND (status IN ('queued','running') OR (status='completed' AND NOT EXISTS (SELECT 1 FROM background_task_delivery d WHERE d.id=background_task_index.id))) ORDER BY CASE WHEN status IN ('queued','running') THEN 0 ELSE 1 END,rowid LIMIT 256")
+            .bind(sid).bind(sid)
+        };
+        let ids: Vec<String> = match select().fetch_all(self.pool).await {
+            Ok(ids) => ids,
+            Err(_) => {
+                self.background_index().await?;
+                select().fetch_all(self.pool).await?
+            }
+        };
         let mut tasks = Vec::new();
         for id in ids {
             if let Some(task) = self.background_get(&id).await? {

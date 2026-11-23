@@ -320,6 +320,18 @@ impl<
             .collect()
     }
 
+    /// What [`Self::active_runs`] tells message admission, counted without decrypting: how
+    /// many rows it returns (at most 200) and whether one of them belongs to `sid`. The
+    /// index and the view are written together, with the same session and the same
+    /// finished-or-not status.
+    pub async fn active_runs_window(&self, sid: &str) -> Result<(usize, bool)> {
+        let (count, session): (i64, i64) = sqlx::query_as("SELECT COUNT(*),COALESCE(MAX(w.session_id=?),0) FROM (SELECT r.session_id FROM run_index r JOIN docs d ON d.key='run_view:'||r.id WHERE r.status NOT IN ('completed','cancelled','failed') ORDER BY COALESCE(r.enqueue_seq,r.rowid) LIMIT 200) AS w")
+            .bind(sid)
+            .fetch_one(self.pool)
+            .await?;
+        Ok((usize::try_from(count)?, session != 0))
+    }
+
     pub async fn recent_runs(&self, sid: Option<&str>) -> Result<Vec<Value>> {
         let rows = if let Some(sid) = sid {
             sqlx::query("SELECT d.value FROM run_index r JOIN docs d ON d.key='run_view:'||r.id WHERE r.session_id=? ORDER BY r.updated_at DESC LIMIT 100").bind(sid).fetch_all(self.pool).await?

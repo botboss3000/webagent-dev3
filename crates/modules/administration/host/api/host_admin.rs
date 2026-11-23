@@ -205,11 +205,10 @@ async fn production_list(app: &App) -> anyhow::Result<Value> {
     if !webagent_administration::tools::installed() {
         anyhow::bail!("Administrator pack not installed");
     }
-    let Some(user) = app.store.scan_user_ids().await?.into_iter().next() else {
-        anyhow::bail!("no users");
-    };
+    // The administrator account itself, not the first account a full scan returns (which
+    // sorts registered ids below "admin" first).
     let mut caller = app.clone();
-    caller.store = app.store.for_user(&user).await?;
+    caller.store = app.store.for_user("admin").await?;
     webagent_administration_host::dashboard::production(&crate::tools::administrator::Host(&caller))
         .await
         .map_err(|error| anyhow::anyhow!(error.1))

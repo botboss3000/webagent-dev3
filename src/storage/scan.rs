@@ -1,12 +1,14 @@
 //! Periodic scans visit only accounts that can have work. Each open account database
 //! holds a connection, and each connection an OS thread, so polling every account kept
 //! one thread per account alive. An account not written since it was found idle is
-//! skipped; every idle account is still revisited every 5-10 minutes.
+//! skipped; every idle account is still revisited every 5-10 minutes. One result is shared
+//! by all of a process's scanners for up to a second, and recomputed after any wake hint.
 use super::Store;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use sqlx::Row;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use webagent_accounts_host::AccountsStore;
@@ -17,6 +19,13 @@ const RECHECK: Duration = Duration::from_secs(300);
 const WINDOW: Duration = Duration::from_secs(15);
 /// File times are coarse; a write this close before a check counts as after it.
 const CLOCK_MARGIN: Duration = Duration::from_millis(50);
+/// How long one scan result serves every periodic scanner of the process. Root tests read
+/// their own writes at once without a wake hint, so they always scan afresh.
+const SHARE: Duration = if cfg!(test) {
+    Duration::ZERO
+} else {
+    Duration::from_secs(1)
+};
 
 /// Work a periodic scan acts on without a new write, by row presence: unfinished runs,
 /// unacknowledged loop commands, unrelayed notifications, background tasks, host leases,
@@ -99,6 +108,18 @@ static IDLE: LazyLock<Mutex<HashMap<String, Idle>>> = LazyLock::new(Default::def
 static SEEN: LazyLock<Mutex<HashMap<(&'static str, String), SystemTime>>> =
     LazyLock::new(Default::default);
 
+/// The latest scan result of this process: its state root, the wake sequence read before it
+/// was computed, when it was computed and the accounts it found.
+struct Shared {
+    root: PathBuf,
+    wake: u64,
+    at: Instant,
+    users: Vec<String>,
+}
+
+/// Held while scanning, so concurrent scanners wait for one scan and reuse it.
+static SHARED: LazyLock<tokio::sync::Mutex<Option<Shared>>> = LazyLock::new(Default::default);
+
 fn registry_error<T>(_: T) -> anyhow::Error {
     anyhow!("Account scan registry unavailable")
 }
@@ -164,10 +185,37 @@ impl Store {
         Ok(false)
     }
 
+    /// Accounts a periodic scan must visit now, shared by every scanner of the process: a
+    /// result is reused for up to [`SHARE`] unless a wake hint arrived since it was taken
+    /// (message admission and run ends send one), so new work is never served stale.
+    pub async fn scan_user_ids(&self) -> Result<Vec<String>> {
+        self.shared_scan(SHARE).await
+    }
+
+    async fn shared_scan(&self, share: Duration) -> Result<Vec<String>> {
+        let mut slot = SHARED.lock().await;
+        // Read before scanning: a hint during the scan makes this result stale at once.
+        let wake = webagent_engine::wake::sequence();
+        if let Some(shared) = slot.as_ref().filter(|shared| {
+            shared.root == self.root && shared.wake == wake && shared.at.elapsed() < share
+        }) {
+            return Ok(shared.users.clone());
+        }
+        let at = Instant::now();
+        let users = self.scan_user_ids_now().await?;
+        *slot = Some(Shared {
+            root: self.root.clone(),
+            wake,
+            at,
+            users: users.clone(),
+        });
+        Ok(users)
+    }
+
     /// Accounts a periodic scan must visit now. The administrator is always visited; an
     /// account is skipped while it has not been written since it was found to hold no
     /// pending work, until its periodic revisit.
-    pub async fn scan_user_ids(&self) -> Result<Vec<String>> {
+    async fn scan_user_ids_now(&self) -> Result<Vec<String>> {
         let now = Instant::now();
         let mut due = Vec::new();
         for user in self.all_user_ids().await? {
@@ -364,5 +412,30 @@ mod tests {
     fn revisit_offsets_are_spread() {
         assert!(offset("guest-a") < Duration::from_secs(300));
         assert_ne!(offset("guest-a"), offset("guest-b"));
+    }
+
+    #[tokio::test]
+    async fn shared_scan_sees_new_work_after_a_wake_hint() {
+        let share = Duration::from_secs(60);
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let guest = store.create_guest_account().await.unwrap();
+        let id = guest["user_id"].as_str().unwrap().to_owned();
+        assert!(store.shared_scan(share).await.unwrap().contains(&id));
+        tokio::time::sleep(CLOCK_MARGIN * 2).await;
+        store.scan_user_ids_now().await.unwrap();
+        assert!(!store.scan_user_ids_now().await.unwrap().contains(&id));
+        // A shared result taken while the account rests.
+        assert!(!store.shared_scan(share).await.unwrap().contains(&id));
+        let user = store.for_user(&id).await.unwrap();
+        user.put(
+            "background_task:t1",
+            &serde_json::json!({"status":"queued"}),
+        )
+        .await
+        .unwrap();
+        // Writers of new work send a hint, which makes the shared result stale at once.
+        webagent_engine::wake::notify(root.path()).await;
+        assert!(store.shared_scan(share).await.unwrap().contains(&id));
     }
 }

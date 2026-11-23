@@ -82,6 +82,7 @@ pub async fn scheduler<
     owners: U,
 ) {
     let mut jobs = tokio::task::JoinSet::new();
+    let mut hints = owners.hints();
     loop {
         while let Some(result) = jobs.try_join_next() {
             if !matches!(result, Ok(Ok(()))) {
@@ -129,14 +130,29 @@ pub async fn scheduler<
                 }
             }
         }
-        tokio::select! {_=app.stop.cancelled()=>break,
-        _=tokio::time::sleep(Duration::from_millis(250))=>{}}
+        // Message admission queues a review and then sends a wake hint; the fallback covers
+        // claim deadlines and lost hints. A finished review frees a slot for the next one.
+        tokio::select! {
+            _ = app.stop.cancelled() => break,
+            Some(result) = jobs.join_next(), if !jobs.is_empty() => {
+                if !matches!(result, Ok(Ok(()))) {
+                    tracing::warn!("Manager review deferred");
+                }
+            }
+            _ = hints.changed() => {}
+            _ = tokio::time::sleep(FALLBACK) => {}
+        }
     }
     jobs.abort_all();
 }
+
+/// Longest wait between review scans without a wake hint.
+const FALLBACK: Duration = Duration::from_secs(5);
 
 pub trait OwnerSources<C: RuntimeStorage + RecordEffects, A: ReviewAuthority<C>, P: Engine>:
     Sync
 {
     fn users(&self) -> impl Future<Output = Result<Vec<Runtime<C, A, P>>>> + Send + '_;
+    /// The process's wake hints (a sequence that moves on each hint; no account or content).
+    fn hints(&self) -> tokio::sync::watch::Receiver<u64>;
 }

@@ -49,4 +49,5 @@ pub(super) fn runtime(app:&App)->ManagerRuntime {
 #[derive(Clone)]pub(super) struct Owners(pub App);
 impl webagent_manager::scheduler::OwnerSources<Store,Authority,EnginePort> for Owners {
  async fn users(&self)->Result<Vec<ManagerRuntime>> {Ok(crate::user_apps(&self.0).await?.iter().map(runtime).collect())}
+ fn hints(&self)->tokio::sync::watch::Receiver<u64> {crate::wake::subscribe()}
 }

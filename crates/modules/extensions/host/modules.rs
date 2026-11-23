@@ -1563,6 +1563,8 @@ async fn admit(app: &App, id: &str, gen: &str, admission: &Value) -> Result<Valu
     wake::notify(app).await;
     Ok(result)
 }
+/// Longest wait between user scans of a module package without a hint or a due deadline.
+const MODULE_FALLBACK: Duration = Duration::from_secs(15);
 pub(crate) async fn service(app: App) {
     let mut workers = tokio::task::JoinSet::new();
     for id in IDS {
@@ -1577,13 +1579,19 @@ async fn package_service(app: App, id: &'static str) {
     let mut jobs = tokio::task::JoinSet::new();
     let mut inflight = std::collections::HashSet::new();
     let mut seen = std::collections::HashSet::new();
-    let mut next_poll = HashMap::new();
+    let mut next_poll: HashMap<String, tokio::time::Instant> = HashMap::new();
     let mut last_dispatched_wake = HashMap::new();
     let mut wake_hints = crate::wake::subscribe();
     let mut last_check = 0;
     let mut last_probe = 0;
     let mut probed_generation = String::new();
     let mut cursor = 0usize;
+    // Users are scanned on a wake hint, when a user's own tick deadline passes, when both
+    // reducers were busy and one finished, and otherwise every `MODULE_FALLBACK`.
+    let mut last_scan: Option<tokio::time::Instant> = None;
+    let mut checked_until: Option<tokio::time::Instant> = None;
+    let mut scanned_wake = 0u64;
+    let mut deferred = false;
     loop {
         if app.stop.is_cancelled() {
             break;
@@ -1637,14 +1645,43 @@ async fn package_service(app: App, id: &'static str) {
         }
         // Omitted packages do not scan users. Separate package workers and two
         // bounded reducers prevent a slow webhook from delaying agent schedules.
-        if available(id) && jobs.len() < 2 {
-            if let Ok(mut users) = crate::agent_loop::user_apps(&app).await {
+        let started = tokio::time::Instant::now();
+        let hint = *wake_hints.borrow();
+        let full = deferred
+            || hint != scanned_wake
+            || last_scan.is_none_or(|at| started.duration_since(at) >= MODULE_FALLBACK);
+        // Otherwise only users whose own deadline passed since the last look are opened.
+        let due_users: std::collections::HashSet<String> = if full {
+            Default::default()
+        } else {
+            next_poll
+                .iter()
+                .filter(|(_, deadline)| {
+                    checked_until.is_none_or(|at| at < **deadline) && **deadline <= started
+                })
+                .map(|(uid, _)| uid.clone())
+                .collect()
+        };
+        if available(id) && jobs.len() < 2 && (full || !due_users.is_empty()) {
+            checked_until = Some(started);
+            if full {
+                last_scan = Some(started);
+                scanned_wake = hint;
+                deferred = false;
+            }
+            let scanned = if full {
+                crate::agent_loop::user_apps(&app).await
+            } else {
+                crate::agent_loop::user_apps_among(&app, &due_users).await
+            };
+            if let Ok(mut users) = scanned {
                 let len = users.len();
                 if len > 0 {
                     users.rotate_left(cursor % len);
                 }
                 for user in users {
                     if jobs.len() >= 2 {
+                        deferred = true;
                         break;
                     }
                     let uid = user.store.current_user_id().to_owned();
@@ -1673,11 +1710,29 @@ async fn package_service(app: App, id: &'static str) {
                 }
             }
         }
+        // Sleep until the next user deadline, the fallback scan or the next generation check.
+        let now_at = tokio::time::Instant::now();
+        // A scan overdue here could not run (package unavailable or both reducers busy): a
+        // finished reducer or the generation check comes first.
+        let mut wait = last_scan
+            .map(|at| (at + MODULE_FALLBACK).saturating_duration_since(now_at))
+            .filter(|wait| !wait.is_zero())
+            .unwrap_or(MODULE_FALLBACK);
+        if let Some(next) = next_poll
+            .values()
+            .filter(|deadline| **deadline > now_at)
+            .min()
+        {
+            wait = wait.min(next.saturating_duration_since(now_at));
+        }
+        let wait = wait
+            .min(Duration::from_secs(5))
+            .max(Duration::from_millis(10));
         tokio::select! {
             _=app.stop.cancelled()=>break,
             result=jobs.join_next(),if !jobs.is_empty()=>if let Some(Ok((uid,result)))=result{inflight.remove(&uid);let delay=result.as_ref().copied().unwrap_or(1000);next_poll.insert(uid.clone(),tokio::time::Instant::now()+Duration::from_millis(delay));if result.is_ok(){seen.insert(uid);}else{tracing::warn!(module_id=id,"Optional module work deferred");}},
             _=wake_hints.changed()=>{},
-            _=tokio::time::sleep(Duration::from_secs(1))=>{},
+            _=tokio::time::sleep(wait)=>{},
         }
     }
     // Give already-reserved transport one bounded shutdown window. A killed

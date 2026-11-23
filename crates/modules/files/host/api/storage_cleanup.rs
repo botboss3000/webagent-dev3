@@ -9,6 +9,7 @@ use super::*;
 use crate::api::uploads::{live_policy, owner_tier};
 use crate::store::storage_limits::{POLICY_KEY, STATE_KEY};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{LazyLock, Mutex};
 
 const DAY: u64 = 86_400;
 const MAX_IDS: usize = 500;
@@ -26,6 +27,25 @@ pub(crate) const STORAGE_FULL: &str = "Storage is full. Free space on the Sessio
 const CHECK_SECONDS: u64 = 600;
 const CRITICAL_CHECK_SECONDS: u64 = 60;
 const MIB: u64 = 1024 * 1024;
+/// Whether each account's stored level is above zero, as this process last read or wrote it.
+/// Only [`evaluate`] writes the level, and it runs only in this (the API) process, so the
+/// limit service can tell an account is not due yet without opening it.
+static LEVELS: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new(Default::default);
+
+fn remember_level(user: &str, raised: bool) {
+    LEVELS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(user.to_owned(), raised);
+}
+
+fn known_level(user: &str) -> Option<bool> {
+    LEVELS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(user)
+        .copied()
+}
 
 /// One cleanup action as the panel or a saved policy states it.
 #[derive(Clone, Debug, PartialEq)]
@@ -298,6 +318,7 @@ pub(crate) async fn evaluate(app: &App, automatic: bool) -> Result<Value, ApiErr
         if state["level"] != fresh["level"] || state["full"] != fresh["full"] {
             app.store.put(STATE_KEY, &fresh).await?;
         }
+        remember_level(app.store.current_user_id(), false);
         return Ok(json!({"state":fresh,"cleanup":null}));
     };
     let warning = u64::from(policy.warning_percent);
@@ -374,6 +395,7 @@ pub(crate) async fn evaluate(app: &App, automatic: bool) -> Result<Value, ApiErr
         state = fresh;
         app.store.put(STATE_KEY, &state).await?;
     }
+    remember_level(app.store.current_user_id(), level > 0);
     Ok(json!({"state":state,"cleanup":cleanup}))
 }
 
@@ -479,6 +501,16 @@ pub(crate) async fn service(app: App) {
                 if app.stop.is_cancelled() {
                     return;
                 }
+                // Not due by the in-memory schedule: no check comes sooner than the critical
+                // interval, and an account last seen below every level waits the full one.
+                if let Some(at) = checked.get(&user) {
+                    let age = now().saturating_sub(*at);
+                    if age < CRITICAL_CHECK_SECONDS
+                        || (age < CHECK_SECONDS && known_level(&user) == Some(false))
+                    {
+                        continue;
+                    }
+                }
                 let Ok(store) = app.store.for_user(&user).await else {
                     continue;
                 };
@@ -488,6 +520,7 @@ pub(crate) async fn service(app: App) {
                     .ok()
                     .flatten()
                     .is_some_and(|state| state["level"].as_u64().unwrap_or(0) > 0);
+                remember_level(&user, critical);
                 let due = if critical {
                     CRITICAL_CHECK_SECONDS
                 } else {

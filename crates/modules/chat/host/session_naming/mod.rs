@@ -273,6 +273,7 @@ pub(crate) async fn service(app: App) {
     let mut workers = tokio::task::JoinSet::new();
     let mut active = std::collections::HashSet::new();
     let mut next_recovery = now() + 30;
+    let mut hints = crate::wake::subscribe();
     loop {
         if app.stop.is_cancelled() {
             break;
@@ -312,7 +313,18 @@ pub(crate) async fn service(app: App) {
                 }
             }
         }
-        tokio::select! {_=app.stop.cancelled()=>break,_=tokio::time::sleep(Duration::from_millis(500))=>{}}
+        // Naming jobs are queued when a run completes, which sends a wake hint; the fallback
+        // covers lease recovery and lost hints. A finished worker frees a slot for the next.
+        tokio::select! {
+            _ = app.stop.cancelled() => break,
+            Some(result) = workers.join_next(), if !workers.is_empty() => {
+                if let Ok(id) = result {
+                    active.remove(&id);
+                }
+            }
+            _ = hints.changed() => {}
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+        }
     }
     workers.abort_all();
     while workers.join_next().await.is_some() {}

@@ -128,6 +128,11 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
             .execute(&pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS reasoning_cleanup(segment_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,payload BLOB NOT NULL)")
             .execute(&pool).await?;
+        // Background task index and delivery marks (`Repository::background_index`), here
+        // once per open instead of before every background read.
+        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS background_task_index(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,revision INTEGER NOT NULL,status TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS background_task_delivery(id TEXT PRIMARY KEY,run_id TEXT NOT NULL);")
+            .execute(&pool).await?;
         // Per-account app notifications (storage warnings, automatic cleanups).
         sqlx::query("CREATE TABLE IF NOT EXISTS user_notices(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,severity TEXT NOT NULL,body BLOB NOT NULL,created_at INTEGER NOT NULL,read_at INTEGER)")
             .execute(&pool).await?;

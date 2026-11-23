@@ -186,6 +186,14 @@ impl StoreCore {
         Ok(values)
     }
 
+    /// How many documents [`Self::list`] would return for `prefix`, without decoding them.
+    pub async fn count(&self, prefix: &str) -> Result<usize> {
+        self.validate_agent_doc_key(prefix)?;
+        Ok(usize::try_from(
+            docs::count(self.pool_for(prefix), prefix).await?,
+        )?)
+    }
+
     /// The last `limit` model interactions of session `sid`, oldest first, as
     /// `(seq, run_id, item)`. Callers check session authority first.
     pub async fn session_interactions(

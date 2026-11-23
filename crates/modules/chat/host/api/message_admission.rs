@@ -4,8 +4,8 @@
 use super::chat::{command, current_workflow_policy};
 use super::{
     assembled_agent_instructions, attachments, bad, conflict, digest, json, key, memory,
-    model_selection, now, provider, public_run, required, session_agent_id, status, terminal,
-    uploads, uuid, workflow, ApiError, App, Json, Path, State, StatusCode, Value,
+    model_selection, now, provider, public_run, required, session_agent_id, status, uploads, uuid,
+    workflow, ApiError, App, Json, Path, State, StatusCode, Value,
 };
 
 /// Fields only the server sets: a panel answer (`/components/{cid}/answer`) and a
@@ -448,11 +448,11 @@ async fn prepare_message_inner(
             result: json!({"run_id":null,"agent_active":false,"attachments":prepared.metadata}),
         });
     }
-    let active = app.store.active_runs().await?;
-    let reviews = app.store.list("manager_pending:").await?;
-    let session_busy = active
-        .iter()
-        .any(|run| run["session_id"] == id && !terminal(status(run)))
+    // Counted in SQL: the same window of unfinished runs and pending reviews the limit
+    // always used, without decrypting each record.
+    let (active, active_in_session) = app.store.active_runs_window(&id).await?;
+    let reviews = app.store.count("manager_pending:").await?;
+    let session_busy = active_in_session
         || app
             .store
             .get(&format!("manager_pending:{id}"))
@@ -463,7 +463,7 @@ async fn prepare_message_inner(
             .is_some_and(|queue| !queue.is_empty());
     // Follow-ups queue behind this conversation; independent admissions retain the existing ceilings.
     if !followup && !session_busy {
-        if active.len() + reviews.len() >= app.runtime.read().await.scheduler.max_unresolved_runs {
+        if active + reviews >= app.runtime.read().await.scheduler.max_unresolved_runs {
             return Err(conflict("Run queue is full"));
         }
     }

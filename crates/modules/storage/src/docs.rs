@@ -46,6 +46,17 @@ pub async fn scan(connection: &mut SqliteConnection, prefix: &str) -> Result<Vec
     )
 }
 
+/// Count the documents whose key starts with `prefix` (the same range as [`scan`]).
+pub async fn count<'c, E: SqliteExecutor<'c>>(executor: E, prefix: &str) -> Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key>=? AND key<?")
+            .bind(prefix)
+            .bind(format!("{prefix}{}", char::MAX))
+            .fetch_one(executor)
+            .await?,
+    )
+}
+
 /// Append one encoded event to a plane's log.
 pub async fn append_event<'c, E: SqliteExecutor<'c>>(
     executor: E,

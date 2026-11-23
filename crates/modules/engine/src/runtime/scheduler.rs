@@ -245,14 +245,16 @@ impl<
                     if heartbeat_app.stop.is_cancelled() {
                         break;
                     }
-                    let _ = crate::send_future(
+                    if let Err(error) = crate::send_future(
                         heartbeat_app.store.write_loop_heartbeat(&heartbeat_owner),
                     )
-                    .await;
+                    .await
+                    {
+                        tracing::error!("Loop heartbeat failed: {error}");
+                    }
                     tokio::select! {_=heartbeat_app.stop.cancelled()=>break,_=tokio::time::sleep(Duration::from_secs(2))=>{}}
                 }
             });
-            let mut last_heartbeat = 0;
             let mut last_recovery = 0;
             loop {
                 if app.stop.is_cancelled() {
@@ -293,15 +295,9 @@ impl<
                     crate::ports::AgentMetadata::root(app.store.records()),
                     "loop",
                 );
+                // The heartbeat task above is the one writer of the loop heartbeat (every 2 s);
+                // a stuck pass shows in the watchdog's stage progress instead.
                 progress.at(Stage::Heartbeat);
-                if now().saturating_sub(last_heartbeat) >= 2 {
-                    if let Err(error) =
-                        crate::send_future(app.store.write_loop_heartbeat(&owner)).await
-                    {
-                        tracing::error!("Loop heartbeat failed: {error}");
-                    }
-                    last_heartbeat = now();
-                }
                 if now() - last_recovery
                     >= crate::send_future(app.runtime.read())
                         .await

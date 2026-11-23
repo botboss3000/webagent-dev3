@@ -105,6 +105,12 @@ mod tests {
     async fn background_dispatch_idle_waits_and_wake_rescans() {
         use crate::runtime_tests::fixture;
         let (_root, app) = fixture().await;
+        // The account database is opened with the index table; dropping it first makes its
+        // reappearance mark the service's first scan.
+        sqlx::query("DROP TABLE background_task_index")
+            .execute(&app.store.pool)
+            .await
+            .unwrap();
         let (wake, hints) = tokio::sync::watch::channel(0);
         let service = tokio::spawn(service_with_hints(app.clone(), hints));
         let exists = || async {

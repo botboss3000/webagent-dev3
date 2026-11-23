@@ -21,6 +21,10 @@ fn broadcasts() -> &'static watch::Sender<u64> {
 pub fn subscribe() -> watch::Receiver<u64> {
     broadcasts().subscribe()
 }
+/// How many wake hints this process has seen; a result computed before the latest hint is stale.
+pub fn sequence() -> u64 {
+    *broadcasts().borrow()
+}
 fn emit() {
     signal().notify_one();
     broadcasts().send_modify(|sequence| *sequence = sequence.wrapping_add(1));

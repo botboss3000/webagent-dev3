@@ -1294,6 +1294,10 @@ impl Store {
     pub async fn active_runs(&self) -> Result<Vec<Value>> {
         self.engine_repository().active_runs().await
     }
+    /// [`Self::active_runs`]'s length and whether it holds a run of `sid`, without decrypting.
+    pub async fn active_runs_window(&self, sid: &str) -> Result<(usize, bool)> {
+        self.engine_repository().active_runs_window(sid).await
+    }
     /// List bounded recent session runs or application-wide failures using redacted stored views.
     pub async fn recent_runs(&self, sid: Option<&str>) -> Result<Vec<Value>> {
         self.engine_repository().recent_runs(sid).await
