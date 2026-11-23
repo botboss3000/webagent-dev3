@@ -706,6 +706,7 @@ impl Store {
                 || (candidate.starts_with("receipt:session:") && record["result"]["id"] == sid)
                 || [
                     "session_mode",
+                    "session_checkpoint",
                     "core_spawn_origin",
                     "session_ability_state",
                     "session_usage",

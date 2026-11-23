@@ -54,6 +54,7 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("receipt:shared_help:")
         || key.starts_with("receipt:participation:")
         || key.starts_with("session_mode:")
+        || key.starts_with("session_checkpoint:")
         || key.starts_with("session_stopped:")
         || key.starts_with("session_chat_controls:")
         || key.starts_with("session_naming:")

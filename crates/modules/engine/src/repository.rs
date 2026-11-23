@@ -802,8 +802,18 @@ impl<
                 .bind(sid)
                 .fetch_one(&mut *tx)
                 .await?;
-                session["checkpoint_input"] = run["input"].clone();
+                // The history goes to its own record (`webagent_storage::checkpoint`), so the
+                // session record every check reads keeps only the cursor.
                 session["checkpoint_through"] = json!(through);
+                if let Some(fields) = session.as_object_mut() {
+                    fields.remove("checkpoint_input");
+                }
+                sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                    .bind(format!("session_checkpoint:{sid}"))
+                    .bind(self.records.encode_user_record(&json!({"session_id":sid,
+                        "checkpoint_input":run["input"],"checkpoint_through":through}))?)
+                    .execute(&mut *tx)
+                    .await?;
                 session["notes_front"] = json!(session["notes_front"].as_u64().unwrap_or(0) + 1);
                 sqlx::query("UPDATE docs SET value=? WHERE key=?")
                     .bind(self.records.encode_user_record(&session)?)
@@ -824,8 +834,18 @@ impl<
                 .bind(sid)
                 .fetch_one(&mut *tx)
                 .await?;
-                session["checkpoint_input"] = run["input"].clone();
+                // The history goes to its own record (`webagent_storage::checkpoint`), so the
+                // session record every check reads keeps only the cursor.
                 session["checkpoint_through"] = json!(through);
+                if let Some(fields) = session.as_object_mut() {
+                    fields.remove("checkpoint_input");
+                }
+                sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                    .bind(format!("session_checkpoint:{sid}"))
+                    .bind(self.records.encode_user_record(&json!({"session_id":sid,
+                        "checkpoint_input":run["input"],"checkpoint_through":through}))?)
+                    .execute(&mut *tx)
+                    .await?;
                 // A merge drops the notes changes kept ahead of its blocks: rebuild the snapshot.
                 if payload["merge"] == true {
                     session["notes_front"] =

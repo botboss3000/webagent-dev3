@@ -496,6 +496,34 @@ mod session {
         assert_eq!(public_session(&child).unwrap()["parent_session_id"], "p");
     }
 
+    /// After a compaction moved the history to `session_checkpoint:`, an ordinary save of a
+    /// stale snapshot keeps the stored cursor instead of pointing it off that history.
+    #[tokio::test]
+    async fn saves_keep_the_cursor_of_a_moved_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = pool(dir.path()).await;
+        put(
+            &pool,
+            "session:s",
+            &json!({"id":"s","status":"active","checkpoint_through":9}),
+        )
+        .await;
+        put(
+            &pool,
+            "session_checkpoint:s",
+            &json!({"checkpoint_input":[],"checkpoint_through":9}),
+        )
+        .await;
+        let mut tx = pool.begin().await.unwrap();
+        let stale = json!({"id":"s","status":"active","title":"Renamed","checkpoint_through":4});
+        let merged = prepare_session_document(&TaggedCodec, &mut tx, "session:s", &stale, 50)
+            .await
+            .unwrap();
+        assert_eq!(merged["checkpoint_through"], 9);
+        assert_eq!(merged["title"], "Renamed");
+        assert!(merged.get("checkpoint_input").is_none());
+    }
+
     #[tokio::test]
     async fn checkpoints_preserve_newer_metadata_and_tombstones_stay_archived() {
         let dir = tempfile::tempdir().unwrap();

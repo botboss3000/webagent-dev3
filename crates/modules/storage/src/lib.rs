@@ -8,6 +8,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 pub mod cache;
+pub mod checkpoint;
 pub mod codec;
 pub mod compression;
 pub mod dictionary;

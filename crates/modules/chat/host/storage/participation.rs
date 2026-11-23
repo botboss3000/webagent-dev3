@@ -231,6 +231,10 @@ impl Store {
                         // immutable interactions at the next active turn.
                         session["checkpoint_input"] = json!([]);
                         session["checkpoint_through"] = json!(0);
+                        sqlx::query("DELETE FROM docs WHERE key=?")
+                            .bind(format!("session_checkpoint:{sid}"))
+                            .execute(&mut *tx)
+                            .await?;
                     }
                     // Generation changes fence publication; retain uncertain effects for recovery.
                     let executing = run["pending"]["state"] == "executing"

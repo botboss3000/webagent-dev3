@@ -258,6 +258,26 @@ pub async fn prepare_session_document<C: RecordCodec>(
                 }
             }
         }
+        // Once the history moved to `session_checkpoint:{sid}`, a snapshot without
+        // `checkpoint_input` keeps the stored checkpoint: only the compaction and reset
+        // writers change it, so a stale snapshot cannot move the cursor off its history.
+        let moved = !object.contains_key("checkpoint_input")
+            && sqlx::query_scalar::<_, i64>("SELECT count(*) FROM docs WHERE key=?")
+                .bind(format!(
+                    "session_checkpoint:{}",
+                    key.strip_prefix("session:").unwrap_or(key)
+                ))
+                .fetch_one(&mut **tx)
+                .await?
+                > 0;
+        if moved {
+            for field in ["checkpoint_input", "checkpoint_through"] {
+                match previous.get(field) {
+                    Some(value) => object.insert(field.into(), value.clone()),
+                    None => object.remove(field),
+                };
+            }
+        }
         // Participation and queue are independently revisioned authorities.
         for (field, revision) in [
             ("participation", "revision"),

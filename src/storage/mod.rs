@@ -820,15 +820,16 @@ impl Store {
             through,
             history_revision,
         );
-        let (mut input, mut cursor) = cached.unwrap_or_else(|| {
-            (
-                session["checkpoint_input"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default(),
-                through,
-            )
-        });
+        let (mut input, mut cursor) = match cached {
+            Some(cached) => cached,
+            None => {
+                let record = self.get(&webagent_storage::checkpoint::key(sid)).await?;
+                (
+                    webagent_storage::checkpoint::input(&session, record.as_ref()),
+                    through,
+                )
+            }
+        };
         let rows = sqlx::query(
             // Compaction call/result rows are activity only, never model context.
             "SELECT seq,run_id,step,item FROM interactions WHERE session_id=? AND seq>? AND step NOT LIKE 'compaction:%' AND step NOT LIKE 'retry:%' AND step NOT LIKE 'preload:%' AND step NOT LIKE 'closing:%' AND step NOT LIKE 'usage:%' ORDER BY seq",

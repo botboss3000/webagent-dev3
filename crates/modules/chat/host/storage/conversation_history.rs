@@ -542,6 +542,10 @@ impl Store {
             // The old compaction checkpoint may contain undone text. Rebuild from retained durable interactions.
             session["checkpoint_input"] = json!([]);
             session["checkpoint_through"] = json!(0);
+            sqlx::query("DELETE FROM docs WHERE key=?")
+                .bind(format!("session_checkpoint:{sid}"))
+                .execute(&mut *tx)
+                .await?;
             session["tool_context_state"] = Value::Null;
             session["tool_result_projection"] = Value::Null;
             session["history_revision"] = json!(session["history_revision"]

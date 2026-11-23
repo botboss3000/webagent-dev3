@@ -27,11 +27,9 @@ fn last_sweeps() -> &'static Mutex<HashMap<String, Instant>> {
 
 /// Tool calls the session's compacted conversation still carries: a fold keeps recent
 /// exchanges word for word, and their stored rows stay their originals.
-fn checkpoint_calls(session: &Value) -> HashSet<String> {
-    session["checkpoint_input"]
-        .as_array()
-        .into_iter()
-        .flatten()
+fn checkpoint_calls(session: &Value, record: Option<&Value>) -> HashSet<String> {
+    webagent_storage::checkpoint::input(session, record)
+        .iter()
         .filter_map(|item| item["call_id"].as_str().map(str::to_owned))
         .collect()
 }
@@ -89,7 +87,8 @@ impl Store {
             } else {
                 session["checkpoint_through"].as_i64().unwrap_or(0)
             };
-            let in_context = checkpoint_calls(&session);
+            let record = self.get(&webagent_storage::checkpoint::key(&sid)).await?;
+            let in_context = checkpoint_calls(&session, record.as_ref());
             while mark < target {
                 let (rows, through) = self.trim_rows(&sid, mark, target, &in_context).await?;
                 trimmed += rows;
