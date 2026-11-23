@@ -285,7 +285,9 @@ async fn supersede_stopped_runs(
     sid: &str,
     request_id: &str,
 ) -> std::result::Result<(), ApiError> {
-    for view in app.store.active_runs().await? {
+    let active = app.store.active_runs().await?;
+    let mut superseded = false;
+    for view in &active {
         if view["session_id"] != sid
             || !matches!(status(&view), "paused" | "stopped")
             || view["uncertain"] == true
@@ -306,14 +308,19 @@ async fn supersede_stopped_runs(
         app.store
             .atomic_docs_event(vec![(key("run", run_id), run)], sid, "run_status", &result)
             .await?;
+        superseded = true;
     }
     let queue = app.store.followup_queue(sid).await?;
-    let busy = app
-        .store
-        .active_runs()
-        .await?
-        .iter()
-        .any(|r| r["session_id"] == sid);
+    // The list read above still holds unless this request cancelled a run from it.
+    let busy = if superseded {
+        app.store
+            .active_runs()
+            .await?
+            .iter()
+            .any(|r| r["session_id"] == sid)
+    } else {
+        active.iter().any(|r| r["session_id"] == sid)
+    };
     if queue["held"] == true && !busy {
         let revision = queue["revision"].as_u64().unwrap_or(0);
         let request = format!("supersede:{request_id}");
@@ -468,17 +475,12 @@ async fn prepare_message_inner(
         }
     }
     // Review screens visitors; the agent's owner and members skip it unless it also
-    // reviews staff.
-    let staff = app
-        .store
-        .live_access(crate::shared_chat::actor(app), &agent_id)
-        .await
-        .is_ok_and(|access| {
-            matches!(
-                access.relationship,
-                crate::access::Relationship::Owner | crate::access::Relationship::Member
-            )
-        });
+    // reviews staff. The access read above in this call decides it: the shared-chat
+    // adjustment only turns a revoked relationship into a caller, neither of them staff.
+    let staff = matches!(
+        access.relationship,
+        crate::access::Relationship::Owner | crate::access::Relationship::Member
+    );
     let staff_exempt = staff
         && crate::manager::config::incoming(&app.store, &agent_id)
             .await
