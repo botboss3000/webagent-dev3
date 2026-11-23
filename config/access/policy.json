@@ -47,10 +47,14 @@
   "run_limits": {
     "agent_daily_cost_usd": null,
     "agent_daily_turns": null,
+    "command_cpu_seconds_per_run": 3600,
+    "command_cpu_seconds_per_user_day": 14400,
+    "concurrent_commands_per_run": 2,
+    "concurrent_commands_per_user": 4,
     "max_active_runs_per_agent": null,
     "reserved_admin_runs": 1
   },
-  "revision": 61,
+  "revision": 62,
   "storage": {
     "compress_idle_days": 7,
     "compression": {

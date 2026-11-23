@@ -309,6 +309,33 @@ impl<
                     json!({"status":"denied","output":"Additional matching action needs specific human authorization"}),
                 );
             }
+            // Command budget (C5): a run's and an account's `shell`/`python` commands share a
+            // processor-time budget from the usage ledger and a count of commands going at once.
+            let command_budget = if crate::usage_ledger::metered(&name) {
+                let access = app
+                    .chat
+                    .live_access(
+                        app.store.records(),
+                        run["requester_user_id"]
+                            .as_str()
+                            .unwrap_or(app.store.current_user_id()),
+                        &sid,
+                        &agent_id,
+                    )
+                    .await?;
+                let pool = ScopedStorage::application_pool(app.store.records());
+                if let Some(reason) =
+                    crate::usage_ledger::command_refusal(pool, &access, &run_id).await?
+                {
+                    return Ok(json!({"status":"denied","output":reason}));
+                }
+                match crate::usage_ledger::CommandSlot::take(&access, &run_id) {
+                    Ok(slot) => Some((access, slot)),
+                    Err(reason) => return Ok(json!({"status":"denied","output":reason})),
+                }
+            } else {
+                None
+            };
             let claimed = app
                 .actions
                 .claim(app.store.records(), &run, &pending)
@@ -342,6 +369,29 @@ impl<
             scoped.clone().call_raw(sid.clone(),run_id.clone(),generation.clone(),name.clone(),clean,execution_id,policy_version,cancel.clone())).await
             .map_err(|error| failure::boundary(error,failure::Stage::Execution,failure::Delivery::PossiblySent,started))
     }.await;
+            if let Some((access, slot)) = command_budget {
+                drop(slot);
+                // The worker reports the command's processor time; a reply without it (a
+                // refusal before it started) used none.
+                let cpu_ms = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|reply| reply["cpu_seconds"].as_f64())
+                    .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+                    .map_or(0, |seconds| (seconds * 1000.0).round() as u64);
+                if cpu_ms > 0 {
+                    if let Err(error) = crate::usage_ledger::record_command(
+                        ScopedStorage::application_pool(app.store.records()),
+                        &access,
+                        &run_id,
+                        cpu_ms,
+                    )
+                    .await
+                    {
+                        tracing::warn!("Command time not counted: {error}");
+                    }
+                }
+            }
             if let Some(claimed) = claimed {
                 return app
                     .actions

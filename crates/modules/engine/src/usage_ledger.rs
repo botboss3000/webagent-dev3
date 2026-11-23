@@ -13,6 +13,8 @@ use webagent_access::run_limits::{daily_refusal, DailyUsage};
 pub const REQUESTER: &str = "requester";
 /// Usage of one agent by non-administrators.
 pub const AGENT: &str = "agent";
+/// Command processor time of one run (its `cpu_ms`, on the days its commands ran).
+pub const RUN: &str = "run";
 /// Days of rows kept (today included).
 pub const RETENTION_DAYS: i64 = 35;
 
@@ -55,9 +57,20 @@ fn today() -> i64 {
 
 /// Create the table; idempotent.
 pub async fn schema(pool: &SqlitePool) -> Result<()> {
-    sqlx::query("CREATE TABLE IF NOT EXISTS usage_daily(scope TEXT NOT NULL,id TEXT NOT NULL,day INTEGER NOT NULL,turns INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,cost_micros INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,id,day))")
+    sqlx::query("CREATE TABLE IF NOT EXISTS usage_daily(scope TEXT NOT NULL,id TEXT NOT NULL,day INTEGER NOT NULL,turns INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,cost_micros INTEGER NOT NULL DEFAULT 0,cpu_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,id,day))")
         .execute(pool)
         .await?;
+    // Tables made before command processor time was counted.
+    let has: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pragma_table_info('usage_daily') WHERE name='cpu_ms'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has == 0 {
+        sqlx::query("ALTER TABLE usage_daily ADD COLUMN cpu_ms INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -154,6 +167,159 @@ pub async fn refusal_on(
     Ok(None)
 }
 
+/// Add one finished command's processor time to its run and to its requester's day.
+pub async fn record_command_on(
+    pool: &SqlitePool,
+    requester: &str,
+    run: &str,
+    day: i64,
+    cpu_ms: u64,
+) -> Result<()> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    for (scope, id) in [(REQUESTER, requester), (RUN, run)] {
+        sqlx::query("INSERT INTO usage_daily(scope,id,day,cpu_ms) VALUES(?,?,?,?) ON CONFLICT(scope,id,day) DO UPDATE SET cpu_ms=cpu_ms+excluded.cpu_ms")
+            .bind(scope)
+            .bind(id)
+            .bind(day)
+            .bind(i64::try_from(cpu_ms).unwrap_or(i64::MAX))
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`record_command_on`] for today, for `access`'s requester.
+pub async fn record_command(
+    pool: &SqlitePool,
+    access: &LiveAccess,
+    run: &str,
+    cpu_ms: u64,
+) -> Result<()> {
+    record_command_on(pool, &access.principal.user_id, run, today(), cpu_ms).await
+}
+
+/// Why `access`'s requester may not start another command in `run` on `day`: the run's or the
+/// account's command processor time is used up. Administrators are never limited.
+pub async fn command_refusal_on(
+    pool: &SqlitePool,
+    access: &LiveAccess,
+    run: &str,
+    day: i64,
+) -> Result<Option<String>> {
+    if access.principal.administrator() {
+        return Ok(None);
+    }
+    let limits = access.run_limits;
+    if let Some(limit) = limits.command_cpu_seconds_per_run {
+        let used: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(cpu_ms),0) FROM usage_daily WHERE scope=? AND id=?",
+        )
+        .bind(RUN)
+        .bind(run)
+        .fetch_one(pool)
+        .await?;
+        if used >= i64::from(limit) * 1000 {
+            return Ok(Some(format!(
+                "Command budget used: this run's commands have used their {limit} seconds of processor time. Start a new run to continue."
+            )));
+        }
+    }
+    if let Some(limit) = limits.command_cpu_seconds_per_user_day {
+        let used: Option<i64> =
+            sqlx::query_scalar("SELECT cpu_ms FROM usage_daily WHERE scope=? AND id=? AND day=?")
+                .bind(REQUESTER)
+                .bind(&access.principal.user_id)
+                .bind(day)
+                .fetch_optional(pool)
+                .await?;
+        if used.unwrap_or(0) >= i64::from(limit) * 1000 {
+            return Ok(Some(format!(
+                "Command budget used: your account's commands have used their {limit} seconds of processor time today. It resets at 00:00 UTC."
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// [`command_refusal_on`] for today.
+pub async fn command_refusal(
+    pool: &SqlitePool,
+    access: &LiveAccess,
+    run: &str,
+) -> Result<Option<String>> {
+    command_refusal_on(pool, access, run, today()).await
+}
+
+/// The tools whose commands count against the command budget: workspace and Sandbox commands.
+#[must_use]
+pub fn metered(name: &str) -> bool {
+    matches!(
+        name,
+        "shell" | "python" | "sandbox_shell" | "sandbox_python"
+    )
+}
+
+/// Commands going now, per run and per account, in this process (the loop runs them all).
+static RUNNING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// One running command's place in the per-run and per-account counts; dropping it frees it.
+#[derive(Debug)]
+pub struct CommandSlot(Vec<String>);
+
+impl CommandSlot {
+    /// Take a place for a command of `run`, or say which limit is full. Administrators are
+    /// counted but never refused.
+    pub fn take(access: &LiveAccess, run: &str) -> std::result::Result<Self, String> {
+        let limits = access.run_limits;
+        let keys = [
+            (
+                format!("run:{run}"),
+                limits.concurrent_commands_per_run,
+                "this run",
+            ),
+            (
+                format!("user:{}", access.principal.user_id),
+                limits.concurrent_commands_per_user,
+                "your account",
+            ),
+        ];
+        let mut running = RUNNING.lock().unwrap_or_else(|error| error.into_inner());
+        if !access.principal.administrator() {
+            for (key, limit, whose) in &keys {
+                if let Some(limit) = limit {
+                    if running.get(key).copied().unwrap_or(0) >= *limit {
+                        return Err(format!(
+                            "Command limit reached: {whose} may run {limit} command{} at once. Wait for one to finish.",
+                            if *limit == 1 { "" } else { "s" }
+                        ));
+                    }
+                }
+            }
+        }
+        let keys: Vec<String> = keys.into_iter().map(|(key, _, _)| key).collect();
+        for key in &keys {
+            *running.entry(key.clone()).or_insert(0) += 1;
+        }
+        Ok(Self(keys))
+    }
+}
+
+impl Drop for CommandSlot {
+    fn drop(&mut self) {
+        let mut running = RUNNING.lock().unwrap_or_else(|error| error.into_inner());
+        for key in &self.0 {
+            if let Some(count) = running.get_mut(key) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    running.remove(key);
+                }
+            }
+        }
+    }
+}
+
 /// [`refusal_on`] for today.
 pub async fn refusal(pool: &SqlitePool, access: &LiveAccess) -> Result<Option<String>> {
     refusal_on(pool, access, today()).await
@@ -205,6 +371,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    #[tokio::test]
+    async fn command_time_adds_up_per_run_and_per_requester_day() {
+        let pool = pool().await;
+        record_command_on(&pool, "u1", "r1", 100, 1500)
+            .await
+            .unwrap();
+        record_command_on(&pool, "u1", "r1", 101, 500)
+            .await
+            .unwrap();
+        let run: i64 =
+            sqlx::query_scalar("SELECT SUM(cpu_ms) FROM usage_daily WHERE scope='run' AND id='r1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(run, 2000);
+        let day: i64 = sqlx::query_scalar(
+            "SELECT cpu_ms FROM usage_daily WHERE scope='requester' AND id='u1' AND day=100",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(day, 1500);
+        // A command adds no model turn.
+        assert_eq!(used(&pool, REQUESTER, "u1", 100).await.unwrap().turns, 0);
     }
 
     #[test]

@@ -857,4 +857,74 @@ mod tests {
                 .unwrap();
         assert_eq!(kept, 0);
     }
+
+    #[tokio::test]
+    async fn commands_share_a_budget_per_run_and_per_day_and_a_count_at_once() {
+        let (_root, store) = opened().await;
+        set_run_limits(
+            &store,
+            json!({"command_cpu_seconds_per_run":10,"command_cpu_seconds_per_user_day":15,
+                "concurrent_commands_per_run":1,"concurrent_commands_per_user":2}),
+        );
+        let user = &free_accounts(&store, &["commands"]).await[0];
+        let me = user.current_user_id().to_owned();
+        let access = store.live_access(&me, "shared_default").await.unwrap();
+        let pool = &store.app_pool;
+        let day = 20_000;
+        use webagent_engine::usage_ledger::{command_refusal_on, record_command_on, CommandSlot};
+        assert!(command_refusal_on(pool, &access, "r1", day)
+            .await
+            .unwrap()
+            .is_none());
+        record_command_on(pool, &me, "r1", day, 10_000)
+            .await
+            .unwrap();
+        let run = command_refusal_on(pool, &access, "r1", day)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(run.contains("this run's commands"), "{run}");
+        assert!(command_refusal_on(pool, &access, "r2", day)
+            .await
+            .unwrap()
+            .is_none());
+        record_command_on(pool, &me, "r2", day, 5_000)
+            .await
+            .unwrap();
+        let today = command_refusal_on(pool, &access, "r3", day)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            today.contains("today") && today.contains("00:00 UTC"),
+            "{today}"
+        );
+        assert!(command_refusal_on(pool, &access, "r3", day + 1)
+            .await
+            .unwrap()
+            .is_none());
+        let admin = store
+            .live_access(store.current_user_id(), "shared_default")
+            .await
+            .unwrap();
+        record_command_on(pool, store.current_user_id(), "admin-run", day, 99_000)
+            .await
+            .unwrap();
+        assert!(command_refusal_on(pool, &admin, "admin-run", day)
+            .await
+            .unwrap()
+            .is_none());
+        // At once: one per run, two per account; a finished command frees its place.
+        let first = CommandSlot::take(&access, "r9").unwrap();
+        assert!(CommandSlot::take(&access, "r9")
+            .unwrap_err()
+            .contains("this run may run 1 command"));
+        let second = CommandSlot::take(&access, "r8").unwrap();
+        assert!(CommandSlot::take(&access, "r7")
+            .unwrap_err()
+            .contains("your account may run 2 commands"));
+        drop(first);
+        let third = CommandSlot::take(&access, "r7").unwrap();
+        drop((second, third));
+    }
 }

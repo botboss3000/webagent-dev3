@@ -19,6 +19,14 @@ pub struct RunLimits {
     pub agent_daily_turns: Option<u32>,
     /// Known provider cost non-administrators may use on one agent per day, in US dollars.
     pub agent_daily_cost_usd: Option<f64>,
+    /// Processor seconds all `shell` and `python` commands of one run may use together.
+    pub command_cpu_seconds_per_run: Option<u32>,
+    /// Processor seconds one account's commands may use per day (UTC).
+    pub command_cpu_seconds_per_user_day: Option<u32>,
+    /// Commands one run may have going at once.
+    pub concurrent_commands_per_run: Option<u32>,
+    /// Commands one account's runs may have going at once.
+    pub concurrent_commands_per_user: Option<u32>,
 }
 
 impl Default for RunLimits {
@@ -28,6 +36,10 @@ impl Default for RunLimits {
             max_active_runs_per_agent: None,
             agent_daily_turns: None,
             agent_daily_cost_usd: None,
+            command_cpu_seconds_per_run: Some(3_600),
+            command_cpu_seconds_per_user_day: Some(14_400),
+            concurrent_commands_per_run: Some(2),
+            concurrent_commands_per_user: Some(4),
         }
     }
 }
@@ -60,6 +72,32 @@ impl RunLimits {
         }
         if !valid_cost(limits.agent_daily_cost_usd) {
             bail!("run_limits.agent_daily_cost_usd must be a number from 0 to 1000000");
+        }
+        for (name, value, max) in [
+            (
+                "command_cpu_seconds_per_run",
+                limits.command_cpu_seconds_per_run,
+                360_000,
+            ),
+            (
+                "command_cpu_seconds_per_user_day",
+                limits.command_cpu_seconds_per_user_day,
+                8_640_000,
+            ),
+            (
+                "concurrent_commands_per_run",
+                limits.concurrent_commands_per_run,
+                64,
+            ),
+            (
+                "concurrent_commands_per_user",
+                limits.concurrent_commands_per_user,
+                256,
+            ),
+        ] {
+            if value.is_some_and(|value| value == 0 || value > max) {
+                bail!("run_limits.{name} must be 1..={max}");
+            }
         }
         Ok(limits)
     }
@@ -161,6 +199,8 @@ mod tests {
             json!({"run_limits":{"agent_daily_turns":0}}),
             json!({"run_limits":{"agent_daily_cost_usd":-1}}),
             json!({"run_limits":{"unknown":1}}),
+            json!({"run_limits":{"command_cpu_seconds_per_run":0}}),
+            json!({"run_limits":{"concurrent_commands_per_user":257}}),
         ] {
             assert!(RunLimits::from_policy(&bad).is_err(), "{bad}");
         }

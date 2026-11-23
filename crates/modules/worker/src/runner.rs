@@ -40,6 +40,55 @@ fn invalid(error: impl std::fmt::Display) -> io::Error {
 /// to stop, and 1 when the command could not start confined.
 #[must_use]
 pub fn supervise(argv_json: &str) -> i32 {
+    let usage = UsageReport::take();
+    let code = supervise_inner(argv_json);
+    usage.send();
+    code
+}
+
+/// The pipe the worker reads a command's processor time from (`V3_USAGE_FD`), kept out of
+/// the command's own processes.
+struct UsageReport(Option<i32>);
+
+impl UsageReport {
+    fn take() -> Self {
+        let fd = std::env::var("V3_USAGE_FD")
+            .ok()
+            .and_then(|fd| fd.parse::<i32>().ok())
+            .filter(|fd| *fd > 2);
+        if let Some(fd) = fd {
+            // SAFETY: fcntl on a descriptor number; a wrong number only fails.
+            unsafe {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+        }
+        Self(fd)
+    }
+
+    /// Writes `{"cpu_ms":N}`: the processor time of every descendant this supervisor reaped
+    /// (the command's whole tree, since it is the subreaper), then closes the pipe.
+    fn send(self) {
+        let Some(fd) = self.0 else { return };
+        // SAFETY: getrusage writes only into the struct passed by pointer; write and close
+        // take a buffer this function owns and a descriptor it was given.
+        unsafe {
+            let mut own: libc::rusage = std::mem::zeroed();
+            libc::getrusage(libc::RUSAGE_CHILDREN, &mut own);
+            let millis = |time: libc::timeval| {
+                u64::try_from(time.tv_sec).unwrap_or(0) * 1000
+                    + u64::try_from(time.tv_usec).unwrap_or(0) / 1000
+            };
+            let line = format!(
+                "{{\"cpu_ms\":{}}}\n",
+                millis(own.ru_utime) + millis(own.ru_stime)
+            );
+            libc::write(fd, line.as_ptr().cast(), line.len());
+            libc::close(fd);
+        }
+    }
+}
+
+fn supervise_inner(argv_json: &str) -> i32 {
     let strict = std::env::var("V3_SANDBOX_CONFINEMENT")
         .ok()
         .map(|text| crate::sandbox_tools::Confinement::parse(&text))

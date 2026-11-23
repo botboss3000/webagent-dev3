@@ -13,3 +13,5 @@ Pass `command`, and optionally `timeout_seconds` (default and maximum: the abili
 - Programs that need the network, `/proc` or files outside the sandbox fail with "Permission denied" or "Operation not permitted". That is the sandbox working, not a fault to work around.
 
 Use `sandbox_file` to write file content rather than shell redirection with long here-documents.
+
+The result also gives `cpu_seconds`, the processor time the command and its processes used. A run's commands and an account's commands each share a processor-time budget (per run, and per account per day) and a limit on commands going at once (the app's run limits). A call past one is not run: it returns status `denied` with a reason starting "Command budget used" or "Command limit reached". Do not repeat it; finish with what you have, or wait for the running command to end.

@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -258,6 +258,9 @@ pub(crate) async fn run(
     confined: Confined<'_>,
 ) -> io::Result<Value> {
     let (reader, writer) = std::io::pipe()?;
+    // The supervisor writes the command's processor time here when it ends.
+    let (usage_reader, usage_writer) = std::io::pipe()?;
+    let usage_fd = usage_writer.as_raw_fd();
     let ports: Vec<String> = ports.iter().map(u16::to_string).collect();
     let (program, leading) = runner
         .split_first()
@@ -279,6 +282,7 @@ pub(crate) async fn run(
         .env("V3_ALLOWED_LISTEN_PORTS", ports.join(","))
         // Only a Codebase Admin call may read the checkout's source files.
         .env("V3_CHECKOUT_READ", if checkout { "1" } else { "0" })
+        .env("V3_USAGE_FD", usage_fd.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::from(writer.try_clone()?))
         .stderr(Stdio::from(writer));
@@ -288,16 +292,23 @@ pub(crate) async fn run(
     };
     // SAFETY: setsid is async-signal-safe and touches no memory.
     unsafe {
-        command.as_std_mut().pre_exec(|| {
+        command.as_std_mut().pre_exec(move || {
             if libc::setsid() < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // The usage pipe survives exec into the supervisor, which closes it on exec
+            // into the command again.
+            if libc::fcntl(usage_fd, libc::F_SETFD, 0) < 0 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
         });
     }
+    let started = std::time::Instant::now();
     let child = command.spawn()?;
-    // The command's own copies of the write end are the only ones left.
+    // The command's own copies of the write ends are the only ones left.
     drop(command);
+    drop(usage_writer);
     let group = child
         .id()
         .and_then(|pid| i32::try_from(pid).ok())
@@ -343,10 +354,24 @@ pub(crate) async fn run(
     unsafe {
         libc::killpg(group, libc::SIGKILL);
     }
+    // Its processor time, as the supervisor reported it; the elapsed time when it could not
+    // (it was killed), which is at least as much for one thread.
+    let mut report = Vec::new();
+    let mut usage = tokio::net::unix::pipe::Receiver::from_owned_fd(OwnedFd::from(usage_reader))?;
+    let _ = tokio::time::timeout(Duration::from_secs(1), usage.read_to_end(&mut report)).await;
+    let cpu_ms = serde_json::from_slice::<Value>(report.trim_ascii())
+        .ok()
+        .and_then(|value| value["cpu_ms"].as_u64())
+        .unwrap_or_else(|| u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
     Ok(
         json!({"status":status,"output":String::from_utf8_lossy(&data),
-        "exit_code":exit_code,"truncated":truncated}),
+        "exit_code":exit_code,"truncated":truncated,"cpu_seconds":cpu_seconds(cpu_ms)}),
     )
+}
+
+/// Milliseconds as seconds with two decimals.
+fn cpu_seconds(millis: u64) -> f64 {
+    (millis / 10) as f64 / 100.0
 }
 
 /// The exit code as asyncio reports it: negative for a signal.

@@ -582,6 +582,93 @@
       "max": 1000000,
       "bounds": "validator",
       "nullable": true
+    },
+    {
+      "id": "access.run_limits.command_cpu_seconds_per_run",
+      "description": "Processor seconds all shell and python commands of one run (workspace and Sandbox) may use together; past it the run's further commands are refused. Administrators are not limited.",
+      "type": "integer",
+      "pointer": "/run_limits/command_cpu_seconds_per_run",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "one run may use an hour of command CPU",
+        "cap command processor time per run at 10 minutes"
+      ],
+      "areas": [
+        "limits",
+        "runs",
+        "commands"
+      ],
+      "min": 1,
+      "max": 360000,
+      "unit": "s",
+      "nullable": true,
+      "bounds": "validator"
+    },
+    {
+      "id": "access.run_limits.command_cpu_seconds_per_user_day",
+      "description": "Processor seconds one account's commands may use per day (UTC). Administrators are not limited.",
+      "type": "integer",
+      "pointer": "/run_limits/command_cpu_seconds_per_user_day",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "four hours of command CPU per user per day"
+      ],
+      "areas": [
+        "limits",
+        "accounts",
+        "commands"
+      ],
+      "min": 1,
+      "max": 8640000,
+      "unit": "s",
+      "nullable": true,
+      "bounds": "validator"
+    },
+    {
+      "id": "access.run_limits.concurrent_commands_per_run",
+      "description": "Commands one run may have going at once.",
+      "type": "integer",
+      "pointer": "/run_limits/concurrent_commands_per_run",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "one command at a time per run"
+      ],
+      "areas": [
+        "limits",
+        "runs",
+        "commands"
+      ],
+      "min": 1,
+      "max": 64,
+      "nullable": true,
+      "bounds": "validator"
+    },
+    {
+      "id": "access.run_limits.concurrent_commands_per_user",
+      "description": "Commands one account's runs may have going at once.",
+      "type": "integer",
+      "pointer": "/run_limits/concurrent_commands_per_user",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "each user may run 4 commands at once"
+      ],
+      "areas": [
+        "limits",
+        "accounts",
+        "commands"
+      ],
+      "min": 1,
+      "max": 256,
+      "nullable": true,
+      "bounds": "validator"
     }
   ],
   "excluded": {
