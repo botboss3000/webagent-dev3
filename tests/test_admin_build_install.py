@@ -142,6 +142,23 @@ class InstallTests(unittest.TestCase):
         self.assertNotIn("PRIVATE-FIXTURE", (protected / "manifest.json").read_text())
         self.assertEqual({"copied": 0, "failed": 0}, installer.archive_rollbacks())
 
+    def test_archive_copies_only_newest_kept_exports(self):
+        # The Docker guard deletes older copies; recopying them made a 2 GB read loop.
+        newest = self.artifact_fixture()
+        for age in (1, 2):
+            job = self.v3 / "build-jobs" / str(uuid.uuid4())
+            job.mkdir(mode=0o700)
+            for name in ("rollback-images.tar", "container-config.json"):
+                (job / name).write_bytes((newest / name).read_bytes())
+                os.chmod(job / name, 0o600)
+            os.utime(job / "rollback-images.tar", ns=(age * 10**9, age * 10**9))
+        scheduler = {**installer.CONFIG["scheduler"], "rollback_keep_archives": 1}
+        with patch.dict(installer.CONFIG, {"scheduler": scheduler}):
+            self.assertEqual({"copied": 2, "failed": 0}, installer.archive_rollbacks())
+            archives = self.v3 / "rollback/administrator"
+            self.assertEqual({newest.name}, {p.name for p in archives.iterdir()})
+            self.assertEqual({"copied": 0, "failed": 0}, installer.archive_rollbacks())
+
     def test_archive_rejects_symlink_hardlink_database_and_disk_exhaustion(self):
         job = self.artifact_fixture()
         source_fd = installer.directory(job)

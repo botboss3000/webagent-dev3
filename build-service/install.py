@@ -284,12 +284,18 @@ def archive_rollbacks():
     copied = failed = 0
     try:
         # Enumerate only canonical job directories and two exact artifact names.
+        exports = []
         for name in sorted(os.listdir(jobs))[:1000]:
             try:
                 if str(uuid.UUID(name)) != name:
                     continue
-            except ValueError:
+                exports.append((os.stat(name + "/rollback-images.tar", dir_fd=jobs, follow_symlinks=False).st_mtime_ns, name))
+            except (ValueError, OSError):
                 continue
+        # Copy only the newest exports the Docker guard keeps (rollback_keep_archives).
+        # Older copies are its to delete; recopying them re-read ~2 GB each every guard run.
+        keep = CONFIG["scheduler"].get("rollback_keep_archives", 2)
+        for _, name in sorted(exports, reverse=True)[:keep]:
             source = destination = None
             try:
                 source = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=jobs)
