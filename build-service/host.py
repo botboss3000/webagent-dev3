@@ -947,8 +947,13 @@ def inspect_source_patch_corrected(root, patch):
     return paths, patch
 
 
+# Environment no longer carried into a replacement container: the diagnostics browser-login
+# bridge these configured was removed from the app (2026-11-23); old containers may still hold them.
+RETIRED_ENV = ("V3_BROWSER_LOGIN_TOKEN", "V3_BROWSER_LOGIN_CALLER_ID")
+
+
 def replacement_config(current, old_defaults, new_defaults):
-    """Preserve explicit overrides while adopting the new image's defaults."""
+    """Preserve explicit overrides while adopting the new image's defaults; drop RETIRED_ENV."""
     result = dict(current)
     for key in ("Entrypoint", "Cmd", "User", "WorkingDir", "Healthcheck", "StopSignal", "Shell", "ExposedPorts", "Volumes"):
         if current.get(key) == old_defaults.get(key):
@@ -962,6 +967,8 @@ def replacement_config(current, old_defaults, new_defaults):
     for key, value in current_env.items():
         if old_env.get(key) != value:
             new_env[key] = value
+    for key in RETIRED_ENV:
+        new_env.pop(key, None)
     result["Env"] = [key + "=" + value for key, value in sorted(new_env.items())]
     labels = dict(new_defaults.get("Labels") or {})
     for key, value in (current.get("Labels") or {}).items():

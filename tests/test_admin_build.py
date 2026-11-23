@@ -2403,6 +2403,15 @@ class BuildTests(unittest.TestCase):
         self.assertEqual({"MODE=new", "ADDED=yes", "TOKEN=private", "CUSTOM=yes"}, set(value["Env"]))
         self.assertEqual({"image": "new", "custom": "yes"}, value["Labels"])
 
+    def test_replacement_drops_retired_browser_login_environment(self):
+        old = {"Env": ["MODE=old"]}
+        current = {"Env": ["MODE=old", "CUSTOM=yes"] + [name + "=fixture" for name in host.RETIRED_ENV]}
+        value = host.replacement_config(current, old, {"Env": ["MODE=new"]})
+        self.assertEqual({"MODE=new", "CUSTOM=yes"}, set(value["Env"]))
+        # Also when an image were to declare one as a default.
+        value = host.replacement_config({"Env": []}, {"Env": []}, {"Env": [host.RETIRED_ENV[0] + "=x"]})
+        self.assertEqual([], value["Env"])
+
 
 class InheritedSocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_codex_and_webagent_share_work_registry(self):

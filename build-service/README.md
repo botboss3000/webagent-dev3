@@ -212,25 +212,6 @@ profile key the new helper requires (for example `approvers`) goes into
 `/etc/webagent/host-profile.json` before the update, or the helper falls back to its
 fail-closed default.
 
-## Diagnostics browser sign-in key rotation
-
-Host helper action `rotate_browser_login_token` (no arguments) replaces the API container's
-`V3_BROWSER_LOGIN_TOKEN`, the bearer `POST /api/v3/diagnostics/browser-login` accepts, without
-anyone seeing the value. Request it as the operator, `buildctl host request
-rotate_browser_login_token`, and approve it on the Host Admin page with the host approval
-passphrase or with `sudo buildctl host approve ID`; no allow-all window covers it. It runs in
-its own transient unit like `broker_install`. It refuses while a broker job runs or another
-task holds a drain, then drains under `token-rotate-<id>`, holds the boot supervisor's effect
-lock, makes 32 random bytes as hex inside the helper, writes
-`/etc/webagent/development/browser-login.env` atomically (root:root 0600, other lines kept),
-and recreates the API container through the installed release's `host.Runner` (the Docker
-socket, as `reconfigure.py` does) with only that variable changed. The old container stays
-stopped as `<api>-pre-rotate-<id>`; if the new one is not healthy with readiness 200, the old
-one and the old file come back. The result is only `rotated`, `at` and `sha256_8` (first 8 hex
-of the SHA-256 of the new value); error text has both values replaced by `[redacted]`. Later
-deploys keep the new value (`replacement_config` carries non-image environment over). Older
-`-pre-build-` rollback containers still hold the previous key: restoring one brings it back.
-
 ## Local models relay
 
 `local_models_relay.py` lets the app use self-hosted models (Laya and Kev on the sidekick)
