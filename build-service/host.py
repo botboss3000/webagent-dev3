@@ -134,6 +134,7 @@ CONTEXT = (
     "v3/sandbox.py", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service")
 UI_SOURCE_PREFIX = "v3/ui/"
+ADMINISTRATOR_UI_PREFIX = UI_SOURCE_PREFIX + "main-panel/administrator/"
 def checked_git_modes(patch):
     """Render receipt POSIX modes as Git owner-execute modes for checked source patches."""
     def mode(line,prefix):
@@ -2217,8 +2218,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             return self.command([*git, "rev-parse", "HEAD"], timeout=30).strip()
 
     def verify_ui(self, changed=()):
-        # Static routes are public and must serve the exact selected bytes; the
-        # app shell may carry one bounded server-rendered SEO head block.
+        # Static routes are public and must serve the exact selected bytes (administrator
+        # pages excepted, below); the app shell may carry one bounded server-rendered SEO head block.
         paths = [("v3/ui/index.html", "/app")]
         paths.extend((name, "/ui/" + name[len(UI_SOURCE_PREFIX):])
                      for name in changed if name.startswith(UI_SOURCE_PREFIX) and
@@ -2235,6 +2236,12 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 response = connection.getresponse()
                 body = response.read(16 * 1024 * 1024 + 1)
                 if expected is None and response.status == 404:
+                    continue
+                # Administrator pages are served only to a signed-in administrator, so this
+                # anonymous request must get the missing-file 404 (checks that gate too).
+                if name.lower().startswith(ADMINISTRATOR_UI_PREFIX):
+                    if response.status != 404:
+                        raise RuntimeError("administrator UI file served without sign-in: " + name)
                     continue
                 matches = (Runner.shell_matches(expected, body) if route == "/app" and expected is not None
                            else body == expected)

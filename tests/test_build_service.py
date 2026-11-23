@@ -1749,6 +1749,30 @@ class PublicationWaitUnitTests(unittest.TestCase):
   self.pub._admit=lambda *args:self.pub.acquire(self.job)
   self.assertIsNone(self.pub.admit(self.job,b"source"));self.assertEqual(self.job["status"],"needs_decision");self.assertFalse(self.job.get("effects_started"))
 
+class ServedUiVerificationTests(unittest.TestCase):
+ """After a UI switch public files must serve the frozen bytes and administrator files the anonymous 404."""
+ def check(self,admin_status):
+  import http.server,threading
+  class Handler(http.server.BaseHTTPRequestHandler):
+   def log_message(self,*args):pass
+   def do_GET(self):
+    body={"/ui/a.css":b"a{}","/ui/main-panel/Administrator/b.js":b"b()"}.get(self.path)
+    status=admin_status if self.path.startswith("/ui/main-panel/Administrator/") else 200 if body else 404
+    self.send_response(status);self.end_headers()
+    if status==200:self.wfile.write(body or b"")
+  server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
+  try:
+   with tempfile.TemporaryDirectory() as root:
+    current=Path(root)/"current"/"v3"/"ui"
+    (current/"main-panel"/"Administrator").mkdir(parents=True)
+    (current/"a.css").write_bytes(b"a{}");(current/"main-panel"/"Administrator"/"b.js").write_bytes(b"b()")
+    with patch.object(fixtures.host,"ASSET_ROOT",Path(root)),patch.dict(fixtures.host.CONFIG,{"bind_address":"127.0.0.1","port":server.server_address[1]}):
+     fixtures.host.Runner.verify_ui(None,["v3/ui/a.css","v3/ui/main-panel/Administrator/b.js"])
+  finally:server.shutdown();server.server_close()
+ def test_administrator_files_must_be_refused_anonymously(self):
+  self.check(404)
+  with self.assertRaisesRegex(RuntimeError,"administrator UI file served without sign-in"):self.check(200)
+
 class AppShellVerificationTests(unittest.TestCase):
  frozen=b'<html><head><title>WebAgent</title>\n<link rel="manifest" href="/m.json">\n</head><body></body></html>'
  block=(b'<meta name="description" content="WebAgent">\n<meta property="og:title" content="WebAgent">\n'
