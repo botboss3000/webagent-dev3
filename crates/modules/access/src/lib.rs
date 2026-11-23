@@ -178,10 +178,6 @@ pub struct Tier {
     /// Model turns one account at this level may use per day (UTC); absent means no limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_turns: Option<u32>,
-    /// Known provider cost one account at this level may use per day (UTC), in US dollars;
-    /// absent means no limit. Calls without a reported cost count as turns only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub daily_cost_usd: Option<f64>,
     /// What an owner on this tier may serve with their agents (absent values: no limit).
     #[serde(default, skip_serializing_if = "OwnerLimits::unlimited")]
     pub owner_limits: OwnerLimits,
@@ -248,7 +244,6 @@ impl Tier {
             || self
                 .daily_turns
                 .is_some_and(|turns| turns == 0 || turns > 1_000_000)
-            || !run_limits::valid_cost(self.daily_cost_usd)
             || !self.owner_limits.valid()
         {
             bail!("Invalid entitlement tier");
@@ -679,7 +674,6 @@ mod tests {
             max_sessions: 10,
             max_active_runs: 2,
             daily_turns: None,
-            daily_cost_usd: None,
             owner_limits: Default::default(),
         };
         assert!(tier.allows_byo_model("deepseek-chat"));
@@ -712,7 +706,6 @@ mod tests {
             max_sessions: 10,
             max_active_runs: 2,
             daily_turns: None,
-            daily_cost_usd: None,
             owner_limits: Default::default(),
         };
         tier.validate().unwrap();
@@ -723,10 +716,11 @@ mod tests {
         tier.daily_turns = Some(0);
         assert!(tier.validate().is_err());
         tier.daily_turns = Some(300);
-        tier.daily_cost_usd = Some(-1.0);
-        assert!(tier.validate().is_err());
-        tier.daily_cost_usd = Some(1.0);
         tier.validate().unwrap();
+        // The open app holds no money limits (plus tier spec 8.1): a dollar field is refused.
+        let mut value = serde_json::to_value(&tier).unwrap();
+        value["daily_cost_usd"] = json!(1.0);
+        assert!(serde_json::from_value::<Tier>(value).is_err());
     }
     #[test]
     fn tiers_hold_no_tool_or_ability_grants() {

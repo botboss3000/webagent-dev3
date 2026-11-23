@@ -45,7 +45,6 @@
     }
   },
   "run_limits": {
-    "agent_daily_cost_usd": null,
     "agent_daily_turns": null,
     "command_cpu_seconds_per_run": 3600,
     "command_cpu_seconds_per_user_day": 14400,
@@ -54,7 +53,7 @@
     "max_active_runs_per_agent": null,
     "reserved_admin_runs": 1
   },
-  "revision": 64,
+  "revision": 65,
   "storage": {
     "compress_idle_days": 7,
     "compression": {
@@ -127,13 +126,12 @@
       "allowed_models": [
         "deepseek-flash"
       ],
-      "daily_cost_usd": 0.25,
       "daily_turns": 60,
       "id": "anonymous",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 8,
+      "revision": 9,
       "owner_limits": {
         "public_visitors": false
       }
@@ -142,13 +140,12 @@
       "allowed_models": [
         "deepseek-flash"
       ],
-      "daily_cost_usd": 1.0,
       "daily_turns": 300,
       "id": "free",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 9,
+      "revision": 10,
       "owner_limits": {
         "agent_users": 20,
         "agent_users_at_once": 3,

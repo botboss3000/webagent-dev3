@@ -563,34 +563,6 @@
       "notes": "The administrator level has no daily limit; a level without the field has none either."
     },
     {
-      "id": "access.tier.daily_cost_usd",
-      "description": "Known model cost, in US dollars, one account at this account level may use per day (UTC). Absent means no limit; calls without a reported cost count as turns only.",
-      "type": "number",
-      "pointer": "/tiers/{tier}/daily_cost_usd",
-      "layers": [
-        "app"
-      ],
-      "examples": [
-        "cap free accounts at one dollar a day",
-        "anonymous visitors may spend 25 cents a day"
-      ],
-      "areas": [
-        "accounts",
-        "limits",
-        "cost"
-      ],
-      "min": 0,
-      "max": 1000000,
-      "parameters": {
-        "tier": [
-          "free",
-          "anonymous"
-        ]
-      },
-      "bounds": "validator",
-      "notes": "The administrator level has no daily limit; a level without the field has none either."
-    },
-    {
       "id": "access.run_limits.reserved_admin_runs",
       "description": "Loop run slots kept for administrators: ordinary runs start only while fewer than the loop's maximum concurrent runs minus this number are going.",
       "type": "integer",
@@ -651,27 +623,6 @@
       ],
       "min": 1,
       "max": 10000000,
-      "bounds": "validator",
-      "nullable": true
-    },
-    {
-      "id": "access.run_limits.agent_daily_cost_usd",
-      "description": "Known model cost, in US dollars, non-administrators together may use on one agent per day (UTC). Null means no limit.",
-      "type": "number",
-      "pointer": "/run_limits/agent_daily_cost_usd",
-      "layers": [
-        "app"
-      ],
-      "examples": [
-        "cap each public agent at 5 dollars a day"
-      ],
-      "areas": [
-        "agents",
-        "limits",
-        "cost"
-      ],
-      "min": 0,
-      "max": 1000000,
       "bounds": "validator",
       "nullable": true
     },

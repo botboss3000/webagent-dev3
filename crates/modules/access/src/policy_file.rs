@@ -19,7 +19,6 @@ fn fresh_install_tiers() -> [Tier; 2] {
         max_sessions: 10_000,
         max_active_runs: 200,
         daily_turns: None,
-        daily_cost_usd: None,
         owner_limits: Default::default(),
     };
     let basic = Tier {
@@ -30,7 +29,6 @@ fn fresh_install_tiers() -> [Tier; 2] {
         max_sessions: 10,
         max_active_runs: 2,
         daily_turns: None,
-        daily_cost_usd: None,
         owner_limits: Default::default(),
     };
     [operator, basic]

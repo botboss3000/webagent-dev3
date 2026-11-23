@@ -1049,6 +1049,15 @@ impl<
             // The caller's copy now matches what was stored, so its later saves meet the
             // exact terminal fence.
             *run = finished_record(run);
+            // The run's usage feed (plus tier 8.6): what it used since its last flush. The save
+            // has committed, so a failed flush is logged; the next flush adds the difference.
+            if crate::usage_ledger::flushes_when_saved(run) {
+                if let Err(error) =
+                    crate::send_future(crate::usage_ledger::flush_saved(self.app_pool, run)).await
+                {
+                    tracing::warn!("Usage feed not flushed: {error}");
+                }
+            }
             if matches!(
                 run["status"].as_str(),
                 Some("completed" | "cancelled" | "failed")

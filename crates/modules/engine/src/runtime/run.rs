@@ -1977,13 +1977,15 @@ impl<
     }
 
     /// Advance one claimed run generation, rebuilding current context before model calls and retaining host authority over tool execution and publication.
-    /// Count the model call `record_usage` just stored in the daily usage ledger (C5). A failed
-    /// write is logged, not retried: the call already happened and must not be repeated.
+    /// Count the model call `record_usage` just stored in the daily usage ledger (C5), with the
+    /// run's usage feed flush when one is due. A failed write is logged, not retried: the call
+    /// already happened and must not be repeated.
     async fn ledger_turn(app: &Self, access: &webagent_access::authority::LiveAccess, run: &Value) {
         if let Err(error) = crate::usage_ledger::record(
             ScopedStorage::application_pool(app.store.records()),
             access,
             crate::usage_ledger::Turn::latest(run),
+            run,
         )
         .await
         {

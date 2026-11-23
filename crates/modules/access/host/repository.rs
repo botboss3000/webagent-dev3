@@ -619,7 +619,6 @@ mod tests {
                     max_sessions: 4,
                     max_active_runs: 1,
                     daily_turns: None,
-                    daily_cost_usd: None,
                     owner_limits: Default::default(),
                 },
                 0,
