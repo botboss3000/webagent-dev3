@@ -44,7 +44,13 @@
       "upload": 30
     }
   },
-  "revision": 60,
+  "run_limits": {
+    "agent_daily_cost_usd": null,
+    "agent_daily_turns": null,
+    "max_active_runs_per_agent": null,
+    "reserved_admin_runs": 1
+  },
+  "revision": 61,
   "storage": {
     "compress_idle_days": 7,
     "compression": {
@@ -110,21 +116,25 @@
       "allowed_models": [
         "deepseek-flash"
       ],
+      "daily_cost_usd": 0.25,
+      "daily_turns": 60,
       "id": "anonymous",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 6
+      "revision": 7
     },
     "free": {
       "allowed_models": [
         "deepseek-flash"
       ],
+      "daily_cost_usd": 1.0,
+      "daily_turns": 300,
       "id": "free",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 6
+      "revision": 8
     }
   }
 }

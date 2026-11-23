@@ -14,6 +14,7 @@ pub mod ports;
 pub mod publication;
 pub mod repository;
 pub mod runtime;
+pub mod usage_ledger;
 // Replaceable engine components run only under the Linux sandbox; elsewhere preparing
 // one fails, so components stay unavailable.
 #[cfg_attr(not(target_os = "linux"), path = "sandbox_unsupported.rs")]

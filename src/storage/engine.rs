@@ -215,8 +215,9 @@ impl AdmissionEffects for Store {
     fn requester_claim_ready<'a>(
         &'a self,
         run: &'a Value,
+        capacity: Capacity,
     ) -> impl std::future::Future<Output = Result<bool>> + Send + 'a {
-        Store::requester_claim_ready(self, run)
+        Store::requester_claim_ready_within(self, run, capacity)
     }
     fn reconcile_requester_slots<'a>(
         &'a self,

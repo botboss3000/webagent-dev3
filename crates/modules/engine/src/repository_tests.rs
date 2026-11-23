@@ -332,7 +332,7 @@ impl ChatEffects for Fixture {
 }
 
 impl AdmissionEffects for Fixture {
-    async fn requester_claim_ready<'a>(&'a self, _: &'a Value) -> Result<bool> {
+    async fn requester_claim_ready<'a>(&'a self, _: &'a Value, _: Capacity) -> Result<bool> {
         Ok(true)
     }
     async fn reconcile_requester_slots<'a>(&'a self) -> Result<()> {

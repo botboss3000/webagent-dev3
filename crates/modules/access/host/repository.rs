@@ -543,6 +543,8 @@ mod tests {
                     allowed_models: vec!["gpt-6-luna".into()],
                     max_sessions: 4,
                     max_active_runs: 1,
+                    daily_turns: None,
+                    daily_cost_usd: None,
                 },
                 0,
             )

@@ -227,6 +227,7 @@ impl Store {
         }
         store.pin_conversation_privacy().await?;
         webagent_engine::due::schema(&store.app_pool).await?;
+        webagent_engine::usage_ledger::schema(&store.app_pool).await?;
         for user in store.all_user_ids().await? {
             store.for_user(&user).await?;
             // Migrated; close the pool so start-up does not keep a connection per account.

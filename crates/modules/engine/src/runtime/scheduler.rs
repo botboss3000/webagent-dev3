@@ -196,18 +196,15 @@ impl<
         };
         let mut complete = true;
         for user in users {
-            let Ok(runs) = crate::send_future(user.store.active_runs()).await else {
+            let Ok(runs) = crate::send_future(user.store.scheduler_runs()).await else {
                 complete = false;
                 continue;
             };
-            for view in runs {
-                if status(&view) != "paused" {
+            for (id, state) in runs {
+                if state != "paused" {
                     continue;
                 }
-                let Some(id) = view["id"].as_str() else {
-                    continue;
-                };
-                if crate::send_future(user.component_restore(id))
+                if crate::send_future(user.component_restore(&id))
                     .await
                     .is_err()
                 {
@@ -307,6 +304,8 @@ impl<
             // shutoff ends after the loop saw them away; the account revisit is the fallback.
             let mut restore_sweep = true;
             let mut seen_pauses = super::components::COMPONENT_PAUSES.load(Ordering::Acquire);
+            // The requester whose run the loop started last; the next pass starts after it.
+            let mut last_served: Option<String> = None;
             loop {
                 if app.stop.is_cancelled() {
                     break;
@@ -396,6 +395,8 @@ impl<
                             Vec::new()
                         }
                     };
+                    // Queued runs of every account, claimed after all accounts' own work.
+                    let mut candidates = Vec::new();
                     for user_app in users {
                         progress.at(Stage::DispatchGate);
                         let _account_gate = crate::send_future(app.handles.gate.lock()).await;
@@ -419,14 +420,15 @@ impl<
                             tracing::warn!("Message queue drain deferred: {error}");
                         }
                         progress.at(Stage::RunScan);
-                        if let Ok(runs) = crate::send_future(user_app.store.active_runs()).await {
+                        // The plain run index (no window, no decrypt) names the runs to act on.
+                        if let Ok(runs) = crate::send_future(user_app.store.scheduler_runs()).await
+                        {
                             // The account's earliest approval expiry, stored after the pass
                             // so an account with only approval waits rests until then.
                             let mut expires: Option<u64> = None;
                             let mut expiry_known = true;
-                            for view in runs {
-                                let id = view["id"].as_str().unwrap().to_owned();
-                                if status(&view) == "paused" {
+                            for (id, state) in runs {
+                                if state == "paused" {
                                     if let Err(_) =
                                         crate::send_future(user_app.component_restore(&id)).await
                                     {
@@ -434,7 +436,7 @@ impl<
                                     }
                                     continue;
                                 }
-                                if status(&view) == "waiting_approval" {
+                                if state == "waiting_approval" {
                                     match crate::send_future(Self::requeue_auto_approval(
                                         &user_app, &id,
                                     ))
@@ -451,7 +453,7 @@ impl<
                                     }
                                     continue;
                                 }
-                                if status(&view) != "queued" {
+                                if state != "queued" {
                                     continue;
                                 }
                                 if !crate::components::available(crate::ports::AgentMetadata::root(
@@ -465,7 +467,6 @@ impl<
                                     }
                                     continue;
                                 }
-                                progress.at(Stage::Claim);
                                 let mut run = match crate::send_future(user_app.run(&id)).await {
                                     Ok(r) => r,
                                     Err(_) => continue,
@@ -484,172 +485,14 @@ impl<
                                     }
                                     continue;
                                 }
-                                let mut active = crate::send_future(app.active.lock()).await;
-                                if active.contains_key(&id) {
-                                    continue;
-                                }
-                                let ceiling = crate::send_future(app.runtime.read())
-                                    .await
-                                    .scheduler
-                                    .max_active_runs;
-                                if ceiling != 0 && active.len() >= ceiling {
-                                    expiry_known = false;
-                                    break;
-                                }
-                                let permit = match app.slots.clone().try_acquire_owned() {
-                                    Ok(p) => p,
-                                    Err(_) => {
-                                        expiry_known = false;
-                                        break;
-                                    }
-                                };
-                                let cancel = app.stop.child_token();
-                                active.insert(id.clone(), cancel.clone());
-                                drop(active);
-                                if run["context_hydration_pending"] == true {
-                                    let requester = run["requester_user_id"]
-                                        .as_str()
-                                        .unwrap_or(user_app.store.current_user_id());
-                                    let context = if requester == user_app.store.current_user_id() {
-                                        crate::send_future(
-                                            user_app
-                                                .store
-                                                .context(run["session_id"].as_str().unwrap()),
-                                        )
-                                        .await
-                                    } else {
-                                        crate::send_future(user_app.store.shared_model_context(
-                                            run["session_id"].as_str().unwrap(),
-                                        ))
-                                        .await
-                                    };
-                                    match context {
-                                        Ok(mut input) => {
-                                            // Keep saved notes beside the latest user turn as source data.
-                                            if requester == user_app.store.current_user_id() {
-                                                memory::insert(
-                                                    &mut input,
-                                                    run["memory_context"].as_str(),
-                                                );
-                                            }
-                                            super::run::pair_unresolved_calls(&mut input);
-                                            run["input"] = json!(input);
-                                            run["context_hydration_pending"] = json!(false);
-                                        }
-                                        Err(error) => {
-                                            tracing::warn!(run_id=%id,"Context hydration failed: {}",error);
-                                            crate::send_future(app.active.lock()).await.remove(&id);
-                                            continue;
-                                        }
-                                    }
-                                }
-                                let generation = uuid();
-                                if !matches!(
-                                    crate::send_future(user_app.store.claim_run(
-                                        &mut run,
-                                        &owner,
-                                        &generation
-                                    ))
-                                    .await,
-                                    Ok(true)
-                                ) {
-                                    crate::send_future(app.active.lock()).await.remove(&id);
-                                    continue;
-                                }
-                                let mut cloned = user_app.clone();
-                                cloned.chat_actor =
-                                    run["requester_user_id"].as_str().map(str::to_owned);
-                                let requester = cloned.actor().to_owned();
-                                match crate::send_future(cloned.chat.resolve(
-                                    cloned.store.records(),
-                                    run["session_id"].as_str().unwrap_or(""),
-                                    &requester,
-                                ))
-                                .await
-                                {
-                                    Ok(access) => cloned.chat_access = Some(access),
-                                    Err(_) => {
-                                        crate::send_future(app.active.lock()).await.remove(&id);
-                                        continue;
-                                    }
-                                }
-                                let lease_owner = owner.clone();
-                                tokio::spawn(async move {
-                                    let epoch = run["lease_epoch"].as_i64().unwrap_or(0);
-                                    let watcher_store = cloned.store.clone();
-                                    let watcher_id = id.clone();
-                                    let watcher_generation = generation.clone();
-                                    let watcher_cancel = cancel.clone();
-                                    let watcher = tokio::spawn(async move {
-                                        loop {
-                                            crate::send_future(tokio::time::sleep(
-                                                Duration::from_secs(5),
-                                            ))
-                                            .await;
-                                            if watcher_cancel.is_cancelled() {
-                                                break;
-                                            }
-                                            let renewed =
-                                                crate::send_future(watcher_store.renew_run_lease(
-                                                    &watcher_id,
-                                                    &watcher_generation,
-                                                    &lease_owner,
-                                                    epoch,
-                                                ))
-                                                .await
-                                                .unwrap_or(false);
-                                            if !renewed {
-                                                watcher_cancel.cancel();
-                                                break;
-                                            }
-                                        }
-                                    });
-                                    if let Err(error) =
-                                        crate::send_future(cloned.session_operation(
-                                            run["session_id"].as_str().unwrap_or(""),
-                                            cancel.clone(),
-                                            Self::execute_run(
-                                                cloned.clone(),
-                                                id.clone(),
-                                                generation,
-                                                cancel.clone(),
-                                            ),
-                                        ))
-                                        .await
-                                    {
-                                        tracing::warn!(run_id=%id,"Run interrupted: {}",error);
-                                        let _settle_guard =
-                                            crate::send_future(cloned.handles.gate.lock()).await;
-                                        if let Ok(mut failed) =
-                                            crate::send_future(cloned.run(&id)).await
-                                        {
-                                            if note_interrupt(&mut failed, &error.to_string()) {
-                                                if let Err(error) =
-                                                    crate::send_future(cloned.save(&mut failed))
-                                                        .await
-                                                {
-                                                    tracing::warn!(run_id=%id,"Interrupt note not saved: {error}");
-                                                }
-                                            }
-                                        }
-                                    }
-                                    cancel.cancel();
-                                    watcher.abort();
-                                    crate::send_future(cloned.active.lock()).await.remove(&id);
-                                    drop(permit);
-                                    crate::send_future(crate::wake::notify_account(
-                                        &cloned.control_dir,
-                                        crate::ports::Records::current_user_id(
-                                            cloned.store.records(),
-                                        ),
-                                        crate::wake::Kind::Run,
-                                    ))
-                                    .await;
-                                });
+                                let requester = run["requester_user_id"]
+                                    .as_str()
+                                    .unwrap_or(user_app.store.current_user_id())
+                                    .to_owned();
+                                candidates.push((requester, (user_app.clone(), id, run)));
                             }
-                            // A failed reconciliation, or a pass that stopped before seeing every
-                            // run, leaves the expiry due now: the account stays visited and the
-                            // next complete pass stores the real one.
+                            // A failed reconciliation leaves the expiry due now: the account
+                            // stays visited and the next complete pass stores the real one.
                             let expires = if expiry_known { expires } else { Some(0) };
                             if let Err(error) = crate::send_future(APPROVAL_EXPIRIES.set(
                                 ScopedStorage::application_pool(user_app.store.records()),
@@ -662,6 +505,177 @@ impl<
                                 tracing::warn!("Approval expiry not stored: {error}");
                             }
                         }
+                    }
+                    // C5 fair admission: queued runs start in turn over requesters, starting
+                    // after the one served last, not in account order. Admission decides each
+                    // claim in its writer transaction (requester limit, per-agent cap, slots
+                    // kept for administrators); the loop's ceiling still stops the pass.
+                    let mut waiting = std::collections::HashSet::new();
+                    for (requester_key, (user_app, id, mut run)) in
+                        fair_order(candidates, last_served.as_deref())
+                    {
+                        if waiting.contains(&requester_key) {
+                            continue;
+                        }
+                        progress.at(Stage::DispatchGate);
+                        let _claim_gate = crate::send_future(app.handles.gate.lock()).await;
+                        progress.at(Stage::Claim);
+                        let last_served = &mut last_served;
+                        let mut active = crate::send_future(app.active.lock()).await;
+                        if active.contains_key(&id) {
+                            continue;
+                        }
+                        let ceiling = crate::send_future(app.runtime.read())
+                            .await
+                            .scheduler
+                            .max_active_runs;
+                        if ceiling != 0 && active.len() >= ceiling {
+                            break;
+                        }
+                        let capacity = Capacity {
+                            active: active.len(),
+                            ceiling,
+                        };
+                        let permit = match app.slots.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => break,
+                        };
+                        let cancel = app.stop.child_token();
+                        active.insert(id.clone(), cancel.clone());
+                        drop(active);
+                        if run["context_hydration_pending"] == true {
+                            let requester = run["requester_user_id"]
+                                .as_str()
+                                .unwrap_or(user_app.store.current_user_id());
+                            let context = if requester == user_app.store.current_user_id() {
+                                crate::send_future(
+                                    user_app.store.context(run["session_id"].as_str().unwrap()),
+                                )
+                                .await
+                            } else {
+                                crate::send_future(
+                                    user_app
+                                        .store
+                                        .shared_model_context(run["session_id"].as_str().unwrap()),
+                                )
+                                .await
+                            };
+                            match context {
+                                Ok(mut input) => {
+                                    // Keep saved notes beside the latest user turn as source data.
+                                    if requester == user_app.store.current_user_id() {
+                                        memory::insert(&mut input, run["memory_context"].as_str());
+                                    }
+                                    super::run::pair_unresolved_calls(&mut input);
+                                    run["input"] = json!(input);
+                                    run["context_hydration_pending"] = json!(false);
+                                }
+                                Err(error) => {
+                                    tracing::warn!(run_id=%id,"Context hydration failed: {}",error);
+                                    crate::send_future(app.active.lock()).await.remove(&id);
+                                    continue;
+                                }
+                            }
+                        }
+                        let generation = uuid();
+                        if !matches!(
+                            crate::send_future(user_app.store.claim_run_within(
+                                &mut run,
+                                &owner,
+                                &generation,
+                                capacity,
+                            ))
+                            .await,
+                            Ok(true)
+                        ) {
+                            crate::send_future(app.active.lock()).await.remove(&id);
+                            // The requester's later runs wait behind this one (their places in
+                            // line are later), so they are not tried again in this pass.
+                            waiting.insert(requester_key);
+                            continue;
+                        }
+                        *last_served = Some(requester_key.clone());
+                        let mut cloned = user_app.clone();
+                        cloned.chat_actor = run["requester_user_id"].as_str().map(str::to_owned);
+                        let requester = cloned.actor().to_owned();
+                        match crate::send_future(cloned.chat.resolve(
+                            cloned.store.records(),
+                            run["session_id"].as_str().unwrap_or(""),
+                            &requester,
+                        ))
+                        .await
+                        {
+                            Ok(access) => cloned.chat_access = Some(access),
+                            Err(_) => {
+                                crate::send_future(app.active.lock()).await.remove(&id);
+                                continue;
+                            }
+                        }
+                        let lease_owner = owner.clone();
+                        tokio::spawn(async move {
+                            let epoch = run["lease_epoch"].as_i64().unwrap_or(0);
+                            let watcher_store = cloned.store.clone();
+                            let watcher_id = id.clone();
+                            let watcher_generation = generation.clone();
+                            let watcher_cancel = cancel.clone();
+                            let watcher = tokio::spawn(async move {
+                                loop {
+                                    crate::send_future(tokio::time::sleep(Duration::from_secs(5)))
+                                        .await;
+                                    if watcher_cancel.is_cancelled() {
+                                        break;
+                                    }
+                                    let renewed =
+                                        crate::send_future(watcher_store.renew_run_lease(
+                                            &watcher_id,
+                                            &watcher_generation,
+                                            &lease_owner,
+                                            epoch,
+                                        ))
+                                        .await
+                                        .unwrap_or(false);
+                                    if !renewed {
+                                        watcher_cancel.cancel();
+                                        break;
+                                    }
+                                }
+                            });
+                            if let Err(error) = crate::send_future(cloned.session_operation(
+                                run["session_id"].as_str().unwrap_or(""),
+                                cancel.clone(),
+                                Self::execute_run(
+                                    cloned.clone(),
+                                    id.clone(),
+                                    generation,
+                                    cancel.clone(),
+                                ),
+                            ))
+                            .await
+                            {
+                                tracing::warn!(run_id=%id,"Run interrupted: {}",error);
+                                let _settle_guard =
+                                    crate::send_future(cloned.handles.gate.lock()).await;
+                                if let Ok(mut failed) = crate::send_future(cloned.run(&id)).await {
+                                    if note_interrupt(&mut failed, &error.to_string()) {
+                                        if let Err(error) =
+                                            crate::send_future(cloned.save(&mut failed)).await
+                                        {
+                                            tracing::warn!(run_id=%id,"Interrupt note not saved: {error}");
+                                        }
+                                    }
+                                }
+                            }
+                            cancel.cancel();
+                            watcher.abort();
+                            crate::send_future(cloned.active.lock()).await.remove(&id);
+                            drop(permit);
+                            crate::send_future(crate::wake::notify_account(
+                                &cloned.control_dir,
+                                crate::ports::Records::current_user_id(cloned.store.records()),
+                                crate::wake::Kind::Run,
+                            ))
+                            .await;
+                        });
                     }
                 }
                 progress.at(Stage::Idle);
@@ -685,6 +699,36 @@ impl<
             keep_alive.abort();
             modules.abort();
             heartbeat.abort();
+        }
+    }
+}
+
+/// C5 fair order: round-robin over requesters, each requester's runs in the order given
+/// (admission order), with a rotating start: the first requester after `last` (the one the
+/// loop served most recently, by id, wrapping), so no requester is always first or last.
+pub fn fair_order<T>(items: Vec<(String, T)>, last: Option<&str>) -> Vec<(String, T)> {
+    let mut lines: std::collections::BTreeMap<String, std::collections::VecDeque<T>> =
+        std::collections::BTreeMap::new();
+    for (requester, item) in items {
+        lines.entry(requester).or_default().push_back(item);
+    }
+    let mut requesters: Vec<String> = lines.keys().cloned().collect();
+    if let Some(last) = last {
+        let start = requesters.partition_point(|id| id.as_str() <= last);
+        let count = requesters.len().max(1);
+        requesters.rotate_left(start % count);
+    }
+    let mut ordered = Vec::new();
+    loop {
+        let mut any = false;
+        for requester in &requesters {
+            if let Some(item) = lines.get_mut(requester).and_then(|line| line.pop_front()) {
+                ordered.push((requester.clone(), item));
+                any = true;
+            }
+        }
+        if !any {
+            return ordered;
         }
     }
 }
@@ -725,6 +769,32 @@ fn note_interrupt(run: &mut Value, error: &str) -> bool {
 mod interrupt_tests {
     use super::note_interrupt;
     use serde_json::json;
+
+    #[test]
+    fn requesters_are_served_in_turn_from_a_rotating_start() {
+        let queued = |pairs: &[(&str, u32)]| -> Vec<(String, u32)> {
+            pairs.iter().map(|(r, n)| ((*r).to_owned(), *n)).collect()
+        };
+        // Account order put "a" (three runs) before the guest "z"; turns alternate instead.
+        let items = queued(&[("a", 1), ("a", 2), ("a", 3), ("b", 4), ("z", 5)]);
+        let order: Vec<u32> = super::fair_order(items.clone(), None)
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect();
+        assert_eq!(order, vec![1, 4, 5, 2, 3]);
+        // After "a" was served, the next pass starts with "b"; after "z", it wraps to "a".
+        let after_a: Vec<u32> = super::fair_order(items.clone(), Some("a"))
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect();
+        assert_eq!(after_a, vec![4, 5, 1, 2, 3]);
+        let after_z: Vec<String> = super::fair_order(items, Some("z"))
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect();
+        assert_eq!(after_z[0], "a");
+        assert!(super::fair_order::<u32>(Vec::new(), Some("a")).is_empty());
+    }
 
     #[test]
     fn repeated_failures_on_one_turn_pause_the_run() {

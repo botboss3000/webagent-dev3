@@ -131,10 +131,29 @@ pub trait ChatEffects: Sync {
         'c: 'a;
 }
 
+/// How full the loop is when it claims a run: runs it is executing and its
+/// `scheduler.max_active_runs` (0: no ceiling). Admission derives the reserved
+/// administrator slots and the per-agent cap from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Capacity {
+    pub active: usize,
+    pub ceiling: usize,
+}
+
+impl Capacity {
+    /// No loop ceiling (claims outside the loop's run slots, such as follow-up reviews).
+    pub const UNBOUNDED: Self = Self {
+        active: 0,
+        ceiling: 0,
+    };
+}
+
 pub trait AdmissionEffects: Sync {
+    /// Whether `run` may start now, given how full the loop is (see `Capacity`).
     fn requester_claim_ready<'a>(
         &'a self,
         run: &'a Value,
+        capacity: Capacity,
     ) -> impl Future<Output = Result<bool>> + Send + 'a;
     fn reconcile_requester_slots<'a>(&'a self) -> impl Future<Output = Result<()>> + Send + 'a;
     fn reserve_requester_run<'a>(

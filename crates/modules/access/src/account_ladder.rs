@@ -68,6 +68,10 @@ pub fn effective(policy: &Value, id: &str) -> Result<Tier> {
         }
         result.max_sessions = result.max_sessions.min(tier.max_sessions);
         result.max_active_runs = result.max_active_runs.min(tier.max_active_runs);
+        // An upper level's daily limit caps every level below it (absent: no limit).
+        result.daily_turns = crate::run_limits::lower(result.daily_turns, tier.daily_turns);
+        result.daily_cost_usd =
+            crate::run_limits::lower(result.daily_cost_usd, tier.daily_cost_usd);
         if let Some(ceiling) = &tier.model_policy {
             if let Some(model) = &mut result.model_policy {
                 model.allow_byo &= ceiling.allow_byo;

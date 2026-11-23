@@ -320,6 +320,27 @@ impl<
             .collect()
     }
 
+    /// The runs the scheduler acts on, by admission order, from the plain run index only (no
+    /// window, no decrypt): `queued` runs to claim, `waiting_approval` and `parked` runs whose
+    /// expiry or auto approval it checks (both reported as `waiting_approval`), and `paused`
+    /// runs it offers to component restore. `(id, status)` pairs.
+    pub async fn scheduler_runs(&self) -> Result<Vec<(String, String)>> {
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT id,status FROM run_index WHERE status NOT IN ('completed','cancelled','failed') AND status IN ('queued','waiting_approval','parked','paused') ORDER BY COALESCE(enqueue_seq,rowid)")
+            .fetch_all(self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, status)| {
+                let status = if status == "parked" {
+                    "waiting_approval".to_owned()
+                } else {
+                    status
+                };
+                (id, status)
+            })
+            .collect())
+    }
+
     /// What [`Self::active_runs`] tells message admission, counted without decrypting: how
     /// many rows it returns (at most 200) and whether one of them belongs to `sid`. The
     /// index and the view are written together, with the same session and the same
@@ -1094,6 +1115,18 @@ impl<
         owner: &'s str,
         generation: &'s str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send + 's {
+        self.claim_run_within(run, owner, generation, crate::ports::Capacity::UNBOUNDED)
+    }
+
+    /// [`Self::claim_run`] by the loop's scheduler, which says how full the loop is so
+    /// admission can keep the reserved administrator slots and the per-agent cap.
+    pub fn claim_run_within<'s>(
+        &'s self,
+        run: &'s mut Value,
+        owner: &'s str,
+        generation: &'s str,
+        capacity: crate::ports::Capacity,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send + 's {
         async move {
             let rid = run["id"]
                 .as_str()
@@ -1116,7 +1149,7 @@ impl<
             )
             .await?;
             lifecycle.commit().await?;
-            if !crate::send_future(self.admission.requester_claim_ready(&saved)).await? {
+            if !crate::send_future(self.admission.requester_claim_ready(&saved, capacity)).await? {
                 return Ok(false);
             }
             // Read-then-write: take the write lock first, so a concurrent writer makes this wait

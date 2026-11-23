@@ -92,6 +92,8 @@ pub struct LiveAccess {
     pub owner_tier_id: String,
     pub revision: AccessRevision,
     pub capability_level: crate::capabilities::CapabilityLevel,
+    /// The policy's run-sharing limits, read with the tier from the same policy document.
+    pub run_limits: crate::run_limits::RunLimits,
     tool_permissions: Value,
     ability_permissions: Value,
     tool_callers: Value,
@@ -411,6 +413,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         }
         let tier = crate::account_ladder::effective(&policy, &principal.tier_id)?;
         tier.validate()?;
+        let run_limits = crate::run_limits::RunLimits::from_policy(&policy)?;
         if tier.id != principal.tier_id {
             return Err(anyhow!("Tier identity conflict"));
         }
@@ -552,6 +555,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             owner_tier_id,
             revision,
             capability_level,
+            run_limits,
             tool_permissions,
             ability_permissions,
             tool_callers,

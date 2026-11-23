@@ -1977,6 +1977,20 @@ impl<
     }
 
     /// Advance one claimed run generation, rebuilding current context before model calls and retaining host authority over tool execution and publication.
+    /// Count the model call `record_usage` just stored in the daily usage ledger (C5). A failed
+    /// write is logged, not retried: the call already happened and must not be repeated.
+    async fn ledger_turn(app: &Self, access: &webagent_access::authority::LiveAccess, run: &Value) {
+        if let Err(error) = crate::usage_ledger::record(
+            ScopedStorage::application_pool(app.store.records()),
+            access,
+            crate::usage_ledger::Turn::latest(run),
+        )
+        .await
+        {
+            tracing::warn!("Daily usage ledger not updated: {error}");
+        }
+    }
+
     async fn execute_run_inner(
         app: Self,
         id: String,
@@ -2303,6 +2317,20 @@ impl<
                     run["status"] = json!("paused");
                     run["error"] =
                         json!(format!("This run reached its limit of {turn_limit} steps"));
+                    app.save(&mut run).await?;
+                    return Ok(());
+                }
+                // C5: the daily usage limits of the requester's account level and of the agent
+                // (administrators are never limited). Over a limit the run pauses with the reason
+                // and gives its run slot back; the owner continues it once the day has turned.
+                if let Some(reason) = crate::usage_ledger::refusal(
+                    ScopedStorage::application_pool(app.store.records()),
+                    &access,
+                )
+                .await?
+                {
+                    run["status"] = json!("paused");
+                    run["error"] = json!(reason);
                     app.save(&mut run).await?;
                     return Ok(());
                 }
@@ -3006,6 +3034,7 @@ impl<
                             outcome["summary"] = json!(summary);
                             compaction_result(&mut run, &step, outcome);
                             X::record_usage(&mut run, &json!({"usage": job["usage"]}));
+                            Self::ledger_turn(&app, &access, &run).await;
                             run["input"] = json!(compacted);
                             run["tool_result_projection"]["rebase"] = json!(true);
                             context_accounting.reset();
@@ -3491,6 +3520,7 @@ impl<
                     }
                     if let Ok(value) = &response {
                         X::record_usage(&mut run, value);
+                        Self::ledger_turn(&app, &access, &run).await;
                     }
                     let summary = response.ok().and_then(|value| {
                         value["output"].as_array().map(|output| {
@@ -4293,6 +4323,7 @@ impl<
                     }
                     Ok(response) => {
                         X::record_usage(&mut run, &response);
+                        Self::ledger_turn(&app, &access, &run).await;
                         super::cache_estimate::log_call(&sid, &id, &run);
                         super::cache_estimate::reply_received(&sid);
                         let usage_row = super::cache_estimate::activity_item(&run);

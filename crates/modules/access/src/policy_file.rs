@@ -18,6 +18,8 @@ fn fresh_install_tiers() -> [Tier; 2] {
         allowed_models: vec!["*".into()],
         max_sessions: 10_000,
         max_active_runs: 200,
+        daily_turns: None,
+        daily_cost_usd: None,
     };
     let basic = Tier {
         id: crate::FREE_TIER.into(),
@@ -26,6 +28,8 @@ fn fresh_install_tiers() -> [Tier; 2] {
         allowed_models: Vec::new(),
         max_sessions: 10,
         max_active_runs: 2,
+        daily_turns: None,
+        daily_cost_usd: None,
     };
     [operator, basic]
 }

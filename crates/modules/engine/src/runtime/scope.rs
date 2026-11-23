@@ -82,6 +82,20 @@ impl<
     pub async fn claim_run(&self, run: &mut Value, owner: &str, generation: &str) -> Result<bool> {
         self.repository().claim_run(run, owner, generation).await
     }
+    pub async fn claim_run_within(
+        &self,
+        run: &mut Value,
+        owner: &str,
+        generation: &str,
+        capacity: Capacity,
+    ) -> Result<bool> {
+        self.repository()
+            .claim_run_within(run, owner, generation, capacity)
+            .await
+    }
+    pub async fn scheduler_runs(&self) -> Result<Vec<(String, String)>> {
+        self.repository().scheduler_runs().await
+    }
     pub async fn renew_run_lease(
         &self,
         rid: &str,

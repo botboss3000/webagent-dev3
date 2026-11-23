@@ -174,6 +174,13 @@ pub struct Tier {
     pub model_policy: Option<ModelPolicy>,
     pub max_sessions: u32,
     pub max_active_runs: u32,
+    /// Model turns one account at this level may use per day (UTC); absent means no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_turns: Option<u32>,
+    /// Known provider cost one account at this level may use per day (UTC), in US dollars;
+    /// absent means no limit. Calls without a reported cost count as turns only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_cost_usd: Option<f64>,
 }
 
 impl Tier {
@@ -188,6 +195,10 @@ impl Tier {
             || self.allowed_models.len() > 64
             || self.max_sessions > 10_000
             || self.max_active_runs > 200
+            || self
+                .daily_turns
+                .is_some_and(|turns| turns == 0 || turns > 1_000_000)
+            || !run_limits::valid_cost(self.daily_cost_usd)
         {
             bail!("Invalid entitlement tier");
         }
@@ -606,6 +617,8 @@ mod tests {
             allowed_models: vec!["*".into()],
             max_sessions: 10,
             max_active_runs: 2,
+            daily_turns: None,
+            daily_cost_usd: None,
         };
         assert!(tier.allows_byo_model("deepseek-chat"));
         assert!(tier.allows_byo_growth(0, 1));
@@ -636,11 +649,21 @@ mod tests {
             allowed_models: vec!["gpt-6-luna".into()],
             max_sessions: 10,
             max_active_runs: 2,
+            daily_turns: None,
+            daily_cost_usd: None,
         };
         tier.validate().unwrap();
         assert!(!tier.allows_model("other"));
         tier.max_active_runs = 201;
         assert!(tier.validate().is_err());
+        tier.max_active_runs = 2;
+        tier.daily_turns = Some(0);
+        assert!(tier.validate().is_err());
+        tier.daily_turns = Some(300);
+        tier.daily_cost_usd = Some(-1.0);
+        assert!(tier.validate().is_err());
+        tier.daily_cost_usd = Some(1.0);
+        tier.validate().unwrap();
     }
     #[test]
     fn tiers_hold_no_tool_or_ability_grants() {
@@ -658,6 +681,7 @@ pub mod capabilities;
 pub mod credential_authorization;
 pub mod policy_file;
 pub mod repository;
+pub mod run_limits;
 pub mod storage;
 pub fn require_administrator(account: &serde_json::Value) -> anyhow::Result<()> {
     if !Principal::from_account(account)?.administrator() {

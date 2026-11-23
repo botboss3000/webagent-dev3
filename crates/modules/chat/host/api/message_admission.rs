@@ -416,6 +416,13 @@ async fn prepare_message_inner(
         &access.capability_level,
     )
     .await?;
+    // C5: daily usage limits of the account level and of the agent, from the usage ledger
+    // (the same check runs before each model turn).
+    if let Some(reason) =
+        webagent_engine::usage_ledger::refusal(&app.store.app_pool, &access).await?
+    {
+        return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, reason));
+    }
     let participation = app.store.participation_state(id).await.or_else(|error| {
         if let Some(session) = supplied_session {
             Ok(session
