@@ -670,13 +670,17 @@ impl<
             let app = self;
             use webagent_background_contracts::{Request, State, Task, INTERFACE_VERSION};
             let mut active = std::collections::HashSet::new();
-            let mut workers = tokio::task::JoinSet::new();
+            let mut workers = tokio::task::JoinSet::<String>::new();
+            // C8: accounts as their last complete visit left them (see `Settled`).
+            let mut settled: std::collections::HashMap<String, Settled> =
+                std::collections::HashMap::new();
             loop {
                 if app.stop.is_cancelled() {
                     break;
                 }
                 while let Some(result) = workers.try_join_next() {
                     if let Ok(id) = result {
+                        settled.remove(worker_account(&id));
                         active.remove(&id);
                     }
                 }
@@ -693,21 +697,36 @@ impl<
                 ) {
                     retry_ms = retry_ms.min(delay);
                 }
+                // Component trouble decides differently from what was remembered: forget it.
+                if retry_ms < rescan_interval_ms {
+                    settled.clear();
+                }
                 if crate::components::component_available(
                     crate::ports::AgentMetadata::root(app.store.records()),
                     crate::components::BACKGROUND,
                 ) {
                     if let Ok(users) = crate::send_future(app.user_ids(false)).await {
-                        for user in users {
+                        settled.retain(|user, _| users.contains(user));
+                        for user_id in users {
+                            // C8: a hint visits only the accounts written since their last
+                            // complete visit, or whose own retry time or `SETTLED` passed.
+                            let mark = app.store.contents_mark(&user_id);
+                            if settled.get(&user_id).is_some_and(|known| known.holds(mark)) {
+                                continue;
+                            }
+                            settled.remove(&user_id);
                             // One account at a time (see `user_ids`).
-                            let Ok(user) = crate::send_future(app.for_user_view(&user)).await
+                            let Ok(user) = crate::send_future(app.for_user_view(&user_id)).await
                             else {
                                 continue;
                             };
+                            // Taken after opening and before reading: a write meanwhile moves it.
+                            let mark = app.store.contents_mark(&user_id);
                             if let Ok(tasks) =
                                 crate::send_future(user.store.background_scan(None)).await
                             {
                                 if tasks.is_empty() {
+                                    settled.insert(user_id, Settled::new(mark, None));
                                     continue;
                                 }
                                 let identities = tasks
@@ -803,6 +822,7 @@ impl<
                                         }
                                     };
                                 retry_ms = retry_ms.min(plan.retry_ms);
+                                let mut complete = true;
                                 for index in plan.followup {
                                     if !crate::components::component_available(
                                         crate::ports::AgentMetadata::root(app.store.records()),
@@ -814,6 +834,7 @@ impl<
                                         crate::send_future(user.background_followup(&tasks[index]))
                                             .await
                                     {
+                                        complete = false;
                                         tracing::warn!("Background followup deferred");
                                     }
                                 }
@@ -824,6 +845,7 @@ impl<
                                             crate::components::BACKGROUND,
                                         )
                                     {
+                                        complete = false;
                                         break;
                                     }
                                     let id = identities[index].clone();
@@ -839,6 +861,17 @@ impl<
                                         id
                                     });
                                 }
+                                // With every worker busy the plan could not dispatch all it
+                                // would: the account stays due for the next free worker.
+                                if complete && workers.len() < max_workers {
+                                    settled.insert(
+                                        user_id,
+                                        Settled::new(
+                                            mark,
+                                            Some(Duration::from_millis(plan.retry_ms)),
+                                        ),
+                                    );
+                                }
                             }
                         }
                     }
@@ -850,7 +883,7 @@ impl<
                 }
                 tokio::select! {_=app.stop.cancelled()=>break,
                 _=hints.changed()=>{},
-                joined=workers.join_next(),if !workers.is_empty()=>{if let Some(Ok(id))=joined{active.remove(&id);}},
+                joined=workers.join_next(),if !workers.is_empty()=>{if let Some(Ok(id))=joined{settled.remove(worker_account(&id));active.remove(&id);}},
                 _=wait_for_background_retry(retry_ms)=>{}}
             }
             workers.abort_all();
@@ -1005,6 +1038,44 @@ impl<
         }
     }
 }
+/// C8: how long an account whose visit finished is taken as it was while nothing is written
+/// to it: the background rescan's default period, so time-based steps (a lease expiry, a
+/// retry) wait no longer than they did when nothing woke the service.
+const SETTLED: Duration = Duration::from_secs(5);
+
+/// An account as its last complete visit left it: nothing dispatched was cut short, no
+/// follow-up failed and a worker was free. Skipped while its contents mark is the one taken
+/// before that visit read it, `SETTLED` has not passed, and neither has the retry time the
+/// plan gave it. One of its workers finishing forgets it (`worker_account`).
+struct Settled {
+    mark: Option<u64>,
+    at: std::time::Instant,
+    retry: Option<Duration>,
+}
+
+impl Settled {
+    fn new(mark: Option<u64>, retry: Option<Duration>) -> Self {
+        Self {
+            mark,
+            at: std::time::Instant::now(),
+            retry,
+        }
+    }
+    /// Still as that visit left it. An unknown mark always counts as changed.
+    fn holds(&self, mark: Option<u64>) -> bool {
+        let elapsed = self.at.elapsed();
+        self.mark.is_some()
+            && self.mark == mark
+            && elapsed < SETTLED
+            && self.retry.is_none_or(|retry| elapsed < retry)
+    }
+}
+
+/// The account of a worker identity `account:task`.
+fn worker_account(id: &str) -> &str {
+    id.split_once(':').map_or(id, |(account, _)| account)
+}
+
 pub async fn wait_for_background_retry(milliseconds: u64) {
     let started = tokio::time::Instant::now();
     loop {
@@ -1054,6 +1125,25 @@ mod stop_tests {
     }
 
     /// Only an open placeholder of a parked approval whose run left the active list.
+    /// C8: a settled account is skipped only while its mark is the known one, its time has
+    /// not passed and the plan's retry has not come; an unknown mark is always visited.
+    #[test]
+    fn a_settled_account_is_skipped_only_while_unchanged_and_not_due() {
+        let settled = Settled::new(Some(7), None);
+        assert!(settled.holds(Some(7)));
+        assert!(!settled.holds(Some(8)), "written since");
+        assert!(!settled.holds(None), "unknown counts as changed");
+        assert!(!Settled::new(None, None).holds(None));
+        assert!(
+            !Settled::new(Some(7), Some(Duration::ZERO)).holds(Some(7)),
+            "its own retry time came"
+        );
+        let mut old = Settled::new(Some(7), None);
+        old.at -= SETTLED;
+        assert!(!old.holds(Some(7)), "the fallback period passed");
+        assert_eq!(worker_account("lt0001:task:1"), "lt0001");
+    }
+
     #[test]
     fn placeholders_of_ended_runs_are_orphaned() {
         let active = std::collections::HashSet::from(["live"]);

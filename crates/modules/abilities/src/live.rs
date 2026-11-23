@@ -2,16 +2,32 @@
 //! reads them) in the checkout apply without a release:
 //! they are laid over the published abilities as a snapshot folder the catalog loads like a
 //! publication, so code and compiled plugins still come only from the release. A file the
-//! checkout deleted is left out. Rechecked at most once a second; an edit that does not load
-//! keeps the last good snapshot.
+//! checkout deleted is left out. An edit that does not load keeps the last good snapshot.
+//!
+//! C8: on Linux the checkout's folders are watched (inotify, [`webagent_platform::watch`]).
+//! Each caller empties the watch's queue without blocking and walks the tree only when
+//! something changed, so an unchanged tree costs one system call and an edit is seen by the
+//! very next call (the kernel queues the event inside the edit's own file operation). Where
+//! there is no watch (other platforms, or the system refused one) the files' names, sizes
+//! and times are compared at most every [`UNWATCHED_RECHECK`].
 use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant, UNIX_EPOCH},
 };
+use webagent_platform::watch::Tree;
 
-const RECHECK: Duration = Duration::from_secs(1);
+/// How long a walk's answer is used without a watch: today's once a second on Linux, where
+/// it only applies when the system refused a watch, and longer on platforms without one.
+const UNWATCHED_RECHECK: Duration = if cfg!(target_os = "linux") {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(5)
+};
 /// Snapshot folders kept besides the one in use.
 const KEEP: usize = 3;
 
@@ -21,10 +37,62 @@ struct State {
     root: PathBuf,
     /// The publication `root` holds (itself, or the base its snapshot was built on).
     base: PathBuf,
+    /// The base and checkout this answer is for.
+    asked: (PathBuf, PathBuf),
+    /// [`GENERATION`] read before the walk, while a watch covered every folder; `None`:
+    /// unwatched, so the answer holds for [`UNWATCHED_RECHECK`].
+    generation: Option<u64>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 static BUILDING: Mutex<()> = Mutex::new(());
+
+/// The checkout's watch. `tree` is `None` where the platform has none or the system refused
+/// one (instance or watch limit); the process then compares metadata instead.
+struct Watch {
+    checkout: PathBuf,
+    tree: Option<Arc<Tree>>,
+}
+
+static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
+/// Moves whenever a watch saw a change or a new watch started (which has seen nothing yet).
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Walks of a checkout, for the tests' "nothing is read when nothing changed".
+static WALKS: AtomicU64 = AtomicU64::new(0);
+
+fn watch() -> std::sync::MutexGuard<'static, Option<Watch>> {
+    WATCH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The change count of `checkout`'s watch after emptying its queue, with the watch to add
+/// walked folders to; `None` when it is unwatched.
+fn generation(checkout: &Path) -> Option<(u64, Arc<Tree>)> {
+    let mut watch = watch();
+    if watch.as_ref().is_none_or(|w| w.checkout != checkout) {
+        *watch = Some(Watch {
+            checkout: checkout.to_path_buf(),
+            tree: Tree::new().map(Arc::new),
+        });
+        GENERATION.fetch_add(1, Ordering::AcqRel);
+    }
+    let tree = watch.as_ref()?.tree.clone()?;
+    if tree.changed() {
+        GENERATION.fetch_add(1, Ordering::AcqRel);
+    }
+    Some((GENERATION.load(Ordering::Acquire), tree))
+}
+
+/// Stops watching `checkout` after a folder could not be watched: unwatched from now on.
+fn unwatch(checkout: &Path) {
+    let mut watch = watch();
+    if let Some(current) = watch.as_mut().filter(|w| w.checkout == checkout) {
+        if current.tree.take().is_some() {
+            eprintln!("Live ability folders cannot be watched; comparing file times instead");
+        }
+    }
+}
 
 fn editable(path: &Path) -> bool {
     matches!(
@@ -41,9 +109,25 @@ const INSTALLED_PACKAGES: &[&str] = &["Core/mcp/package"];
 /// Checkout-relative ability JSON, Markdown and icon files (symlinks and installed
 /// packages are skipped).
 fn files(checkout: &Path) -> Vec<PathBuf> {
+    files_watched(checkout, None).0
+}
+
+/// [`files`], adding each folder to `watch` before listing it, so a change after the listing
+/// is queued. The flag is false when a folder that still exists could not be watched.
+fn files_watched(checkout: &Path, watch: Option<&Tree>) -> (Vec<PathBuf>, bool) {
     let mut found = Vec::new();
+    let mut watched = true;
     let mut pending = vec![checkout.to_path_buf()];
     while let Some(folder) = pending.pop() {
+        if let Some(tree) = watch {
+            // A folder gone meanwhile was seen by its parent's watch.
+            if tree
+                .add(&folder)
+                .is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound)
+            {
+                watched = false;
+            }
+        }
         let Ok(entries) = std::fs::read_dir(&folder) else {
             continue;
         };
@@ -67,7 +151,7 @@ fn files(checkout: &Path) -> Vec<PathBuf> {
         }
     }
     found.sort();
-    found
+    (found, watched)
 }
 
 /// Names, sizes and modification times of the editable files, with the base they apply to.
@@ -222,74 +306,34 @@ fn prune(cache: &Path, keep: &Path) {
 /// checkout's versions. `valid` decides whether a new snapshot loads; one that does not
 /// keeps the previous choice.
 ///
-/// The walk runs off the caller's path: while callers keep asking, a background thread
-/// repeats it before the last answer is a `RECHECK` old, so callers normally take the last
-/// choice. A caller still walks itself when that answer is older than `RECHECK` (first use,
-/// after an idle spell), so no caller gets an older choice than before.
+/// The tree is walked only when its watch saw a change since the last walk (or, unwatched,
+/// when the last answer is older than [`UNWATCHED_RECHECK`]); no thread walks in between.
 pub fn overlay(
     base: &Path,
     checkout: &Path,
     cache: &Path,
     valid: impl Fn(&Path) -> bool + Send + Sync + 'static,
 ) -> PathBuf {
-    let valid: Validator = std::sync::Arc::new(valid);
-    *refresh() = Some(Refresh {
-        base: base.to_path_buf(),
-        checkout: checkout.to_path_buf(),
-        cache: cache.to_path_buf(),
-        valid: valid.clone(),
-        asked: Instant::now(),
-    });
-    static REFRESHER: std::sync::Once = std::sync::Once::new();
-    REFRESHER.call_once(|| {
-        let _ = std::thread::Builder::new()
-            .name("ability-live-walk".into())
-            .spawn(refresh_loop);
-    });
-    overlay_every(RECHECK, base, checkout, cache, |root| valid(root))
+    overlay_every(UNWATCHED_RECHECK, base, checkout, cache, valid)
 }
 
-type Validator = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
-
-/// The last caller's arguments, for the background walk.
-struct Refresh {
-    base: PathBuf,
-    checkout: PathBuf,
-    cache: PathBuf,
-    valid: Validator,
-    asked: Instant,
-}
-
-static REFRESH: Mutex<Option<Refresh>> = Mutex::new(None);
-
-fn refresh() -> std::sync::MutexGuard<'static, Option<Refresh>> {
-    REFRESH
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Walks a little before callers would (every `REFRESH_EVERY`), and only while someone
-/// asked within `REFRESH_IDLE`, so an idle process does not walk.
-const REFRESH_EVERY: Duration = Duration::from_millis(800);
-const REFRESH_IDLE: Duration = Duration::from_secs(10);
-
-fn refresh_loop() {
-    loop {
-        std::thread::sleep(REFRESH_EVERY);
-        let args = refresh().as_ref().and_then(|r| {
-            (r.asked.elapsed() < REFRESH_IDLE).then(|| {
-                (
-                    r.base.clone(),
-                    r.checkout.clone(),
-                    r.cache.clone(),
-                    r.valid.clone(),
-                )
-            })
-        });
-        if let Some((base, checkout, cache, valid)) = args {
-            overlay_every(REFRESH_EVERY, &base, &checkout, &cache, |root| valid(root));
-        }
+/// The last answer when it still holds for `base`, `checkout` and the watch's count.
+fn answered(
+    base: &Path,
+    checkout: &Path,
+    generation: Option<u64>,
+    recheck: Duration,
+) -> Option<PathBuf> {
+    let state = state();
+    let current = state.as_ref()?;
+    if current.asked.0 != base || current.asked.1 != checkout {
+        return None;
     }
+    let fresh = match (generation, current.generation) {
+        (Some(now), Some(then)) => now == then,
+        _ => current.checked.elapsed() < recheck,
+    };
+    fresh.then(|| current.root.clone())
 }
 
 fn overlay_every(
@@ -299,23 +343,37 @@ fn overlay_every(
     cache: &Path,
     valid: impl Fn(&Path) -> bool,
 ) -> PathBuf {
-    if let Some(current) = state().as_ref() {
-        if current.checked.elapsed() < recheck {
-            return current.root.clone();
-        }
+    let watched = generation(checkout);
+    if let Some(root) = answered(base, checkout, watched.as_ref().map(|w| w.0), recheck) {
+        return root;
     }
     // One builder at a time. `STATE` is only held briefly: checking a snapshot reads tool
     // definitions, which ask `selected` for it.
     let _building = BUILDING
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let listed = files(checkout);
+    // Another caller may have walked while this one waited. Read again: a change queued
+    // since then moves the count, and the count is read before the walk below, so a change
+    // during the walk is walked again by the next call.
+    let watched = generation(checkout);
+    if let Some(root) = answered(base, checkout, watched.as_ref().map(|w| w.0), recheck) {
+        return root;
+    }
+    WALKS.fetch_add(1, Ordering::Relaxed);
+    let (listed, all_watched) = files_watched(checkout, watched.as_ref().map(|w| &*w.1));
+    if watched.is_some() && !all_watched {
+        unwatch(checkout);
+    }
+    let generation = watched.filter(|_| all_watched).map(|w| w.0);
+    let asked = (base.to_path_buf(), checkout.to_path_buf());
     let key = fingerprint(base, checkout, &listed);
     let previous = {
         let mut state = state();
         if let Some(current) = state.as_mut() {
             if current.key == key {
                 current.checked = Instant::now();
+                current.asked = asked;
+                current.generation = generation;
                 return current.root.clone();
             }
         }
@@ -351,6 +409,8 @@ fn overlay_every(
         key,
         root: chosen.clone(),
         base: built_on,
+        asked,
+        generation,
     });
     chosen
 }
@@ -410,8 +470,18 @@ pub fn candidate(
 mod tests {
     use super::*;
 
+    /// The tests that choose a snapshot share this process's state and watch.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn checkout_edits_overlay_the_base_and_bad_ones_keep_the_last_good() {
+        let _serial = serial();
         let dir = tempfile::tempdir().unwrap();
         let (base, checkout, cache) = (
             dir.path().join("release"),
@@ -478,6 +548,98 @@ mod tests {
             "a file the checkout deleted leaves the snapshot"
         );
         assert!(live.join("abilities/Core/demo/tool.json").is_file());
+    }
+
+    /// C8: with a watch, the tree is read only after a change, and every kind of change
+    /// (an edit, a new file, a new folder and an edit inside it, a deletion, a renamed
+    /// folder) is seen by the very next call, however recent the last answer.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_watched_checkout_is_read_only_after_a_change_and_every_change_is_seen_at_once() {
+        let _serial = serial();
+        let dir = tempfile::tempdir().unwrap();
+        let (base, checkout, cache) = (
+            dir.path().join("release"),
+            dir.path().join("checkout"),
+            dir.path().join("cache"),
+        );
+        for root in [base.join("abilities"), checkout.clone()] {
+            std::fs::create_dir_all(root.join("Core/demo")).unwrap();
+            std::fs::write(root.join("Core/demo/tool.json"), "{\"v\":1}").unwrap();
+        }
+        // An hour: any change seen below comes from the watch, not from time passing.
+        let hour = Duration::from_secs(3600);
+        let ok = |_: &Path| true;
+        let walks = || WALKS.load(Ordering::Relaxed);
+        let choose = || overlay_every(hour, &base, &checkout, &cache, ok);
+        let read = |root: &Path, relative: &str| {
+            std::fs::read_to_string(root.join("abilities").join(relative)).ok()
+        };
+        assert_eq!(choose(), base);
+        let before = walks();
+        for _ in 0..3 {
+            assert_eq!(choose(), base);
+        }
+        assert_eq!(walks(), before, "nothing is read when nothing changed");
+
+        std::fs::write(checkout.join("Core/demo/tool.json"), "{\"v\":2}").unwrap();
+        let live = choose();
+        assert_eq!(
+            read(&live, "Core/demo/tool.json").as_deref(),
+            Some("{\"v\":2}")
+        );
+        assert_eq!(walks(), before + 1, "one walk for one change");
+        assert_eq!(choose(), live);
+        assert_eq!(walks(), before + 1, "and none after it");
+
+        std::fs::write(checkout.join("Core/demo/new.skill.md"), "new").unwrap();
+        let live = choose();
+        assert_eq!(
+            read(&live, "Core/demo/new.skill.md").as_deref(),
+            Some("new")
+        );
+
+        std::fs::create_dir_all(checkout.join("Core/fresh")).unwrap();
+        std::fs::write(checkout.join("Core/fresh/x.skill.md"), "x1").unwrap();
+        let live = choose();
+        assert_eq!(read(&live, "Core/fresh/x.skill.md").as_deref(), Some("x1"));
+        std::fs::write(checkout.join("Core/fresh/x.skill.md"), "x2").unwrap();
+        let live = choose();
+        assert_eq!(
+            read(&live, "Core/fresh/x.skill.md").as_deref(),
+            Some("x2"),
+            "a folder created after the first walk is watched too"
+        );
+
+        std::fs::remove_file(checkout.join("Core/demo/new.skill.md")).unwrap();
+        let live = choose();
+        assert_eq!(
+            read(&live, "Core/demo/new.skill.md"),
+            None,
+            "a deleted file"
+        );
+
+        std::fs::rename(checkout.join("Core/fresh"), checkout.join("Core/renamed")).unwrap();
+        let live = choose();
+        assert_eq!(
+            read(&live, "Core/fresh/x.skill.md"),
+            None,
+            "a renamed folder"
+        );
+        assert_eq!(
+            read(&live, "Core/renamed/x.skill.md").as_deref(),
+            Some("x2")
+        );
+        std::fs::write(checkout.join("Core/renamed/x.skill.md"), "x3").unwrap();
+        assert_eq!(
+            read(&choose(), "Core/renamed/x.skill.md").as_deref(),
+            Some("x3"),
+            "the renamed folder is still watched"
+        );
+
+        let settled = walks();
+        assert_eq!(choose(), choose());
+        assert_eq!(walks(), settled, "settled again");
     }
 
     #[test]

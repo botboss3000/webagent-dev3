@@ -93,42 +93,57 @@ pub async fn scheduler<
             break;
         }
         if jobs.len() < 2 {
+            // C8: only the accounts written since this scheduler last finished them, or not
+            // looked at for `FALLBACK` (a review's claim deadline is time-based).
             if let Ok(users) = owners.user_ids().await {
-                for user in users {
+                for (account, mark) in users {
                     if jobs.len() >= 2 {
                         break;
                     }
-                    let Some(user) = owners.user(&user).await else {
+                    let Some(user) = owners.user(&account).await else {
                         continue;
                     };
-                    if let Ok(pending) = user.pending().await {
-                        for pointer in pending {
-                            if jobs.len() >= 2 {
-                                break;
-                            }
-                            if let Some(id) = pointer["id"].as_str() {
-                                let Some(record) = user
-                                    .storage
-                                    .read_document(&format!("manager_review:{id}"))
-                                    .await
-                                    .ok()
-                                    .flatten()
-                                else {
-                                    continue;
-                                };
-                                if record["status"] == "pending_review" {
-                                    jobs.spawn(process(user.clone(), id.to_owned()));
-                                } else if record["status"] == "reviewing"
-                                    && record["deadline"].as_u64().unwrap_or(0) <= now()
-                                {
-                                    // An interrupted provider call may have incurred usage. Never replay it.
-                                    let _ = user
-                                        .repository()
-                                        .finish_manager_review(&record, "review_error", None)
-                                        .await;
+                    // Finished: every pending review was read and either started or left
+                    // for its deadline; one cut off by the job limit stays due.
+                    let mut finished = true;
+                    match user.pending().await {
+                        Err(_) => finished = false,
+                        Ok(pending) => {
+                            for pointer in pending {
+                                if jobs.len() >= 2 {
+                                    finished = false;
+                                    break;
+                                }
+                                if let Some(id) = pointer["id"].as_str() {
+                                    let record = match user
+                                        .storage
+                                        .read_document(&format!("manager_review:{id}"))
+                                        .await
+                                    {
+                                        Ok(Some(record)) => record,
+                                        Ok(None) => continue,
+                                        Err(_) => {
+                                            finished = false;
+                                            continue;
+                                        }
+                                    };
+                                    if record["status"] == "pending_review" {
+                                        jobs.spawn(process(user.clone(), id.to_owned()));
+                                    } else if record["status"] == "reviewing"
+                                        && record["deadline"].as_u64().unwrap_or(0) <= now()
+                                    {
+                                        // An interrupted provider call may have incurred usage. Never replay it.
+                                        let _ = user
+                                            .repository()
+                                            .finish_manager_review(&record, "review_error", None)
+                                            .await;
+                                    }
                                 }
                             }
                         }
+                    }
+                    if finished {
+                        owners.looked(&account, mark);
                     }
                 }
             }
@@ -149,15 +164,23 @@ pub async fn scheduler<
     jobs.abort_all();
 }
 
-/// Longest wait between review scans without a wake hint.
-const FALLBACK: Duration = Duration::from_secs(5);
+/// Longest wait between review scans without a wake hint, and the longest an unchanged
+/// account is left unread.
+pub const FALLBACK: Duration = Duration::from_secs(5);
 
 pub trait OwnerSources<C: RuntimeStorage + RecordEffects, A: ReviewAuthority<C>, P: Engine>:
     Sync
 {
-    /// The accounts to look at; each is opened with [`OwnerSources::user`] in turn and let go
-    /// before the next, so idle account databases can be closed meanwhile.
-    fn user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send + '_;
+    /// What an account's contents were when it was listed, handed back to
+    /// [`OwnerSources::looked`].
+    type Mark: Send;
+    /// The accounts to look at, each with its mark taken before it is read: those written
+    /// since [`OwnerSources::looked`] last recorded them, and any recorded [`FALLBACK`] ago or
+    /// more. Each is opened with [`OwnerSources::user`] in turn and let go before the next,
+    /// so idle account databases can be closed meanwhile.
+    fn user_ids(&self) -> impl Future<Output = Result<Vec<(String, Self::Mark)>>> + Send + '_;
+    /// The scheduler finished the account as of `mark`: nothing was left for later.
+    fn looked(&self, id: &str, mark: Self::Mark);
     /// One account's runtime; `None` when its storage cannot be opened (skipped).
     fn user<'a>(
         &'a self,

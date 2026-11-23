@@ -320,6 +320,8 @@ pub mod signal {
     }
 }
 
+pub mod watch;
+
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
