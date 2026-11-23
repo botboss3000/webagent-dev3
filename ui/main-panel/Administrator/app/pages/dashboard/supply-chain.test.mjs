@@ -39,6 +39,15 @@ test('model shows states, counts, UI library check and deduplicated findings',()
  assert.equal(supplyChainModel(view({targets:[]})).findings.length,0);
 });
 
+test('a capped list says how many findings are not shown',()=>{
+ const capped=view({targets:[{name:'api',by_severity:{CRITICAL:6,HIGH:612},fixable_by_severity:{CRITICAL:6,HIGH:612},fixable_high_critical:[apt],fixable_not_shown:617}]});
+ const model=supplyChainModel(capped);
+ assert.ok(model.rows.some(([label,value])=>label==='api fixable'&&value==='6 critical · 612 high (617 not listed)'));
+ assert.match(model.note,/and 617 more not shown/);
+ assert.match(prepareBrief(capped),/and 617 more not shown here/);
+ assert.doesNotMatch(supplyChainModel(view()).note,/not shown/);
+});
+
 test('prepare update only opens a chat with a brief; it changes nothing itself',async()=>{
  const calls=[];let opened='';
  const fetchFn=async(path,options={})=>{

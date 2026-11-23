@@ -207,6 +207,8 @@ pub struct Raised {
     pub severity: String,
     pub count: u32,
     pub window_seconds: u64,
+    /// A short line the raiser adds to the message (the dependency scan's counts or reason).
+    pub detail: Option<String>,
 }
 
 impl Raised {
@@ -228,19 +230,29 @@ impl Raised {
                 "A host action is waiting for approval on the Host Admin page".into()
             }
             "supply_chain_fixable" => format!(
-                "{} new high or critical {} with a fix available in the deployed release; see the Dashboard's dependency scan card",
+                "{} new high or critical {} with a fix available in the deployed release{}; see the Dashboard's dependency scan card",
                 self.count,
-                if self.count == 1 { "finding" } else { "findings" }
+                if self.count == 1 { "finding" } else { "findings" },
+                self.detail()
             ),
-            "supply_chain_failed" => {
-                "The dependency scan failed or its report could not be read; see the Dashboard".into()
-            }
+            "supply_chain_failed" => format!(
+                "The dependency scan failed or its report could not be read{}; see the Dashboard",
+                self.detail()
+            ),
             "supply_chain_stale" => format!(
                 "The dependency scan has not run for more than {} days, or its scanner stopped checking; see the Dashboard",
                 self.count
             ),
             other => format!("{} {other} events within {minutes} min", self.count),
         }
+    }
+
+    /// ` (detail)` with the detail cut to 300 characters, or nothing.
+    fn detail(&self) -> String {
+        self.detail
+            .as_deref()
+            .map(|d| format!(" ({})", d.chars().take(300).collect::<String>()))
+            .unwrap_or_default()
     }
 }
 
@@ -269,6 +281,7 @@ impl Counter {
             severity: rule.severity.clone(),
             count: entry.1,
             window_seconds: rule.window_seconds,
+            detail: None,
         })
     }
 }
@@ -293,6 +306,7 @@ pub fn single(config: &Config, kind: &str) -> Option<Raised> {
         severity: rule.severity.clone(),
         count: 1,
         window_seconds: rule.window_seconds,
+        detail: None,
     })
 }
 
@@ -523,6 +537,13 @@ mod tests {
             .unwrap()
             .message()
             .contains("failed"));
+        fixable.detail = Some("6 critical and 612 high fixable in this scan".into());
+        assert!(fixable
+            .message()
+            .contains("release (6 critical and 612 high fixable in this scan); see"));
+        let mut failed = single(&config, "supply_chain_failed").unwrap();
+        failed.detail = Some("x".repeat(400));
+        assert!(failed.message().len() < 400);
     }
 
     #[tokio::test]

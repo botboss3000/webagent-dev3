@@ -33,19 +33,22 @@ export function fixable(view){
  return [...found.values()];
 }
 
+/** Fixable high/critical findings the broker counted but did not list (it lists at most 200, critical first). */
+export const notShown=view=>(view?.targets||[]).reduce((sum,target)=>sum+(numeric(target.fixable_not_shown)?target.fixable_not_shown:0),0);
+
 /** Tile state, rows and note for the card. */
 export function supplyChainModel(view){
  if(!view||view.read_error)return {state:'unavailable',badge:'Unavailable',rows:[],findings:[],note:view?.read_error||'Loading…'};
  const counts=object=>SEVERITIES.filter(key=>numeric(object[key])&&object[key]>0).map(key=>object[key]+' '+key.toLowerCase()).join(' · ')||'none';
  const rows=[['Last scan',when(view.scanned_at)],['Last scanner check',when(view.checked_at??view.scanned_at)],['Release scanned',text(view.release)&&view.release?view.release.slice(0,8):'Unknown']];
- for(const target of view.targets)rows.push([target.name+' findings',counts(target.by_severity)],[target.name+' fixable',counts(target.fixable_by_severity)]);
+ for(const target of view.targets)rows.push([target.name+' findings',counts(target.by_severity)],[target.name+' fixable',counts(target.fixable_by_severity)+(numeric(target.fixable_not_shown)&&target.fixable_not_shown>0?' ('+target.fixable_not_shown+' not listed)':'')]);
  const ui=view.ui_libraries;
  rows.push(['UI library versions',!ui?'Not checked':ui.missing?'Version record missing':ui.mismatch?.length?ui.mismatch.length+' mismatch'+(ui.mismatch.length===1?'':'es')+': '+ui.mismatch.map(m=>m.library).join(', '):'Match the record'+(ui.recorded?' ('+Object.entries(ui.recorded).map(([k,v])=>k+' '+v).join(', ')+')':'')]);
  const findings=fixable(view);
  const badge={ok:'Live',failed:'Scan failed',stale:'Scan is older than '+(view.stale_days||'?')+' days or the scanner stopped',unavailable:'Unavailable'}[view.state];
  const note=view.state==='failed'?(view.reason==='missing'?'No scan report found.':view.reason==='malformed'||view.reason==='too_large'||view.reason==='refused'?'The scan report was refused as unreadable.':'The last scan failed'+(text(view.error)&&view.error?': '+view.error:'.')+' Earlier results shown.')
   :view.state==='unavailable'?'The build broker could not be reached.':
-  findings.length?findings.length+' high or critical finding'+(findings.length===1?' has':'s have')+' a fix available. Unfixable findings are counted only.':'No high or critical finding with a fix available.';
+  findings.length?findings.length+' high or critical finding'+(findings.length===1?' has':'s have')+' a fix available'+(notShown(view)?', and '+notShown(view)+' more not shown (critical listed first)':'')+'. Unfixable findings are counted only.':'No high or critical finding with a fix available.';
  return {state:view.state==='ok'&&!(ui&&(ui.missing||ui.mismatch?.length))?'live':view.state==='ok'?'partial':view.state==='unavailable'?'unavailable':'error',badge,rows,findings,note};
 }
 
@@ -54,7 +57,8 @@ export function prepareBrief(view){
  const lines=fixable(view).map(f=>'- '+f.package+' '+f.installed+' → '+f.fixed+' ('+f.id+'; in '+f.targets.join(', ')+')');
  return ['The dependency scan found high or critical findings that have a fix available. Prepare an update for them.',
   'Scan: '+when(view.scanned_at)+', release '+(view.release||'unknown')+'.',
-  'Fixable findings (package, installed → fixed version, identifier, where):',...lines,'',
+  'Fixable findings (package, installed → fixed version, identifier, where):',...lines,
+  ...(notShown(view)?['and '+notShown(view)+' more not shown here (the full list is in the scan report folder).']:[]),'',
   'Please: open an ordinary broker task (build_work begin, broker_id new) and propose the smallest version bumps that',
   'clear these: Cargo.lock crate updates for cargo findings, the container base image or its Debian packages for',
   'api/loop/gate findings (first check the Blocker board and the Builds page for an open base-image task and work with',
@@ -88,7 +92,8 @@ export function paintSupplyChain(view,{tile,badge,body,needs},node){
  for(const [label,value] of model.rows){const row=node('div',undefined,'dashboard-field');row.append(node('span',String(label)),node('span',String(value)));body.append(row);}
  if(model.findings.length){
   const list=node('details',undefined,'dashboard-findings');
-  list.append(node('summary','Fixable high/critical findings ('+model.findings.length+')'));
+  const hidden=notShown(view);
+  list.append(node('summary','Fixable high/critical findings ('+model.findings.length+(hidden?' listed, '+hidden+' more not shown':'')+')'));
   const items=node('ul');
   for(const f of model.findings.slice(0,50))items.append(node('li',f.package+' '+f.installed+' → '+f.fixed+' · '+f.id+' · '+f.targets.join(', ')));
   if(model.findings.length>50)items.append(node('li','and '+(model.findings.length-50)+' more'));

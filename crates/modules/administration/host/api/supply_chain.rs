@@ -150,11 +150,15 @@ async fn check(
     if decision.new_findings > 0 {
         if let Some(mut alert) = alerts::single(&config, "supply_chain_fixable") {
             alert.count = u32::try_from(decision.new_findings).unwrap_or(u32::MAX);
+            alert.detail.clone_from(&decision.detail);
             raised.push(alert);
         }
     }
     if decision.failed {
-        raised.extend(alerts::single(&config, "supply_chain_failed"));
+        if let Some(mut alert) = alerts::single(&config, "supply_chain_failed") {
+            alert.detail.clone_from(&decision.detail);
+            raised.push(alert);
+        }
     }
     if decision.stale {
         if let Some(mut alert) = alerts::single(&config, "supply_chain_stale") {

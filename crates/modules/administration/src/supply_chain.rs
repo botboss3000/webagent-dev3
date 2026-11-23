@@ -37,6 +37,10 @@ pub struct Target {
     pub by_severity: BTreeMap<String, u64>,
     pub fixable_by_severity: BTreeMap<String, u64>,
     pub fixable_high_critical: Vec<Finding>,
+    /// Fixable high/critical findings beyond the listed ones (the broker lists at most
+    /// `MAX_FINDINGS` across all targets, critical first; the counts above stay exact).
+    #[serde(default)]
+    pub fixable_not_shown: u64,
 }
 
 /// A UI library whose file header disagrees with the recorded version.
@@ -139,6 +143,7 @@ pub fn parse(output: &Value) -> anyhow::Result<Report> {
             target_name(name)
                 && counts(&target.by_severity)
                 && counts(&target.fixable_by_severity)
+                && target.fixable_not_shown <= 10_000_000
                 && target.fixable_high_critical.iter().all(|f| {
                     word(&f.package) && word(&f.installed) && word(&f.id) && word(&f.fixed)
                 })
@@ -275,7 +280,62 @@ pub struct Decision {
     pub failed: bool,
     /// Raise the stale-scan alert.
     pub stale: bool,
+    /// One line for the raised alert: the fixable counts by severity and the most affected
+    /// packages, or why the scan counts as failed. Package names are checked words.
+    pub detail: Option<String>,
     pub memory: Memory,
+}
+
+/// The fixable summary: exact counts by severity across the scanned images, how many are not
+/// listed, and the (at most three) packages with the most listed findings.
+fn fixable_detail(report: &Report) -> String {
+    let total = |severity: &str| -> u64 {
+        report
+            .targets
+            .values()
+            .filter_map(|t| t.fixable_by_severity.get(severity))
+            .sum()
+    };
+    let mut packages: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for finding in report
+        .targets
+        .values()
+        .flat_map(|t| &t.fixable_high_critical)
+    {
+        packages
+            .entry(finding.package.as_str())
+            .or_default()
+            .insert(fingerprint(finding));
+    }
+    let mut ranked: Vec<(&str, usize)> = packages.iter().map(|(p, f)| (*p, f.len())).collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let top: Vec<&str> = ranked.iter().take(3).map(|(p, _)| *p).collect();
+    let hidden: u64 = report.targets.values().map(|t| t.fixable_not_shown).sum();
+    let mut line = format!(
+        "{} critical and {} high fixable in this scan",
+        total("CRITICAL"),
+        total("HIGH")
+    );
+    if hidden > 0 {
+        line.push_str(&format!(", {hidden} not listed"));
+    }
+    if !top.is_empty() {
+        line.push_str(&format!("; most affected: {}", top.join(", ")));
+    }
+    line
+}
+
+/// Why a report counts as failed, in words for the alert.
+fn failed_detail(report: &Report) -> String {
+    match (report.available, report.reason.as_deref()) {
+        (false, Some("missing")) => "no scan report found",
+        (false, Some("too_large")) => "the report is too large to read",
+        (false, Some("refused")) => "the report file was refused",
+        (false, _) => "the report was refused as malformed",
+        (true, _) if report.status.as_deref() == Some("failed") => "the scanner recorded a failure",
+        (true, _) => "the report has no scan time",
+    }
+    .to_owned()
 }
 
 /// Decide the alerts for `report` given what was already alerted.
@@ -300,10 +360,19 @@ pub fn decide(report: &Report, limits: Thresholds, now: f64, memory: &Memory) ->
         let now_listed = current(report);
         (now_listed.difference(&memory.findings).count(), now_listed)
     };
+    let failed = entered && state == State::Failed;
+    let detail = if failed {
+        Some(failed_detail(report))
+    } else if new_findings > 0 {
+        Some(fixable_detail(report))
+    } else {
+        None
+    };
     Decision {
         new_findings,
-        failed: entered && state == State::Failed,
+        failed,
         stale: entered && state == State::Stale,
+        detail,
         memory: Memory { findings, problem },
     }
 }
@@ -321,6 +390,7 @@ pub fn view(report: &Report, limits: Thresholds, now: f64) -> Value {
         .iter()
         .map(|(name, t)| {
             json!({"name":name,"by_severity":t.by_severity,"fixable_by_severity":t.fixable_by_severity,
+            "fixable_not_shown":t.fixable_not_shown,
             "fixable_high_critical":t.fixable_high_critical.iter().map(|f| json!({
                 "package":f.package,"installed":f.installed,"fixed":f.fixed,"id":f.id})).collect::<Vec<_>>()})
         })
@@ -462,6 +532,48 @@ mod tests {
         for case in cases {
             assert!(parse(&case).is_err(), "{case}");
         }
+    }
+
+    #[test]
+    fn many_new_findings_are_one_summary_and_failures_say_why() {
+        // 200 listed Chromium rows of 618 fixable: one decision, exact counts, top packages.
+        let rows: Vec<Value> = (0..200)
+            .map(|i| {
+                let package = ["chromium", "chromium-common", "chromium-driver"][i % 3];
+                json!({"package":package,"installed":"156.0.8078.79-1~deb12u1",
+                "id":format!("CVE-2026-{}", 20000 + i / 3),"fixed":"156.0.8078.108-1~deb12u1"})
+            })
+            .collect();
+        let mut value = report(Value::Array(rows));
+        value["targets"]["api"]["fixable_by_severity"] = json!({"CRITICAL":6,"HIGH":612});
+        value["targets"]["api"]["fixable_not_shown"] = json!(418);
+        let parsed = parse(&value).unwrap();
+        let decision = decide(&parsed, LIMITS, NOW, &Memory::default());
+        assert_eq!(decision.new_findings, 200);
+        assert_eq!(
+            decision.detail.as_deref(),
+            Some("6 critical and 612 high fixable in this scan, 418 not listed; most affected: chromium, chromium-common, chromium-driver")
+        );
+        assert_eq!(
+            view(&parsed, LIMITS, NOW)["targets"][0]["fixable_not_shown"],
+            418
+        );
+        // Seen again: nothing.
+        let again = decide(&parsed, LIMITS, NOW + 900.0, &decision.memory);
+        assert_eq!((again.new_findings, again.detail), (0, None));
+        // A refused report alerts once, saying why, and keeps the findings remembered.
+        let refused = parse(&json!({"available":false,"reason":"malformed"})).unwrap();
+        let failed = decide(&refused, LIMITS, NOW, &decision.memory);
+        assert!(failed.failed);
+        assert_eq!(
+            failed.detail.as_deref(),
+            Some("the report was refused as malformed")
+        );
+        assert_eq!(failed.memory.findings, decision.memory.findings);
+        assert!(!decide(&refused, LIMITS, NOW + 900.0, &failed.memory).failed);
+        let mut bad = value.clone();
+        bad["targets"]["api"]["fixable_not_shown"] = json!(-1);
+        assert!(parse(&bad).is_err());
     }
 
     #[test]
