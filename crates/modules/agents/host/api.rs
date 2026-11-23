@@ -138,7 +138,8 @@ async fn identity_get(
     let owned = webagent_agents::repository::Repository::new(&store.agent_pool, &id, &store)?
         .identity()
         .await?;
-    let config = webagent_agents::modes::config(&agent_metadata(&store, &id).await?)?;
+    let metadata = agent_metadata(&store, &id).await?;
+    let config = webagent_agents::modes::config(&metadata)?;
     let defaults = crate::context_compaction::Config::read(&app.compaction_config_path)?;
     let override_settings = crate::context_compaction::agent_thresholds(&store, &id).await?;
     // Keep Identity readable if a later app-default edit invalidates an override.
@@ -182,6 +183,7 @@ async fn identity_get(
         "tool_output_overridden":tool_output_overridden,"tool_output_eligible_tools":tool_output_eligible_tools,
         "compaction_overridden":override_settings.is_some(),"compaction_valid":compaction_valid,
         "description":owned["description"],"revision":owned["revision"],
+        "admin_contact_email":metadata["admin_contact_email"].as_str().unwrap_or(""),
         "can_manage":rights["can_manage"]}),
     ))
 }
@@ -213,6 +215,8 @@ struct IdentityUpdate {
     shared_chat: Option<crate::shared_chat::SharedChatPolicy>,
     name: Option<String>,
     description: Option<String>,
+    /// Blank clears it.
+    admin_contact_email: Option<String>,
     execution_modes: Option<Value>,
     default_execution_mode: Option<String>,
     message_visibility: Option<crate::gate_controls::AgentVisibility>,
@@ -251,6 +255,7 @@ async fn identity_put(
     if body.revision < 0
         || (body.name.is_none()
             && body.description.is_none()
+            && body.admin_contact_email.is_none()
             && body.execution_modes.is_none()
             && body.default_execution_mode.is_none()
             && body.message_visibility.is_none()
@@ -302,6 +307,16 @@ async fn identity_put(
     }
     if let Some(settings) = body.member_access {
         metadata["member_access"] = serde_json::to_value(settings).map_err(anyhow::Error::from)?;
+    }
+    if let Some(email) = body.admin_contact_email.as_deref() {
+        match webagent_agents::admin_contact_email(email).map_err(|e| crate::bad(&e.to_string()))? {
+            Some(email) => metadata["admin_contact_email"] = json!(email),
+            None => {
+                if let Some(fields) = metadata.as_object_mut() {
+                    fields.remove("admin_contact_email");
+                }
+            }
+        }
     }
     let own_update = webagent_agents::IdentityUpdate {
         revision: body.revision,
@@ -1007,6 +1022,7 @@ mod tests {
             revision,
             name: None,
             description: None,
+            admin_contact_email: None,
             execution_modes: None,
             default_execution_mode: None,
             message_visibility: Some(crate::gate_controls::AgentVisibility {
@@ -1241,6 +1257,7 @@ mod tests {
             revision,
             name: None,
             description: None,
+            admin_contact_email: None,
             execution_modes: None,
             default_execution_mode: None,
             message_visibility: None,
@@ -1367,6 +1384,7 @@ mod tests {
             revision,
             name: None,
             description: None,
+            admin_contact_email: None,
             execution_modes: None,
             default_execution_mode: None,
             message_visibility: None,
@@ -1446,6 +1464,7 @@ mod tests {
             revision,
             name: None,
             description: None,
+            admin_contact_email: None,
             execution_modes: None,
             default_execution_mode: None,
             message_visibility: None,
@@ -1656,6 +1675,7 @@ mod tests {
             revision,
             name: None,
             description: None,
+            admin_contact_email: None,
             execution_modes: None,
             default_execution_mode: None,
             message_visibility: None,
@@ -1739,6 +1759,7 @@ mod tests {
                 revision: before["revision"].as_i64().unwrap(),
                 name: None,
                 description: None,
+                admin_contact_email: None,
                 execution_modes: Some(
                     json!([{"id":"review","label":"Review","prompt":"Inspect only"}]),
                 ),
@@ -1787,6 +1808,7 @@ mod tests {
                 revision: saved["revision"].as_i64().unwrap(),
                 name: None,
                 description: None,
+                admin_contact_email: None,
                 execution_modes: Some(modes),
                 default_execution_mode: None,
                 message_visibility: None,
@@ -1838,6 +1860,7 @@ mod tests {
                 revision,
                 name: Some("  Renamed  ".into()),
                 description: Some("Description".into()),
+                admin_contact_email: Some(" admin@example.com ".into()),
                 execution_modes: None,
                 default_execution_mode: None,
                 message_visibility: None,
@@ -1854,6 +1877,7 @@ mod tests {
         .unwrap();
         assert_eq!(saved["name"], "Renamed");
         assert_eq!(saved["description"], "Description");
+        assert_eq!(saved["admin_contact_email"], "admin@example.com");
         assert!(identity_put(
             State(app.clone()),
             Extension(identity.clone()),
@@ -1865,6 +1889,7 @@ mod tests {
                 revision,
                 name: Some("Stale".into()),
                 description: None,
+                admin_contact_email: None,
                 execution_modes: None,
                 default_execution_mode: None,
                 message_visibility: None,
@@ -1890,6 +1915,7 @@ mod tests {
                 revision: revision + 1,
                 name: Some(" ".into()),
                 description: None,
+                admin_contact_email: None,
                 execution_modes: None,
                 default_execution_mode: None,
                 message_visibility: None,
@@ -1916,6 +1942,7 @@ mod tests {
                 revision: revision + 1,
                 name: Some("Forbidden".into()),
                 description: None,
+                admin_contact_email: None,
                 execution_modes: None,
                 default_execution_mode: None,
                 message_visibility: None,

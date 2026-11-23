@@ -99,6 +99,29 @@ pub fn validate_identity(name: Option<&str>, description: Option<&str>) -> Resul
     Ok(())
 }
 
+/// The agent administrator's contact email, shown to chat users when the agent's model cannot
+/// be reached. Blank clears it. Only a plain `name@domain.tld` address is accepted.
+pub fn admin_contact_email(value: &str) -> Result<Option<String>> {
+    let email = value.trim();
+    if email.is_empty() {
+        return Ok(None);
+    }
+    let shape = email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty()
+            && local.len() <= 64
+            && !domain.contains('@')
+            && domain.contains('.')
+            && domain.split('.').all(|part| !part.is_empty())
+    });
+    let characters = email
+        .chars()
+        .all(|c| c.is_ascii_graphic() && !"<>()[]\\,;:\"".contains(c));
+    if email.len() > 254 || !shape || !characters {
+        bail!("Enter an email address like admin@example.com");
+    }
+    Ok(Some(email.to_owned()))
+}
+
 /// Archive statuses: `archived` (was active) and `archived_disabled` (was disabled).
 pub fn archived(agent: &Value) -> bool {
     agent["status"]

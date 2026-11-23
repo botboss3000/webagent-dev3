@@ -612,3 +612,25 @@ async fn archive_hides_stops_runs_unarchives_and_never_lifts_a_disable() {
     );
     assert_eq!(archive_status(&f, &id).await["status"], "disabled");
 }
+
+#[test]
+fn admin_contact_email_accepts_plain_addresses_and_blank_clears() {
+    assert_eq!(
+        admin_contact_email(" admin@example.com ")
+            .unwrap()
+            .as_deref(),
+        Some("admin@example.com")
+    );
+    assert_eq!(admin_contact_email("  ").unwrap(), None);
+    for bad in [
+        "admin",
+        "@example.com",
+        "admin@example",
+        "admin@@example.com",
+        "admin@example..com",
+        "Admin <admin@example.com>",
+        "admin@exa mple.com",
+    ] {
+        assert!(admin_contact_email(bad).is_err(), "{bad}");
+    }
+}

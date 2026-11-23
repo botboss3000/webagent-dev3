@@ -162,8 +162,35 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
 /// The chat notice for a model that cannot be reached. It names no model, provider or
 /// recovery detail; those go to the operator row below.
 pub const MODEL_UNREACHABLE: &str = "The model is unreachable";
-pub const MODEL_UNREACHABLE_GUIDANCE: &str =
-    "Use a different session to resume, or contact the administrator.";
+
+/// The notice's next step, naming the agent administrator's contact email when one is set.
+pub fn model_unreachable_guidance(contact: Option<&str>) -> String {
+    match contact {
+        Some(email) => {
+            format!("Use a different session to resume, or contact the administrator at {email}.")
+        }
+        None => "Use a different session to resume, or contact the administrator.".into(),
+    }
+}
+
+/// The agent administrator's contact email (Identity → Profile), if one is set.
+pub async fn admin_contact(
+    store: &impl crate::ports::AgentMetadata,
+    agent: &str,
+) -> Result<Option<String>> {
+    use crate::ports::AgentMetadata;
+    use webagent_access::storage::RecordCodec;
+    let view = store.for_agent(agent).await?;
+    let blob: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
+        .bind(agent)
+        .fetch_one(view.agent_pool())
+        .await?;
+    let metadata = view.unseal(&blob)?;
+    Ok(metadata["admin_contact_email"]
+        .as_str()
+        .filter(|email| !email.is_empty())
+        .map(str::to_owned))
+}
 
 /// Stop a call whose model could not be reached: the chat shows only `MODEL_UNREACHABLE`,
 /// and an activity row (run logs, administrators only) records the model, provider, what

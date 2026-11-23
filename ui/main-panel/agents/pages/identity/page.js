@@ -106,6 +106,11 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   const descriptionRow = createLongTextRow(profileList, {title:'Description', value:agent.description||'', placeholder:'Describe what this agent is for…',
     minHeight:80, disabled:!agent.can_manage, onSave: value => saveField('description', value)});
   descriptionRow.editor.area.dataset.field = 'description';
+  const contactRow = createTextRow(profileList, {title:'Administrator contact email', value:agent.admin_contact_email||'',
+    placeholder:'admin@example.com', maxLength:254, disabled:!agent.can_manage,
+    hint:'Shown to chat users when this agent\'s model cannot be reached. Leave blank to show no address.',
+    onSave: value => saveField('admin_contact_email', value.trim())});
+  contactRow.control.dataset.field = 'admin_contact_email';
   renderMemberAccess(stage,agent,persist,request,{agentId,reload:()=>renderIdentity(host,request,{agentId,onSaved})});
   if(agent.can_manage)await renderEmbedSettings(stage,request,{agentId});
   renderSharedChat(stage, agent, persist);
