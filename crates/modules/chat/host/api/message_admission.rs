@@ -38,6 +38,12 @@ fn blocked_summary(reason: &str) -> Option<&'static str> {
         "Account run limit reached" => {
             "You have the most runs allowed going at once. Wait for one to finish."
         }
+        crate::store::AGENT_USERS_BUSY => {
+            "This agent is busy with as many people as it can serve at once. Try again in a few minutes."
+        }
+        crate::store::AGENT_USERS_FULL => {
+            "This agent can't take on new people right now. Try again later."
+        }
         "Model unavailable"
         | "Text model required, or selected model is unavailable"
         | "System model assignment is invalid or unauthorized"
@@ -341,8 +347,8 @@ pub(crate) struct PreparedMessage {
 pub(super) fn admission_error(error: anyhow::Error) -> ApiError {
     if error.to_string() == "Participation revision changed" {
         conflict("Participation revision changed; resend against the current agent state")
-    } else if error.to_string() == "Account run limit reached" {
-        conflict("Account run limit reached")
+    } else if crate::store::limit_refusal(&error) {
+        conflict(&error.to_string())
     } else if error.to_string() == "Session already has an active run" {
         conflict("Resolve the existing run first")
     } else {

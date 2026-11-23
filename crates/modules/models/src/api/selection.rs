@@ -305,10 +305,12 @@ pub async fn save<C: RuntimeStorage>(
         };
     }
     // The test model answers on the server for anyone its agent serves: administrators only.
+    // Compared with the caller's view, so an administrator's test model granted to the agent
+    // comes back unchanged in its scoped form.
     if !caller.administrator()
         && input.connections.iter().any(|(id, c)| {
             c.transport.provider_id() == crate::provider::ProviderId::Loadtest
-                && old.connections.get(id) != Some(c)
+                && view.connections.get(id) != Some(c)
         })
     {
         return Err(denied());

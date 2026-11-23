@@ -13,6 +13,13 @@ pub struct MemberAccess {
     pub visitor_access: bool,
     pub app_login_members: bool,
     pub conversation_privacy: ConversationPrivacy,
+    /// The owner's own limit on people active on this agent in the last 30 days, below
+    /// their tier's (`OwnerLimits::agent_users`); absent: the tier's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_users: Option<u32>,
+    /// The owner's own limit on people with a run going at once; absent: the tier's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_users_at_once: Option<u32>,
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,6 +64,15 @@ impl<C: RecordCodec> Repository<'_, C> {
 }
 
 impl MemberAccess {
+    /// Saved limits are whole numbers of at least 1 within the tier fields' bounds.
+    pub fn validate(&self) -> Result<()> {
+        if self.max_users.is_some_and(|n| n == 0 || n > 1_000_000)
+            || self.max_users_at_once.is_some_and(|n| n == 0 || n > 200)
+        {
+            return Err(anyhow!("Invalid agent user limits"));
+        }
+        Ok(())
+    }
     /// The agent's joining policy from its metadata record.
     pub fn from_metadata(metadata: &Value) -> Result<Self> {
         Ok(if metadata["member_access"].is_null() {

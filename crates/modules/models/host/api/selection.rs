@@ -708,6 +708,90 @@ mod tests {
             .unwrap();
     }
     #[tokio::test]
+    async fn an_owner_saves_its_roster_with_an_administrators_test_model_granted_to_it() {
+        let (_root, app) = fixture().await;
+        let mut catalog = selection_fixture(&app).await;
+        let user = tenant_user(&app, "loadtest-granted").await;
+        let identity = json!({"_user_id":user});
+        let Json(created) = create_agent(
+            State(app.clone()),
+            Extension(identity.clone()),
+            Json(NewAgent {
+                client_request_id: "loadtest-granted-agent".into(),
+                name: "Tenant".into(),
+                description: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let agent = created["id"].as_str().unwrap();
+        // The administrator's own connection "one" becomes a test model granted to the agent.
+        let connection = catalog.connections.get_mut("one").unwrap();
+        connection.transport = crate::model_selection::Transport::Loadtest;
+        connection.allowed_agents.insert(agent.into());
+        catalog
+            .entries
+            .get_mut("one")
+            .unwrap()
+            .allowed_agents
+            .insert(agent.into());
+        app.store
+            .save_model_catalog(&catalog, catalog.revision)
+            .await
+            .unwrap();
+        let view = read(
+            State(app.clone()),
+            Extension(identity.clone()),
+            agent_query(agent),
+        )
+        .await
+        .unwrap()
+        .0;
+        let mut input: Catalog = serde_json::from_value(view["catalog"].clone()).unwrap();
+        input.agent_models.insert(
+            agent.into(),
+            serde_json::from_value(json!({"agent_id":agent,"owner_id":user,"revision":1,
+                "entry_ids":["one"],"roles":{"standard":{"entry_id":"one"}}}))
+            .unwrap(),
+        );
+        // Allowed: the granted test model comes back in its scoped form, unchanged.
+        save(
+            State(app.clone()),
+            Extension(identity.clone()),
+            agent_query(agent),
+            Json(input.clone()),
+        )
+        .await
+        .unwrap();
+        // Refused: changing that test model's grants is still the administrator's.
+        let mut changed: Catalog = serde_json::from_value(
+            read(
+                State(app.clone()),
+                Extension(identity.clone()),
+                agent_query(agent),
+            )
+            .await
+            .unwrap()
+            .0["catalog"]
+                .clone(),
+        )
+        .unwrap();
+        changed
+            .connections
+            .get_mut("one")
+            .unwrap()
+            .allowed_agents
+            .insert("shared_default".into());
+        assert!(save(
+            State(app),
+            Extension(identity),
+            agent_query(agent),
+            Json(changed)
+        )
+        .await
+        .is_err());
+    }
+    #[tokio::test]
     async fn byo_disabled_blocks_credential_writes_without_mutating_catalog() {
         let (_root, app) = fixture().await;
         let catalog = selection_fixture(&app).await;

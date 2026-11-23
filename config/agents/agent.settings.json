@@ -64,6 +64,52 @@
       "bounds": "validator"
     },
     {
+      "id": "agent.member_access.max_users",
+      "description": "Most people (members and visitors with a message in the last 30 days) this agent serves; below the owner's plan limit.",
+      "type": "integer",
+      "pointer": "/member_access/max_users",
+      "layers": [
+        "agent"
+      ],
+      "examples": [
+        "only 10 people may use my agent",
+        "limit how many users this agent has"
+      ],
+      "areas": [
+        "access",
+        "agent",
+        "limits"
+      ],
+      "min": 1,
+      "max": 1000000,
+      "bounds": "validator",
+      "nullable": true,
+      "notes": "Absent means the owner's plan limit; a number above it counts as the plan's."
+    },
+    {
+      "id": "agent.member_access.max_users_at_once",
+      "description": "Most people with a run going at the same time on this agent; below the owner's plan limit.",
+      "type": "integer",
+      "pointer": "/member_access/max_users_at_once",
+      "layers": [
+        "agent"
+      ],
+      "examples": [
+        "two people at once on my agent",
+        "limit simultaneous users of this agent"
+      ],
+      "areas": [
+        "access",
+        "agent",
+        "limits"
+      ],
+      "min": 1,
+      "max": 200,
+      "bounds": "validator",
+      "nullable": true,
+      "notes": "Absent means the owner's plan limit; a number above it counts as the plan's."
+    },
+    {
       "id": "agent.member_access.conversation_privacy",
       "description": "Whether members' conversations with this agent are private or reviewable by its operators.",
       "type": "enum",

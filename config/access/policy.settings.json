@@ -127,6 +127,92 @@
       "bounds": "proposed"
     },
     {
+      "id": "access.tier.owner_limits.agent_users",
+      "description": "Most people (members and signed-out visitors with a message in the last 30 days) one agent owned by an account at this level may serve; new people are refused beyond it. Absent means no limit.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/owner_limits/agent_users",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "free owners' agents serve up to 20 people",
+        "let plus agents have 500 users",
+        "how many users can one agent have"
+      ],
+      "areas": [
+        "agents",
+        "limits",
+        "users"
+      ],
+      "min": 0,
+      "max": 1000000,
+      "parameters": {
+        "tier": [
+          "plus",
+          "free"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Owners may set a lower number per agent. The administrator level has none."
+    },
+    {
+      "id": "access.tier.owner_limits.agent_users_at_once",
+      "description": "Most people with a run going at the same time on one agent owned by an account at this level; a new person waits outside it. Absent means no limit.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/owner_limits/agent_users_at_once",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "three people at once on a free agent",
+        "plus agents serve 25 people at the same time",
+        "how many users can chat at once"
+      ],
+      "areas": [
+        "agents",
+        "limits",
+        "users"
+      ],
+      "min": 0,
+      "max": 200,
+      "parameters": {
+        "tier": [
+          "plus",
+          "free"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Owners may set a lower number per agent. The administrator level has none."
+    },
+    {
+      "id": "access.tier.owner_limits.public_visitors",
+      "description": "Whether agents owned by an account at this level may let signed-out visitors chat without a widget.",
+      "type": "boolean",
+      "pointer": "/tiers/{tier}/owner_limits/public_visitors",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "free agents cannot have anonymous visitors",
+        "let plus owners open their agents to the public",
+        "public links for free users"
+      ],
+      "areas": [
+        "agents",
+        "visitors",
+        "access"
+      ],
+      "parameters": {
+        "tier": [
+          "plus",
+          "free",
+          "anonymous"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Absent means allowed. Widgets are not affected."
+    },
+    {
       "id": "access.tier_names",
       "description": "Display name of an account level.",
       "type": "string",

@@ -176,7 +176,7 @@ async fn identity_get(
     let voice_output = voice_output(&store, &id).await?;
     // The default publishing guidance, which an agent's own guidance replaces.
     Ok(Json(
-        json!({"member_access":store.access_repository().member_access(&id).await?,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"voice_output":voice_output.to_value(),"voice_catalog":webagent_media::speech::voice_catalog(),"dictation_cleanup_default":webagent_media::settings::VoiceSettings::live().dictation.editor,"closing_protocol":{"flags":closing_protocol.agent_flags(),"notification_target_words":closing_protocol.notification.target_words},"message_visibility":{"mode":settings.mode},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
+        json!({"member_access":store.access_repository().member_access(&id).await?,"owner_limits":owner_limits(&app,identity["_user_id"].as_str().unwrap_or(""),&id).await,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"voice_output":voice_output.to_value(),"voice_catalog":webagent_media::speech::voice_catalog(),"dictation_cleanup_default":webagent_media::settings::VoiceSettings::live().dictation.editor,"closing_protocol":{"flags":closing_protocol.agent_flags(),"notification_target_words":closing_protocol.notification.target_words},"message_visibility":{"mode":settings.mode},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
         "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens,"ceiling_tokens":ceiling,"summarizer":summarizer,"cache_timeout_minutes":effective.cache_timeout_minutes,"keep_alive":effective.keep_alive,"fold_tasks_retained":effective.fold_tasks_retained},
         "compaction_defaults":{"trigger_tokens":defaults.trigger_tokens,"tail_tokens":defaults.tail_tokens,"summary_tokens":defaults.summary_tokens,"ceiling_tokens":defaults.ceiling(),"summarizer":defaults.summarizer},
         "tool_result_deduplication":crate::tool_output::dedup_policy(&store,&id).await?,"tool_output_policy":tool_output_policy,"tool_output_defaults":tool_output_defaults,
@@ -197,6 +197,16 @@ pub(crate) const IDENTITY_SETTINGS: [&str; 7] = [
     "member_access",
     "message_visibility",
 ];
+/// The agent owner's tier limits on people and visitors, read through `caller`'s access
+/// (`None`: owner or tier unreadable).
+async fn owner_limits(app: &App, caller: &str, agent: &str) -> Option<crate::access::OwnerLimits> {
+    app.store
+        .live_access(caller, agent)
+        .await
+        .ok()?
+        .owner_tier
+        .map(|tier| tier.owner_limits)
+}
 /// The identity view, as `GET /agents/{id}/identity` returns it.
 pub(crate) async fn identity(app: App, caller: Value, id: String) -> Api {
     identity_get(State(app), Extension(caller), Path(id)).await
@@ -306,6 +316,21 @@ async fn identity_put(
         metadata["shared_chat"] = serde_json::to_value(settings).map_err(anyhow::Error::from)?;
     }
     if let Some(settings) = body.member_access {
+        settings
+            .validate()
+            .map_err(|_| crate::bad("User limits must be whole numbers of at least 1"))?;
+        let before = crate::access::membership::MemberAccess::from_metadata(&metadata)?;
+        let caller = identity["_user_id"].as_str().unwrap_or("");
+        if settings.visitor_access
+            && !before.visitor_access
+            && !owner_limits(&app, caller, &id)
+                .await
+                .is_some_and(|limits| limits.allows_public_visitors())
+        {
+            return Err(crate::conflict(
+                "The owner's plan does not include signed-out visitors without a widget",
+            ));
+        }
         metadata["member_access"] = serde_json::to_value(settings).map_err(anyhow::Error::from)?;
     }
     if let Some(email) = body.admin_contact_email.as_deref() {

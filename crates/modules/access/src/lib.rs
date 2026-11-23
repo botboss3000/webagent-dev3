@@ -182,6 +182,55 @@ pub struct Tier {
     /// absent means no limit. Calls without a reported cost count as turns only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_cost_usd: Option<f64>,
+    /// What an owner on this tier may serve with their agents (absent values: no limit).
+    #[serde(default, skip_serializing_if = "OwnerLimits::unlimited")]
+    pub owner_limits: OwnerLimits,
+}
+
+/// Limits an agent owner's tier sets on each agent they own: how many people it serves and
+/// whether signed-out visitors may use it (agents owned: `storage.tiers.*.max_published_agents`).
+/// The owner may lower the numbers on each agent (`MemberAccess`). Absent means no limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerLimits {
+    /// People (members and visitors) with a message on one agent in the last 30 days.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_users: Option<u32>,
+    /// People with a run going on one agent at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_users_at_once: Option<u32>,
+    /// Whether signed-out visitors may chat with the owner's agents without a widget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_visitors: Option<bool>,
+}
+impl OwnerLimits {
+    pub fn unlimited(&self) -> bool {
+        *self == Self::default()
+    }
+    fn valid(&self) -> bool {
+        self.agent_users.is_none_or(|n| n <= 1_000_000)
+            && self.agent_users_at_once.is_none_or(|n| n <= 200)
+    }
+    pub fn allows_public_visitors(&self) -> bool {
+        self.public_visitors != Some(false)
+    }
+    /// These limits, each capped by `upper`'s (a tier ranked above).
+    pub fn within(self, upper: &Self) -> Self {
+        Self {
+            agent_users: run_limits::lower(self.agent_users, upper.agent_users),
+            agent_users_at_once: run_limits::lower(
+                self.agent_users_at_once,
+                upper.agent_users_at_once,
+            ),
+            public_visitors: match (
+                self.allows_public_visitors(),
+                upper.allows_public_visitors(),
+            ) {
+                (true, true) => self.public_visitors,
+                _ => Some(false),
+            },
+        }
+    }
 }
 
 impl Tier {
@@ -200,6 +249,7 @@ impl Tier {
                 .daily_turns
                 .is_some_and(|turns| turns == 0 || turns > 1_000_000)
             || !run_limits::valid_cost(self.daily_cost_usd)
+            || !self.owner_limits.valid()
         {
             bail!("Invalid entitlement tier");
         }
@@ -630,6 +680,7 @@ mod tests {
             max_active_runs: 2,
             daily_turns: None,
             daily_cost_usd: None,
+            owner_limits: Default::default(),
         };
         assert!(tier.allows_byo_model("deepseek-chat"));
         assert!(tier.allows_byo_growth(0, 1));
@@ -662,6 +713,7 @@ mod tests {
             max_active_runs: 2,
             daily_turns: None,
             daily_cost_usd: None,
+            owner_limits: Default::default(),
         };
         tier.validate().unwrap();
         assert!(!tier.allows_model("other"));

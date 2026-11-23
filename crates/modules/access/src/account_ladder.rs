@@ -105,6 +105,7 @@ pub fn effective(policy: &Value, id: &str) -> Result<Tier> {
         result.daily_turns = crate::run_limits::lower(result.daily_turns, tier.daily_turns);
         result.daily_cost_usd =
             crate::run_limits::lower(result.daily_cost_usd, tier.daily_cost_usd);
+        result.owner_limits = result.owner_limits.within(&tier.owner_limits);
         if let Some(ceiling) = &tier.model_policy {
             if let Some(model) = &mut result.model_policy {
                 model.allow_byo &= ceiling.allow_byo;

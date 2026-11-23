@@ -147,7 +147,7 @@ async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
     match app.store.requester_claim_ready(&quota).await {
         Ok(true) => {}
         Ok(false) => return Ok(()),
-        Err(error) if error.to_string() == "Account run limit reached" => return Ok(()),
+        Err(error) if crate::store::limit_refusal(&error) => return Ok(()),
         Err(error) => return Err(error),
     }
     let mut r = e["review"].clone();

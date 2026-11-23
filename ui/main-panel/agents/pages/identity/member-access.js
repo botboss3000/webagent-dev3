@@ -23,10 +23,25 @@ export function renderMemberAccess(host,agent,persist,request,{agentId,reload}) 
     options:modes.map(([value,title,hint])=>({value,title,hint})),
     onSave:value=>{const [,,,visitor,members]=modes.find(mode=>mode[0]===value);return save1({visitor_access:visitor,app_login_members:members});}});
   body.append(node('p','Operators can always appoint or block individual users on the Members page. Removing an assignment restores the policy\'s automatic access.','ac-hint'));
+  // People this agent serves: the owner's plan sets the most; the owner may set lower numbers.
+  const plan=agent.owner_limits||{};
+  if(plan.public_visitors===false)body.append(node('p','The owner\'s plan does not include signed-out visitors without a widget.','ac-hint'));
+  const people=node('div','','member-level-limits'),peopleInputs={};
+  for(const [key,planKey,label] of [['max_users','agent_users','People in the last 30 days'],['max_users_at_once','agent_users_at_once','People at once']]){
+    const field=node('label',label,'ac-label'),input=node('input','','ac-input');input.type='number';input.min='1';input.step='1';
+    input.placeholder=plan[planKey]!=null?'Plan limit: '+plan[planKey]:'No limit';input.value=settings[key]??'';input.disabled=!agent.can_manage;
+    input.setAttribute('aria-label',label);field.append(input);people.append(field);peopleInputs[key]=input;
+  }
+  if(agent.can_manage)people.append(button('Save user limits',()=>{const change={};
+    for(const [key,input] of Object.entries(peopleInputs)){const value=input.value.trim();
+      if(value&&!(Number.isInteger(Number(value))&&Number(value)>=1)){status.textContent='Limits must be whole numbers of at least 1, or empty for the plan\'s limit.';return;}
+      change[key]=value?Number(value):undefined;}
+    status.textContent='Saving…';save1(change).then(()=>{status.textContent='Saved.';},error=>{status.textContent=error.message;});}));
+  body.append(node('h4','User limits'),node('p','New people are refused at these limits; people already using the agent keep working. A number above the owner\'s plan counts as the plan\'s limit.','ac-hint'),people);
   createSelectRow(createConfigList(body,{label:'Conversation privacy setting'}),{title:'Conversation privacy',value:settings.conversation_privacy,disabled:!agent.can_manage,
     hint:'Applies to new conversations. Existing conversations keep their privacy mode. Reviewable conversations disclose that Operators can read and join.',
     options:[['private','Private'],['operator_reviewable','Operator-reviewable']],onSave:value=>save1({conversation_privacy:value})});
-  body.append(node('h4','Agent member levels'),node('p','Highest to lowest. Each level gets no more than the level above it; a change that breaks this order is refused. Configure abilities on the Abilities page. Message limits count each user\'s messages to this agent over the last 24 hours and 30 days.','ac-hint'));
+  body.append(node('h4','Agent member levels'),node('p','Highest to lowest. Each level gets no more than the level above it; a change that breaks this order is refused. Configure abilities on the Abilities page. Message limits count each user\'s messages to this agent over the last 24 hours and 30 days; runs at once is capped by the owner\'s plan.','ac-hint'));
   const levels=agent.capability_levels;
   const save=async(next,reassignments={},confirm_expansion=false)=>{
     status.textContent='Saving…';try{await request('/agents/'+encodeURIComponent(agentId)+'/capability-ladder','PUT',{expected_revision:levels.revision,ladder:next,reassignments,confirm_expansion});await reload();}catch(error){status.textContent=error.message;}
@@ -36,7 +51,7 @@ export function renderMemberAccess(host,agent,persist,request,{agentId,reload}) 
     if(id!=='operator'){
       // Rolling-window message caps per user for this agent; Operators are never limited.
       const limits=node('div','','member-level-limits'),inputs={};
-      for(const [key,label] of [['daily_turns','Messages per 24 hours'],['monthly_turns','Messages per 30 days']]){
+      for(const [key,label] of [['daily_turns','Messages per 24 hours'],['monthly_turns','Messages per 30 days'],['runs_at_once','Runs at once']]){
         const field=node('label',label,'ac-label'),input=node('input','','ac-input');input.type='number';input.min='1';input.step='1';input.placeholder='No limit';
         input.value=level[key]??'';input.disabled=!agent.can_manage;input.setAttribute('aria-label',level.name+' '+label.toLowerCase());field.append(input);limits.append(field);inputs[key]=input;
       }

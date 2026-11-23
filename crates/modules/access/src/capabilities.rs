@@ -28,6 +28,10 @@ pub struct CapabilityLevel {
     pub daily_turns: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub monthly_turns: Option<u32>,
+    /// Runs one user at this level may have going at once on this agent; the owner's tier's
+    /// `max_active_runs` caps it (absent: that cap). Operators are not limited by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs_at_once: Option<u32>,
     /// Set by `CapabilityLevels::effective`: this level's rungs (it, then the levels
     /// below it) and saved tool permissions, followed by each level above it.
     #[serde(skip)]
@@ -69,6 +73,9 @@ impl CapabilityLevel {
             || self.revision == 0
             || self.daily_turns == Some(0)
             || self.monthly_turns == Some(0)
+            || self
+                .runs_at_once
+                .is_some_and(|runs| runs == 0 || runs > 200)
             || self.ability_permissions.len() > 128
             || self.tool_permissions.len() > 256
             || self
@@ -223,6 +230,7 @@ impl Default for CapabilityLevels {
                         skill_exposure: BTreeMap::new(),
                         daily_turns: None,
                         monthly_turns: None,
+                        runs_at_once: None,
                         chain: Vec::new(),
                         ability_chain: Vec::new(),
                     },

@@ -80,6 +80,19 @@ pub struct AccessRevision {
     pub capability_level: u64,
 }
 
+/// What this agent serves the caller under: its owner's tier ceilings, lowered by the owner's
+/// own per-agent values (`None`: no limit). Operators and administrators are not limited.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct AgentLimits {
+    /// People active on the agent in the last 30 days.
+    pub users: Option<u32>,
+    /// People with a run going on the agent at once.
+    pub users_at_once: Option<u32>,
+    /// The caller's runs going at once on this agent: their level's value, capped by the
+    /// owner's tier's `max_active_runs`.
+    pub runs_at_once: Option<u32>,
+}
+
 #[derive(Clone, Debug)]
 pub struct LiveAccess {
     pub principal: Principal,
@@ -102,6 +115,8 @@ pub struct LiveAccess {
     pub capability_level: crate::capabilities::CapabilityLevel,
     /// The policy's run-sharing limits, read with the tier from the same policy document.
     pub run_limits: crate::run_limits::RunLimits,
+    /// The agent's limits on people and runs for this caller.
+    pub agent_limits: AgentLimits,
     tool_permissions: Value,
     ability_permissions: Value,
     tool_callers: Value,
@@ -130,6 +145,7 @@ impl LiveAccess {
             self.owner_tier,
             self.owner_tiers,
             self.capability_level,
+            self.agent_limits,
             self.tool_permissions,
             self.ability_permissions,
             self.tool_callers
@@ -468,13 +484,41 @@ impl<C: RecordCodec> Repository<'_, C> {
         {
             return Err(anyhow!("Agent owner conflict"));
         }
+        // The owner's tier comes first: it decides whether visitors are let in. A missing
+        // owner account leaves no tier, so no ability, model or visitor works.
+        let owner_tier_id = if owner == principal.user_id {
+            principal.tier_id.clone()
+        } else {
+            match self.account_by_id(&owner).await? {
+                Some(account) => Principal::from_account(&account)?.tier_id,
+                None => String::new(),
+            }
+        };
+        let (owner_tiers, owner_tier) = if owner_tier_id.is_empty() {
+            (Vec::new(), None)
+        } else if owner_tier_id == principal.tier_id {
+            (
+                crate::account_ladder::inherited(&policy, &owner_tier_id),
+                Some(tier.clone()),
+            )
+        } else {
+            (
+                crate::account_ladder::inherited(&policy, &owner_tier_id),
+                crate::account_ladder::effective(&policy, &owner_tier_id)
+                    .ok()
+                    .filter(|owner| owner.validate().is_ok()),
+            )
+        };
+        let member_access = crate::membership::MemberAccess::from_metadata(&metadata)?;
         let raw = self.agent_membership(user_id, agent_id).await?;
         let membership =
             crate::membership::membership_from(user_id, agent_id, &owner, raw.clone(), || {
-                Ok((
-                    principal.clone(),
-                    crate::membership::MemberAccess::from_metadata(&metadata)?,
-                ))
+                // Signed-out visitors without a widget only where the owner's tier allows.
+                let mut policy = member_access.clone();
+                policy.visitor_access &= owner_tier
+                    .as_ref()
+                    .is_some_and(|tier| tier.owner_limits.allows_public_visitors());
+                Ok((principal.clone(), policy))
             })?;
         if let Some(value) = &membership {
             if value["user_id"] != user_id
@@ -541,30 +585,6 @@ impl<C: RecordCodec> Repository<'_, C> {
             (false, 0, Value::Null, Value::Null, Value::Null, None)
         };
         let owner_id = owner.clone().unwrap_or_default();
-        // A missing owner account leaves no tier, so no ability works.
-        let owner_tier_id = match owner {
-            Some(owner) if owner == principal.user_id => principal.tier_id.clone(),
-            Some(owner) => match self.account_by_id(&owner).await? {
-                Some(account) => Principal::from_account(&account)?.tier_id,
-                None => String::new(),
-            },
-            None => String::new(),
-        };
-        let (owner_tiers, owner_tier) = if owner_tier_id.is_empty() {
-            (Vec::new(), None)
-        } else if owner_tier_id == principal.tier_id {
-            (
-                crate::account_ladder::inherited(&policy, &owner_tier_id),
-                Some(tier.clone()),
-            )
-        } else {
-            (
-                crate::account_ladder::inherited(&policy, &owner_tier_id),
-                crate::account_ladder::effective(&policy, &owner_tier_id)
-                    .ok()
-                    .filter(|owner| owner.validate().is_ok()),
-            )
-        };
         // `agent_authority`'s checks of the stored membership, then its `can_manage`.
         if raw.as_ref().is_some_and(|v| {
             v["user_id"] != user_id
@@ -584,6 +604,31 @@ impl<C: RecordCodec> Repository<'_, C> {
         let levels = crate::capabilities::CapabilityLevels::from_metadata(&metadata)?;
         let level_id = crate::capabilities::membership_level(membership.as_ref(), relationship)?;
         let capability_level = levels.effective(&level_id)?;
+        let agent_limits = match &owner_tier {
+            _ if agent_administrator || principal.administrator() => AgentLimits::default(),
+            None => AgentLimits {
+                users: Some(0),
+                users_at_once: Some(0),
+                runs_at_once: Some(0),
+            },
+            Some(owner) => AgentLimits {
+                users: crate::run_limits::lower(
+                    owner.owner_limits.agent_users,
+                    member_access.max_users,
+                ),
+                users_at_once: crate::run_limits::lower(
+                    owner.owner_limits.agent_users_at_once,
+                    member_access.max_users_at_once,
+                ),
+                runs_at_once: Some(
+                    capability_level
+                        .runs_at_once
+                        .map_or(owner.max_active_runs, |runs| {
+                            runs.min(owner.max_active_runs)
+                        }),
+                ),
+            },
+        };
         let revision = AccessRevision {
             account: principal.access_revision,
             tier: tier.revision,
@@ -608,6 +653,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             revision,
             capability_level,
             run_limits,
+            agent_limits,
             tool_permissions,
             ability_permissions,
             tool_callers,

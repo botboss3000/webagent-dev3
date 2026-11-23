@@ -22,6 +22,7 @@ async fn add_tier(app: &App, id: &str) {
                 max_active_runs: 25,
                 daily_turns: None,
                 daily_cost_usd: None,
+                owner_limits: Default::default(),
             },
             0,
         )

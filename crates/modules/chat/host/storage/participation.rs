@@ -608,10 +608,7 @@ impl Store {
                         &current,
                     )
                     .await;
-                if activation
-                    .as_ref()
-                    .is_err_and(|error| error.to_string() == "Account run limit reached")
-                {
+                if activation.as_ref().is_err_and(crate::store::limit_refusal) {
                     continue;
                 }
                 activation?;

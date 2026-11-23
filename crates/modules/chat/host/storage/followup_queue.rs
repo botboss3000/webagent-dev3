@@ -479,7 +479,7 @@ impl Store {
         if choice != "steer" {
             match self.reserve_requester_run(run).await {
                 Ok(()) => {}
-                Err(error) if error.to_string() == "Account run limit reached" => return Ok(false),
+                Err(error) if crate::store::limit_refusal(&error) => return Ok(false),
                 Err(error) => return Err(error),
             }
         }

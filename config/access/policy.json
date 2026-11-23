@@ -54,7 +54,7 @@
     "max_active_runs_per_agent": null,
     "reserved_admin_runs": 1
   },
-  "revision": 63,
+  "revision": 64,
   "storage": {
     "compress_idle_days": 7,
     "compression": {
@@ -88,7 +88,7 @@
       },
       "free": {
         "agent_storage_mb": 50,
-        "max_published_agents": 5,
+        "max_published_agents": 2,
         "user_storage_mb": 100
       },
       "plus": {
@@ -133,7 +133,10 @@
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 7
+      "revision": 8,
+      "owner_limits": {
+        "public_visitors": false
+      }
     },
     "free": {
       "allowed_models": [
@@ -145,7 +148,12 @@
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 8
+      "revision": 9,
+      "owner_limits": {
+        "agent_users": 20,
+        "agent_users_at_once": 3,
+        "public_visitors": false
+      }
     },
     "plus": {
       "allowed_models": [
@@ -155,7 +163,12 @@
       "max_active_runs": 25,
       "max_sessions": 100,
       "model_policy": null,
-      "revision": 1
+      "revision": 2,
+      "owner_limits": {
+        "agent_users": 500,
+        "agent_users_at_once": 25,
+        "public_visitors": true
+      }
     }
   }
 }

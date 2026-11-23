@@ -1,5 +1,17 @@
 //! Application-wide requester slots. Absent canonical commits remain reserved.
 use super::*;
+/// A new person refused because the agent serves its most people of the last 30 days.
+pub(crate) const AGENT_USERS_FULL: &str = "Agent user limit reached";
+/// A new person refused because the agent serves its most people at once.
+pub(crate) const AGENT_USERS_BUSY: &str = "Agent users at once limit reached";
+/// Whether `error` is a run or user limit refusing a new run: the run waits, or the sender is
+/// told why; nothing failed.
+pub(crate) fn limit_refusal(error: &anyhow::Error) -> bool {
+    let text = error.to_string();
+    text == "Account run limit reached" || text == AGENT_USERS_FULL || text == AGENT_USERS_BUSY
+}
+/// How long a person counts as one of an agent's users after their last message (seconds).
+const AGENT_USER_WINDOW: i64 = 30 * 86_400;
 impl Store {
     async fn requester_slots_schema(&self) -> Result<()> {
         // Checked once per state root and process; every admission ran it before.
@@ -57,6 +69,11 @@ impl Store {
             }
         }
         sqlx::query("CREATE INDEX IF NOT EXISTS requester_run_slots_agent ON requester_run_slots(agent_id,released,admin)")
+            .execute(&self.app_pool)
+            .await?;
+        // An agent's users of the last 30 days (plain ids and a time only), written by the
+        // admission that counts them; rows past the window are deleted there, per agent.
+        sqlx::query("CREATE TABLE IF NOT EXISTS agent_users(agent_id TEXT NOT NULL,user_id TEXT NOT NULL,last_active INTEGER NOT NULL,PRIMARY KEY(agent_id,user_id)) WITHOUT ROWID")
             .execute(&self.app_pool)
             .await?;
         Ok(())
@@ -343,7 +360,9 @@ impl Store {
     }
 
     /// Reserve (or confirm) `run`'s slot and return the requester's live access. A new run is
-    /// refused past the account level's `max_active_runs`; a run whose slot was set aside while
+    /// refused past the account level's `max_active_runs`, and on the agent past the caller's
+    /// level's runs at once, its people at once and its people of the last 30 days (people
+    /// already counted keep working); a run whose slot was set aside while
     /// it was stopped, paused or parked takes it again without that check (it then waits its
     /// turn at claim, so resuming never fails or loses work).
     async fn reserve_requester_slot(&self, run: &Value) -> Result<access::authority::LiveAccess> {
@@ -404,6 +423,7 @@ impl Store {
             if count >= limit {
                 return Err(anyhow!("Account run limit reached"));
             }
+            agent_admission(&mut tx, &access, actor).await?;
             sqlx::query("INSERT INTO requester_run_slots(run_id,requester_id,owner_id,session_id,sequence,agent_id,admin) VALUES(?,?,?,?,(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots),?,?)").bind(rid).bind(actor).bind(self.current_user_id()).bind(sid).bind(agent).bind(admin).execute(&mut *tx).await?;
         }
         tx.commit().await?;
@@ -448,6 +468,18 @@ impl Store {
         if rank > i64::from(access.max_active_runs()) {
             return Ok(false);
         }
+        // The caller's level's runs at once on this agent, in the same line order.
+        if let Some(runs) = access.agent_limits.runs_at_once {
+            let place: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM requester_run_slots WHERE requester_id=(SELECT requester_id FROM requester_run_slots WHERE run_id=?) AND agent_id=? AND released=0 AND sequence <= (SELECT sequence FROM requester_run_slots WHERE run_id=?)")
+                .bind(rid)
+                .bind(&access.agent_id)
+                .bind(rid)
+                .fetch_one(&mut *tx)
+                .await?;
+            if place > i64::from(runs) {
+                return Ok(false);
+            }
+        }
         if !admin {
             if let Some(cap) = limits.agent_cap(capacity.ceiling) {
                 let place: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM requester_run_slots WHERE agent_id=? AND released=0 AND admin=0 AND sequence <= (SELECT sequence FROM requester_run_slots WHERE run_id=?)")
@@ -463,6 +495,77 @@ impl Store {
         tx.commit().await?;
         Ok(true)
     }
+}
+
+/// The agent's limits for a new run of `actor`, inside the slot reservation's transaction:
+/// their level's runs at once there, then (for a person with no run going there) its people
+/// at once, then (for a person not seen there in 30 days) its people of the last 30 days,
+/// whom this run then counts. Operators and administrators have no such limits.
+async fn agent_admission(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    access: &access::authority::LiveAccess,
+    actor: &str,
+) -> Result<()> {
+    let limits = access.agent_limits;
+    if limits == access::authority::AgentLimits::default() {
+        return Ok(());
+    }
+    let agent = access.agent_id.as_str();
+    let mine: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM requester_run_slots WHERE requester_id=? AND agent_id=? AND released=0",
+    )
+    .bind(actor)
+    .bind(agent)
+    .fetch_one(&mut **tx)
+    .await?;
+    if limits
+        .runs_at_once
+        .is_some_and(|runs| mine >= i64::from(runs))
+    {
+        return Err(anyhow!("Account run limit reached"));
+    }
+    if let (0, Some(at_once)) = (mine, limits.users_at_once) {
+        let others: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT requester_id) FROM requester_run_slots WHERE agent_id=? AND released=0 AND admin=0 AND requester_id<>? AND requester_id<>?")
+            .bind(agent)
+            .bind(actor)
+            .bind(&access.agent_owner_id)
+            .fetch_one(&mut **tx)
+            .await?;
+        if others >= i64::from(at_once) {
+            return Err(anyhow!(AGENT_USERS_BUSY));
+        }
+    }
+    let now = crate::now() as i64;
+    sqlx::query("DELETE FROM agent_users WHERE agent_id=? AND last_active<?")
+        .bind(agent)
+        .bind(now - AGENT_USER_WINDOW)
+        .execute(&mut **tx)
+        .await?;
+    if let Some(users) = limits.users {
+        let known: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM agent_users WHERE agent_id=? AND user_id=?")
+                .bind(agent)
+                .bind(actor)
+                .fetch_optional(&mut **tx)
+                .await?;
+        if known.is_none() {
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM agent_users WHERE agent_id=?")
+                    .bind(agent)
+                    .fetch_one(&mut **tx)
+                    .await?;
+            if count >= i64::from(users) {
+                return Err(anyhow!(AGENT_USERS_FULL));
+            }
+        }
+    }
+    sqlx::query("INSERT INTO agent_users(agent_id,user_id,last_active) VALUES(?,?,?) ON CONFLICT(agent_id,user_id) DO UPDATE SET last_active=excluded.last_active")
+        .bind(agent)
+        .bind(actor)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 /// What a reconcile does to one slot row.
@@ -734,6 +837,163 @@ mod tests {
         visitors[0].put("run:visit-0", &done).await.unwrap();
         visitors[0].reconcile_requester_slots().await.unwrap();
         assert!(ready(2).await.unwrap());
+    }
+
+    /// An agent `owner` owns, whose Member level has `runs` at once, with the owner's own
+    /// `member_access` limits.
+    async fn owned_agent(
+        store: &Store,
+        owner: &Store,
+        runs: Option<u32>,
+        member_access: Value,
+    ) -> String {
+        let agent = format!("agent-{}", owner.current_user_id().to_lowercase());
+        let mut levels = crate::access::capabilities::CapabilityLevels::default();
+        levels.revision = 1;
+        if let Some(level) = levels.levels.get_mut("member") {
+            level.runs_at_once = runs;
+        }
+        let metadata = json!({"owner_id":owner.current_user_id(),"member_access":member_access,
+            "capability_levels":levels});
+        let pool = crate::agent_storage::open_agent_pool(&store.root, &agent)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO agents(id,name,description,provider,model,status,metadata,revision,created_at,updated_at) VALUES(?,'Owned','','openai_subscription','fixture','active',?,1,0,0)")
+            .bind(&agent)
+            .bind(store.seal(&metadata).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        store
+            .register_agent(&agent, owner.current_user_id())
+            .await
+            .unwrap();
+        agent
+    }
+    async fn join(store: &Store, users: &[Store], agent: &str) {
+        for user in users {
+            store
+                .set_agent_membership(
+                    user.current_user_id(),
+                    agent,
+                    crate::access::Relationship::Member,
+                    0,
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_level_runs_at_once_on_an_agent_refuses_a_new_run_and_queues_a_resumed_one() {
+        let (_root, store) = opened().await;
+        let accounts = free_accounts(&store, &["owner", "member"]).await;
+        let (owner, member) = (&accounts[0], &accounts[1]);
+        let agent = owned_agent(&store, owner, Some(1), json!({})).await;
+        join(&store, std::slice::from_ref(member), &agent).await;
+        let me = member.current_user_id().to_owned();
+        let first = run_on("level-1", &me, &agent);
+        member.reserve_requester_run(&first).await.unwrap();
+        // Refused: a second run of this member on this agent at once.
+        let refused = member
+            .reserve_requester_run(&run_on("level-2", &me, &agent))
+            .await;
+        assert!(refused.is_err_and(|e| limit_refusal(&e)));
+        // Allowed: the same member elsewhere, and the owner (an operator) on the agent.
+        member
+            .reserve_requester_run(&run_on("elsewhere", &me, "shared_default"))
+            .await
+            .unwrap();
+        let mine = owner.current_user_id().to_owned();
+        owner
+            .reserve_requester_run(&run_on("owner-1", &mine, &agent))
+            .await
+            .unwrap();
+        owner
+            .reserve_requester_run(&run_on("owner-2", &mine, &agent))
+            .await
+            .unwrap();
+        assert!(member
+            .requester_claim_ready_within(&first, capacity(0, 10))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_agent_takes_new_people_up_to_its_limits_and_keeps_those_it_has() {
+        let (_root, store) = opened().await;
+        let names = ["owner", "p1", "p2", "p3", "p4"];
+        let accounts = free_accounts(&store, &names).await;
+        // The owner allows 2 people at once and 3 in 30 days (a fresh install's Free has none).
+        let agent = owned_agent(
+            &store,
+            &accounts[0],
+            None,
+            json!({"max_users":3,"max_users_at_once":2}),
+        )
+        .await;
+        join(&store, &accounts[1..], &agent).await;
+        let id = |i: usize| accounts[i].current_user_id().to_owned();
+        let p1 = run_on("p1-a", &id(1), &agent);
+        accounts[1].reserve_requester_run(&p1).await.unwrap();
+        accounts[2]
+            .reserve_requester_run(&run_on("p2-a", &id(2), &agent))
+            .await
+            .unwrap();
+        // Refused: a third person at once (the owner's 2), with a clear reason.
+        let busy = accounts[3]
+            .reserve_requester_run(&run_on("p3-a", &id(3), &agent))
+            .await;
+        assert_eq!(busy.unwrap_err().to_string(), AGENT_USERS_BUSY);
+        // Allowed: a person already served adds a run (Free's tier allows 2 runs at once).
+        accounts[1]
+            .reserve_requester_run(&run_on("p1-b", &id(1), &agent))
+            .await
+            .unwrap();
+        // p1 finishes everything: p3 gets in as the third person of the last 30 days.
+        for rid in ["p1-a", "p1-b"] {
+            let mut done = run_on(rid, &id(1), &agent);
+            done["status"] = json!("completed");
+            accounts[1].put(&format!("run:{rid}"), &done).await.unwrap();
+        }
+        accounts[1].reconcile_requester_slots().await.unwrap();
+        accounts[3]
+            .reserve_requester_run(&run_on("p3-b", &id(3), &agent))
+            .await
+            .unwrap();
+        // Refused: a fourth person in 30 days, though someone is free at once.
+        for rid in ["p2-a", "p3-b"] {
+            let i = if rid == "p2-a" { 2 } else { 3 };
+            let mut done = run_on(rid, &id(i), &agent);
+            done["status"] = json!("completed");
+            accounts[i].put(&format!("run:{rid}"), &done).await.unwrap();
+            accounts[i].reconcile_requester_slots().await.unwrap();
+        }
+        let full = accounts[4]
+            .reserve_requester_run(&run_on("p4-a", &id(4), &agent))
+            .await;
+        assert_eq!(full.unwrap_err().to_string(), AGENT_USERS_FULL);
+        // Allowed: people already counted keep working; the administrator is never counted.
+        accounts[1]
+            .reserve_requester_run(&run_on("p1-c", &id(1), &agent))
+            .await
+            .unwrap();
+        let admin = store.current_user_id().to_owned();
+        store
+            .reserve_requester_run(&run_on("admin-a", &admin, &agent))
+            .await
+            .unwrap();
+        // A person last seen over 30 days ago leaves the count: p4 gets in.
+        sqlx::query("UPDATE agent_users SET last_active=last_active-31*86400 WHERE user_id=?")
+            .bind(id(2))
+            .execute(&store.app_pool)
+            .await
+            .unwrap();
+        accounts[4]
+            .reserve_requester_run(&run_on("p4-b", &id(4), &agent))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
