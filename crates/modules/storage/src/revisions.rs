@@ -9,9 +9,11 @@
 //! - Agent database: `agent_epoch` (one row) moves with every change of the agent row (metadata:
 //!   ownership, capability levels, modes, ability settings, permissions; status, model), its
 //!   memberships, its ability connections and its main-chat state.
-//! - User database: `session_revisions` per session: `record` (the session record: status,
-//!   agent, participation generation), `mode` (`session_mode:`), `abilities`
-//!   (`session_ability_state:`).
+//! - User database: `session_revisions` per session: `record` (every write of the session
+//!   record), `mode` (`session_mode:`), `abilities` (`session_ability_state:`). The session
+//!   record is rewritten for many reasons (activity time, flags, names), so access decisions
+//!   compare the plain `session_header` instead: its status, agent and participation, kept
+//!   beside the `record` counter it was read at (`session_header` below).
 //! - Application database: `plain_revisions` row `model_catalog`.
 //!
 //! Reads fail closed: a missing table, row or value reads as `None`, which callers treat as
@@ -78,6 +80,8 @@ fn user_script() -> String {
         "CREATE TABLE IF NOT EXISTS session_revisions(session_id TEXT PRIMARY KEY,
             record INTEGER NOT NULL DEFAULT 0, mode INTEGER NOT NULL DEFAULT 0,
             abilities INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS session_header(session_id TEXT PRIMARY KEY,
+            checked INTEGER NOT NULL, status TEXT, agent_id TEXT, participation TEXT NOT NULL);
         CREATE TRIGGER IF NOT EXISTS rev_session_insert AFTER INSERT ON docs
             WHEN {new_matches} BEGIN {insert_bump} END;
         CREATE TRIGGER IF NOT EXISTS rev_session_update AFTER UPDATE ON docs
@@ -192,13 +196,16 @@ async fn install(
     Ok(())
 }
 
-fn present_query(triggers: &[&str]) -> String {
-    let names = triggers
+/// Counts the family's triggers and tables (`objects`); the script runs unless all exist.
+fn present_query(objects: &[&str]) -> String {
+    let names = objects
         .iter()
         .map(|name| format!("'{name}'"))
         .collect::<Vec<_>>()
         .join(",");
-    format!("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN ({names})")
+    format!(
+        "SELECT count(*) FROM sqlite_master WHERE type IN ('trigger','table') AND name IN ({names})"
+    )
 }
 
 /// The installation texts of one family, built once.
@@ -218,10 +225,11 @@ fn texts(
     })
 }
 
-const USER_TRIGGERS: [&str; 3] = [
+const USER_TRIGGERS: [&str; 4] = [
     "rev_session_insert",
     "rev_session_update",
     "rev_session_delete",
+    "session_header",
 ];
 const AGENT_TRIGGERS: [&str; 12] = [
     "rev_agents_insert",
@@ -282,6 +290,107 @@ pub async fn session(pool: &SqlitePool, sid: &str) -> Option<SessionRevisions> {
         mode: row.try_get("mode").ok()?,
         abilities: row.try_get("abilities").ok()?,
     })
+}
+
+/// The access-relevant part of a session record, in plain values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionHeader {
+    pub status: Option<String>,
+    pub agent_id: Option<String>,
+    /// The session's participation state (active, revision, generation) as JSON text.
+    pub participation: String,
+}
+
+impl SessionHeader {
+    /// The header of a session record, with the participation default of
+    /// `webagent_chat::shared::participation_state`.
+    pub fn of(session: &serde_json::Value) -> Self {
+        let participation = session
+            .get("participation")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({"active":true,"revision":0,"generation":0}));
+        Self {
+            status: session["status"].as_str().map(str::to_owned),
+            agent_id: session["agent_id"].as_str().map(str::to_owned),
+            participation: participation.to_string(),
+        }
+    }
+}
+
+/// The session's header at its current `record` counter. When the stored header was read at
+/// that counter it is used as is (one indexed read, no decryption). Otherwise the session
+/// record is read and decrypted in the same read transaction as the counter, and the header
+/// is stored with that counter (newest first) for the next reader. Not a timed cache: it is
+/// used only while the counter, moved by every write of the record, is unchanged. `None`
+/// (read as changed) when the counter, the record or its decryption is missing.
+pub async fn session_header(
+    pool: &SqlitePool,
+    sid: &str,
+    unseal: impl Fn(&[u8]) -> anyhow::Result<serde_json::Value>,
+) -> Option<SessionHeader> {
+    let mut tx = pool.begin().await.ok()?;
+    let record: i64 = sqlx::query_scalar("SELECT record FROM session_revisions WHERE session_id=?")
+        .bind(sid)
+        .fetch_optional(&mut *tx)
+        .await
+        .ok()??;
+    let stored = sqlx::query(
+        "SELECT checked,status,agent_id,participation FROM session_header WHERE session_id=?",
+    )
+    .bind(sid)
+    .fetch_optional(&mut *tx)
+    .await
+    .ok()?;
+    if let Some(row) = stored {
+        if row.try_get::<i64, _>("checked").ok()? == record {
+            let header = SessionHeader {
+                status: row.try_get("status").ok()?,
+                agent_id: row.try_get("agent_id").ok()?,
+                participation: row.try_get("participation").ok()?,
+            };
+            tx.commit().await.ok()?;
+            return Some(header);
+        }
+    }
+    let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+        .bind(format!("session:{sid}"))
+        .fetch_optional(&mut *tx)
+        .await
+        .ok()??;
+    tx.commit().await.ok()?;
+    let header = SessionHeader::of(&unseal(&raw).ok()?);
+    // Best effort: a failed write only means the next reader decrypts again.
+    let _ = sqlx::query(
+        "INSERT INTO session_header(session_id,checked,status,agent_id,participation)
+        VALUES(?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET checked=excluded.checked,
+        status=excluded.status,agent_id=excluded.agent_id,participation=excluded.participation
+        WHERE excluded.checked>session_header.checked",
+    )
+    .bind(sid)
+    .bind(record)
+    .bind(&header.status)
+    .bind(&header.agent_id)
+    .bind(&header.participation)
+    .execute(pool)
+    .await;
+    Some(header)
+}
+
+/// Whether `user` is a shared participant of session `sid` (`shared_participants`, application
+/// database). No table yet means no participants; any other failure is `None` (changed).
+pub async fn shared_participant(app: &SqlitePool, sid: &str, user: &str) -> Option<bool> {
+    match sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM shared_participants WHERE session_id=? AND user_id=?",
+    )
+    .bind(sid)
+    .bind(user)
+    .fetch_optional(app)
+    .await
+    {
+        Ok(row) => Some(row.is_some()),
+        Err(error) if error.to_string().contains("no such table") => Some(false),
+        Err(_) => None,
+    }
 }
 
 /// The agent database's epoch; `None` when unreadable (read as changed).

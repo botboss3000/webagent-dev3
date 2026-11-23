@@ -130,6 +130,7 @@ impl<
             requester,
             agent_id,
             sid,
+            |raw| webagent_access::storage::RecordCodec::unseal(records, raw),
         )
         .await;
         if agent.is_none() {

@@ -21,7 +21,7 @@ use std::sync::{
     Mutex,
 };
 use webagent_access::authority::LiveAccess;
-use webagent_storage::revisions::{self, Principals, SessionRevisions};
+use webagent_storage::revisions::{self, Principals, SessionHeader, SessionRevisions};
 
 /// The plain revisions an access decision depends on. `None` = unreadable = changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,8 +30,13 @@ pub struct RevisionVector {
     pub principals: Option<Principals>,
     /// The agent database's epoch (agent row, memberships, ability connections, main chat).
     pub agent: Option<i64>,
-    /// The session record, its mode and its ability state.
+    /// The session's mode and ability-state counters (its `record` counter is not compared:
+    /// the record is rewritten for reasons that are not access; `header` stands for it).
     pub session: Option<SessionRevisions>,
+    /// The session record's status, agent and participation, in plain values.
+    pub header: Option<SessionHeader>,
+    /// Whether the caller is a shared participant of the session (`shared_participants`).
+    pub participant: Option<bool>,
     pub model_catalog: Option<i64>,
     /// The access policy file's digest (it keeps its digest, stream B part 1 assumption 4).
     pub policy: Option<String>,
@@ -42,6 +47,7 @@ fn differ<T: PartialEq>(before: &Option<T>, now: &Option<T>) -> bool {
 }
 
 impl RevisionVector {
+    #[allow(clippy::too_many_arguments)]
     pub async fn read(
         app: &sqlx::SqlitePool,
         user: &sqlx::SqlitePool,
@@ -50,11 +56,14 @@ impl RevisionVector {
         requester: &str,
         agent_id: &str,
         sid: &str,
+        unseal: impl Fn(&[u8]) -> anyhow::Result<Value>,
     ) -> Self {
         Self {
             principals: revisions::principals(app, requester, agent_id).await,
             agent: revisions::agent(agent).await,
             session: revisions::session(user, sid).await,
+            header: revisions::session_header(user, sid, unseal).await,
+            participant: revisions::shared_participant(app, sid, requester).await,
             model_catalog: revisions::model_catalog(app).await,
             policy: webagent_access::policy_file::policy_digest(root).ok(),
         }
@@ -68,7 +77,11 @@ impl RevisionVector {
         if differ(&self.agent, &now.agent) {
             moved.push("agent");
         }
-        if differ(&self.session, &now.session) {
+        let counters = |s: &Option<SessionRevisions>| s.map(|s| (s.mode, s.abilities));
+        if differ(&counters(&self.session), &counters(&now.session))
+            || differ(&self.header, &now.header)
+            || differ(&self.participant, &now.participant)
+        {
             moved.push("session");
         }
         if differ(&self.model_catalog, &now.model_catalog) {
@@ -85,6 +98,8 @@ impl RevisionVector {
             "auth_epochs": self.principals.as_ref().map(|p| [p.caller_epoch, p.owner_epoch]),
             "agent_epoch": self.agent,
             "session": self.session.map(|s| [s.record, s.mode, s.abilities]),
+            "header_status": self.header.as_ref().and_then(|h| h.status.clone()),
+            "participant": self.participant,
             "model_catalog": self.model_catalog,
             "policy": self.policy.as_ref().map(|p| p.chars().take(12).collect::<String>()),
         })

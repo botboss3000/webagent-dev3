@@ -13,6 +13,12 @@ fn vector() -> RevisionVector {
             mode: 5,
             abilities: 6,
         }),
+        header: Some(SessionHeader {
+            status: Some("active".into()),
+            agent_id: Some("agent".into()),
+            participation: "{}".into(),
+        }),
+        participant: Some(false),
         model_catalog: Some(7),
         policy: Some("digest".into()),
     }
@@ -54,7 +60,16 @@ fn an_unchanged_vector_with_equal_inputs_stands() {
 
 #[test]
 fn each_moved_part_is_named_and_a_missing_value_counts_as_moved() {
-    let cases: [(&str, fn(&mut RevisionVector)); 6] = [
+    // The session record counter alone moves nothing: the header stands for the record.
+    let mut now = vector();
+    now.session.as_mut().unwrap().record += 5;
+    assert_eq!(compare(&baseline(), &now, &agreeing()), Outcome::Unchanged);
+    let cases: [(&str, fn(&mut RevisionVector)); 9] = [
+        ("session", |v| {
+            v.header.as_mut().unwrap().status = Some("archived".into())
+        }),
+        ("session", |v| v.participant = Some(true)),
+        ("session", |v| v.header = None),
         ("accounts", |v| {
             v.principals.as_mut().unwrap().caller_epoch += 1
         }),

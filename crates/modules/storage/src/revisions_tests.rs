@@ -216,7 +216,11 @@ async fn principals_read_owner_and_both_epochs_or_nothing() {
 
 /// Statements that would write a revision outside its triggers, or remove the triggers or the
 /// tables they watch. Only `revisions.rs` may contain them outside tests.
-const FORBIDDEN: [&str; 20] = [
+const FORBIDDEN: [&str; 24] = [
+    "INTO session_header",
+    "UPDATE session_header",
+    "DELETE FROM session_header",
+    "DROP TABLE session_header",
     "INTO session_revisions",
     "UPDATE session_revisions",
     "DELETE FROM session_revisions",
@@ -367,4 +371,69 @@ fn the_guard_catches_a_write_that_skips_the_triggers() {
     )
     .unwrap();
     assert!(offenders(&[test_only], &own.canonicalize().unwrap()).is_empty());
+}
+
+#[tokio::test]
+async fn the_session_header_moves_only_with_status_agent_or_participation() {
+    let root = tempfile::tempdir().unwrap();
+    let user = pool(root.path(), "user.db").await;
+    install_user(&user).await.unwrap();
+    // Plain JSON stands in for sealed records; the reader is given the decoder.
+    let unseal = |raw: &[u8]| Ok(serde_json::from_slice::<serde_json::Value>(raw)?);
+    let write = |value: &str| {
+        format!("INSERT INTO docs VALUES('session:s1',CAST('{value}' AS BLOB)) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    };
+    assert_eq!(session_header(&user, "s1", unseal).await, None);
+    run(&user, &write(r#"{"status":"active","agent_id":"a"}"#)).await;
+    let first = session_header(&user, "s1", unseal).await.unwrap();
+    assert_eq!(first.status.as_deref(), Some("active"));
+    assert_eq!(first.agent_id.as_deref(), Some("a"));
+    // Stored at the current counter: a second read is answered from the header table.
+    let stored: i64 =
+        sqlx::query_scalar("SELECT checked FROM session_header WHERE session_id='s1'")
+            .fetch_one(&user)
+            .await
+            .unwrap();
+    assert_eq!(stored, session(&user, "s1").await.unwrap().record);
+    // An activity write moves the counter but not the header.
+    run(
+        &user,
+        &write(r#"{"status":"active","agent_id":"a","last_active_at":5}"#),
+    )
+    .await;
+    assert_eq!(
+        session_header(&user, "s1", unseal).await,
+        Some(first.clone())
+    );
+    // Status and participation changes move it.
+    run(&user, &write(r#"{"status":"archived","agent_id":"a"}"#)).await;
+    assert_eq!(
+        session_header(&user, "s1", unseal)
+            .await
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("archived")
+    );
+    run(&user, &write(r#"{"status":"archived","agent_id":"a","participation":{"active":true,"revision":1,"generation":1}}"#)).await;
+    assert_ne!(
+        session_header(&user, "s1", unseal)
+            .await
+            .unwrap()
+            .participation,
+        first.participation
+    );
+    // An undecodable record reads as unknown.
+    run(&user, "UPDATE docs SET value=x'00' WHERE key='session:s1'").await;
+    assert_eq!(session_header(&user, "s1", unseal).await, None);
+}
+
+#[tokio::test]
+async fn shared_participants_read_as_values() {
+    let root = tempfile::tempdir().unwrap();
+    let app = pool(root.path(), "app.db").await;
+    assert_eq!(shared_participant(&app, "s", "u").await, Some(false));
+    run(&app, "CREATE TABLE shared_participants(session_id TEXT, user_id TEXT); INSERT INTO shared_participants VALUES('s','u')").await;
+    assert_eq!(shared_participant(&app, "s", "u").await, Some(true));
+    assert_eq!(shared_participant(&app, "s", "other").await, Some(false));
 }

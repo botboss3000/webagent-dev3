@@ -185,20 +185,38 @@ async fn each_access_record_family_moves_the_vector_without_a_disagreement() {
         "session ability state",
     );
 
-    // Session record (status, agent, participation live in it).
+    // Session record: an activity-only write leaves the header (and the context) standing;
+    // a status change moves it.
     let baseline = step(&app, &sid, "admin").await;
-    let mut session = app
-        .store
-        .get(&format!("session:{sid}"))
-        .await
-        .unwrap()
-        .unwrap();
+    let key = format!("session:{sid}");
+    let mut session = app.store.get(&key).await.unwrap().unwrap();
     session["title"] = json!("Renamed for the shadow test");
-    app.store
-        .put(&format!("session:{sid}"), &session)
-        .await
-        .unwrap();
-    moved(check(&app, &baseline).await, "session", "session record");
+    app.store.put(&key, &session).await.unwrap();
+    assert_eq!(
+        check(&app, &baseline).await,
+        Outcome::Unchanged,
+        "title only"
+    );
+    session["status"] = json!("archived");
+    app.store.put(&key, &session).await.unwrap();
+    // An archived session no longer resolves, so today's recomputation refuses; the vector
+    // must have moved too.
+    let now = app.engine().revision_vector("admin", &sid, AGENT).await;
+    assert!(
+        baseline.vector.moved(&now).contains(&"session"),
+        "session status"
+    );
+    session["status"] = json!("active");
+    app.store.put(&key, &session).await.unwrap();
+
+    // Shared participant: another account joins the session.
+    let baseline = step(&app, &sid, &member).await;
+    app.store.shared_join(&sid, &member).await.unwrap();
+    moved(
+        check(&app, &baseline).await,
+        "session",
+        "shared participant",
+    );
 
     // Model catalog.
     let baseline = step(&app, &sid, "admin").await;
