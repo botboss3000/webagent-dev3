@@ -10,55 +10,40 @@ pub(crate) fn attach_external_build_result(run: &mut Value, result: &Value) -> R
 pub(crate) async fn recover(app: &App, startup: bool) -> Result<()> {
     Engine::recover(&app.engine(), startup).await
 }
-pub(crate) async fn user_apps(app: &App) -> Result<Vec<App>> {
-    scanned_apps(app, None).await
-}
-/// [`user_apps`] for only these accounts, so a scanner woken for a few users' deadlines
-/// does not open every account the scan returns.
-pub(crate) async fn user_apps_among(
-    app: &App,
-    among: &std::collections::HashSet<String>,
-) -> Result<Vec<App>> {
-    scanned_apps(app, Some(among)).await
-}
-/// Every account, for reads that must also count work the scan leaves closed (paused and
-/// approval-waiting runs).
-pub(crate) async fn every_user_app(app: &App) -> Result<Vec<App>> {
-    let mut views = Vec::new();
-    for user in app.store.account_ids().await? {
-        let store = match app.store.for_user(&user).await {
-            Ok(store) => store,
-            Err(error) => {
-                tracing::warn!(%error, "Account skipped: its storage could not be opened");
-                continue;
-            }
-        };
-        let mut view = app.clone();
-        view.store = store;
-        views.push(view);
-    }
-    Ok(views)
-}
-async fn scanned_apps(
+/// The accounts the periodic scan returns (`among`: only these of them). At start-up that is
+/// every account, since none has been evaluated yet. Callers open each with [`user_app`] and let
+/// it go before the next (one at a time), so the storage bound on connected account databases
+/// can close idle ones: collecting a view of every account first held a thread per account and
+/// reached the loop's 1,024-task limit.
+pub(crate) async fn scanned_user_ids(
     app: &App,
     among: Option<&std::collections::HashSet<String>>,
-) -> Result<Vec<App>> {
-    let mut views = Vec::new();
-    for user in app.store.scan_user_ids().await? {
-        if among.is_some_and(|among| !among.contains(&user)) {
-            continue;
+) -> Result<Vec<String>> {
+    Ok(app
+        .store
+        .scan_user_ids()
+        .await?
+        .into_iter()
+        .filter(|user| among.is_none_or(|among| among.contains(user)))
+        .collect())
+}
+/// Every account, for reads that must also count work the scan leaves closed (paused and
+/// approval-waiting runs); open each with [`user_app`] in turn.
+pub(crate) async fn every_user_id(app: &App) -> Result<Vec<String>> {
+    app.store.account_ids().await
+}
+/// One account's view; an unreadable account is skipped (logged) so it cannot stop every
+/// other account's work.
+pub(crate) async fn user_app(app: &App, user: &str) -> Option<App> {
+    match app.store.for_user(user).await {
+        Ok(store) => {
+            let mut view = app.clone();
+            view.store = store;
+            Some(view)
         }
-        // One unreadable account must not stop every other account's module work.
-        let store = match app.store.for_user(&user).await {
-            Ok(store) => store,
-            Err(error) => {
-                tracing::warn!(%error, "Account skipped: its storage could not be opened");
-                continue;
-            }
-        };
-        let mut view = app.clone();
-        view.store = store;
-        views.push(view);
+        Err(error) => {
+            tracing::warn!(%error, "Account skipped: its storage could not be opened");
+            None
+        }
     }
-    Ok(views)
 }

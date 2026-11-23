@@ -93,11 +93,14 @@ pub async fn scheduler<
             break;
         }
         if jobs.len() < 2 {
-            if let Ok(users) = owners.users().await {
+            if let Ok(users) = owners.user_ids().await {
                 for user in users {
                     if jobs.len() >= 2 {
                         break;
                     }
+                    let Some(user) = owners.user(&user).await else {
+                        continue;
+                    };
                     if let Ok(pending) = user.pending().await {
                         for pointer in pending {
                             if jobs.len() >= 2 {
@@ -152,7 +155,14 @@ const FALLBACK: Duration = Duration::from_secs(5);
 pub trait OwnerSources<C: RuntimeStorage + RecordEffects, A: ReviewAuthority<C>, P: Engine>:
     Sync
 {
-    fn users(&self) -> impl Future<Output = Result<Vec<Runtime<C, A, P>>>> + Send + '_;
+    /// The accounts to look at; each is opened with [`OwnerSources::user`] in turn and let go
+    /// before the next, so idle account databases can be closed meanwhile.
+    fn user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send + '_;
+    /// One account's runtime; `None` when its storage cannot be opened (skipped).
+    fn user<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> impl Future<Output = Option<Runtime<C, A, P>>> + Send + 'a;
     /// The process's wake hints (a sequence that moves on each hint; no account or content).
     fn hints(&self) -> tokio::sync::watch::Receiver<u64>;
 }

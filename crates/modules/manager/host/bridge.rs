@@ -48,6 +48,7 @@ pub(super) fn runtime(app:&App)->ManagerRuntime {
 }
 #[derive(Clone)]pub(super) struct Owners(pub App);
 impl webagent_manager::scheduler::OwnerSources<Store,Authority,EnginePort> for Owners {
- async fn users(&self)->Result<Vec<ManagerRuntime>> {Ok(crate::user_apps(&self.0).await?.iter().map(runtime).collect())}
+ async fn user_ids(&self)->Result<Vec<String>> {crate::agent_loop::scanned_user_ids(&self.0,None).await}
+ async fn user(&self,id:&str)->Option<ManagerRuntime> {crate::agent_loop::user_app(&self.0,id).await.as_ref().map(runtime)}
  fn hints(&self)->tokio::sync::watch::Receiver<u64> {crate::wake::subscribe()}
 }

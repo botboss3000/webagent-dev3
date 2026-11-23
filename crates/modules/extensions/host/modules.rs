@@ -1692,28 +1692,25 @@ async fn package_service(app: App, id: &'static str) {
                 last_scan = Some(started);
                 deferred = false;
             }
+            // Account ids only; each account is opened when its tick starts (one at a time).
             let scanned = if full {
-                crate::agent_loop::user_apps(&app).await
+                crate::agent_loop::scanned_user_ids(&app, None).await
             } else {
-                crate::agent_loop::user_apps_among(&app, &due_users).await
+                crate::agent_loop::scanned_user_ids(&app, Some(&due_users)).await
             };
             if let Ok(mut users) = scanned {
                 // A named user the scan does not return has nothing to tick.
-                let present: std::collections::HashSet<String> = users
-                    .iter()
-                    .map(|user| user.store.current_user_id().to_owned())
-                    .collect();
+                let present: std::collections::HashSet<String> = users.iter().cloned().collect();
                 pending_named.retain(|uid| present.contains(uid));
                 let len = users.len();
                 if len > 0 {
                     users.rotate_left(cursor % len);
                 }
-                for user in users {
+                for uid in users {
                     if jobs.len() >= 2 {
                         deferred = true;
                         break;
                     }
-                    let uid = user.store.current_user_id().to_owned();
                     let wake_sequence = *wake_hints.borrow();
                     // A hint naming this user (or naming nobody) received during an in-flight
                     // reducer stays pending for that user. Same-second writes do not depend on
@@ -1728,9 +1725,13 @@ async fn package_service(app: App, id: &'static str) {
                     {
                         continue;
                     }
-                    if !inflight.insert(uid.clone()) {
+                    if inflight.contains(&uid) {
                         continue;
                     }
+                    let Some(user) = crate::agent_loop::user_app(&app, &uid).await else {
+                        continue;
+                    };
+                    inflight.insert(uid.clone());
                     let startup = !seen.contains(&uid);
                     cursor = cursor.wrapping_add(1);
                     pending_named.remove(&uid);

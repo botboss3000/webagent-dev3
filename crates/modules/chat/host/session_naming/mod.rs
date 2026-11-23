@@ -288,8 +288,11 @@ pub(crate) async fn service(app: App) {
             next_recovery = now() + 60;
         }
         let mut recovered = 0;
-        if let Ok(users) = agent_loop::user_apps(&app).await {
+        if let Ok(users) = agent_loop::scanned_user_ids(&app, None).await {
             for user in users {
+                let Some(user) = agent_loop::user_app(&app, &user).await else {
+                    continue;
+                };
                 if let Ok(ids) = user.store.naming_candidates(recovery).await {
                     for sid in ids {
                         if workers.len() >= 2 || (recovery && recovered >= 10) {

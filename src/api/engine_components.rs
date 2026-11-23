@@ -11,7 +11,10 @@ pub(crate) async fn read(State(app): State<App>) -> Api {
     let mut active_tasks = 0usize;
     // Paused and approval-waiting runs leave an account out of the periodic scan, so count
     // over every account (an administrator page read).
-    for user in crate::agent_loop::every_user_app(&app).await? {
+    for user in crate::agent_loop::every_user_id(&app).await? {
+        let Some(user) = crate::agent_loop::user_app(&app, &user).await else {
+            continue;
+        };
         for task in user.store.background_scan(None).await? {
             if matches!(task["status"].as_str(), Some("queued" | "running")) {
                 active_tasks += 1;

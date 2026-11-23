@@ -1,10 +1,11 @@
 //! HTTP handlers for chat operations.
 use super::{
     access, anyhow, append_tool, bad, conflict, digest, json, key, loop_runtime, marker, memory,
-    model_selection, now, parallel_batch, public_run, required, session_ability_state,
-    session_agent_abilities, session_agent_id, session_mode, status, terminal, tools, uploads,
-    user_apps, workflow, Api, ApiError, App, Duration, Event, HashMap, HeaderMap, Infallible, Json,
-    KeepAlive, Path, Query, Result, Sse, State, StatusCode, SystemTime, Uuid, Value, UNIX_EPOCH,
+    model_selection, now, parallel_batch, public_run, required, scanned_user_ids,
+    session_ability_state, session_agent_abilities, session_agent_id, session_mode, status,
+    terminal, tools, uploads, user_app, workflow, Api, ApiError, App, Duration, Event, HashMap,
+    HeaderMap, Infallible, Json, KeepAlive, Path, Query, Result, Sse, State, StatusCode,
+    SystemTime, Uuid, Value, UNIX_EPOCH,
 };
 use webagent_accounts_host::AccountsStore;
 pub(crate) async fn workflow_policy_get(State(app): State<App>) -> Api {
@@ -440,7 +441,10 @@ pub(crate) async fn control(State(app): State<App>, Json(body): Json<Value>) -> 
         for token in app.active.lock().await.values() {
             token.cancel();
         }
-        for user_app in user_apps(&app).await? {
+        for user in scanned_user_ids(&app, None).await? {
+            let Some(user_app) = user_app(&app, &user).await else {
+                continue;
+            };
             for view in user_app.store.active_runs().await? {
                 if matches!(status(&view), "queued" | "running" | "waiting_external") {
                     let Some(id) = view["id"].as_str() else {
