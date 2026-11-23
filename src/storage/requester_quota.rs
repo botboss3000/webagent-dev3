@@ -49,6 +49,7 @@ impl Store {
             .bind(&owner)
             .fetch_all(&self.app_pool)
             .await?;
+            let held: std::collections::HashSet<String> = unreleased.iter().cloned().collect();
             for rid in unreleased {
                 let status: Option<String> =
                     sqlx::query_scalar("SELECT status FROM run_index WHERE id=?")
@@ -127,9 +128,13 @@ impl Store {
                             entry["status"].as_str(),
                             Some("cancelled" | "rejected" | "delivered")
                         );
-                        if reviewing || terminal {
+                        // Releasing a slot that is already released or absent changes
+                        // nothing; every message admission used to repeat one such update
+                        // for each finished follow-up the account ever had.
+                        let slot = format!("followup-review:{owner}:{sid}:{id}");
+                        if reviewing || (terminal && held.contains(&slot)) {
                             records.push((
-                                format!("followup-review:{owner}:{sid}:{id}"),
+                                slot,
                                 owner.clone(),
                                 owner.clone(),
                                 sid.to_owned(),
@@ -159,6 +164,9 @@ impl Store {
                     )
                 };
                 if review && value["status"] == "acceptable" {
+                    continue;
+                }
+                if terminal && !held.contains(rid) {
                     continue;
                 }
                 records.push((
