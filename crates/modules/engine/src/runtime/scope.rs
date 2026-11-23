@@ -96,6 +96,9 @@ impl<
     pub async fn scheduler_runs(&self) -> Result<Vec<(String, String)>> {
         self.repository().scheduler_runs().await
     }
+    pub async fn run_lease_until(&self, rid: &str) -> Result<Option<i64>> {
+        self.repository().run_lease_until(rid).await
+    }
     pub async fn renew_run_lease(
         &self,
         rid: &str,

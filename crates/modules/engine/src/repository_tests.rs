@@ -660,3 +660,31 @@ async fn finished_background_tasks_are_pruned_past_the_newest_kept_and_live_ones
         assert!(f.repo().background_get(id).await.unwrap().is_some());
     }
 }
+
+#[tokio::test]
+async fn recovery_reads_a_claimed_runs_lease_from_the_plain_index() {
+    let f = Fixture::new().await;
+    let mut run = f.initial().await;
+    let r = f.repo();
+    assert_eq!(r.run_lease_until("missing").await.unwrap(), None);
+    assert!(r
+        .claim_run(&mut run, "loop-a", "generation-a")
+        .await
+        .unwrap());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let until = r.run_lease_until("r").await.unwrap();
+    // A live claim: periodic recovery in another loop must leave it alone.
+    assert!(until.is_some_and(|until| until >= now + 25));
+    assert!(!crate::runtime::recovery::lease_lost(until, now));
+    // The owner stopped renewing and the lease lapsed: recovery may take it back.
+    sqlx::query("UPDATE run_index SET lease_expires_at=? WHERE id='r'")
+        .bind(now - 1)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let until = r.run_lease_until("r").await.unwrap();
+    assert!(crate::runtime::recovery::lease_lost(until, now));
+}

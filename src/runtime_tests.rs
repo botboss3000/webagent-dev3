@@ -1245,10 +1245,18 @@ async fn startup_resume_setting_stops_safe_runs_and_settled_writes() {
     let settled = app.run(&write_id).await.unwrap();
     assert_eq!(settled["status"], "stopped");
     assert_eq!(settled["uncertain"], false);
-    // Non-startup recovery must still repair expired read leases.
+    // Non-startup recovery leaves a running run alone while its lease is held (another loop
+    // process may be executing it) and repairs it once the lease expired.
     let sid3 = conversation(&app).await;
     let lease_id = queued(&app, &sid3).await;
     running(&app, &lease_id, "lease-generation").await;
+    recover(&app, false).await.unwrap();
+    assert_eq!(app.run(&lease_id).await.unwrap()["status"], "running");
+    sqlx::query("UPDATE run_index SET lease_expires_at=lease_expires_at-60 WHERE id=?")
+        .bind(&lease_id)
+        .execute(&app.store.pool)
+        .await
+        .unwrap();
     recover(&app, false).await.unwrap();
     assert_eq!(app.run(&lease_id).await.unwrap()["status"], "queued");
     // Corrupt optional configuration must not suppress mandatory classification.

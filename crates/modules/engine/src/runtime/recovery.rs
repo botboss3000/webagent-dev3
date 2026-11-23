@@ -848,6 +848,20 @@ impl<
                 {
                     continue;
                 }
+                // Periodic recovery takes back a `running` run only after its lease expired: the
+                // loop that claimed it renews the lease every 5 s, so a run another loop process
+                // is still executing is left alone. Start-up recovery is unchanged while only one
+                // loop exists. A failed lease read skips the run until the next pass.
+                if !startup && status(&view) == "running" {
+                    match user_app.store.run_lease_until(id).await {
+                        Ok(until) if !lease_lost(until, now() as i64) => continue,
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(run_id = %id, %error, "Run lease unreadable; recovery retries next pass");
+                            continue;
+                        }
+                    }
+                }
                 let mut run = user_app.run(id).await?;
                 if status(&run) == "waiting_external"
                     || (status(&run) == "running" && Self::pending_build_finish(&run))
@@ -1165,9 +1179,28 @@ enum BuildPoll {
     Waiting(Option<Value>),
 }
 
+/// Whether a `running` run's lease, ending at `until` (unix seconds, from the run index), has
+/// lapsed at `now`: the same bound the save fence uses (`until < now`). A run with no index
+/// row counts as lapsed, as every unexecuted running run did before this guard.
+pub(crate) fn lease_lost(until: Option<i64>, now: i64) -> bool {
+    until.is_none_or(|until| until < now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn periodic_recovery_takes_back_a_running_run_only_after_its_lease_lapsed() {
+        let now = 1_000;
+        // The owning loop renews every 5 s for 30 s: a held lease keeps the run with it.
+        assert!(!lease_lost(Some(now + 30), now));
+        assert!(!lease_lost(Some(now), now));
+        // Lapsed (the loop task died without settling) or never indexed: take it back.
+        assert!(lease_lost(Some(now - 1), now));
+        assert!(lease_lost(Some(0), now));
+        assert!(lease_lost(None, now));
+    }
 
     #[test]
     fn finishes_and_unfinished_checks_wait_for_their_job() {

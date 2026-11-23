@@ -1240,6 +1240,18 @@ impl<
         }
     }
 
+    /// When a run's lease ends (unix seconds), from the plain run index alone (no decrypt);
+    /// `None` when the run has no index row. Periodic recovery reads it before taking back a
+    /// `running` run, so it never requeues one whose owning loop is still renewing it.
+    pub async fn run_lease_until(&self, rid: &str) -> Result<Option<i64>> {
+        Ok(
+            sqlx::query_scalar("SELECT lease_expires_at FROM run_index WHERE id=?")
+                .bind(rid)
+                .fetch_optional(self.pool)
+                .await?,
+        )
+    }
+
     pub async fn renew_run_lease(
         &self,
         rid: &str,
