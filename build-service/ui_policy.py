@@ -6,16 +6,23 @@ import posixpath
 import re
 
 VERSION = 4
-UI_TREES = ("v3/ui/", "ui/")  # the only candidate trees mounted into the UI fixture container
+UI_TREES = ("v3/ui/", "v3/web/", "ui/")  # the only candidate trees mounted into the UI fixture container
+SERVED = ("v3/ui/", "v3/web/")  # trees the app serves: /ui/... and /web/...
 IMPORT = re.compile(r"(?:\bimport\s+(?:[^;]+?\s+from\s+)?|\bexport\s+[^;]+?\s+from\s+|\bimport\s*\()\s*['\"]([^'\"]+)['\"]")
 ASSET = re.compile(r"(?:src|href)\s*=\s*['\"]([^'\"]+)['\"]|(?:url\(|@import\s+)\s*['\"]?([^)'\"\s;]+)", re.I)
 DYNAMIC = re.compile(r"\bimport\s*\(\s*[^'\"\s]|\b(?:fetch|loadPartial|loadHTML)\s*\(")
 
 
+def served(ref):
+    """The candidate file an absolute URL names: /web/... is the web/ tree, anything else ui/."""
+    path = ref.lstrip("/")
+    return "v3/" + path if path.startswith("web/") else "v3/ui/" + path
+
+
 # Select dependency-bound frontend verification with conservative unknowns. Config: build-service/scheduler-defaults.json -> ui_test_image supplies the host verification runtime.
 def dependencies(files, changed):
     """Return affected consumers and exact dependency hashes, falling back for dynamic loading."""
-    ui = {p: v for p, v in files.items() if p.startswith("v3/ui/")}
+    ui = {p: v for p, v in files.items() if p.startswith(SERVED)}
     graph = {}; unknown = set()
     for path, (_mode, data) in ui.items():
         if PurePosixPath(path).suffix not in {".js", ".mjs", ".cjs", ".html", ".css"}:
@@ -26,12 +33,12 @@ def dependencies(files, changed):
             if ref.startswith("."):
                 target = posixpath.normpath(posixpath.join(posixpath.dirname(path), ref))
             elif ref.startswith("/"):
-                target = "v3/ui/" + ref.lstrip("/")
+                target = served(ref)
             elif ref in {"node:test", "node:assert", "node:assert/strict"}:
                 continue
             else:
                 unknown.add(path); continue
-            if not target.startswith("v3/ui/") or target not in files:
+            if not target.startswith(SERVED) or target not in files:
                 unknown.add(path)
             else:
                 edges.add(target)
@@ -39,7 +46,7 @@ def dependencies(files, changed):
             ref = (match[1] or match[2]).split("?", 1)[0].split("#", 1)[0]
             if not ref or ref.startswith(("data:", "https:", "http:", "//")):
                 continue
-            target = "v3/ui/" + ref.lstrip("/") if ref.startswith("/") else posixpath.normpath(posixpath.join(posixpath.dirname(path), ref))
+            target = served(ref) if ref.startswith("/") else posixpath.normpath(posixpath.join(posixpath.dirname(path), ref))
             if target in files:
                 edges.add(target)
             else:
@@ -56,7 +63,7 @@ def dependencies(files, changed):
     # Fixtures see only the mounted UI trees, so docs, Rust and other paths cannot change
     # their result; only a shared ui/ change (outside the import graph) selects every fixture.
     changed = [p for p in changed if p.startswith(UI_TREES)]
-    conservative = bool(unknown or any(not p.startswith("v3/ui/") for p in changed))
+    conservative = bool(unknown or any(not p.startswith(SERVED) for p in changed))
     closure = set(ui)|set(changed) if conservative else set(affected)
     pending = list(closure)
     while pending:

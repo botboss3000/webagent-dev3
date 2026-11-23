@@ -130,11 +130,15 @@ BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
-    "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/abilities", "v3/plugins/gates",
+    "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/web", "v3/plugins/engine", "v3/abilities", "v3/plugins/gates",
     "v3/sandbox.py", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service")
 UI_SOURCE_PREFIX = "v3/ui/"
-ADMINISTRATOR_UI_PREFIX = UI_SOURCE_PREFIX + "main-panel/administrator/"
+# The new UI, built beside ui/ and served at /web/; it releases, tests and rolls back like ui/.
+WEB_SOURCE_PREFIX = "v3/web/"
+UI_SOURCE_PREFIXES = (UI_SOURCE_PREFIX, WEB_SOURCE_PREFIX)
+# Folders only a signed-in administrator is served (compared lower-cased).
+ADMINISTRATOR_UI_PREFIXES = (UI_SOURCE_PREFIX + "main-panel/administrator/", WEB_SOURCE_PREFIX + "admin/")
 def checked_git_modes(patch):
     """Render receipt POSIX modes as Git owner-execute modes for checked source patches."""
     def mode(line,prefix):
@@ -156,7 +160,7 @@ def checked_git_modes(patch):
     return "".join(out)
 
 ABILITY_ROOTS=("v3/abilities/",)
-OPTIONAL_CONTEXT={"v3/abilities"}
+OPTIONAL_CONTEXT={"v3/abilities","v3/web"}
 def ability_rest(path):
     """The ability root a path is under and the path below it, or (None, None)."""
     root=next((r for r in ABILITY_ROOTS if path.startswith(r)),None)
@@ -215,7 +219,7 @@ def native_package_migration(path,baseline):
     return declaration.get("readiness")in("ready","partial")or declaration.get("kind")in("virtual_core","service")or bool(declaration.get("required_module"))
 HOT_OPERATIONS={"ui_deploy","index_deploy","plugin_deploy"}
 # Limit no-compile publication to UI assets and ability metadata paths.
-def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or ability_asset_path(path) or (path.startswith("v3/config/") and path.endswith(".json")) or path=="v3/src/engine/tools/administrator-schemas.json" or path=="v3/tests/test_codebase_plugin.py"
+def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIXES)or ability_asset_path(path) or (path.startswith("v3/config/") and path.endswith(".json")) or path=="v3/src/engine/tools/administrator-schemas.json" or path=="v3/tests/test_codebase_plugin.py"
 
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
@@ -900,7 +904,7 @@ def inspect_source_patch_corrected(root, patch):
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                      ".gitignore", "README.md", "deploy.sh",
                      "sandbox.py", "live-files.json", "rustfmt.toml"}
-    allowed_dirs = {"crates", "src", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service"}
+    allowed_dirs = {"crates", "src", "abilities", "plugins", "tests", "ui", "web", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
         binary = len(fields) == 3 and fields[:2] == [b"-", b"-"]
@@ -926,8 +930,8 @@ def inspect_source_patch_corrected(root, patch):
                         or name in deleted and release.retired("v3/" + name)
                         or monitoring_component.package_path("v3/"+name))):
             raise ValueError("source patch path denied")
-        if binary and name not in deleted and not (parts[0] == "ui" and Path(name).suffix.lower() in BINARY_ASSET_SUFFIXES):
-            raise ValueError("binary source patch limited to ui/ image and font assets")
+        if binary and name not in deleted and not (parts[0] in ("ui", "web") and Path(name).suffix.lower() in BINARY_ASSET_SUFFIXES):
+            raise ValueError("binary source patch limited to ui/ and web/ image and font assets")
         cursor = root
         for index, part in enumerate(parts):
             cursor = cursor / part
@@ -1832,12 +1836,12 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         if len(paths)+len(folders)>20000:return None
         files={};names={}
         for rel in sorted(paths):
-            if not rel.startswith(("v3/ui/","ui/"))or ".."in Path(rel).parts:return None
+            if not rel.startswith(("v3/ui/","v3/web/","ui/"))or ".."in Path(rel).parts:return None
             path=root/rel
             if any(part.is_symlink()for part in (path,*path.parents)if root in part.parents):return None
             files[rel]=hashlib.sha256(path.read_bytes()).hexdigest()if path.is_file()else"folder"if path.is_dir()else"missing"
         for rel in sorted(folders):
-            if not rel.startswith(("v3/ui/","ui/"))or ".."in Path(rel).parts:return None
+            if not rel.startswith(("v3/ui/","v3/web/","ui/"))or ".."in Path(rel).parts:return None
             path=root/rel
             if path.is_symlink():return None
             names[rel]=sorted(os.listdir(path))if path.is_dir()else None
@@ -1912,7 +1916,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 pending.append(test)
         if tests:
             if not isinstance(image,str)or not re.fullmatch(r"sha256:[a-f0-9]{64}",image):raise ValueError("Protected pinned UI test runtime required")
-            if len(tests)>256 or len(set(tests))!=len(tests)or any(not p.startswith("v3/ui/")or ".."in Path(p).parts or not(root/p).is_file()for p in tests):raise ValueError("Bounded selected frontend fixtures required")
+            if len(tests)>256 or len(set(tests))!=len(tests)or any(not p.startswith(UI_SOURCE_PREFIXES)or ".."in Path(p).parts or not(root/p).is_file()for p in tests):raise ValueError("Bounded selected frontend fixtures required")
         if pending:
             # The container sees only the candidate's UI trees: fixture results cannot
             # depend on backend sources, which lets fixtures reuse evidence across
@@ -1921,7 +1925,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             if scratch.is_symlink():raise ValueError("UI test mount directory symlink")
             mount=Path(tempfile.mkdtemp(dir=scratch))
             try:
-                for tree in ("v3/ui","ui"):
+                for tree in ("v3/ui","v3/web","ui"):
                     if (root/tree).is_symlink():raise ValueError("UI tree symlink")
                     if (root/tree).is_dir():shutil.copytree(root/tree,mount/tree,symlinks=True)
                 (mount/".ui-trace.cjs").write_text(UI_TRACER)
@@ -1948,7 +1952,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 if not isinstance(row,dict)or row.get("unsafe")or not isinstance(row.get("test"),str):continue
                 rel=lambda value:value.removeprefix("/candidate/")
                 # Only the UI trees are mounted: any other /candidate path is absent in every run.
-                mounted=lambda value:isinstance(value,str)and rel(value).startswith(("v3/ui/","ui/"))
+                mounted=lambda value:isinstance(value,str)and rel(value).startswith(("v3/ui/","v3/web/","ui/"))
                 files,folders=reads.setdefault(rel(row["test"]),(set(),set()))
                 files.update(rel(p)for p in row.get("touched",())if mounted(p))
                 folders.update(rel(p)for p in row.get("listed",())if mounted(p))
@@ -2221,8 +2225,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         # Static routes are public and must serve the exact selected bytes (administrator
         # pages excepted, below); the app shell may carry one bounded server-rendered SEO head block.
         paths = [("v3/ui/index.html", "/app")]
-        paths.extend((name, "/ui/" + name[len(UI_SOURCE_PREFIX):])
-                     for name in changed if name.startswith(UI_SOURCE_PREFIX) and
+        paths.extend((name, "/" + name[len("v3/"):])
+                     for name in changed if name.startswith(UI_SOURCE_PREFIXES) and
                      name != "v3/ui/index.html")
         for name, route in paths:
             expected_path = ASSET_ROOT / "current" / name
@@ -2239,7 +2243,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                     continue
                 # Administrator pages are served only to a signed-in administrator, so this
                 # anonymous request must get the missing-file 404 (checks that gate too).
-                if name.lower().startswith(ADMINISTRATOR_UI_PREFIX):
+                if name.lower().startswith(ADMINISTRATOR_UI_PREFIXES):
                     if response.status != 404:
                         raise RuntimeError("administrator UI file served without sign-in: " + name)
                     continue
@@ -5195,7 +5199,7 @@ class Broker:
         files=release.entries(candidate,context_digest);patterns=release.live_patterns(files)
         live_changed={path for path in changed if release.is_live(path,patterns)}
         core_inputs=set();docs_attested=False
-        if package_changed or docs_changed or external_defaults_changed or live_changed or any(path.startswith("v3/ui/")for path in changed):
+        if package_changed or docs_changed or external_defaults_changed or live_changed or any(path.startswith(UI_SOURCE_PREFIXES)for path in changed):
             try:
                 core_inputs=self.runner.core_compile_inputs()
                 docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs
@@ -5209,7 +5213,7 @@ class Broker:
             and not native_package_migration(path,base_blob)))
             and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/","v3/crates/boot-contracts/","v3/crates/assets-contracts/","v3/crates/capability-contracts/","v3/crates/provider-contracts/"))for path in changed)
         if (package_changed or docs_changed or external_defaults_changed or live_changed)and not docs_attested:ui_only=False
-        if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)and any(path.startswith("v3/ui/")for path in changed)and not docs_attested:ui_only=False
+        if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)and any(path.startswith(UI_SOURCE_PREFIXES)for path in changed)and not docs_attested:ui_only=False
         engine_changed=any(engine_component_source_path(path)for path in changed)
         if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
         plugin_only=ui_only and not monitoring_component.only_paths(changed) and any(path.startswith(ABILITY_ROOTS) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path in live_changed or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
@@ -6118,7 +6122,7 @@ class Broker:
                 matches = []
                 scanned = 0
                 # A path narrows the walk to one file or folder; otherwise every source folder.
-                folders = (scope,) if scope else ("src", "crates", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service")
+                folders = (scope,) if scope else ("src", "crates", "abilities", "plugins", "tests", "ui", "web", "docs", "config", "build-service")
                 for folder in folders:
                     top = source
                     for part in folder.split("/"):
@@ -6151,7 +6155,7 @@ class Broker:
                 if not isinstance(name_path, str) or len(name_path) > 240:
                     raise ValueError("bounded source directory path required")
                 parts = name_path.split("/") if name_path else []
-                allowed_dirs = {"crates", "src", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service"}
+                allowed_dirs = {"crates", "src", "abilities", "plugins", "tests", "ui", "web", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                                  ".gitignore", "README.md", "deploy.sh",
                                  "sandbox.py", "live-files.json", "rustfmt.toml"}

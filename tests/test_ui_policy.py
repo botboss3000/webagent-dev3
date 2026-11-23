@@ -21,6 +21,15 @@ class UIDependencyPolicyTests(unittest.TestCase):
   self.assertFalse(result["conservative"]);self.assertEqual(result["tests"],[])
   mixed=policy.dependencies(files,["v3/docs/notes.md","v3/ui/a.js"])
   self.assertFalse(mixed["conservative"]);self.assertEqual(mixed["tests"],["v3/ui/a.test.mjs"])
+ def test_web_tree_resolves_its_own_absolute_urls_and_selects_its_fixtures(self):
+  files={"v3/web/chat/a.js":(420,b"import '/web/shared/dep.js'; export const a=1;"),
+         "v3/web/shared/dep.js":(420,b"export const dependency=1;"),
+         "v3/web/chat/a.test.mjs":(420,b"import {a} from './a.js';"),
+         "v3/ui/chat/old.js":(420,b"export const old=1;")}
+  result=policy.dependencies(files,["v3/web/shared/dep.js"])
+  self.assertFalse(result["conservative"])
+  self.assertIn("v3/web/chat/a.js",result["affected"]);self.assertNotIn("v3/ui/chat/old.js",result["dependencies"])
+  self.assertEqual(result["tests"],["v3/web/chat/a.test.mjs"])
  def test_dynamic_loading_uses_conservative_validation(self):
   files=self.files(**{"a.js":"import(variable)","b.js":"export const other=1;"})
   result=policy.dependencies(files,["v3/ui/b.js"])

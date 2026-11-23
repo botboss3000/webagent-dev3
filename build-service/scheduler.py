@@ -617,8 +617,8 @@ class Scheduler:
                 return [s[5:]for s in self.store.get(value["ownership_id"])["scopes"]if s.startswith("path:")]if value.get("ownership_id")else []
             paths=writes(job)
             if any(ownership.overlap(a,b)for other in active for a in paths for b in writes(other)):return False
-            if paths and all(p.startswith("ui/")for p in paths):
-                peers=sum(bool(writes(other))and all(p.startswith("ui/")for p in writes(other))for other in active)
+            if paths and all(p.startswith(("ui/","web/"))for p in paths):
+                peers=sum(bool(writes(other))and all(p.startswith(("ui/","web/"))for p in writes(other))for other in active)
                 if peers>=self.config.get("scheduler",{}).get("max_ui_preparations",1):return False
             if job.get("ownership_id"):self.assert_job(job)
             return True

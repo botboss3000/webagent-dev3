@@ -188,6 +188,12 @@ class UIPathTests(unittest.TestCase):
    b=m.Components(root,ui_file_reservations=True).scopes(["ui/chat/b.js"])
    self.assertFalse(set(a)&set(b))
    self.assertIn("module:ui:chat",m.Components(root).scopes(["ui/chat/a.js"]))
+ def test_web_files_reserve_like_ui_files_not_the_workspace(self):
+  with tempfile.TemporaryDirectory()as root:
+   a=m.Components(root,ui_file_reservations=True).scopes(["web/chat/a.js"])
+   b=m.Components(root,ui_file_reservations=True).scopes(["web/chat/b.js"])
+   self.assertFalse(set(a)&set(b));self.assertNotIn("module:workspace",a)
+   self.assertEqual(m.Components(root).scopes(["web/chat/a.js"]),["module:web:chat","path:web/chat/a.js"])
  def test_compiler_attestation_does_not_widen_file_and_directory_claims(self):
   with tempfile.TemporaryDirectory()as root:
    c=m.Components(root,["ui/chat/embedded.js"],ui_file_reservations=True)

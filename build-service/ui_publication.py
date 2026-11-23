@@ -590,7 +590,7 @@ class UIPublication:
         if args["action"]=="complete_activated_release":
             # Complete only the exact already-active, reviewed UI snapshot.
             # This does not activate again, rebuild, or adopt a different runtime.
-            template_only=all(path.startswith("v3/ui/")or path=="v3/config/chat.json"for path in job.get("changed_paths",()))
+            template_only=all(path.startswith(("v3/ui/","v3/web/"))or path=="v3/config/chat.json"for path in job.get("changed_paths",()))
             if job["operation"]not in {"ui_deploy","plugin_deploy"}or not template_only or not job.get("hot_assets")or job.get("publication_policy_version")!=1 or job.get("phase")not in {"switching_ui","checking_ui","promoting_checkout"}:
                 raise ValueError("Retained-runtime activated UI recovery required")
             self.broker._lease(job)
@@ -690,7 +690,7 @@ class UIPublication:
             if not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):raise ValueError("Checkout effects need reconciliation")
         else:
             host_only=job["operation"]=="host_service_deploy"and job.get("hot_assets")and job.get("publication_policy_version")==1
-            if not host_only and(job["operation"]!="ui_deploy"or any(not path.startswith("v3/ui/")for path in job.get("changed_paths",()))):raise ValueError("Only retained-runtime UI or installed-host activation can be restored")
+            if not host_only and(job["operation"]!="ui_deploy"or any(not path.startswith(("v3/ui/","v3/web/"))for path in job.get("changed_paths",()))):raise ValueError("Only retained-runtime UI or installed-host activation can be restored")
             # A retry may observe the pointer already restored by this same durable intent.
             if active!=job["job_id"]and not(previous and active==predecessor):raise ValueError("Active pointer advanced; use a compensating release")
             if not legacy:self.release.verify_publication(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
@@ -740,7 +740,7 @@ class UIPublication:
             merged,changed=self.release.compensating_candidate(before,after,snapshot,target.get("changed_paths",()),self.validate)
             current=self.release.entries(snapshot,self.validate);wanted=self.release.entries(merged,self.validate);patches=[]
             for path in changed:
-                if not path.startswith("v3/ui/"):raise ValueError("Only UI source can use this rollback preview")
+                if not path.startswith(("v3/ui/","v3/web/")):raise ValueError("Only UI source can use this rollback preview")
                 old=current.get(path);new=wanted.get(path)
                 if old==new:continue
                 logical=path.removeprefix("v3/")

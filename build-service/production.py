@@ -39,7 +39,7 @@ KEYSTORE = TOKEN.with_name("android-keystore.jks")
 KEYSTORE_PASS = TOKEN.with_name("android-keystore-pass")
 # Top-level entries of the production repository (live-files.json is read by the app and the
 # installer packaging).
-ALLOW = ("src", "crates", "ui", "abilities", "config", "plugins", "Cargo.toml", "Cargo.lock",
+ALLOW = ("src", "crates", "ui", "web", "abilities", "config", "plugins", "Cargo.toml", "Cargo.lock",
          "build.rs", "rustfmt.toml", "README.md", "live-files.json")
 # The installer image's build context in the exported tree, and the production-only GitHub
 # workflow (macOS installer on each release tag) it carries.

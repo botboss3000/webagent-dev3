@@ -185,8 +185,8 @@ class Components:
                 "tests/test_admin_build.py","tests/test_admin_workspace.py","tests/test_engine_components.py","tests/test_context_component_builds.py","tests/test_buildctl_wait.py"}:
                 output.add("module:broker")
             elif path.startswith("services/system-monitoring/"):output.add("module:service:system-monitoring")
-            elif path.startswith("ui/"):
-                if not self.ui_file_reservations:output.add("module:ui:"+(parts[1]if len(parts)>1 else"shell"))
+            elif path.startswith(("ui/","web/")):
+                if not self.ui_file_reservations:output.add("module:"+parts[0]+":"+(parts[1]if len(parts)>1 else"shell"))
             elif path.startswith("docs/")or(path.startswith("config/")and path.endswith(".json")):output.add("module:asset:"+path)
             # Shared build files (Cargo.toml/lock, build.rs, Dockerfile, ...) and unknown paths fence only each other.
             else:output.add("module:workspace")

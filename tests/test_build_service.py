@@ -2390,6 +2390,8 @@ class EngineModulePathTests(unittest.TestCase):
   self.assertTrue(fixtures.host.hot_source_path("v3/config/administration/native-tools.json"))
   self.assertFalse(fixtures.host.hot_source_path("v3/src/engine/loop/run.rs"))
   self.assertFalse(fixtures.host.hot_source_path("v3/src/engine/tools/dispatch.rs"))
+  # The new web/ UI publishes without a compile, like ui/.
+  self.assertTrue(fixtures.host.hot_source_path("v3/web/chat/a.js"))
 
 class ExternalDefaultRoutingTests(unittest.TestCase):
  """Real isolated finish classification requires installed compiler evidence for external defaults."""
