@@ -548,6 +548,21 @@ async fn administrator(app: &App) -> bool {
 /// Install the app-owned pure-process sandbox before replaceable Automation code executes.
 /// The outbound transport keeps its existing network-capable path; packages cannot select this boundary.
 fn reducer_process(id: &str, executable: &FsPath) -> Result<tokio::process::Command> {
+    // Outside tests the confined reducer starts through this app's own executable in
+    // `--sandbox-exec` mode (`crate::sandbox_exec`), which applies the same pre-exec sandbox
+    // and then runs it. Starting that launcher needs no pre-exec hook, so the loop spawns it
+    // without fork copying the loop's whole memory map, as it did about every 2 seconds.
+    // Unit tests run in the test harness, which has no such mode, so they keep the hook.
+    #[cfg(not(test))]
+    if automation_ability_host(id) {
+        let mut command = tokio::process::Command::new(std::env::current_exe()?);
+        command
+            .arg(crate::SANDBOX_EXEC)
+            .arg(executable)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin");
+        return Ok(command);
+    }
     let mut command = tokio::process::Command::new(executable);
     if automation_ability_host(id) {
         let sandbox = crate::engine_sandbox::prepare(executable)?;
@@ -1768,11 +1783,23 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
         }
     }
     let initial = app.store.module_state(id).await?;
-    let latest = app.store.notification_page(i64::MAX, 1).await?["latest_seq"]
-        .as_i64()
-        .unwrap_or(0);
-    if id == "automation" && webagent_extensions::health::idle(&initial, latest, &gen) {
-        return Ok(15000);
+    let bounds = app.store.notification_page(i64::MAX, 1).await?;
+    let latest = bounds["latest_seq"].as_i64().unwrap_or(0);
+    if id == "automation" {
+        // Automation reads only this user's events (`module_events`), so its cursor stops at
+        // the user's own newest event. Other users' events are not work for it: the cursor
+        // counts as current unless the user has a newer event or it fell behind retention.
+        let cursor = initial["event_cursor"].as_i64().unwrap_or(0);
+        let own_latest = if cursor < bounds["pruned_through"].as_i64().unwrap_or(0)
+            || app.store.module_events_after(cursor).await?
+        {
+            latest
+        } else {
+            cursor
+        };
+        if webagent_extensions::health::idle(&initial, own_latest, &gen) {
+            return Ok(15000);
+        }
     }
     // A generation transition deactivates every retained subscription before tick.
     // It has no active consumer of pre-installation events.

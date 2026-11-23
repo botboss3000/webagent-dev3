@@ -216,9 +216,44 @@ fn local_worker_mode(mode: Option<&str>) -> Option<i32> {
     })
 }
 
+/// Launcher mode: `webagent-v3 --sandbox-exec PROGRAM [ARGS...]` confines itself with the
+/// Engine sandbox for PROGRAM (`engine_sandbox::prepare`/`apply`, the same boundary a
+/// pre-exec hook applies) and replaces itself with PROGRAM. The loop starts replaceable
+/// reducers through it so it never forks its own large process for them.
+const SANDBOX_EXEC: &str = "--sandbox-exec";
+
+fn sandbox_exec() -> i32 {
+    use std::os::unix::process::CommandExt;
+    let mut arguments = std::env::args_os().skip(2);
+    let Some(program) = arguments.next().map(std::path::PathBuf::from) else {
+        return 2;
+    };
+    let sandbox = match engine_sandbox::prepare(&program) {
+        Ok(sandbox) => sandbox,
+        Err(_) => return 3,
+    };
+    let mut command = std::process::Command::new(&program);
+    command
+        .args(arguments)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir("/");
+    // SAFETY: preparation allocated the path rules above; the hook only applies that
+    // Landlock/seccomp/descriptor fence before exec, as `reducer_process` did in the loop.
+    unsafe {
+        command.pre_exec(move || sandbox.apply());
+    }
+    // `exec` returns only on failure.
+    let _ = command.exec();
+    4
+}
+
 // Choose one role for this process. The API serves requests; the loop owns
 // recovery and execution; health only checks a recent loop heartbeat.
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some(SANDBOX_EXEC) {
+        std::process::exit(sandbox_exec());
+    }
     #[cfg(feature = "local-worker")]
     if let Some(code) = local_worker_mode(std::env::args().nth(1).as_deref()) {
         std::process::exit(code);

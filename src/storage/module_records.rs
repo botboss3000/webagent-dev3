@@ -72,6 +72,17 @@ impl Store {
         Ok(true)
     }
 
+    /// Whether this user has a module event after `after` (what `module_events` would return).
+    pub(crate) async fn module_events_after(&self, after: i64) -> Result<bool> {
+        Ok(sqlx::query_scalar::<_, i64>(
+            "SELECT EXISTS(SELECT 1 FROM notification_outbox WHERE source_user=? AND seq>?)",
+        )
+        .bind(&self.user_id)
+        .bind(after)
+        .fetch_one(&self.app_pool)
+        .await?
+            != 0)
+    }
     pub(crate) async fn module_events(&self, after: i64) -> Result<Value> {
         let bounds = self.notification_page(after, 1).await?;
         if bounds["error"] == "cursor_expired" {
