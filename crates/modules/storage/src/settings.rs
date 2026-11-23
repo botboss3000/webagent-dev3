@@ -35,6 +35,7 @@ pub fn parse(bytes: &[u8]) -> Result<Value> {
     }
     admin_encryption_enabled(&value)?;
     max_connected_users(&value)?;
+    deleted_session_retention_days(&value)?;
     Ok(value)
 }
 
@@ -56,6 +57,21 @@ pub fn max_connected_users(settings: &Value) -> Result<usize> {
             )
         })
 }
+
+/// Days a deleted session's remaining records are kept before they are purged
+/// (`deleted_sessions.retention_days`, at least 1); absence keeps
+/// [`DEFAULT_DELETED_SESSION_RETENTION_DAYS`].
+pub fn deleted_session_retention_days(settings: &Value) -> Result<u64> {
+    let Some(value) = settings.pointer("/deleted_sessions/retention_days") else {
+        return Ok(DEFAULT_DELETED_SESSION_RETENTION_DAYS);
+    };
+    value.as_u64().filter(|days| *days >= 1).ok_or_else(|| {
+        anyhow!("storage-settings.json deleted_sessions.retention_days must be an integer of at least 1")
+    })
+}
+
+/// Retention of deleted sessions' remaining records unless the settings say otherwise.
+pub const DEFAULT_DELETED_SESSION_RETENTION_DAYS: u64 = 30;
 
 /// Validate the optional administrator encryption switch; absence keeps encryption enabled.
 pub fn admin_encryption_enabled(settings: &Value) -> Result<bool> {

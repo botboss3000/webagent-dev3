@@ -14,6 +14,13 @@
 //!   record is rewritten for many reasons (activity time, flags, names), so access decisions
 //!   compare the plain `session_header` instead: its status, agent and participation, kept
 //!   beside the `record` counter it was read at (`session_header` below).
+//! - User database (stream B6): `run_revisions` per run: `record` moves with every write of the
+//!   `run:` document and of its split input rows (`recovery_input`), so a decoded run record,
+//!   input included, can be reused while it stands. `session_index`: plain session facts
+//!   (status, agent, parent, flags, times) kept beside the `record` counter they were read at.
+//!   `doc_owner`: the plain ownership ids of a document (which session or run it belongs to),
+//!   recorded by a session deletion that decrypted it; every write or delete of the document
+//!   removes the row in the writing statement, so a row exists only for an unchanged document.
 //! - Application database: `plain_revisions` row `model_catalog`.
 //!
 //! Reads fail closed: a missing table, row or value reads as `None`, which callers treat as
@@ -66,7 +73,31 @@ fn session_bump(side: &str, extra: &str) -> String {
     )
 }
 
+/// Statements that move run `id`'s counter (an SQL expression), only when `when` holds.
+fn run_bump(id: &str, when: &str) -> String {
+    format!(
+        "INSERT INTO run_revisions(run_id) SELECT {id} WHERE {when}
+            AND NOT EXISTS(SELECT 1 FROM run_revisions WHERE run_id={id});
+        UPDATE run_revisions SET record=record+1 WHERE run_id={id} AND {when};"
+    )
+}
+
+/// The split run-input table, created here exactly as `pool::open_pool` creates it, so its
+/// triggers can be installed first (`IF NOT EXISTS`: whichever runs first creates it).
+const RECOVERY_TABLE: &str = "CREATE TABLE IF NOT EXISTS recovery_input(run_id TEXT NOT NULL,ordinal INTEGER NOT NULL,item BLOB NOT NULL,PRIMARY KEY(run_id,ordinal));";
+
 fn user_script() -> String {
+    let run_new = run_bump("substr(NEW.key,5)", "1");
+    let run_old = run_bump("substr(OLD.key,5)", "1");
+    let run_new_if = run_bump("substr(NEW.key,5)", "NEW.key GLOB 'run:*'");
+    let run_old_if = run_bump(
+        "substr(OLD.key,5)",
+        "OLD.key GLOB 'run:*' AND OLD.key IS NOT NEW.key",
+    );
+    let input_new = run_bump("NEW.run_id", "1");
+    let input_old = run_bump("OLD.run_id", "1");
+    let input_old_if = run_bump("OLD.run_id", "OLD.run_id IS NOT NEW.run_id");
+    let recovery_table = RECOVERY_TABLE;
     let new_matches = session_matches("NEW");
     let old_matches = session_matches("OLD");
     let new_bump = session_bump("NEW", "1");
@@ -90,6 +121,34 @@ fn user_script() -> String {
             BEGIN {new_bump} {old_bump} END;
         CREATE TRIGGER IF NOT EXISTS rev_session_delete AFTER DELETE ON docs
             WHEN {old_matches} BEGIN {delete_bump} END;
+        CREATE TABLE IF NOT EXISTS session_index(session_id TEXT PRIMARY KEY,
+            checked INTEGER NOT NULL, status TEXT, agent_id TEXT, parent_id TEXT,
+            created_at INTEGER NOT NULL, flags INTEGER NOT NULL, deleted_since INTEGER);
+        CREATE TABLE IF NOT EXISTS run_revisions(run_id TEXT PRIMARY KEY,
+            record INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS doc_owner(key TEXT PRIMARY KEY, owners TEXT NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS rev_owner_insert AFTER INSERT ON docs
+            BEGIN DELETE FROM doc_owner WHERE key=NEW.key; END;
+        CREATE TRIGGER IF NOT EXISTS rev_owner_update AFTER UPDATE ON docs
+            WHEN OLD.key IS NOT NEW.key OR OLD.value IS NOT NEW.value
+            BEGIN DELETE FROM doc_owner WHERE key=OLD.key OR key=NEW.key; END;
+        CREATE TRIGGER IF NOT EXISTS rev_owner_delete AFTER DELETE ON docs
+            BEGIN DELETE FROM doc_owner WHERE key=OLD.key; END;
+        {recovery_table}
+        CREATE TRIGGER IF NOT EXISTS rev_run_insert AFTER INSERT ON docs
+            WHEN NEW.key GLOB 'run:*' BEGIN {run_new} END;
+        CREATE TRIGGER IF NOT EXISTS rev_run_update AFTER UPDATE ON docs
+            WHEN (NEW.key GLOB 'run:*' OR OLD.key GLOB 'run:*')
+                AND (OLD.key IS NOT NEW.key OR OLD.value IS NOT NEW.value)
+            BEGIN {run_new_if} {run_old_if} END;
+        CREATE TRIGGER IF NOT EXISTS rev_run_delete AFTER DELETE ON docs
+            WHEN OLD.key GLOB 'run:*' BEGIN {run_old} END;
+        CREATE TRIGGER IF NOT EXISTS rev_run_input_insert AFTER INSERT ON recovery_input
+            BEGIN {input_new} END;
+        CREATE TRIGGER IF NOT EXISTS rev_run_input_update AFTER UPDATE ON recovery_input
+            BEGIN {input_new} {input_old_if} END;
+        CREATE TRIGGER IF NOT EXISTS rev_run_input_delete AFTER DELETE ON recovery_input
+            BEGIN {input_old} END;
         INSERT OR IGNORE INTO session_revisions(session_id)
             SELECT substr(key,9) FROM docs WHERE key GLOB 'session:*';
         INSERT OR IGNORE INTO session_revisions(session_id)
@@ -225,11 +284,23 @@ fn texts(
     })
 }
 
-const USER_TRIGGERS: [&str; 4] = [
+const USER_TRIGGERS: [&str; 16] = [
     "rev_session_insert",
     "rev_session_update",
     "rev_session_delete",
     "session_header",
+    "session_index",
+    "run_revisions",
+    "rev_run_insert",
+    "rev_run_update",
+    "rev_run_delete",
+    "rev_run_input_insert",
+    "rev_run_input_update",
+    "rev_run_input_delete",
+    "doc_owner",
+    "rev_owner_insert",
+    "rev_owner_update",
+    "rev_owner_delete",
 ];
 const AGENT_TRIGGERS: [&str; 12] = [
     "rev_agents_insert",
@@ -290,6 +361,40 @@ pub async fn session(pool: &SqlitePool, sid: &str) -> Option<SessionRevisions> {
         mode: row.try_get("mode").ok()?,
         abilities: row.try_get("abilities").ok()?,
     })
+}
+
+/// The write counter that moves with every write of document `key`, as `executor` sees it
+/// (in a transaction: that transaction's snapshot): `session:` (record), `session_mode:`,
+/// `session_ability_state:` and `run:` (the run document and its split input rows). `None`
+/// for any other key, and when the counter is missing or unreadable (read the document again).
+pub async fn document_counter<'c, E: sqlx::SqliteExecutor<'c>>(
+    executor: E,
+    key: &str,
+) -> Option<i64> {
+    let (query, id) = counted(key)?;
+    sqlx::query_scalar(query)
+        .bind(id)
+        .fetch_optional(executor)
+        .await
+        .ok()?
+}
+
+/// The counter query and id for a counted document key (see [`document_counter`]).
+pub fn counted(key: &str) -> Option<(&'static str, &str)> {
+    if let Some(id) = key.strip_prefix("run:") {
+        return Some(("SELECT record FROM run_revisions WHERE run_id=?", id));
+    }
+    for (prefix, column) in SESSION_FAMILIES {
+        if let Some(id) = key.strip_prefix(prefix) {
+            let query = match column {
+                "record" => "SELECT record FROM session_revisions WHERE session_id=?",
+                "mode" => "SELECT mode FROM session_revisions WHERE session_id=?",
+                _ => "SELECT abilities FROM session_revisions WHERE session_id=?",
+            };
+            return Some((query, id));
+        }
+    }
+    None
 }
 
 /// The access-relevant part of a session record, in plain values.
@@ -374,6 +479,208 @@ pub async fn session_header(
     .execute(pool)
     .await;
     Some(header)
+}
+
+/// `SessionFacts::flags`: the record is the agent's Main Chat (`main_chat` true).
+pub const FLAG_MAIN_CHAT: i64 = 1;
+/// `SessionFacts::flags`: a module's silent session (`module_silent` true).
+pub const FLAG_MODULE_SILENT: i64 = 2;
+/// `SessionFacts::flags`: a sub-agent session (`parent_session_id` is a string).
+pub const FLAG_CHILD: i64 = 4;
+/// `SessionFacts::flags`: naming still waits for the first message (`auto_naming.stage`).
+pub const FLAG_AWAITING_MESSAGE: i64 = 8;
+
+/// The plain facts of one session record that counting, drafts, sub-agent lookups and the
+/// purge of deleted sessions need (stream B6): ids, status, flags and times only, no content.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionFacts {
+    pub id: String,
+    pub status: Option<String>,
+    /// The record's `agent_id` as stored (callers apply the `shared_default` default).
+    pub agent_id: Option<String>,
+    pub parent_id: Option<String>,
+    pub created_at: i64,
+    pub flags: i64,
+    /// When the record was first seen deleted: its `deleted_at`, else the first read that saw
+    /// the tombstone (so a purge waits at least the retention period after either).
+    pub deleted_since: Option<i64>,
+}
+
+impl SessionFacts {
+    pub fn of(
+        id: &str,
+        session: &serde_json::Value,
+        earlier_deleted: Option<i64>,
+        now: i64,
+    ) -> Self {
+        let status = session["status"].as_str().map(str::to_owned);
+        let flag = |on: bool, bit: i64| if on { bit } else { 0 };
+        let flags = flag(session["main_chat"] == true, FLAG_MAIN_CHAT)
+            | flag(session["module_silent"] == true, FLAG_MODULE_SILENT)
+            | flag(session["parent_session_id"].is_string(), FLAG_CHILD)
+            | flag(
+                session["auto_naming"]["stage"] == "awaiting_message",
+                FLAG_AWAITING_MESSAGE,
+            );
+        let deleted_since = (status.as_deref() == Some("deleted")).then(|| {
+            earlier_deleted
+                .or_else(|| session["deleted_at"].as_i64())
+                .unwrap_or(now)
+        });
+        Self {
+            id: id.to_owned(),
+            status,
+            agent_id: session["agent_id"].as_str().map(str::to_owned),
+            parent_id: session["parent_session_id"].as_str().map(str::to_owned),
+            created_at: session["created_at"].as_i64().unwrap_or(0),
+            flags,
+            deleted_since,
+        }
+    }
+
+    pub fn has(&self, flag: i64) -> bool {
+        self.flags & flag != 0
+    }
+}
+
+/// The facts of every `session:` record in the user database, in key order, without
+/// decrypting any record whose stored facts were read at its current `record` counter. The
+/// list comes from the record keys themselves, so it holds exactly the records that exist;
+/// a record whose facts are missing or older than its counter (or that has no counter) is read
+/// and decrypted in the same read transaction, and its facts are stored with that counter for
+/// the next reader (newest first, best effort). `None` when anything cannot be read: callers
+/// then decrypt the records as before.
+pub async fn session_facts(
+    pool: &SqlitePool,
+    unseal: impl Fn(&[u8]) -> anyhow::Result<serde_json::Value>,
+    now: i64,
+) -> Option<Vec<SessionFacts>> {
+    let mut tx = pool.begin().await.ok()?;
+    let rows = sqlx::query(
+        "SELECT substr(d.key,9) AS id, r.record, i.checked, i.status, i.agent_id, i.parent_id,
+            i.created_at, i.flags, i.deleted_since
+        FROM docs d LEFT JOIN session_revisions r ON r.session_id=substr(d.key,9)
+            LEFT JOIN session_index i ON i.session_id=substr(d.key,9)
+        WHERE d.key>=? AND d.key<? ORDER BY d.key",
+    )
+    .bind("session:")
+    .bind(format!("session:{}", char::MAX))
+    .fetch_all(&mut *tx)
+    .await
+    .ok()?;
+    let mut facts = Vec::with_capacity(rows.len());
+    let mut refreshed = Vec::new();
+    for row in rows {
+        let id: String = row.try_get("id").ok()?;
+        let record: Option<i64> = row.try_get("record").ok()?;
+        let checked: Option<i64> = row.try_get("checked").ok()?;
+        let stored_status: Option<String> = row.try_get("status").ok()?;
+        let stored_since: Option<i64> = row.try_get("deleted_since").ok()?;
+        if record.is_some() && checked == record {
+            facts.push(SessionFacts {
+                id,
+                status: stored_status,
+                agent_id: row.try_get("agent_id").ok()?,
+                parent_id: row.try_get("parent_id").ok()?,
+                created_at: row.try_get("created_at").ok()?,
+                flags: row.try_get("flags").ok()?,
+                deleted_since: stored_since,
+            });
+            continue;
+        }
+        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+            .bind(format!("session:{id}"))
+            .fetch_one(&mut *tx)
+            .await
+            .ok()?;
+        let earlier = (stored_status.as_deref() == Some("deleted"))
+            .then_some(stored_since)
+            .flatten();
+        let fact = SessionFacts::of(&id, &unseal(&raw).ok()?, earlier, now);
+        if let Some(record) = record {
+            refreshed.push((record, fact.clone()));
+        }
+        facts.push(fact);
+    }
+    tx.commit().await.ok()?;
+    if !refreshed.is_empty() {
+        // Best effort: a failed write only means the next reader decrypts again.
+        let _ = store_session_facts(pool, &refreshed).await;
+    }
+    Some(facts)
+}
+
+async fn store_session_facts(
+    pool: &SqlitePool,
+    facts: &[(i64, SessionFacts)],
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    for (record, fact) in facts {
+        sqlx::query(
+            "INSERT INTO session_index(session_id,checked,status,agent_id,parent_id,created_at,
+                flags,deleted_since) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(session_id) DO UPDATE SET checked=excluded.checked,status=excluded.status,
+                agent_id=excluded.agent_id,parent_id=excluded.parent_id,
+                created_at=excluded.created_at,flags=excluded.flags,
+                deleted_since=excluded.deleted_since
+            WHERE excluded.checked>session_index.checked",
+        )
+        .bind(&fact.id)
+        .bind(record)
+        .bind(&fact.status)
+        .bind(&fact.agent_id)
+        .bind(&fact.parent_id)
+        .bind(fact.created_at)
+        .bind(fact.flags)
+        .bind(fact.deleted_since)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Drop the stored facts of a session whose records were purged, inside the purging
+/// transaction. The counters in `session_revisions` stay, so a counter never goes back.
+pub async fn forget_session_facts(
+    connection: &mut sqlx::SqliteConnection,
+    sid: &str,
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM session_index WHERE session_id=?")
+        .bind(sid)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+/// Every document key of the user database in key order, with its recorded ownership ids
+/// (`doc_owner.owners`, JSON text) when the document is unchanged since they were recorded.
+/// Read in the caller's transaction.
+pub async fn document_owners(
+    connection: &mut sqlx::SqliteConnection,
+) -> anyhow::Result<Vec<(String, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT d.key, o.owners FROM docs d LEFT JOIN doc_owner o ON o.key=d.key ORDER BY d.key",
+    )
+    .fetch_all(connection)
+    .await?)
+}
+
+/// Record a document's ownership ids, read from its current value in the caller's write
+/// transaction (which must hold the writer lock, so the value cannot change before commit).
+pub async fn record_document_owners(
+    connection: &mut sqlx::SqliteConnection,
+    key: &str,
+    owners: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO doc_owner(key,owners) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET owners=excluded.owners",
+    )
+    .bind(key)
+    .bind(owners)
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 /// Whether `user` is a shared participant of session `sid` (`shared_participants`, application

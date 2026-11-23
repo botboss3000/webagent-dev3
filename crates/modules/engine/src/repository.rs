@@ -279,17 +279,13 @@ impl<
             let Some(flag) = session_flag(run) else {
                 return Ok(());
             };
-            let key = format!("session:{}", run["session_id"].as_str().unwrap_or(""));
-            let Some(raw) = crate::send_future(
-                sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-                    .bind(&key)
-                    .fetch_optional(&mut **tx),
-            )
-            .await?
+            let sid = run["session_id"].as_str().unwrap_or("");
+            let key = format!("session:{sid}");
+            let Some(mut session) =
+                crate::send_future(self.records.session_record_in(&mut **tx, sid)).await?
             else {
                 return Ok(());
             };
-            let mut session = self.records.unseal(&raw)?;
             let unchanged = ["flag", "flag_source", "notification", "flag_run_id"]
                 .iter()
                 .all(|field| session[*field] == flag[*field]);
@@ -974,47 +970,38 @@ impl<
                     .execute(&mut *tx)
                     .await?;
             }
-            // Projection assignments share the canonical run lease/history transaction, never the tool journal.
-            if let Some(state) = run.get("tool_result_projection") {
-                let session_key = format!("session:{sid}");
-                if let Some(raw) =
-                    sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-                        .bind(&session_key)
-                        .fetch_optional(&mut *tx)
-                        .await?
+            // Projection assignments and session metadata share the canonical run lease/history
+            // transaction, never the tool journal. One read and at most one write of the session
+            // record serve both (the transaction holds the writer lock throughout).
+            let projection = run.get("tool_result_projection");
+            let context_state = run.get("tool_context_state");
+            if projection.is_some() || context_state.is_some() {
+                if let Some(mut session) =
+                    crate::send_future(self.records.session_record_in(&mut tx, sid)).await?
                 {
-                    let mut session = self.records.unseal(&raw)?;
-                    if state["revision"].as_u64().unwrap_or(0)
-                        >= session["tool_result_projection"]["revision"]
-                            .as_u64()
-                            .unwrap_or(0)
-                    {
-                        session["tool_result_projection"] = state.clone();
-                        sqlx::query("UPDATE docs SET value=? WHERE key=?")
-                            .bind(self.records.encode_user_record(&session)?)
-                            .bind(&session_key)
-                            .execute(&mut *tx)
-                            .await?;
+                    let mut changed = false;
+                    if let Some(state) = projection {
+                        if state["revision"].as_u64().unwrap_or(0)
+                            >= session["tool_result_projection"]["revision"]
+                                .as_u64()
+                                .unwrap_or(0)
+                        {
+                            session["tool_result_projection"] = state.clone();
+                            changed = true;
+                        }
                     }
-                }
-            }
-            // Session metadata shares the existing run lease/revision transaction.
-            if let Some(state) = run.get("tool_context_state") {
-                let session_key = format!("session:{sid}");
-                if let Some(raw) =
-                    sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-                        .bind(&session_key)
-                        .fetch_optional(&mut *tx)
-                        .await?
-                {
-                    let mut session = self.records.unseal(&raw)?;
-                    if state["clock"].as_u64().unwrap_or(0)
-                        >= session["tool_context_state"]["clock"].as_u64().unwrap_or(0)
-                    {
-                        session["tool_context_state"] = state.clone();
+                    if let Some(state) = context_state {
+                        if state["clock"].as_u64().unwrap_or(0)
+                            >= session["tool_context_state"]["clock"].as_u64().unwrap_or(0)
+                        {
+                            session["tool_context_state"] = state.clone();
+                            changed = true;
+                        }
+                    }
+                    if changed {
                         sqlx::query("UPDATE docs SET value=? WHERE key=?")
                             .bind(self.records.encode_user_record(&session)?)
-                            .bind(&session_key)
+                            .bind(format!("session:{sid}"))
                             .execute(&mut *tx)
                             .await?;
                     }

@@ -12,6 +12,91 @@ pub use webagent_chat::session::{
 };
 
 /// Which sessions a permanent deletion accepts.
+/// Deleted sessions purged at most per deletion request.
+const PURGE_BATCH: usize = 20;
+
+/// Per-session documents keyed `{prefix}:{sid}` that go with their session.
+const SESSION_OWNED_PREFIXES: [&str; 11] = [
+    "session_mode",
+    "session_checkpoint",
+    "core_spawn_origin",
+    "session_ability_state",
+    "session_usage",
+    "manager_pending",
+    "session_naming",
+    "administrator_host",
+    "administrator_browser",
+    "administrator_notice",
+    "action_link",
+];
+
+/// Receipt namespaces keyed `{prefix}:{sid}:...` that go with their session.
+const SESSION_OWNED_RECEIPTS: [&str; 12] = [
+    "receipt:message",
+    "receipt:queue",
+    "receipt:agent_message",
+    "receipt:messaging_route",
+    "receipt:session:patch",
+    "receipt:session:lifecycle",
+    "receipt:session:history",
+    "receipt:base",
+    "receipt:voice",
+    "receipt:chat_controls",
+    "receipt:session_mode",
+    "administrator_receipt",
+];
+
+/// The ids that decide which session a document belongs to (as plain text, `doc_owner`):
+/// its `session_id`, `session.id`, `result.session.id` and `result.session_id`; its
+/// `result.id` and `result.run_id`; and a messaging route's two session ids. Ids only.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct DocOwners {
+    #[serde(default, rename = "s")]
+    sessions: Vec<String>,
+    #[serde(default, rename = "r")]
+    result_id: Option<String>,
+    #[serde(default, rename = "rr")]
+    result_run_id: Option<String>,
+    #[serde(default, rename = "m")]
+    route_sessions: Vec<String>,
+}
+
+impl DocOwners {
+    fn of(record: &Value) -> Self {
+        let text = |value: &Value| value.as_str().map(str::to_owned);
+        Self {
+            sessions: [
+                &record["session_id"],
+                &record["session"]["id"],
+                &record["result"]["session"]["id"],
+                &record["result"]["session_id"],
+            ]
+            .into_iter()
+            .filter_map(text)
+            .collect(),
+            result_id: text(&record["result"]["id"]),
+            result_run_id: text(&record["result"]["run_id"]),
+            route_sessions: [
+                &record["scope"]["source_session_id"],
+                &record["scope"]["target_session_id"],
+            ]
+            .into_iter()
+            .filter_map(text)
+            .collect(),
+        }
+    }
+}
+
+/// Whether `session` qualifies as a reusable blank draft of `agent_id`.
+fn draft_candidate(session: &Value, agent_id: &str) -> bool {
+    session["status"] == "active"
+        && session["agent_id"].as_str().unwrap_or("shared_default") == agent_id
+        && session["main_chat"] != true
+        && session["module_silent"] != true
+        && !session["parent_session_id"].is_string()
+        && session["auto_naming"]["stage"] == "awaiting_message"
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Erase {
     /// The user deletes one archived, non-Main Chat session.
@@ -32,6 +117,13 @@ impl webagent_chat::RecordCodec for Store {
     fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> {
         StoreCore::encode_user_record(self, value)
     }
+    fn session_record_in<'a>(
+        &'a self,
+        connection: &'a mut sqlx::SqliteConnection,
+        sid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<Value>>> + Send + 'a {
+        StoreCore::session_record_in(self, connection, sid)
+    }
 }
 
 impl Store {
@@ -46,15 +138,11 @@ impl Store {
 
     /// Read one session's public metadata.
     pub async fn session_read_summary(&self, sid: &str) -> Result<Value> {
-        let mut tx = self.pool.begin().await?;
-        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("session:{sid}"))
-            .fetch_one(&mut *tx)
-            .await?;
-        let session = self.unseal(&raw)?;
-        let result = self.summary_in(&session)?;
-        tx.commit().await?;
-        Ok(result)
+        let session = self
+            .session_record(sid)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?;
+        self.summary_in(&session)
     }
 
     /// The public summary of one session document.
@@ -117,19 +205,83 @@ impl Store {
         .transpose()
     }
 
+    /// The plain facts of every session record (`webagent_storage::revisions::session_facts`):
+    /// no record is decrypted while its stored facts match its write counter. `None` when they
+    /// cannot be read; callers then decrypt the records as before.
+    pub async fn session_facts(&self) -> Option<Vec<webagent_storage::revisions::SessionFacts>> {
+        webagent_storage::revisions::session_facts(
+            &self.pool,
+            |raw| self.unseal(raw),
+            crate::now() as i64,
+        )
+        .await
+    }
+
+    /// Session records that count against `max_sessions`: every record not deleted.
+    pub async fn live_session_count(&self) -> Result<usize> {
+        if let Some(facts) = self.session_facts().await {
+            return Ok(facts
+                .iter()
+                .filter(|s| s.status.as_deref() != Some("deleted"))
+                .count());
+        }
+        Ok(self
+            .list("session:")
+            .await?
+            .iter()
+            .filter(|s| s["status"] != "deleted")
+            .count())
+    }
+
     /// Newest active anonymous conversation for one agent that no message has used yet.
-    /// New reuses this draft instead of leaving another blank session behind.
+    /// New reuses this draft instead of leaving another blank session behind. Chosen from the
+    /// plain session facts; the chosen record is read once to confirm it and take its title.
     pub async fn reusable_draft_session(&self, agent_id: &str) -> Result<Option<Value>> {
+        use webagent_storage::revisions as rev;
+        let Some(facts) = self.session_facts().await else {
+            return self.reusable_draft_session_decrypting(agent_id).await;
+        };
+        // Key order, then newest first with the first key winning a tie, as the scan below.
+        let mut candidates: Vec<_> = facts
+            .iter()
+            .filter(|s| {
+                s.status.as_deref() == Some("active")
+                    && s.agent_id.as_deref().unwrap_or("shared_default") == agent_id
+                    && !s.has(rev::FLAG_MAIN_CHAT)
+                    && !s.has(rev::FLAG_MODULE_SILENT)
+                    && !s.has(rev::FLAG_CHILD)
+                    && s.has(rev::FLAG_AWAITING_MESSAGE)
+            })
+            .collect();
+        candidates.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        for candidate in candidates {
+            if self.session_has_content(&candidate.id).await? {
+                continue;
+            }
+            let Some(session) = self.session_record(&candidate.id).await? else {
+                return self.reusable_draft_session_decrypting(agent_id).await;
+            };
+            if !draft_candidate(&session, agent_id)
+                || session["created_at"].as_i64().unwrap_or(0) != candidate.created_at
+            {
+                // Changed since the facts were read: decide from the records themselves.
+                return self.reusable_draft_session_decrypting(agent_id).await;
+            }
+            return Ok(Some(json!({
+                "id": candidate.id,
+                "agent_id": agent_id,
+                "title": session["title"].as_str().unwrap_or("New chat")
+            })));
+        }
+        Ok(None)
+    }
+
+    /// [`Self::reusable_draft_session`] from the decrypted records (the fallback).
+    async fn reusable_draft_session_decrypting(&self, agent_id: &str) -> Result<Option<Value>> {
         let mut draft: Option<Value> = None;
         let mut newest = i64::MIN;
         for session in self.list("session:").await? {
-            if session["status"] != "active"
-                || session["agent_id"].as_str().unwrap_or("shared_default") != agent_id
-                || session["main_chat"] == true
-                || session["module_silent"] == true
-                || session["parent_session_id"].is_string()
-                || session["auto_naming"]["stage"] != "awaiting_message"
-            {
+            if !draft_candidate(&session, agent_id) {
                 continue;
             }
             let Some(sid) = session["id"].as_str() else {
@@ -150,6 +302,109 @@ impl Store {
             }));
         }
         Ok(draft)
+    }
+
+    /// Sub-agent sessions of `sid` that are active or archived, as full records, chosen from
+    /// the plain session facts (each chosen record is read and checked again).
+    pub async fn spawn_child_sessions(&self, sid: &str) -> Result<Vec<Value>> {
+        let child = |s: &Value| {
+            s["parent_session_id"] == sid
+                && matches!(s["status"].as_str(), Some("active" | "archived"))
+        };
+        let Some(facts) = self.session_facts().await else {
+            return Ok(self
+                .list("session:")
+                .await?
+                .into_iter()
+                .filter(child)
+                .collect());
+        };
+        let mut children = Vec::new();
+        for fact in facts.iter().filter(|s| {
+            s.parent_id.as_deref() == Some(sid)
+                && matches!(s.status.as_deref(), Some("active" | "archived"))
+        }) {
+            if let Some(session) = self.session_record(&fact.id).await? {
+                if child(&session) {
+                    children.push(session);
+                }
+            }
+        }
+        Ok(children)
+    }
+
+    /// Purge what is left of sessions deleted at least `retention_days` ago (their tombstone,
+    /// delete receipts, Main Notes and any per-session record the erase left), at most
+    /// `limit` sessions per call. Deleted sessions can never be opened or restored ("Delete
+    /// permanently"); archived and active ones are never touched. Driven by the account's own
+    /// session lifecycle requests, not by a timer. Returns how many sessions were purged.
+    pub async fn purge_deleted_sessions(&self, retention_days: u64, limit: usize) -> Result<usize> {
+        let Some(facts) = self.session_facts().await else {
+            return Ok(0);
+        };
+        let cutoff = (crate::now() as i64).saturating_sub(
+            i64::try_from(retention_days.saturating_mul(86_400)).unwrap_or(i64::MAX),
+        );
+        let due: Vec<String> = facts
+            .into_iter()
+            .filter(|s| {
+                s.status.as_deref() == Some("deleted")
+                    && s.deleted_since.is_some_and(|since| since <= cutoff)
+            })
+            .map(|s| s.id)
+            .take(limit)
+            .collect();
+        let mut purged = 0;
+        for sid in due {
+            if self.purge_deleted_session(&sid).await? {
+                purged += 1;
+            }
+        }
+        Ok(purged)
+    }
+
+    /// Remove one deleted session's remaining records in one write transaction, after checking
+    /// in that transaction that its record is still the deletion tombstone.
+    async fn purge_deleted_session(&self, sid: &str) -> Result<bool> {
+        let key = format!("session:{sid}");
+        let _guard = self.context_gate.write().await;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE docs SET value=value WHERE key=?")
+            .bind(&key)
+            .execute(&mut *tx)
+            .await?;
+        let Some(session) = self.session_record_in(&mut tx, sid).await? else {
+            return Ok(false);
+        };
+        if session["status"] != "deleted" {
+            return Ok(false);
+        }
+        let mut keys = vec![key.clone(), format!("session_main_notes:{sid}")];
+        keys.extend(
+            SESSION_OWNED_PREFIXES
+                .iter()
+                .map(|prefix| format!("{prefix}:{sid}")),
+        );
+        for key in &keys {
+            sqlx::query("DELETE FROM docs WHERE key=?")
+                .bind(key)
+                .execute(&mut *tx)
+                .await?;
+        }
+        let mut prefixes = vec!["receipt:session:delete".to_owned()];
+        prefixes.extend(SESSION_OWNED_RECEIPTS.iter().map(|p| (*p).to_owned()));
+        for prefix in prefixes {
+            // A key range (no LIKE): `_` and `%` in ids are not wildcards.
+            let start = format!("{prefix}:{sid}:");
+            sqlx::query("DELETE FROM docs WHERE key>=? AND key<?")
+                .bind(&start)
+                .bind(format!("{start}{}", char::MAX))
+                .execute(&mut *tx)
+                .await?;
+        }
+        webagent_storage::revisions::forget_session_facts(&mut tx, sid).await?;
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// Table-only statistics from this user's public chat and recorded usage.
@@ -700,15 +955,15 @@ impl Store {
                 .bind(sid)
                 .fetch_all(&mut *tx)
                 .await?;
-        // Explicit key namespaces plus sealed ownership; never substring-match an ID.
-        let rows = sqlx::query("SELECT key,value FROM docs")
-            .fetch_all(&mut *tx)
-            .await?;
+        // Explicit key namespaces plus sealed ownership; never substring-match an ID. The
+        // ownership ids of a document are recorded in plain form (`doc_owner`) the first time
+        // a deletion decrypts it and dropped by any later write of it, so only documents
+        // written since the last deletion are decrypted here.
+        let rows = webagent_storage::revisions::document_owners(&mut tx).await?;
         let mut uncertain_effects = Vec::new();
         let mut removed = Vec::new();
         let mut upload_bytes = 0u64;
-        for row in rows {
-            let candidate: String = row.get("key");
+        for (candidate, stored) in rows {
             if candidate == key {
                 continue;
             }
@@ -716,46 +971,43 @@ impl Store {
             if candidate.starts_with("action:") {
                 continue;
             }
-            let record = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
-            let owned = record["session_id"] == sid
-                || record["session"]["id"] == sid
-                || record["result"]["session"]["id"] == sid
-                || record["result"]["session_id"] == sid
-                || (candidate.starts_with("receipt:session:") && record["result"]["id"] == sid)
-                || [
-                    "session_mode",
-                    "session_checkpoint",
-                    "core_spawn_origin",
-                    "session_ability_state",
-                    "session_usage",
-                    "manager_pending",
-                    "session_naming",
-                    "administrator_host",
-                    "administrator_browser",
-                    "administrator_notice",
-                    "action_link",
-                ]
-                .iter()
-                .any(|prefix| candidate == format!("{prefix}:{sid}"))
-                || [
-                    "receipt:message",
-                    "receipt:queue",
-                    "receipt:agent_message",
-                    "receipt:messaging_route",
-                    "receipt:session:patch",
-                    "receipt:session:lifecycle",
-                    "receipt:session:history",
-                    "receipt:base",
-                    "receipt:voice",
-                    "receipt:chat_controls",
-                    "receipt:session_mode",
-                    "administrator_receipt",
-                ]
-                .iter()
-                .any(|prefix| candidate.starts_with(&format!("{prefix}:{sid}:")))
-                || message_ids
+            let mut record = None;
+            let owners = match stored.and_then(|text| serde_json::from_str::<DocOwners>(&text).ok())
+            {
+                Some(owners) => owners,
+                None => {
+                    let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+                        .bind(&candidate)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                    let value = self.unseal(&raw)?;
+                    let owners = DocOwners::of(&value);
+                    webagent_storage::revisions::record_document_owners(
+                        &mut tx,
+                        &candidate,
+                        &serde_json::to_string(&owners)?,
+                    )
+                    .await?;
+                    record = Some(value);
+                    owners
+                }
+            };
+            let owned = owners.sessions.iter().any(|owner| owner == sid)
+                || (candidate.starts_with("receipt:session:")
+                    && owners.result_id.as_deref() == Some(sid))
+                || SESSION_OWNED_PREFIXES
                     .iter()
-                    .any(|id| candidate == format!("message_attachments:{id}"))
+                    .any(|prefix| candidate == format!("{prefix}:{sid}"))
+                || SESSION_OWNED_RECEIPTS
+                    .iter()
+                    .any(|prefix| candidate.starts_with(&format!("{prefix}:{sid}:")))
+                || message_ids.iter().any(|id| {
+                    candidate == format!("message_attachments:{id}")
+                        || candidate == format!("message_meta:{id}")
+                })
+                || ids
+                    .iter()
+                    .any(|id| candidate == format!("message_meta:{id}"))
                 || ["run", "run_view"]
                     .iter()
                     .any(|prefix| ids.iter().any(|id| candidate == format!("{prefix}:{id}")))
@@ -763,20 +1015,33 @@ impl Store {
                     .iter()
                     .any(|id| candidate.starts_with(&format!("receipt:run:{id}:")))
                 || ids.iter().any(|id| {
-                    record["result"]["run_id"] == *id
-                        || (candidate.starts_with("receipt:") && record["result"]["id"] == *id)
+                    owners.result_run_id.as_deref() == Some(id.as_str())
+                        || (candidate.starts_with("receipt:")
+                            && owners.result_id.as_deref() == Some(id.as_str()))
                 });
             let owned = owned
                 || (candidate.starts_with("messaging_route:")
-                    && (record["scope"]["source_session_id"] == sid
-                        || record["scope"]["target_session_id"] == sid));
+                    && owners.route_sessions.iter().any(|owner| owner == sid));
             if owned {
-                if candidate.starts_with("run:") && record["uncertain"] == true {
-                    uncertain_effects.push(json!({"run_id":record["id"],"pending":record["pending"],"batch":record["batch"]}));
-                }
-                if candidate.starts_with("attachment:") {
-                    upload_bytes =
-                        upload_bytes.saturating_add(record["bytes"].as_u64().unwrap_or(0));
+                if candidate.starts_with("run:") || candidate.starts_with("attachment:") {
+                    let record = match record {
+                        Some(record) => record,
+                        None => {
+                            let raw: Vec<u8> =
+                                sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+                                    .bind(&candidate)
+                                    .fetch_one(&mut *tx)
+                                    .await?;
+                            self.unseal(&raw)?
+                        }
+                    };
+                    if candidate.starts_with("run:") && record["uncertain"] == true {
+                        uncertain_effects.push(json!({"run_id":record["id"],"pending":record["pending"],"batch":record["batch"]}));
+                    }
+                    if candidate.starts_with("attachment:") {
+                        upload_bytes =
+                            upload_bytes.saturating_add(record["bytes"].as_u64().unwrap_or(0));
+                    }
                 }
                 sqlx::query("DELETE FROM docs WHERE key=?")
                     .bind(&candidate)
@@ -857,7 +1122,7 @@ impl Store {
         let tombstone = with_session_metadata(
             &json!({"id":sid,"agent_id":session["agent_id"],"status":"deleted",
             "title":"","metadata_revision":revision,"execution_epoch":session["execution_epoch"],
-            "uncertain_effects":uncertain_effects}),
+            "uncertain_effects":uncertain_effects,"deleted_at":crate::now()}),
             None,
         )?;
         // Bypass prepare_session_document only for this lifecycle-owned tombstone.
@@ -876,6 +1141,20 @@ impl Store {
         tx.commit().await?;
         self.remove_blobs(removed.iter().filter_map(|k| k.strip_prefix("attachment:")));
         removed.push(key);
+        // The account's own deletion is the moment to purge sessions deleted long ago
+        // (no timer visits accounts for it). A failure leaves them for the next deletion.
+        let retention =
+            webagent_storage::settings::read_settings(&self.root).and_then(|settings| {
+                webagent_storage::settings::deleted_session_retention_days(&settings)
+            });
+        match retention {
+            Ok(days) => {
+                if let Err(error) = self.purge_deleted_sessions(days, PURGE_BATCH).await {
+                    tracing::warn!(%error, "Purge of deleted sessions deferred");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "Deleted-session retention unreadable; no purge"),
+        }
         self.context_cache
             .lock()
             .unwrap()
@@ -1050,6 +1329,403 @@ mod tests {
             client_request_id: request.into(),
             expected_revision: revision,
         }
+    }
+
+    /// Archive then permanently delete `sid` through the user's lifecycle requests.
+    async fn delete_through_lifecycle(store: &Store, sid: &str) {
+        let archived = store
+            .lifecycle_session(sid, &lifecycle(&format!("archive-{sid}"), 0), false)
+            .await
+            .unwrap();
+        assert!(matches!(archived, SessionPatchOutcome::Saved(_)));
+        let deleted = store
+            .delete_session(sid, &lifecycle(&format!("delete-{sid}"), 1))
+            .await
+            .unwrap();
+        assert!(matches!(deleted, SessionPatchOutcome::Saved(_)));
+    }
+
+    /// The decrypting count every caller used before B6 (`list("session:")`).
+    async fn decrypting_count(store: &Store) -> usize {
+        store
+            .list("session:")
+            .await
+            .unwrap()
+            .iter()
+            .filter(|s| s["status"] != "deleted")
+            .count()
+    }
+
+    /// B6: the plain session facts give the same counts, drafts and sub-agent lists as the
+    /// decrypted records, for active, archived, deleted, shared, Main Chat, silent and child
+    /// sessions, also after the records change from another store (another process).
+    #[tokio::test]
+    async fn session_facts_answer_like_the_decrypted_records() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let other = Store::open(root.path()).await.unwrap();
+        let session = |id: &str, extra: Value| {
+            let mut value = json!({"id":id,"agent_id":"shared_default","title":"t","created_at":100,
+                "auto_naming":{"stage":"awaiting_message"}});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            value
+        };
+        for (id, extra) in [
+            ("a-draft-old", json!({"created_at":50})),
+            ("b-draft-new", json!({"created_at":200})),
+            ("c-draft-tie", json!({"created_at":200})),
+            ("d-named", json!({"auto_naming":{"stage":"done"}})),
+            (
+                "e-main",
+                json!({"main_chat":true,"main_chat_agent_id":"shared_default"}),
+            ),
+            ("f-silent", json!({"module_silent":true})),
+            ("g-child", json!({"parent_session_id":"d-named"})),
+            (
+                "h-shared",
+                json!({"participation":{"active":true,"revision":1,"generation":2}}),
+            ),
+            ("i-other-agent", json!({"agent_id":"agent-b"})),
+            ("j-to-archive", json!({})),
+            ("k-to-delete", json!({})),
+        ] {
+            store
+                .put(&format!("session:{id}"), &session(id, extra))
+                .await
+                .unwrap();
+        }
+        // No `status` at all: counted, as before.
+        store
+            .put("session:l-bare", &json!({"id":"l-bare"}))
+            .await
+            .unwrap();
+        store
+            .lifecycle_session("j-to-archive", &lifecycle("archive-j", 0), false)
+            .await
+            .unwrap();
+        delete_through_lifecycle(&store, "k-to-delete").await;
+
+        let check = |label: &'static str| {
+            let store = &store;
+            async move {
+                assert_eq!(
+                    store.live_session_count().await.unwrap(),
+                    decrypting_count(store).await,
+                    "{label}"
+                );
+                for agent in ["shared_default", "agent-b", "nobody"] {
+                    assert_eq!(
+                        store.reusable_draft_session(agent).await.unwrap(),
+                        store
+                            .reusable_draft_session_decrypting(agent)
+                            .await
+                            .unwrap(),
+                        "{label} {agent}"
+                    );
+                }
+                let children = store.spawn_child_sessions("d-named").await.unwrap();
+                let expected: Vec<Value> = store
+                    .list("session:")
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .filter(|s| {
+                        s["parent_session_id"] == "d-named"
+                            && matches!(s["status"].as_str(), Some("active" | "archived"))
+                    })
+                    .collect();
+                assert_eq!(children, expected, "{label}");
+            }
+        };
+        check("first read").await;
+        assert_eq!(store.live_session_count().await.unwrap(), 11);
+        assert_eq!(
+            store
+                .reusable_draft_session("shared_default")
+                .await
+                .unwrap()
+                .unwrap()["id"],
+            "b-draft-new"
+        );
+        check("from stored facts").await;
+        // Another process changes records: the stored facts are stale and read again.
+        other
+            .put(
+                "session:b-draft-new",
+                &session("b-draft-new", json!({"auto_naming":{"stage":"done"}})),
+            )
+            .await
+            .unwrap();
+        other
+            .lifecycle_session("g-child", &lifecycle("archive-g", 0), false)
+            .await
+            .unwrap();
+        delete_through_lifecycle(&other, "l-bare").await;
+        check("after another process wrote").await;
+        assert_eq!(store.live_session_count().await.unwrap(), 10);
+        assert_eq!(
+            store
+                .reusable_draft_session("shared_default")
+                .await
+                .unwrap()
+                .unwrap()["id"],
+            "c-draft-tie"
+        );
+        // A message makes the draft used.
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_chat(&mut tx, "c-draft-tie", "r1", "user", &json!("hi"))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        check("after a message").await;
+    }
+
+    /// B6: deletion decrypts each document once and then decides ownership from the recorded
+    /// plain ids; a later deletion still removes a document recorded during an earlier one,
+    /// and a document rewritten since is decrypted again.
+    #[tokio::test]
+    async fn deletion_uses_recorded_owners_and_rereads_changed_documents() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        for sid in ["x", "y", "z"] {
+            store
+                .put(&format!("session:{sid}"), &json!({"id":sid}))
+                .await
+                .unwrap();
+        }
+        store
+            .put(
+                "reply_attachments:rx",
+                &json!({"session_id":"x","files":[]}),
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                "reply_attachments:rz",
+                &json!({"session_id":"z","files":[]}),
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                "reply_attachments:ry",
+                &json!({"result":{"session":{"id":"y"}}}),
+            )
+            .await
+            .unwrap();
+        store
+            .put("reply_attachments:rn", &json!({"session_id":"nobody"}))
+            .await
+            .unwrap();
+        delete_through_lifecycle(&store, "x").await;
+        assert!(store.get("reply_attachments:rx").await.unwrap().is_none());
+        let recorded: i64 = sqlx::query_scalar("SELECT count(*) FROM doc_owner WHERE key IN ('reply_attachments:rz','reply_attachments:ry','reply_attachments:rn')")
+            .fetch_one(&store.pool).await.unwrap();
+        let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM doc_owner")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(recorded, 3, "{keys:?}");
+        // Rewritten since the first deletion: the recorded owners are dropped and re-read.
+        store
+            .put(
+                "reply_attachments:rz",
+                &json!({"session_id":"y","files":[]}),
+            )
+            .await
+            .unwrap();
+        let recorded: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM doc_owner WHERE key='reply_attachments:rz'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(recorded, 0);
+        delete_through_lifecycle(&store, "y").await;
+        assert!(store.get("reply_attachments:ry").await.unwrap().is_none());
+        assert!(store.get("reply_attachments:rz").await.unwrap().is_none());
+        assert!(store.get("reply_attachments:rn").await.unwrap().is_some());
+        assert_eq!(store.get("session:z").await.unwrap().unwrap()["id"], "z");
+    }
+
+    /// B6: the purge removes only what deleted sessions left, and only after the retention
+    /// period; active, archived and recently deleted sessions keep every record.
+    #[tokio::test]
+    async fn purge_removes_only_old_deleted_sessions_leftovers() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        for sid in ["gone", "archived", "active"] {
+            store
+                .put(&format!("session:{sid}"), &json!({"id":sid,"title":"t"}))
+                .await
+                .unwrap();
+            store
+                .put(&format!("session_main_notes:{sid}"), &json!({"notes":"n"}))
+                .await
+                .unwrap();
+            store
+                .put(
+                    &format!("message_meta:m-{sid}"),
+                    &json!({"author_id":"admin"}),
+                )
+                .await
+                .unwrap();
+        }
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_chat(&mut tx, "gone", "m-gone", "user", &json!("hi"))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        store
+            .lifecycle_session("archived", &lifecycle("archive-a", 0), false)
+            .await
+            .unwrap();
+        delete_through_lifecycle(&store, "gone").await;
+        // The deletion now also removes the deleted messages' metadata.
+        assert!(store.get("message_meta:m-gone").await.unwrap().is_none());
+        let count_before = store.live_session_count().await.unwrap();
+        // Within the retention period nothing goes.
+        assert_eq!(store.purge_deleted_sessions(1, 20).await.unwrap(), 0);
+        assert_eq!(
+            store.get("session:gone").await.unwrap().unwrap()["status"],
+            "deleted"
+        );
+        assert!(store
+            .get("session_main_notes:gone")
+            .await
+            .unwrap()
+            .is_some());
+        // After it (0 days in the test), only the deleted session's leftovers go.
+        assert_eq!(store.purge_deleted_sessions(0, 20).await.unwrap(), 1);
+        assert!(store.get("session:gone").await.unwrap().is_none());
+        assert!(store
+            .get("session_main_notes:gone")
+            .await
+            .unwrap()
+            .is_none());
+        let receipts: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM docs WHERE key>='receipt:session:delete:gone:' AND key<'receipt:session:delete:gone;'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(receipts, 0);
+        for sid in ["archived", "active"] {
+            assert!(store
+                .get(&format!("session:{sid}"))
+                .await
+                .unwrap()
+                .is_some());
+            assert!(store
+                .get(&format!("session_main_notes:{sid}"))
+                .await
+                .unwrap()
+                .is_some());
+            assert!(store
+                .get(&format!("message_meta:m-{sid}"))
+                .await
+                .unwrap()
+                .is_some());
+        }
+        assert_eq!(store.live_session_count().await.unwrap(), count_before);
+        assert_eq!(store.purge_deleted_sessions(0, 20).await.unwrap(), 0);
+        // A repeated delete of the purged session answers "not found".
+        assert!(matches!(
+            store
+                .delete_session("gone", &lifecycle("delete-gone", 1))
+                .await
+                .unwrap(),
+            SessionPatchOutcome::NotFound
+        ));
+    }
+
+    /// B6: a kept decrypted session record is never used after another process changed it:
+    /// the archive and a participation change made by a second store are noticed by the next
+    /// read, by the active-session check inside a write transaction and by the run's
+    /// participation check, exactly as without the copy.
+    #[tokio::test]
+    async fn kept_session_records_notice_another_process_archive_and_share() {
+        let root = tempfile::tempdir().unwrap();
+        let loop_store = Store::open(root.path()).await.unwrap();
+        let api_store = Store::open(root.path()).await.unwrap();
+        loop_store
+            .put(
+                "session:s",
+                &json!({"id":"s","participation":{"active":true,"revision":1,"generation":1}}),
+            )
+            .await
+            .unwrap();
+        // Read twice: the second read is answered from the kept copy.
+        for _ in 0..2 {
+            assert_eq!(
+                loop_store.get("session:s").await.unwrap().unwrap()["status"],
+                "active"
+            );
+        }
+        let run = json!({"id":"r","session_id":"s","participation_generation":1});
+        let mut tx = loop_store.pool.begin().await.unwrap();
+        webagent_chat::shared::require_participation_in(&loop_store, &mut tx, &run)
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+        // The other process changes participation (a share takes the agent out).
+        api_store
+            .put(
+                "session:s",
+                &json!({"id":"s","participation":{"active":false,"revision":2,"generation":2}}),
+            )
+            .await
+            .unwrap();
+        let mut tx = loop_store.pool.begin().await.unwrap();
+        assert!(
+            webagent_chat::shared::require_participation_in(&loop_store, &mut tx, &run)
+                .await
+                .is_err()
+        );
+        tx.rollback().await.unwrap();
+        // Then archives it.
+        api_store
+            .lifecycle_session("s", &lifecycle("archive", 0), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            loop_store.get("session:s").await.unwrap().unwrap()["status"],
+            "archived"
+        );
+        let mut tx = loop_store.pool.begin().await.unwrap();
+        assert!(loop_store
+            .require_active_session(&mut tx, "s")
+            .await
+            .is_err());
+        tx.rollback().await.unwrap();
+        // A write inside a transaction that rolls back is never kept.
+        let mut tx = loop_store.pool.begin().await.unwrap();
+        loop_store
+            .write_document(
+                &mut tx,
+                "session:s",
+                &json!({"id":"s","b6_probe":"rolled back"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            loop_store
+                .session_record_in(&mut tx, "s")
+                .await
+                .unwrap()
+                .unwrap()["b6_probe"],
+            "rolled back"
+        );
+        tx.rollback().await.unwrap();
+        assert_ne!(
+            loop_store.get("session:s").await.unwrap().unwrap()["b6_probe"],
+            "rolled back"
+        );
     }
 
     /// Verify statistics pagination omits private context while retaining unknown usage accounting.

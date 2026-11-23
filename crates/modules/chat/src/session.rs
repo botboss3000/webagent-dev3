@@ -163,14 +163,9 @@ pub async fn touch_session_activity<C: RecordCodec>(
     sid: &str,
 ) -> Result<()> {
     let key = format!("session:{sid}");
-    let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-        .bind(&key)
-        .fetch_optional(&mut **tx)
-        .await?
-    else {
+    let Some(mut session) = codec.session_record_in(&mut **tx, sid).await? else {
         return Ok(());
     };
-    let mut session = codec.unseal(&raw)?;
     let timestamp: i64 =
         sqlx::query_scalar("SELECT COALESCE(MAX(created_at),0) FROM chat WHERE session_id=?")
             .bind(sid)
@@ -186,7 +181,9 @@ pub async fn touch_session_activity<C: RecordCodec>(
     Ok(())
 }
 
-/// Check under the caller's write transaction, never a cached snapshot.
+/// Check under the caller's write transaction, never a snapshot older than it: the record
+/// (or a copy proven current by its write counter read in this transaction) is read after the
+/// write lock is taken.
 pub async fn require_active_session<C: RecordCodec>(
     codec: &C,
     tx: &mut Transaction<'_, Sqlite>,
@@ -196,12 +193,8 @@ pub async fn require_active_session<C: RecordCodec>(
         .bind(format!("session:{sid}"))
         .execute(&mut **tx)
         .await?;
-    if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-        .bind(format!("session:{sid}"))
-        .fetch_optional(&mut **tx)
-        .await?
-    {
-        if codec.unseal(&raw)?["status"] != "active" {
+    if let Some(session) = codec.session_record_in(&mut **tx, sid).await? {
+        if session["status"] != "active" {
             return Err(ArchivedSession.into());
         }
     }
@@ -220,12 +213,16 @@ pub async fn prepare_session_document<C: RecordCodec>(
     let object = next
         .as_object_mut()
         .ok_or_else(|| anyhow!("Invalid session document"))?;
-    let previous = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-        .bind(key)
-        .fetch_optional(&mut **tx)
-        .await?;
-    if let Some(raw) = previous {
-        let previous = codec.unseal(&raw)?;
+    let previous = match key.strip_prefix("session:") {
+        Some(sid) => codec.session_record_in(&mut **tx, sid).await?,
+        None => sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+            .bind(key)
+            .fetch_optional(&mut **tx)
+            .await?
+            .map(|raw| codec.unseal(&raw))
+            .transpose()?,
+    };
+    if let Some(previous) = previous {
         if previous["status"] == "deleted" {
             return Err(ArchivedSession.into());
         }

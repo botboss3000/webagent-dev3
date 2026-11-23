@@ -17,12 +17,11 @@ impl StoreCore {
         pending_id: Option<&str>,
         generation: Option<&str>,
     ) -> Result<()> {
-        let session_raw = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-            .bind(format!("session:{sid}"))
-            .fetch_optional(&mut **tx)
+        // In `tx`: a kept copy is used only when the counter read here proves it current.
+        let session = self
+            .session_record_in(&mut **tx, sid)
             .await?
             .ok_or_else(|| anyhow!("Session unavailable"))?;
-        let session = self.unseal(&session_raw)?;
         if session["id"] != sid || session["status"] == "archived" {
             return Err(anyhow!("Session unavailable"));
         }

@@ -216,7 +216,7 @@ async fn principals_read_owner_and_both_epochs_or_nothing() {
 
 /// Statements that would write a revision outside its triggers, or remove the triggers or the
 /// tables they watch. Only `revisions.rs` may contain them outside tests.
-const FORBIDDEN: [&str; 24] = [
+const FORBIDDEN: [&str; 39] = [
     "INTO session_header",
     "UPDATE session_header",
     "DELETE FROM session_header",
@@ -241,6 +241,21 @@ const FORBIDDEN: [&str; 24] = [
     "DROP TABLE agents",
     "DROP TABLE agent_memberships",
     "DROP TABLE agent_connections",
+    "INTO session_index",
+    "UPDATE session_index",
+    "DELETE FROM session_index",
+    "DROP TABLE session_index",
+    "INTO run_revisions",
+    "UPDATE run_revisions",
+    "DELETE FROM run_revisions",
+    "DROP TABLE run_revisions",
+    "DROP TABLE recovery_input",
+    "DROP TABLE IF EXISTS recovery_input",
+    "DROP TABLE IF EXISTS docs",
+    "INTO doc_owner",
+    "UPDATE doc_owner",
+    "DELETE FROM doc_owner",
+    "DROP TABLE doc_owner",
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -436,4 +451,162 @@ async fn shared_participants_read_as_values() {
     run(&app, "CREATE TABLE shared_participants(session_id TEXT, user_id TEXT); INSERT INTO shared_participants VALUES('s','u')").await;
     assert_eq!(shared_participant(&app, "s", "u").await, Some(true));
     assert_eq!(shared_participant(&app, "s", "other").await, Some(false));
+}
+
+/// B6: the run counter moves with every write of the run document and of its split input
+/// rows, from any connection, and not for lock statements or rolled-back writes.
+#[tokio::test]
+async fn the_run_counter_covers_the_document_and_its_input_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let user = pool(root.path(), "user.db").await;
+    install_user(&user).await.unwrap();
+    let other = pool(root.path(), "user.db").await;
+    let counter = |pool: SqlitePool| async move { document_counter(&pool, "run:r").await };
+    assert_eq!(counter(user.clone()).await, None);
+    run(&user, "INSERT INTO docs VALUES('run:r',x'01')").await;
+    let mut last = counter(user.clone()).await.unwrap();
+    for sql in [
+        "UPDATE docs SET value=x'02' WHERE key='run:r'",
+        "INSERT INTO recovery_input VALUES('r',0,x'01')",
+        "UPDATE recovery_input SET item=x'02' WHERE run_id='r'",
+        "DELETE FROM recovery_input WHERE run_id='r'",
+        "INSERT INTO docs VALUES('run:r',x'03') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    ] {
+        run(&other, sql).await;
+        let now = counter(user.clone()).await.unwrap();
+        assert!(now > last, "{sql}");
+        last = now;
+    }
+    // Lock statements and rolled-back writes move nothing; other keys move nothing.
+    run(&other, "UPDATE docs SET value=value WHERE key='run:r'").await;
+    run(
+        &other,
+        "BEGIN; UPDATE docs SET value=x'09' WHERE key='run:r'; ROLLBACK;",
+    )
+    .await;
+    run(&other, "INSERT INTO docs VALUES('run_view:r',x'01')").await;
+    assert_eq!(counter(user.clone()).await, Some(last));
+    // A delete moves it too, and the row stays, so the counter never goes back.
+    run(&other, "DELETE FROM docs WHERE key='run:r'").await;
+    assert!(counter(user.clone()).await.unwrap() > last);
+    assert_eq!(document_counter(&user, "other:r").await, None);
+    assert!(document_counter(&user, "session_mode:s").await.is_none());
+    run(&user, "INSERT INTO docs VALUES('session_mode:s',x'01')").await;
+    assert!(document_counter(&user, "session_mode:s").await.is_some());
+}
+
+/// B6: recorded document owners exist only while the document is unchanged.
+#[tokio::test]
+async fn document_owners_drop_with_any_write_of_the_document() {
+    let root = tempfile::tempdir().unwrap();
+    let user = pool(root.path(), "user.db").await;
+    install_user(&user).await.unwrap();
+    run(&user, "INSERT INTO docs VALUES('a',x'01'),('b',x'01')").await;
+    let mut connection = user.acquire().await.unwrap();
+    record_document_owners(&mut connection, "a", "{}")
+        .await
+        .unwrap();
+    record_document_owners(&mut connection, "b", "{}")
+        .await
+        .unwrap();
+    let owners = document_owners(&mut connection).await.unwrap();
+    assert_eq!(
+        owners,
+        vec![
+            ("a".into(), Some("{}".into())),
+            ("b".into(), Some("{}".into()))
+        ]
+    );
+    // A lock statement keeps them; a value change, a rename and a delete drop them.
+    run(&user, "UPDATE docs SET value=value WHERE key='a'").await;
+    assert!(document_owners(&mut connection).await.unwrap()[0]
+        .1
+        .is_some());
+    run(&user, "UPDATE docs SET value=x'02' WHERE key='a'").await;
+    assert_eq!(document_owners(&mut connection).await.unwrap()[0].1, None);
+    run(&user, "UPDATE docs SET key='c' WHERE key='b'").await;
+    let owners = document_owners(&mut connection).await.unwrap();
+    assert!(
+        owners.iter().all(|(_, owners)| owners.is_none()),
+        "{owners:?}"
+    );
+    record_document_owners(&mut connection, "c", "{}")
+        .await
+        .unwrap();
+    run(
+        &user,
+        "DELETE FROM docs WHERE key='c'; INSERT INTO docs VALUES('c',x'05')",
+    )
+    .await;
+    assert!(document_owners(&mut connection)
+        .await
+        .unwrap()
+        .iter()
+        .all(|(_, o)| o.is_none()));
+}
+
+/// B6: session facts are decrypted once per record counter; a write from another
+/// connection, a deletion or a missing counter reads that record again, and the time a
+/// record was first seen deleted is kept.
+#[tokio::test]
+async fn session_facts_decrypt_only_changed_records() {
+    let root = tempfile::tempdir().unwrap();
+    let user = pool(root.path(), "user.db").await;
+    install_user(&user).await.unwrap();
+    let other = pool(root.path(), "user.db").await;
+    let decrypts = std::sync::atomic::AtomicUsize::new(0);
+    let unseal = |raw: &[u8]| {
+        decrypts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(serde_json::from_slice::<serde_json::Value>(raw)?)
+    };
+    let write = |id: &str, value: &str| {
+        format!("INSERT INTO docs VALUES('session:{id}',CAST('{value}' AS BLOB)) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    };
+    run(&user, &write("a", r#"{"status":"active","agent_id":"x","created_at":5,"auto_naming":{"stage":"awaiting_message"}}"#)).await;
+    run(
+        &user,
+        &write(
+            "b",
+            r#"{"status":"archived","parent_session_id":"a","main_chat":true}"#,
+        ),
+    )
+    .await;
+    run(&user, "INSERT INTO docs VALUES('session_mode:c',x'01')").await;
+    let first = session_facts(&user, unseal, 1000).await.unwrap();
+    assert_eq!(first.len(), 2);
+    assert_eq!(first[0].id, "a");
+    assert!(first[0].has(FLAG_AWAITING_MESSAGE) && !first[0].has(FLAG_CHILD));
+    assert_eq!(first[1].parent_id.as_deref(), Some("a"));
+    assert!(first[1].has(FLAG_CHILD) && first[1].has(FLAG_MAIN_CHAT));
+    assert_eq!(decrypts.load(std::sync::atomic::Ordering::Relaxed), 2);
+    assert_eq!(session_facts(&user, unseal, 1000).await.unwrap(), first);
+    assert_eq!(decrypts.load(std::sync::atomic::Ordering::Relaxed), 2);
+    run(&other, &write("b", r#"{"status":"deleted"}"#)).await;
+    let second = session_facts(&user, unseal, 2000).await.unwrap();
+    assert_eq!(decrypts.load(std::sync::atomic::Ordering::Relaxed), 3);
+    assert_eq!(second[1].deleted_since, Some(2000));
+    // Rewritten while deleted: the first time seen deleted is kept.
+    run(&other, &write("b", r#"{"status":"deleted","title":""}"#)).await;
+    let third = session_facts(&user, unseal, 3000).await.unwrap();
+    assert_eq!(third[1].deleted_since, Some(2000));
+    // A deleted record's own time wins over the first read.
+    run(
+        &other,
+        &write("d", r#"{"status":"deleted","deleted_at":7}"#),
+    )
+    .await;
+    let fourth = session_facts(&user, unseal, 4000).await.unwrap();
+    assert_eq!(fourth[2].deleted_since, Some(7));
+    // A missing counter row is never answered from stored facts.
+    let mut connection = user.acquire().await.unwrap();
+    sqlx::query("DELETE FROM session_revisions WHERE session_id='a'")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    let before = decrypts.load(std::sync::atomic::Ordering::Relaxed);
+    session_facts(&user, unseal, 5000).await.unwrap();
+    assert_eq!(
+        decrypts.load(std::sync::atomic::Ordering::Relaxed),
+        before + 1
+    );
 }

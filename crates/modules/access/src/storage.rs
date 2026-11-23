@@ -20,6 +20,23 @@ pub trait RecordCodec: Sync {
     fn unseal_agent_for(&self, _agent: &str, value: &[u8]) -> Result<Value> {
         self.unseal_agent(value)
     }
+    /// The session record `session:{sid}` as `connection` sees it (in a transaction: that
+    /// transaction's snapshot, its own writes included). A storage handle that keeps decrypted
+    /// session records answers from a copy only when the record's write counter, read on the
+    /// same connection, equals the copy's (stream B6); this default reads and decrypts.
+    fn session_record_in<'a>(
+        &'a self,
+        connection: &'a mut sqlx::SqliteConnection,
+        sid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<Value>>> + Send + 'a {
+        async move {
+            let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+                .bind(format!("session:{sid}"))
+                .fetch_optional(connection)
+                .await?;
+            raw.map(|raw| self.unseal(&raw)).transpose()
+        }
+    }
 }
 pub(crate) struct AccountsCodec<'a, C: RecordCodec>(&'a C);
 impl<C: RecordCodec> webagent_accounts::RecordCodec for AccountsCodec<'_, C> {

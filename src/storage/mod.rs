@@ -3943,6 +3943,13 @@ impl webagent_access::storage::RecordCodec for Store {
     fn unseal_agent_for(&self, agent: &str, value: &[u8]) -> Result<Value> {
         self.core.unseal_agent_for(agent, value)
     }
+    fn session_record_in<'a>(
+        &'a self,
+        connection: &'a mut sqlx::SqliteConnection,
+        sid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<Value>>> + Send + 'a {
+        StoreCore::session_record_in(self, connection, sid)
+    }
 }
 impl Store {
     pub(crate) fn access_repository(&self) -> webagent_access::storage::Repository<'_, Self> {

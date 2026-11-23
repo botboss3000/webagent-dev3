@@ -58,13 +58,11 @@ impl Store {
             if exists != 0 {
                 bail!("Destination already exists");
             }
-            let sessions = self.list("session:").await?;
+            let sessions = self.live_session_count().await?;
             let access = self
                 .live_access(self.current_user_id(), entry["agent_id"].as_str().unwrap())
                 .await?;
-            if sessions.iter().filter(|s| s["status"] != "deleted").count()
-                >= access.max_sessions() as usize
-            {
+            if sessions >= access.max_sessions() as usize {
                 bail!("Session limit reached");
             }
 

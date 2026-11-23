@@ -1,6 +1,95 @@
 //! Disposable caches. Runtime documents remain authoritative.
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Largest decoded record kept by [`CountedRecords`], in serialized bytes.
+const COUNTED_RECORD_MAX: usize = 1024 * 1024;
+/// Bytes of decoded records one account keeps.
+const COUNTED_RECORDS_BUDGET: usize = 4 * 1024 * 1024;
+
+/// Decoded documents of one account database that have a write counter (session records,
+/// session modes and ability states, run records with their split input), each tagged with
+/// the counter it was read at (stream B6, `webagent_storage::revisions::counted`). An entry is used only when
+/// the reader's own fresh read of that counter, in the reader's own statement or transaction,
+/// equals the tag: every write of the record moves the counter inside the writing transaction
+/// (`revisions.rs` triggers), so an equal counter means the same committed record. Entries
+/// are added only from committed reads; nothing is reused by time. Lives inside the account's
+/// [`ContextCache`], so it goes with the account's pool (a replaced database file is opened
+/// as a new plane with an empty cache).
+#[derive(Default)]
+pub struct CountedRecords {
+    entries: HashMap<String, CountedRecord>,
+    weight: usize,
+    clock: u64,
+}
+
+struct CountedRecord {
+    counter: i64,
+    value: Arc<Value>,
+    weight: usize,
+    stamp: u64,
+}
+
+impl CountedRecords {
+    /// The document `key` when it was cached at exactly `counter`.
+    pub fn get(&mut self, key: &str, counter: i64) -> Option<Arc<Value>> {
+        let entry = self.entries.get_mut(key)?;
+        if entry.counter != counter {
+            return None;
+        }
+        self.clock = self.clock.wrapping_add(1);
+        entry.stamp = self.clock;
+        Some(entry.value.clone())
+    }
+
+    /// Keep `value`, read in one committed snapshot together with `counter`. An entry read at
+    /// a higher counter is kept instead (both are exact; the newer one is more useful).
+    pub fn insert(&mut self, key: &str, counter: i64, value: Arc<Value>) {
+        if self
+            .entries
+            .get(key)
+            .is_some_and(|entry| entry.counter > counter)
+        {
+            return;
+        }
+        self.remove(key);
+        let weight = serde_json::to_vec(&*value)
+            .map(|bytes| bytes.len().saturating_add(128))
+            .unwrap_or(usize::MAX);
+        if weight > COUNTED_RECORD_MAX {
+            return;
+        }
+        while self.weight.saturating_add(weight) > COUNTED_RECORDS_BUDGET {
+            let Some(victim) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.stamp)
+                .map(|(key, _)| key.clone())
+            else {
+                return;
+            };
+            self.remove(&victim);
+        }
+        self.clock = self.clock.wrapping_add(1);
+        self.weight += weight;
+        self.entries.insert(
+            key.to_owned(),
+            CountedRecord {
+                counter,
+                value,
+                weight,
+                stamp: self.clock,
+            },
+        );
+    }
+
+    pub fn remove(&mut self, key: &str) {
+        if let Some(entry) = self.entries.remove(key) {
+            self.weight -= entry.weight;
+        }
+    }
+}
 /// Disposable, bounded assembled context. SQLite checkpoints and interactions
 /// remain authoritative; this only avoids decrypting old interaction rows.
 pub struct ContextCache {
@@ -8,6 +97,8 @@ pub struct ContextCache {
     budget: usize,
     weight: usize,
     clock: u64,
+    /// The account's counter-checked decoded documents (stream B6).
+    pub counted_records: CountedRecords,
 }
 
 struct ContextEntry {
@@ -26,6 +117,7 @@ impl ContextCache {
             budget,
             weight: 0,
             clock: 0,
+            counted_records: CountedRecords::default(),
         }
     }
 

@@ -79,11 +79,11 @@ pub async fn require_participation_in<C: RecordCodec>(
     let sid = run["session_id"]
         .as_str()
         .ok_or_else(|| anyhow!("Run session missing"))?;
-    let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-        .bind(format!("session:{sid}"))
-        .fetch_one(&mut **tx)
-        .await?;
-    let current = participation_state(&codec.unseal(&raw)?);
+    let session = codec
+        .session_record_in(&mut **tx, sid)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    let current = participation_state(&session);
     if current["active"] != true
         || current["generation"].as_u64().unwrap_or(0)
             != run["participation_generation"].as_u64().unwrap_or(0)

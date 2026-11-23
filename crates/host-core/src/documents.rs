@@ -6,7 +6,7 @@
 use crate::{now, StoreCore};
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
-use webagent_storage::{docs, recovery, routing};
+use webagent_storage::{docs, recovery, revisions, routing};
 
 impl webagent_storage::ScopedCodec for StoreCore {
     fn seal(&self, value: &Value) -> Result<Vec<u8>> {
@@ -29,6 +29,13 @@ impl webagent_chat::RecordCodec for StoreCore {
     }
     fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> {
         StoreCore::encode_user_record(self, value)
+    }
+    fn session_record_in<'a>(
+        &'a self,
+        connection: &'a mut sqlx::SqliteConnection,
+        sid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<Value>>> + Send + 'a {
+        StoreCore::session_record_in(self, connection, sid)
     }
 }
 
@@ -54,6 +61,13 @@ impl webagent_access::storage::RecordCodec for StoreCore {
     }
     fn unseal_agent_for(&self, agent: &str, value: &[u8]) -> Result<Value> {
         StoreCore::unseal_agent_for(self, agent, value)
+    }
+    fn session_record_in<'a>(
+        &'a self,
+        connection: &'a mut sqlx::SqliteConnection,
+        sid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<Value>>> + Send + 'a {
+        StoreCore::session_record_in(self, connection, sid)
     }
 }
 
@@ -126,9 +140,14 @@ impl StoreCore {
     }
 
     /// Read and authenticate a namespace-selected document, reconstructing split
-    /// recovery input in one snapshot. Never cached: the loop process shares them.
+    /// recovery input in one snapshot. Only documents with a write counter (session records,
+    /// session modes and ability states, run records with their input) are reused, and only
+    /// while that counter proves them unchanged (`counted_document`); the loop process shares them.
     pub async fn get(&self, key: &str) -> Result<Option<Value>> {
         self.validate_agent_doc_key(key)?;
+        if revisions::counted(key).is_some() {
+            return self.counted_document(key).await;
+        }
         let mut tx = self.pool_for(key).begin().await?;
         let result = match docs::read(&mut tx, key).await? {
             Some(raw) => Some(self.decode_document(&mut tx, &raw).await?),
@@ -136,6 +155,81 @@ impl StoreCore {
         };
         tx.commit().await?;
         Ok(result)
+    }
+
+    /// The session record `session:{sid}` (see [`Self::get`]).
+    pub async fn session_record(&self, sid: &str) -> Result<Option<Value>> {
+        self.counted_document(&format!("session:{sid}")).await
+    }
+
+    /// A counted document (`revisions::counted`). One indexed read of its write counter (one
+    /// statement, so one committed snapshot) answers from this process's copy when the copy
+    /// was read at that counter; otherwise the counter and the document are read in one read
+    /// transaction, decoded, and kept under that counter. Every write of the document moves
+    /// the counter inside the writing transaction (`webagent_storage::revisions` triggers), so
+    /// an equal counter is the same committed document; a missing or unreadable counter reads
+    /// the document again and keeps nothing.
+    async fn counted_document(&self, key: &str) -> Result<Option<Value>> {
+        let pool = self.pool_for(key);
+        if let Some(counter) = revisions::document_counter(pool, key).await {
+            if let Some(value) = self.kept_document(key, counter) {
+                return Ok(Some((*value).clone()));
+            }
+        }
+        let mut tx = pool.begin().await?;
+        let counter = revisions::document_counter(&mut *tx, key).await;
+        let result = match docs::read(&mut tx, key).await? {
+            Some(raw) => Some(self.decode_document(&mut tx, &raw).await?),
+            None => None,
+        };
+        tx.commit().await?;
+        if let (Some(counter), Some(value)) = (counter, &result) {
+            self.keep_document(key, counter, value.clone());
+        }
+        Ok(result)
+    }
+
+    /// The session record read inside the caller's transaction `tx`, so it answers for that
+    /// transaction's snapshot exactly as `SELECT value FROM docs` there would (including the
+    /// transaction's own uncommitted writes, which move the counter away from any kept copy).
+    /// Uses a kept copy only when the counter read in `tx` equals its tag; never keeps what it
+    /// reads, since `tx` may still roll back.
+    pub async fn session_record_in(
+        &self,
+        connection: &mut sqlx::SqliteConnection,
+        sid: &str,
+    ) -> Result<Option<Value>> {
+        let key = format!("session:{sid}");
+        if let Some(counter) = revisions::document_counter(&mut *connection, &key).await {
+            if let Some(value) = self.kept_document(&key, counter) {
+                return Ok(Some((*value).clone()));
+            }
+        }
+        match docs::read(connection, &key).await? {
+            Some(raw) => Ok(Some(self.unseal(&raw)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn kept_document(&self, key: &str, counter: i64) -> Option<std::sync::Arc<Value>> {
+        self.context_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .counted_records
+            .get(&self.context_cache_key(key), counter)
+    }
+
+    /// Keep a document read in one committed snapshot together with `counter`.
+    fn keep_document(&self, key: &str, counter: i64, value: Value) {
+        self.context_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .counted_records
+            .insert(
+                &self.context_cache_key(key),
+                counter,
+                std::sync::Arc::new(value),
+            );
     }
 
     /// Write a non-run document through its lifecycle guards, then invalidate the

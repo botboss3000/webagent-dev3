@@ -332,15 +332,7 @@ pub(crate) async fn prepare_session_id(
     if !access.admitted() {
         return Err(ApiError(StatusCode::FORBIDDEN, "Agent unavailable".into()));
     }
-    if app
-        .store
-        .list("session:")
-        .await?
-        .iter()
-        .filter(|s| s["status"] != "deleted")
-        .count()
-        >= access.max_sessions() as usize
-    {
+    if app.store.live_session_count().await? >= access.max_sessions() as usize {
         return Err(conflict("Session limit reached"));
     }
     let agent_store = app
@@ -746,16 +738,7 @@ pub(crate) async fn archive_session_api(
 }
 /// Sub agent sessions of `sid` that are not deleted.
 async fn spawn_children(app: &App, sid: &str) -> Result<Vec<Value>, ApiError> {
-    Ok(app
-        .store
-        .list("session:")
-        .await?
-        .into_iter()
-        .filter(|s| {
-            s["parent_session_id"] == sid
-                && matches!(s["status"].as_str(), Some("active" | "archived"))
-        })
-        .collect())
+    Ok(app.store.spawn_child_sessions(sid).await?)
 }
 /// A short request ID for the cascade step on `child` caused by request `request`.
 fn cascade_request(request: &str, child: &str) -> String {

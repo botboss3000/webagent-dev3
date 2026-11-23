@@ -7,5 +7,9 @@
   "user_database_pools": {
     "_instructions": "max_connected: how many account databases may hold open connections at once in each process (API and loop; at least 8). Each connection is one thread and the containers allow 1,024 tasks, so a pass over every account must not keep one open per account. Past the bound the idle databases used longest ago are closed (reopened on their next use). Read at process start.",
     "max_connected": 64
+  },
+  "deleted_sessions": {
+    "_instructions": "retention_days: how long the records a permanently deleted chat leaves behind (its deletion marker, delete receipts and Main Notes) are kept before they are purged (at least 1). A deleted chat can never be opened or restored; the wait only keeps a repeated delete request answering as before. The purge runs when the same account deletes another chat. Read on each deletion.",
+    "retention_days": 30
   }
 }
