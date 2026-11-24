@@ -666,7 +666,9 @@ change the repository hold the checkout lock; reads do not. A timeout or crash o
 action is reported as uncertain. So nothing in the app's containers needs write access to
 `.git`: `buildctl checkout-git-owner` (operator) then makes `.git` writable by the operator
 account only (files another account owned are replaced by operator-owned copies, group set to the
-operator's own, group write, setgid and access lists removed; reading stays open).
+operator's own, group write, setgid and access lists removed; reading stays open: Git's
+`core.sharedRepository` is set to `0644` so files the operator's Git writes later stay readable,
+and files already written privately become readable).
 
 Every change to the checkout outside a release commit is recorded in
 `build-jobs/coordination/authorship.jsonl`, one JSON line per path (`at`, `kind`, `path`,

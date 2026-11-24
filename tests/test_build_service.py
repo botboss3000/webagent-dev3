@@ -2965,8 +2965,10 @@ class CheckoutGitTests(unittest.TestCase):
     def test_owner_action_removes_group_write_setgid_and_needs_the_operator(self):
         import pwd,os,threading,stat as st
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder);git=root/".git";(git/"hooks").mkdir(parents=True);(git/"config").write_text("[core]\n")
+            root=Path(folder);git=root/".git";(git/"hooks").mkdir(parents=True);(git/"objects"/"ab").mkdir(parents=True)
+            import subprocess;subprocess.run(["git","init","-q",str(root)],check=True)
             os.chmod(git/"hooks",0o2775);os.chmod(git/"config",0o664)
+            (git/"objects"/"ab"/"cd").write_text("x");os.chmod(git/"objects"/"ab"/"cd",0o400);os.chmod(git/"objects"/"ab",0o700)
             broker=types.SimpleNamespace(runner=types.SimpleNamespace(git_lock=threading.Lock()))
             with patch.object(fixtures.host,"SOURCE",root),patch.dict(fixtures.host.CONFIG,{"source_owner":pwd.getpwuid(os.getuid()).pw_name}):
                 with self.assertRaises(PermissionError):fixtures.host.Broker.checkout_git_owner(broker,{"action":"checkout_git_owner"},{"user_id":"admin","administrator":True})
@@ -2976,7 +2978,11 @@ class CheckoutGitTests(unittest.TestCase):
                 mode=path.stat().st_mode
                 self.assertFalse(mode&(st.S_IWGRP|st.S_IWOTH|st.S_ISGID),path)
                 self.assertTrue(mode&st.S_IROTH,path)
-            self.assertEqual((git/"config").read_text(),"[core]\n")
+            # Stream D3 fix: files the operator's Git writes later stay readable, old ones too.
+            self.assertTrue((git/"objects"/"ab"/"cd").stat().st_mode&st.S_IROTH)
+            self.assertTrue((git/"objects"/"ab").stat().st_mode&st.S_IXOTH)
+            shared=subprocess.run(["git","-C",str(root),"config","core.sharedRepository"],capture_output=True,text=True).stdout.strip()
+            self.assertEqual(shared,"0644")
 
 
 

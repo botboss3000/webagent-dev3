@@ -4091,6 +4091,20 @@ class Broker:
                     os.chmod(path, mode)
                     changed["chmod"] += 1
             acl = subprocess.run(["setfacl", "-R", "-b", str(git_dir)], capture_output=True, timeout=120)
+            # Without the shared access lists the operator's Git writes private files (its umask);
+            # reading stays open to every account (the worker's repository watch and agents' Git
+            # history reads), so Git creates them readable and existing ones become readable.
+            subprocess.run(["git", "-C", str(SOURCE), "config", "core.sharedRepository", "0644"],
+                           check=True, capture_output=True, timeout=30)
+            changed["readable"] = 0
+            for path in [git_dir, *git_dir.rglob("*")]:
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode):
+                    continue
+                wanted = stat.S_IROTH | (stat.S_IXOTH if stat.S_ISDIR(info.st_mode) else 0)
+                if stat.S_IMODE(info.st_mode) & wanted != wanted:
+                    os.chmod(path, stat.S_IMODE(info.st_mode) | wanted | (stat.S_IRGRP | (stat.S_IXGRP if stat.S_ISDIR(info.st_mode) else 0)))
+                    changed["readable"] += 1
         changed["acl_removed"] = acl.returncode == 0
         return {"status": "done", **changed}
 
