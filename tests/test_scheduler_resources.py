@@ -250,11 +250,27 @@ class ControlTests(unittest.TestCase):
         self.assertEqual([["systemctl","set-property","--runtime",name,"CPUWeight=20"]for name in
                           ("webagent.slice","webagent-build.slice","webagent-build-development.slice")],[call.args[0]for call in run.call_args_list])
         with patch.object(control.subprocess,"run")as run:
-            c.weigh_build_slices({})
+            c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":20}}})
             self.assertEqual(0,run.call_count)
             c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":50}}})
             self.assertEqual(3,run.call_count)
             with self.assertRaises(ValueError):c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":0}}})
+    def test_build_slices_yield_fully_to_the_app_by_default(self):
+        # Stream D1: with no setting the build slices get CPUWeight=idle (cgroup cpu.idle) on every
+        # ancestor; a number switches back to an ordinary weight; any other text is refused.
+        from unittest.mock import patch
+        c=control.Control({"instance":"development"})
+        names=("webagent.slice","webagent-build.slice","webagent-build-development.slice")
+        with patch.object(control.subprocess,"run")as run:
+            c.weigh_build_slices({})
+        self.assertEqual([["systemctl","set-property","--runtime",name,"CPUWeight=idle"]for name in names],[call.args[0]for call in run.call_args_list])
+        with patch.object(control.subprocess,"run")as run:
+            c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":"idle"}}})
+            self.assertEqual(0,run.call_count)
+            c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":20}}})
+            self.assertEqual([["systemctl","set-property","--runtime",name,"CPUWeight=20"]for name in names],[call.args[0]for call in run.call_args_list])
+            for bad in ("Idle","",None,True,20.5):
+                with self.assertRaises(ValueError,msg=repr(bad)):c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":bad}}})
 
 
 class DeadlineCPUAdmissionTests(unittest.TestCase):

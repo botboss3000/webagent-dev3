@@ -1595,6 +1595,10 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
     self.assertFalse({"/live-checkout","/live-checkout/plugins","/run/v3","/run/v3/gate"}&set(mounts))
    self.assertEqual(["CAP_KILL"],configs["api"]["HostConfig"]["CapAdd"])
    self.assertNotIn("CapAdd",configs["loop"]["HostConfig"])
+   # Stream D1: the loop joins the worker's group (webagent-work) to reach the tool socket, once,
+   # across generations; the API gets it from its launcher instead.
+   self.assertEqual([str(fixtures.host.WORK_GID)],configs["loop"]["HostConfig"]["GroupAdd"])
+   self.assertNotIn("GroupAdd",configs["api"]["HostConfig"])
 
 class AutomaticBrokerIdentityTests(unittest.TestCase):
     from test_scheduler_broker import SchedulerBrokerTests as _base

@@ -57,7 +57,8 @@ def container_capacity(policy):
   if pids is not None and(type(pids)is not int or not 256<=pids<=65536):raise ValueError("Invalid container capacity: "+role+".pids_limit")
   result[role]=value
  builds={**defaults["builds"],**given.get("builds",{})}
- if set(builds)!={"cpu_weight"}or type(builds["cpu_weight"])is not int or not 1<=builds["cpu_weight"]<=10000:raise ValueError("Invalid container capacity: builds")
+ # "idle" (the default) is systemd's CPUWeight=idle: builds take only processor time the app leaves.
+ if set(builds)!={"cpu_weight"}or builds["cpu_weight"]!="idle"and(type(builds["cpu_weight"])is not int or not 1<=builds["cpu_weight"]<=10000):raise ValueError("Invalid container capacity: builds")
  result["builds"]=builds
  return result
 def runc_cpu_weight(shares):

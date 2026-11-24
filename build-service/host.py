@@ -224,6 +224,9 @@ def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIXES)or ability_a
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
 TARGETS = (CONFIG["api_container"], CONFIG["loop_container"])
+# webagent-work: the tool worker's own group, shared with the app only for workspaces and the
+# worker's sockets (stream D1, DATA-5). The API's launcher grants it to the API itself.
+WORK_GID = 1105
 # The browser container runs the API image as another service (`--browser-host`). It is
 # created once by `deploy.py start-browser` and only follows the API image; it is never a
 # release role, so a failure to follow never rolls back the API or loop.
@@ -2708,6 +2711,9 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                     "webagent.release.role":"api"if name==TARGETS[0]else"loop","webagent.release.instance":CONFIG["instance"]}
         if name == TARGETS[1]:
             host = loop_plugin_mounts(host)
+            # The loop reaches the tool worker's socket through the worker's own group
+            # (webagent-work, stream D1), not through the app group the worker no longer has.
+            host["GroupAdd"] = sorted(set(host.get("GroupAdd") or []) | {str(WORK_GID)})
         if capacity_role(name) and (release_root is not None or name == BROWSER):
             # Processor weight, optional cap, memory and tasks from `container_capacity`; the loop
             # scales for its loop processes (multi-loop). Retained-image reconfiguration keeps its

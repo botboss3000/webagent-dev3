@@ -916,13 +916,15 @@ class BuildTests(unittest.TestCase):
             return config.container_capacity({"container_capacity": value})
         merged = check({"api": {"cpu_weight": 800}})
         self.assertEqual((800, 2147483648), (merged["api"]["cpu_weight"], merged["api"]["memory_bytes"]))
-        self.assertEqual(20, merged["builds"]["cpu_weight"])
+        self.assertEqual("idle", merged["builds"]["cpu_weight"])
+        self.assertEqual(20, check({"builds": {"cpu_weight": 20}})["builds"]["cpu_weight"])
         self.assertEqual(1.5, check({"browser": {"cpu_cap": 1.5}})["browser"]["cpu_cap"])
         for bad in ({"api": {"cpu_weight": 0}}, {"api": {"cpu_weight": 10001}}, {"api": {"cpu_weight": True}},
                     {"loop": {"cpu_cap": 0.5}}, {"loop": {"cpu_cap": (os.cpu_count() or 1) + 1}},
                     {"api": {"memory_bytes": 256 * 1024**2}}, {"api": {"memory_bytes": 2**60}},
                     {"loop": {"pids_limit": 100}}, {"api": {"swap": 1}}, {"gate": {}},
-                    {"builds": {"cpu_weight": 0}}, {"builds": {"cap": 1}}, {"api": 400}, []):
+                    {"builds": {"cpu_weight": 0}}, {"builds": {"cap": 1}}, {"builds": {"cpu_weight": "IDLE"}},
+                    {"builds": {"cpu_weight": None}}, {"api": 400}, []):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 check(bad)
         # A reviewed default above a small host's memory shrinks to it instead of refusing.

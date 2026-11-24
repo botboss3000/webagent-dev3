@@ -72,12 +72,14 @@ class Control:
         return {"admitted":True,"slice":self.slice,"cpu_budget":cpus,"memory_budget":budget,"reserve":reserve,"swap_budget":swap}
 
     def weigh_build_slices(self,policy):
-        """Give build jobs the lowest processor weight (container_capacity.builds, docs/capacity.md) so
+        """Give build jobs the lowest processor priority (container_capacity.builds, docs/capacity.md) so
         they use what the app leaves idle. Weights compete only between siblings, so it is set on the
-        build slice and each ancestor (webagent.slice competes with system.slice, where the app runs)."""
-        # The installed config is validated and carries the reviewed defaults; 20 is that default.
-        weight=((policy.get("container_capacity")or{}).get("builds")or{}).get("cpu_weight",20)
-        if type(weight)is not int or not 1<=weight<=10000:raise ValueError("Invalid build processor weight")
+        build slice and each ancestor (webagent.slice competes with system.slice, where the app runs).
+        "idle" (the default) is systemd's CPUWeight=idle, the cgroup cpu.idle flag: builds run only on
+        processor time nothing else wants, so a waking app request never waits behind a compile."""
+        # The installed config is validated and carries the reviewed defaults; "idle" is that default.
+        weight=((policy.get("container_capacity")or{}).get("builds")or{}).get("cpu_weight","idle")
+        if weight!="idle"and(type(weight)is not int or not 1<=weight<=10000):raise ValueError("Invalid build processor weight")
         if getattr(self,"build_weight",None)==weight:return
         parts=self.slice[:-len(".slice")].split("-")
         for count in range(1,len(parts)+1):

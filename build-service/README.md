@@ -221,7 +221,7 @@ its default:
 | `.cpu_cap` | `null` (no cap) | `null` or 1–cores (may be fractional) | Hard processor limit. The loop's cap is raised to loops + 1 when `scheduler.loops` asks for more. |
 | `.memory_bytes` | 2 GiB, 8 GiB, 3 GiB | api ≥ 512 MiB, loop and browser ≥ 1 GiB; ≤ host memory | Memory limit. The container's existing swap allowance is kept. A default above a small host's memory shrinks to it. |
 | `.pids_limit` | `null` (= `api_pids_limit`), `null`, 1024 | `null` or 256–65536 | Task limit. The loop's is raised to 512 per loop process. |
-| `builds.cpu_weight` | 20 | 1–10000 | Processor weight of `webagent.slice` and the build slices under it (they compete with `system.slice`, where the app containers run). |
+| `builds.cpu_weight` | `"idle"` | `"idle"` or 1–10000 | Processor priority of `webagent.slice` and the build slices under it (they compete with `system.slice`, where the app containers run). `"idle"` is systemd `CPUWeight=idle` (cgroup `cpu.idle`): builds run only on processor time nothing else wants, so a waking app request never waits behind a compile. A number is an ordinary weight (20 was the earlier default). Set at the next build admission. |
 
 When it applies: every start of an app container by the broker (release, browser
 sync, rollback, restore) brings it to these values first, and a broker start updates
