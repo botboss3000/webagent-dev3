@@ -1,0 +1,75 @@
+/* Chat shell frame, ported from the current panel's surface rules in ui/chat/.
+   It draws only the frame: the three regions inside are empty until their
+   components are ported, so nothing here styles a control. */
+
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-rest);
+  overflow: hidden;
+}
+
+/* Header strip: fixed height, hairline divider, contents come later. */
+.chat-header {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 56px;
+  padding: 8px 10px;
+  border-bottom: var(--border-width) solid var(--border-soft);
+}
+
+/* Transcript: the only scroller inside the panel. */
+.chat-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.chat-messages:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.chat-messages-inner {
+  box-sizing: border-box;
+  min-height: 100%;
+  width: 100%;
+  padding: 16px 12px;
+}
+
+/* Footer strip: fixed height, hairline divider, contents come later. */
+.chat-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 64px;
+  padding: 8px 10px;
+  border-top: var(--border-width) solid var(--border-soft);
+}
+
+@media (max-width: 700px) {
+  .chat-header {
+    min-height: 52px;
+    padding: 8px;
+  }
+
+  .chat-messages-inner {
+    padding: 12px 8px;
+  }
+
+  .chat-footer {
+    min-height: 60px;
+    padding: 8px;
+  }
+}

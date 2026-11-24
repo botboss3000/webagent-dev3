@@ -244,6 +244,8 @@ async function renderRoute() {
   state.route = currentRoute();
   markActive();
   syncChatSwitch();
+  // The chat page fills the panel edge to edge, so the shell drops its body padding there.
+  document.body.classList.toggle('chat-route', state.route.startsWith('/chat'));
   const titleHost = document.getElementById('page-title');
   const noteHost = document.getElementById('page-note');
   const body = document.getElementById('page-body');

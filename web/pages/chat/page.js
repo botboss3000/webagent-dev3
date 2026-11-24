@@ -1,17 +1,16 @@
-// Chat page: the destination of the phone header's chat icon. The chat itself is
-// stripped, so this is the empty surface the ported components will land in.
+// Chat page: the destination of the phone header's chat icon. It mounts the ported
+// chat shell — panel frame with an empty header, transcript and footer.
+
+import { mountChat } from '../../chat/chat.js';
 
 export const meta = {
   title: 'Chat',
-  note: 'Placeholder',
+  note: '',
 };
 
-export function render(host) {
-  const panel = document.createElement('div');
-  panel.className = 'card chat-empty';
-  const hint = document.createElement('p');
-  hint.className = 'card-hint';
-  hint.textContent = 'Chat lives here. Components land one at a time.';
-  panel.append(hint);
-  host.append(panel);
+export async function render(host) {
+  const page = document.createElement('div');
+  page.className = 'chat-page';
+  host.append(page);
+  await mountChat(page);
 }

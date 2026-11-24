@@ -73,6 +73,25 @@ async function withPage(admin, run) {
   }
 }
 
+// Reads the mounted chat shell: its three regions and its rendered size.
+async function probeShell(page) {
+  return page.evaluate(() => {
+    const panel = document.getElementById('chat-panel');
+    if (!panel) return null;
+    const header = document.getElementById('chat-header');
+    const footer = document.getElementById('chat-footer');
+    const inner = document.getElementById('chat-messages-inner');
+    const box = panel.getBoundingClientRect();
+    return {
+      headerChildren: header ? header.children.length : -1,
+      footerChildren: footer ? footer.children.length : -1,
+      innerChildren: inner ? inner.children.length : -1,
+      height: Math.round(box.height),
+      width: Math.round(box.width),
+    };
+  });
+}
+
 const VIEWPORTS = [
   { name: 'desktop', width: 1280, height: 900, touch: false },
   { name: 'phone', width: 390, height: 844, touch: true },
@@ -149,6 +168,20 @@ for (const viewport of VIEWPORTS) {
 
           // The chat switch is a phone affordance only.
           assert.equal(await page.locator('#chat-switch').isVisible(), false, 'no chat switch on desktop');
+
+          // The chat route mounts the ported shell: empty header, transcript and footer.
+          await page.evaluate(() => {
+            window.location.hash = '#/chat';
+          });
+          await page.waitForFunction(() => document.getElementById('page-title').textContent === 'Chat');
+          await page.waitForSelector('#page-body #chat-panel');
+          const shell = await probeShell(page);
+          assert.ok(shell, 'chat panel is mounted on the chat route');
+          assert.equal(shell.headerChildren, 0, 'header region is empty');
+          assert.equal(shell.footerChildren, 0, 'footer region is empty');
+          assert.equal(shell.innerChildren, 0, 'transcript region is empty');
+          assert.ok(shell.height > 300, `chat panel fills the height (${shell.height}px)`);
+          assert.ok(shell.width > 400, `chat panel fills the width (${shell.width}px)`);
         } else {
           // Phone: the sidebar is a drawer over the stage.
           assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');
@@ -166,11 +199,19 @@ for (const viewport of VIEWPORTS) {
           assert.equal(await page.locator('#chat-switch').isVisible(), true, 'chat switch shows on a phone');
           await page.click('#chat-switch');
           await page.waitForFunction(() => window.location.hash === '#/chat');
-          await page.waitForSelector('#page-body .chat-empty');
+          await page.waitForSelector('#page-body #chat-panel');
           await page.waitForFunction(() => document.getElementById('page-title').textContent === 'Chat');
           assert.equal(await page.locator('#page-title').textContent(), 'Chat', 'header switches to the chat');
           assert.equal(await page.locator('#chat-switch').getAttribute('aria-pressed'), 'true');
           assert.equal(await page.locator('#chat-switch').getAttribute('aria-label'), 'Back to the panel');
+
+          // The phone chat is the same empty shell, filling the body.
+          const phoneShell = await probeShell(page);
+          assert.ok(phoneShell, 'chat panel is mounted on a phone');
+          assert.equal(phoneShell.headerChildren, 0, 'header region is empty');
+          assert.equal(phoneShell.footerChildren, 0, 'footer region is empty');
+          assert.equal(phoneShell.innerChildren, 0, 'transcript region is empty');
+          assert.ok(phoneShell.height > 300, `chat panel fills the height (${phoneShell.height}px)`);
 
           await page.click('#chat-switch');
           await page.waitForFunction(() => window.location.hash === '#/sessions');
