@@ -221,6 +221,8 @@ fn local_worker_mode(mode: Option<&str>) -> Option<i32> {
         // The per-command and per-plugin supervisors.
         "--tool-runner" => runner::supervise(&spec()),
         "--plugin-runner" => runner::supervise_plugin(&spec()),
+        // One File Manager Git request, run by the build broker as the operator (stream D3).
+        "--checkout-git" => git::manager::run_stdin(),
         _ => return None,
     })
 }

@@ -292,6 +292,52 @@ fn relative_writes_and_task_scopes_belong_to_the_broker() {
     );
 }
 
+/// Stream D2: checkout_edit never writes the checkout; it returns the broker request with the
+/// digest of the bytes it read, so the broker writes only over those bytes.
+#[test]
+fn checkout_edits_are_prepared_for_the_broker_never_written() {
+    let mut fixture = fixture();
+    let checkout = fixture._dir.path().join("checkout");
+    fixture.roots.live_checkout = checkout.clone();
+    std::fs::create_dir_all(checkout.join("src")).expect("checkout");
+    std::fs::write(checkout.join("src/a.rs"), "alpha beta").expect("source");
+    let digest = hex::encode(Sha256::digest(b"alpha beta"));
+    let edit = fixture.call(
+        "checkout_edit",
+        json!({"path":"src/a.rs","old_text":"beta","new_text":"gamma"}),
+    );
+    assert_eq!(edit["status"], "prepared", "{edit}");
+    assert_eq!(
+        edit["write"],
+        json!({"action":"write","path":"src/a.rs","content":"alpha gamma","encoding":"utf-8",
+            "expected_sha256":digest})
+    );
+    let write = fixture.call(
+        "checkout_edit",
+        json!({"path":"src/a.rs","content":"whole","expected_sha256":digest}),
+    );
+    assert_eq!(write["write"]["content"], "whole", "{write}");
+    assert_eq!(write["write"]["expected_sha256"], digest.as_str());
+    let stale = fixture.call(
+        "checkout_edit",
+        json!({"path":"src/a.rs","content":"x","expected_sha256":"0".repeat(64)}),
+    );
+    assert_eq!(stale["error_kind"], "changed_since_read", "{stale}");
+    // A new file, also in folders that do not exist yet: expected is empty.
+    let new = fixture.call(
+        "checkout_edit",
+        json!({"path":"src/new/deeper/b.rs","content":"b"}),
+    );
+    assert_eq!(new["write"]["expected_sha256"], "", "{new}");
+    assert_eq!(new["write"]["path"], "src/new/deeper/b.rs");
+    // Nothing was written by the worker.
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("src/a.rs")).expect("source"),
+        "alpha beta"
+    );
+    assert!(!checkout.join("src/new").exists());
+}
+
 #[test]
 fn checkout_edits_refuse_runtime_state_and_ambiguous_requests() {
     let fixture = fixture();

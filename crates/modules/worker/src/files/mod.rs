@@ -522,7 +522,8 @@ fn operation(
     granted: bool,
     sent: Option<&Value>,
 ) -> Outcome<Value> {
-    // checkout_edit is the one direct live-checkout writer; policy can deny it alone.
+    // checkout_edit is the one direct live-checkout edit; policy can deny it alone. The worker
+    // only prepares it: the broker writes the bytes (stream D2, security spec BUILD-4).
     let checkout = name == "checkout_edit";
     let name = match (checkout, args.contains_key("content")) {
         (true, true) => "file_write",
@@ -565,36 +566,52 @@ fn operation(
         Some((leaf, folders)) => (*leaf, folders),
         None => (OsStr::new("."), &[][..]),
     };
+    let relative = if checkout {
+        target
+            .strip_prefix(resolve(&roots.live_checkout))
+            .ok()
+            .and_then(Path::to_str)
+            .filter(|relative| !relative.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                rejected_kind(
+                    "denied_path",
+                    "Path must be a live-checkout source path outside runtime state",
+                )
+            })?
+    } else {
+        String::new()
+    };
     for part in folders {
-        if name == "file_write" {
-            match mkdirat(
-                &directory,
-                *part,
-                Mode::from_raw_mode(if checkout { 0o2775 } else { 0o770 }),
-            ) {
-                Ok(()) => {
-                    if checkout {
-                        rustix::fs::chmodat(
-                            &directory,
-                            *part,
-                            // Group-writable and setgid: new checkout files stay in
-                            // `webagent-source` for the owner and the broker.
-                            Mode::from_raw_mode(0o2775),
-                            AtFlags::empty(),
-                        )?;
-                    }
-                    fsync(&directory)?;
-                }
+        if name == "file_write" && !checkout {
+            match mkdirat(&directory, *part, Mode::from_raw_mode(0o770)) {
+                Ok(()) => fsync(&directory)?,
                 Err(Errno::EXIST) => {}
                 Err(error) => return Err(error.into()),
             }
         }
-        directory = open_at(&directory, part, DIRECTORY)?;
+        directory = match openat(
+            &directory,
+            *part,
+            DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(folder) => folder,
+            // A new checkout file's missing folders are created by the broker.
+            Err(Errno::NOENT) if checkout && name == "file_write" => {
+                return prepare_write(None, &relative, args);
+            }
+            Err(error) => return Err(os_error(error, part)),
+        };
     }
     let mut scan_limited = false;
     let output = match name {
+        "file_edit" if checkout => return prepare_edit(&directory, leaf, args, &relative),
+        "file_write" if checkout => {
+            return prepare_write(Some((&directory, leaf)), &relative, args)
+        }
         "file_edit" => return edit(&directory, leaf, args),
-        "file_write" => write(&directory, leaf, args, checkout)?,
+        "file_write" => write(&directory, leaf, args)?,
         "file_read" => return read(&directory, leaf, args),
         "file_list" if args.contains_key("pattern") => {
             // A pattern lists matching file paths under the folder, recursively.
@@ -793,7 +810,13 @@ fn replaced(original: &[u8], pairs: &[(&str, &str)]) -> Outcome<Vec<u8>> {
     Ok(updated)
 }
 
-fn edit(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome<Value> {
+/// The file `leaf`'s current bytes, their status and digest, and the bytes after the
+/// requested replacements; checked against `expected_sha256` and the size limit.
+fn edited(
+    directory: &OwnedFd,
+    leaf: &OsStr,
+    args: &Map<String, Value>,
+) -> Outcome<(Vec<u8>, Stat, String)> {
     if leaf == "." {
         return Err(rejected("path must name a file"));
     }
@@ -831,6 +854,11 @@ fn edit(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome
     if updated.len() > LIMIT {
         return Err(rejected_kind("too_large", "file content exceeds limit"));
     }
+    Ok((updated, original_stat, digest))
+}
+
+fn edit(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome<Value> {
+    let (updated, original_stat, digest) = edited(directory, leaf, args)?;
     let mode = permission_bits(&original_stat);
     let temporary = Temporary {
         directory,
@@ -868,12 +896,102 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn write(
+/// What `checkout_edit` hands back instead of writing: the broker request (`checkout_write`
+/// `write`) the app sends with the agent's user as author. `expected` is the digest the
+/// bytes were prepared from (empty for a new file), so the broker never overwrites a change
+/// made in between.
+fn prepared(relative: &str, bytes: &[u8], expected: &str, output: &str) -> Value {
+    use base64::Engine as _;
+    let (content, encoding) = match std::str::from_utf8(bytes) {
+        Ok(text) => (text.to_owned(), "utf-8"),
+        Err(_) => (
+            base64::engine::general_purpose::STANDARD.encode(bytes),
+            "base64",
+        ),
+    };
+    json!({"status":"prepared","output":output,
+        "previous_sha256":(!expected.is_empty()).then_some(expected),
+        "write":{"action":"write","path":relative,"content":content,"encoding":encoding,
+            "expected_sha256":expected}})
+}
+
+fn prepare_edit(
     directory: &OwnedFd,
     leaf: &OsStr,
     args: &Map<String, Value>,
-    checkout: bool,
-) -> Outcome<Written> {
+    relative: &str,
+) -> Outcome<Value> {
+    let (updated, _, digest) = edited(directory, leaf, args)?;
+    Ok(prepared(relative, &updated, &digest, "edited"))
+}
+
+/// `checkout_edit` with `content`: the current digest of the file in `existing` (its folder
+/// and name; `None` when a folder on the way is missing), checked against
+/// `expected_sha256` when given.
+fn prepare_write(
+    existing: Option<(&OwnedFd, &OsStr)>,
+    relative: &str,
+    args: &Map<String, Value>,
+) -> Outcome<Value> {
+    if is_given(args, "mode") || is_given(args, "delete") {
+        return Err(rejected(
+            "checkout_edit takes content, or old_text and new_text (or edits)",
+        ));
+    }
+    let Some(Value::String(content)) = args.get("content") else {
+        return Err(rejected("content must be text"));
+    };
+    if content.len() > LIMIT {
+        return Err(rejected_kind("too_large", "file content exceeds limit"));
+    }
+    let current = match existing {
+        None => None,
+        Some((directory, leaf)) => {
+            match openat(
+                directory,
+                leaf,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                Err(Errno::NOENT) => None,
+                Err(error) => return Err(os_error(error, leaf)),
+                Ok(file) => {
+                    let mut file = File::from(file);
+                    if !regular(&fstat(&file)?) {
+                        return Err(rejected_kind(
+                            "unsupported",
+                            "only regular files are supported",
+                        ));
+                    }
+                    let bytes = read_up_to(&mut file, LIMIT + 1)?;
+                    if bytes.len() > LIMIT {
+                        return Err(rejected_kind("too_large", "file content exceeds limit"));
+                    }
+                    Some(hex::encode(Sha256::digest(&bytes)))
+                }
+            }
+        }
+    };
+    let expected = match args.get("expected_sha256") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(hash)) if hex_digest(hash) => Some(hash.as_str()),
+        Some(_) => return Err(rejected("invalid expected_sha256")),
+    };
+    if expected.is_some_and(|hash| Some(hash) != current.as_deref()) {
+        return Err(rejected_kind(
+            "changed_since_read",
+            "file changed since inspection",
+        ));
+    }
+    Ok(prepared(
+        relative,
+        content.as_bytes(),
+        current.as_deref().unwrap_or_default(),
+        "written",
+    ))
+}
+
+fn write(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome<Written> {
     if is_given(args, "mode") {
         return Err(rejected(
             "mode applies only to broker task files; omit it to create or replace a workspace file, or use file_edit for a small in-place change",
@@ -904,9 +1022,7 @@ fn write(
             "only regular files are supported",
         ));
     }
-    let mode = previous
-        .as_ref()
-        .map_or(if checkout { 0o664 } else { 0o660 }, permission_bits);
+    let mode = previous.as_ref().map_or(0o660, permission_bits);
     let temporary = Temporary {
         directory,
         name: temporary_name("write"),

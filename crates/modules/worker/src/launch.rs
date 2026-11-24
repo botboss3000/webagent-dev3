@@ -22,14 +22,15 @@ const WORK_GID: u32 = 1105;
 /// The tool worker's own identity (`webagent-worker`), distinct from any host login.
 const WORKER_UID: u32 = 1103;
 const APP_BINARY: &str = "/usr/local/bin/webagent-v3";
-/// The worker runs as `webagent-worker` (1103) in its own group `webagent-work` (1105), not
-/// the app's, with only the `webagent-source` group (1110) added so checkout_edit can write
-/// the checkout, and no capabilities: the app's state folder, the encryption key and
-/// account databases stay out of reach of tools, and no host login's files are reachable.
+/// The worker runs as `webagent-worker` (1103) in its own group `webagent-work` (1105) only,
+/// with no capabilities: the app's state folder, the encryption key and account databases
+/// stay out of reach of tools, it reads the checkout as any account may and writes neither
+/// the checkout nor `.git` (the broker makes those changes, streams D2 and D3), and no host
+/// login's files are reachable.
 const WORKER_IDENTITY: [&str; 8] = [
     "--reuid=1103",
     "--regid=1105",
-    "--groups=1110",
+    "--clear-groups",
     "--inh-caps=-all",
     "--ambient-caps=-all",
     "--no-new-privs",
@@ -175,10 +176,17 @@ fn launch() -> io::Result<i32> {
     // keep private modes beneath the listable state root.
     let text = |path: &Path| path.to_string_lossy().into_owned();
     let runtime = webagent_configuration::paths::runtime();
-    let (control, worker_dir) = (
+    let (control, worker_dir, external_dir) = (
         text(&runtime.join("control")),
         text(&runtime.join("worker")),
+        text(&runtime.join("worker-c")),
     );
+    // Stream D4: with `V3_EXTERNAL_WORKER=1` the tool worker runs in its own container (the
+    // broker's follower `<api>-worker`), serving `runtime/worker-c/tools.sock` (the API and
+    // loop get `V3_TOOL_SOCKET` for it). This launcher then only prepares that folder and
+    // starts the API. A release without this mode starts its own worker on
+    // `runtime/worker/tools.sock`, so a rollback never puts two workers on one socket.
+    let external = std::env::var_os("V3_EXTERNAL_WORKER").is_some_and(|value| value == "1");
     let runtime = text(&runtime);
     directory(
         &text(&webagent_configuration::paths::state()),
@@ -212,6 +220,9 @@ fn launch() -> io::Result<i32> {
     }
     directory(&control, APP_UID, WORK_GID, 0o710)?;
     directory(&worker_dir, WORKER_UID, WORK_GID, 0o750)?;
+    if external {
+        directory(&external_dir, WORKER_UID, WORK_GID, 0o750)?;
+    }
     directory(&runtime, APP_UID, APP_GID, 0o755)?;
     let browser_socket = text(&crate::browser::host::default_socket());
     // The socket sits in a folder only its owner and group may enter, and the launcher keeps no
@@ -246,8 +257,13 @@ fn launch() -> io::Result<i32> {
     if let Some(host) = &host {
         env.push(("V3_BROWSER_HOST", host));
     }
-    let mut tools = worker(&[APP_BINARY, "--tool-worker"], &env)?;
-    wait_for(&tools_socket, &mut tools, "tool worker")?;
+    let mut tools = if external {
+        None
+    } else {
+        let mut tools = worker(&[APP_BINARY, "--tool-worker"], &env)?;
+        wait_for(&tools_socket, &mut tools, "tool worker")?;
+        Some(tools)
+    };
     // The API keeps the container environment, as before.
     let mut app = Command::new(APP_BINARY);
     // SAFETY: drop_to only makes raw system calls.
@@ -276,7 +292,7 @@ fn launch() -> io::Result<i32> {
         if STOPPING.swap(false, Ordering::SeqCst) {
             terminate_app();
         }
-        if exited(&mut app) || exited(&mut tools) {
+        if exited(&mut app) || tools.as_mut().is_some_and(exited) {
             break;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -285,8 +301,8 @@ fn launch() -> io::Result<i32> {
         terminate_app();
     }
     // As launch.py: the first process that ended with a non-zero code decides the exit.
-    let code = [&mut app, &mut tools]
-        .into_iter()
+    let code = std::iter::once(&mut app)
+        .chain(tools.as_mut())
         .filter_map(|child| child.try_wait().ok().flatten())
         .map(|status| {
             status
@@ -306,6 +322,8 @@ mod tests {
     fn the_worker_runs_in_its_own_group_without_the_app_group() {
         assert!(WORKER_IDENTITY.contains(&"--regid=1105"));
         assert!(!WORKER_IDENTITY.iter().any(|arg| arg.contains("1100")));
+        assert!(!WORKER_IDENTITY.iter().any(|arg| arg.contains("1110")));
+        assert!(WORKER_IDENTITY.contains(&"--clear-groups"));
         assert_eq!(WORK_GID, 1105);
         assert_ne!(WORK_GID, APP_GID);
     }

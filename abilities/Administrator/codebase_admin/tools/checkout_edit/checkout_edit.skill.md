@@ -4,4 +4,6 @@ Write or edit one file directly in the live checkout (/code), without a broker t
 
 Use it for live files: the .json and .md files listed in /code/live-files.json (for example prompt Markdown and runtime JSON configuration). The app reads them live and the broker commits the edit automatically. When a live-file change belongs with code that depends on it, put it in that code's broker task instead, so both ship in one release; the broker checks it against the task's base bytes, so an in-place edit made after the task began stops promotion instead of being overwritten.
 
+The worker prepares the new bytes and the build broker writes them as the checkout owner, only if the file still holds the bytes that were read (otherwise the call fails with "File changed; reload before saving": read the file again and retry). The broker records your user as the author of the change in its checkout authorship journal. The run must belong to an administrator. A new file's missing folders are created.
+
 For any other file, a direct edit changes the shared checkout only: it is not built, tested or deployed, the running app does not see it, and other writers and the broker see it as checkout drift. Change and release those with file_edit/file_write broker tasks and build_work. Live policy can deny this tool on its own without affecting broker task edits.

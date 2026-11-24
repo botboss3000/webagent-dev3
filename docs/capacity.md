@@ -13,7 +13,8 @@ The app runs as a few containers on one machine. Each has a job and its own limi
 
 | Process | What it does | What limits it |
 | --- | --- | --- |
-| **API** (`webagent-dev-v3`) | Every page, request and message admission; the tool worker (the isolated Python process that runs approved low-level tools) lives in this container too. Each request is small, but it is the part people feel. | Processor weight (highest), optional processor cap, memory, task limit. |
+| **API** (`webagent-dev-v3`) | Every page, request and message admission. The tool worker (the isolated Rust process that runs approved low-level tools: file tools, commands, terminals, previews, session Git) lives in this container too, unless the worker container below is switched on. Each request is small, but it is the part people feel. | Processor weight (highest), optional processor cap, memory, task limit. |
+| **Worker** (`webagent-dev-v3-worker`, off by default) | The tool worker in its own container (`scheduler.worker_container`, section 2.1): users' commands and terminals then use its memory, not the API's. | Processor weight (below the loops), optional cap, memory, task limit. Commands run one at a time per loop process, so its memory need is about (loops + 1) × the per-command limit (measured 2026-11-24: one 200 MB command added 210 MiB; eight at once from one loop still peaked at one). |
 | **Agent loops** (`webagent-dev-v3-loop`) | Runs the agents: context, model calls, tool calls, recovery. The container runs `scheduler.loops` loop processes under a small supervisor; accounts are split between them. | Each loop process can use about **one processor thread** (its run steps share one in-process lock), so N loops use up to about N threads. Also the run ceiling and per-agent caps below. |
 | **Browser** (`webagent-dev-v3-browser`) | The private Chromium browsers agents use. | Processor weight, optional cap, memory, task limit, and the browser limits (how many run at once). |
 | **Build jobs** (the broker's compiles and tests) | Building and testing new releases. | They run only on processor time the app leaves idle (`builds.cpu_weight: "idle"`, the default), plus the broker's own build budget (`cpu_budget_millis`, `cargo_build_jobs`, `test_threads`). |
@@ -79,11 +80,14 @@ has the same table).
 | `api.cpu_weight` | 400 | 1–10000 | API's share when processors are contended. 100 is normal. |
 | `loop.cpu_weight` | 100 | 1–10000 | Agent loops' share. |
 | `browser.cpu_weight` | 100 | 1–10000 | Browser container's share. |
+| `worker.cpu_weight` | 50 | 1–10000 | Worker container's share (when switched on): below the loops, so a user's command never slows chat, above builds. |
 | `<role>.cpu_cap` | `null` (no cap) | `null` or 1 to the number of processor threads | A hard limit in processors (may be fractional, such as 1.5). The loop's cap, if set, is raised to loops + 1 so every loop process and its helpers fit. |
 | `api.memory_bytes` | 2 GiB | 512 MiB to host memory | Memory limit. |
 | `loop.memory_bytes` | 8 GiB | 1 GiB to host memory | Memory limit for all loop processes together. |
 | `browser.memory_bytes` | 3 GiB | 1 GiB to host memory | Memory limit for all browsers together. |
-| `<role>.pids_limit` | API and loop `null` (= `api_pids_limit`, 1024 on development); browser 1024 | `null` or 256–65536 | Task (process and thread) limit. The loop's is raised to 512 per loop process. |
+| `worker.memory_bytes` | 2 GiB | 512 MiB to host memory | Memory limit for all commands, terminals and previews together (worker container only). |
+| `<role>.pids_limit` | API and loop `null` (= `api_pids_limit`, 1024 on development); browser and worker 1024 | `null` or 256–65536 | Task (process and thread) limit. The loop's is raised to 512 per loop process. |
+| `worker_container` (in `scheduler`, not in `container_capacity`) | `false` | `true`/`false` | Runs the tool worker in its own container `<api>-worker` from the next release. It takes effect only once the host has the worker network `webagent-worker` and its firewall script (broker README, "Worker container"); until then releases keep the worker inside the API container. |
 | `builds.cpu_weight` | `"idle"` | `"idle"` or 1–10000 | Priority of all build jobs together. `"idle"` is systemd's `CPUWeight=idle` (the control group's `cpu.idle` flag): build jobs get a processor only when nothing else wants it, so an app request never waits behind a compile. A number makes it an ordinary weight instead (20 was the earlier default). |
 
 A default memory value larger than a small machine's memory shrinks to that machine's memory; a

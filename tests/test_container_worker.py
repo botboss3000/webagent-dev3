@@ -44,10 +44,10 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "success", response)
         result = json.loads(response["output"])
         self.assertEqual(result["uid"], 1103)
-        # Stream D1 (DATA-5): the worker's own group webagent-work (1105), not the app's 1100,
-        # plus only webagent-source; the app's state folder is out of reach of commands.
+        # Streams D1-D3 (DATA-5, BUILD-10): only the worker's own group webagent-work (1105):
+        # not the app's 1100 (state) nor webagent-source 1110 (checkout writes go to the broker).
         self.assertEqual(result["gid"], 1105)
-        self.assertEqual(result["groups"], [1110])
+        self.assertEqual(result["groups"], [])
         self.assertTrue(result["source_access"])
         self.assertFalse(result["v2_source_access"])
         self.assertFalse(result["state_access"])

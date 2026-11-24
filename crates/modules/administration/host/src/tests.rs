@@ -37,6 +37,7 @@ struct Fake {
     /// Whether Codebase Admin supplies the call, so live-checkout tools get the grant.
     checkout: bool,
     broker_reply: fn(&str, &Value) -> Value,
+    worker_reply: fn(&str, &Value) -> Value,
     events: Mutex<Vec<(String, String)>>,
     /// The agents opted into repository notices (`None`: unknown).
     notice_agents: Option<std::collections::HashSet<String>>,
@@ -54,6 +55,7 @@ impl Fake {
             settings: json!({}),
             checkout: false,
             broker_reply: |_, _| json!({"status":"success","output":{"status":"success"}}),
+            worker_reply: |_, _| json!({"status":"success","output":"worker"}),
             events: Mutex::new(Vec::new()),
             notice_agents: None,
         }
@@ -141,7 +143,8 @@ impl AdministrationHost for Fake {
         _cancel: CancellationToken,
     ) -> Pending<'a, Result<Value>> {
         self.push("worker", name, args, trusted);
-        Box::pin(async { Ok(json!({"status":"success","output":"worker"})) })
+        let reply = (self.worker_reply)(name, args);
+        Box::pin(async move { Ok(reply) })
     }
     fn checkout<'a>(
         &'a self,
@@ -339,6 +342,64 @@ async fn only_live_checkout_tools_carry_the_host_grant() {
     assert_eq!(sent[1].trusted, granted);
     assert_eq!(sent[2].name, "terminal_list");
     assert_eq!(sent[2].trusted, None);
+}
+
+/// Stream D2: checkout_edit's bytes are written by the broker, never the worker, as the
+/// administrator who runs the agent; a refusal is reported, not hidden.
+#[tokio::test]
+async fn checkout_edits_are_written_by_the_broker_for_an_administrator() {
+    let dir = root();
+    let mut host = Fake::new(dir.path()).await;
+    host.checkout = true;
+    host.worker_reply = |_, _| {
+        json!({"status":"prepared","output":"edited","previous_sha256":"a".repeat(64),
+            "write":{"action":"write","path":"config/x.json","content":"{}","encoding":"utf-8",
+                "expected_sha256":"a".repeat(64)}})
+    };
+    host.broker_reply = |_, _| json!({"status":"success","output":{"sha256":"b".repeat(64)}});
+    let reply = call(
+        &host,
+        "checkout_edit",
+        json!({"path":"config/x.json","content":"{}"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply["status"], "success");
+    assert_eq!(reply["sha256"], "b".repeat(64));
+    let sent = host.sent();
+    assert_eq!(
+        (sent[1].socket, sent[1].name.as_str()),
+        ("broker", "checkout_write")
+    );
+    assert_eq!(sent[1].args["path"], "config/x.json");
+    let trusted = sent[1].trusted.clone().unwrap();
+    assert_eq!(
+        (
+            trusted["user_id"].as_str(),
+            trusted["administrator"].as_bool()
+        ),
+        (Some("admin"), Some(true))
+    );
+    // The broker's refusal (a changed file, a non-administrator) comes back as a failure.
+    host.broker_reply =
+        |_, _| json!({"status":"failed","output":"File changed; reload before saving"});
+    let reply = call(
+        &host,
+        "checkout_edit",
+        json!({"path":"config/x.json","content":"{}"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply["status"], "failed");
+    assert!(reply["output"].as_str().unwrap().contains("File changed"));
+    // A worker refusal never reaches the broker.
+    host.worker_reply =
+        |_, _| json!({"status":"failed","output":"Path must be a live-checkout source path"});
+    let before = host.sent().len();
+    call(&host, "checkout_edit", json!({"path":"data/x"}))
+        .await
+        .unwrap();
+    assert_eq!(host.sent().len(), before + 1);
 }
 
 #[tokio::test]

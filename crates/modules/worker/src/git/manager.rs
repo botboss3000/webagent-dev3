@@ -110,6 +110,41 @@ fn lossy(raw: &[u8]) -> String {
     String::from_utf8_lossy(raw).into_owned()
 }
 
+/// `webagent-v3 --checkout-git`: one File Manager Git request (`{"arguments", "trusted"}` on
+/// stdin) on the checkout, run by the build broker in a one-shot container as the operator
+/// account (stream D3), so nothing in the app's containers needs write access to `.git`. Prints
+/// the result as one JSON line; the exit code is 0 whenever a result was printed.
+#[must_use]
+pub fn run_stdin() -> i32 {
+    use std::io::Read;
+    let mut raw = Vec::new();
+    if std::io::stdin()
+        .take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut raw)
+        .is_err()
+        || raw.len() > 2 * 1024 * 1024
+    {
+        return 2;
+    }
+    let Ok(request) = serde_json::from_slice::<Value>(&raw) else {
+        return 2;
+    };
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return 3;
+    };
+    let root = webagent_configuration::paths::checkout();
+    let result = runtime.block_on(action(
+        &root,
+        &request["arguments"],
+        request.get("trusted").unwrap_or(&Value::Null),
+    ));
+    println!("{result}");
+    0
+}
+
 /// Runs one File Manager Git request on the checkout at `root`.
 pub async fn action(root: &Path, args: &Value, trusted: &Value) -> Value {
     let Some(map) = args.as_object().filter(|map| {

@@ -98,10 +98,36 @@ pub async fn execute(
                 Ok(reply)
             }
         }
-        // The direct live-checkout writer never becomes a broker draft.
+        // The direct live-checkout writer never becomes a broker draft. The worker only
+        // prepares the new bytes (it cannot write the checkout); the broker writes them as the
+        // checkout owner, only over the bytes the worker read, and records this agent's user as
+        // the author (stream D2, security spec BUILD-4/BUILD-5).
         "checkout_edit" => {
-            let trusted = host.checkout(sid, run, name, codebase_revision(run)).await;
-            host.worker(name, args, sid, trusted, cancel).await
+            let grant = host.checkout(sid, run, name, codebase_revision(run)).await;
+            let prepared = host.worker(name, args, sid, grant, cancel.clone()).await?;
+            if prepared["status"] != "prepared" {
+                return Ok(prepared);
+            }
+            let fingerprint = host.fingerprint(sid, run_id, name).await?;
+            let administrator = host.administrator(sid).await?;
+            let identity = trusted(host.actor(), sid, &json!(fingerprint), administrator);
+            let reply = host
+                .broker(
+                    "checkout_write",
+                    &prepared["write"],
+                    sid,
+                    Some(identity),
+                    cancel,
+                )
+                .await?;
+            Ok(if reply["status"] == "success" {
+                json!({"status":"success","output":prepared["output"],
+                    "previous_sha256":prepared["previous_sha256"],
+                    "sha256":reply["output"]["sha256"]})
+            } else {
+                json!({"status":"failed","error_kind":"broker_refused",
+                    "output":format!("Not written: {}", reply["output"].as_str().unwrap_or("the broker refused the edit"))})
+            })
         }
         "build_work" => {
             let mut request = args.clone();

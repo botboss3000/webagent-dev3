@@ -1,5 +1,6 @@
 //! Administrator File Manager admission. Browser identity and CSRF are checked
-//! by the router; the isolated worker confines checkout paths to /code. Absolute
+//! by the router; the isolated worker confines checkout reads to /code and the broker makes
+//! checkout changes (`checkout_write`). Absolute
 //! paths outside `/live-checkout` go to the root host file service (`host_files.py`),
 //! which serves them only while Host Admin has granted this administrator access
 //! (approved with the host approval passphrase; security spec FILES-1).
@@ -8,6 +9,8 @@ use axum::Extension;
 
 /// The checkout's name on the File Manager page; every other absolute path is the host's.
 const CHECKOUT: &str = "/live-checkout";
+/// The fixed workspace File Manager calls run under (no chat session).
+const MANAGER_WORKSPACE: &str = "00000000-0000-0000-0000-000000000000";
 /// The page shows these refusals as a toast with the passphrase prompt and stays where it is.
 #[cfg(unix)]
 const NEEDS_GRANT: &str =
@@ -71,16 +74,70 @@ pub(crate) async fn action(
             return host_files(admin, action, &body).await;
         }
     }
+    // Checkout changes are made by the broker as the checkout owner and recorded with this
+    // administrator as author (stream D2, security spec BUILD-4/BUILD-5): nothing in the app's
+    // containers writes the checkout through the file system. Reads, listings and Git stay
+    // with the worker.
+    if matches!(action, "write" | "create" | "rename" | "delete") {
+        let admin = identity["_user_id"].as_str().unwrap_or_default();
+        let result = tools::execute_host_trusted(
+            "checkout_write",
+            &body,
+            MANAGER_WORKSPACE,
+            &crate::tools::administrator::build_socket(&app),
+            Some(json!({"user_id":admin,"session_id":MANAGER_WORKSPACE,"administrator":true})),
+            CancellationToken::new(),
+        )
+        .await?;
+        if result["status"] != "success" {
+            return Err(bad(result["output"]
+                .as_str()
+                .unwrap_or("File Manager operation failed")));
+        }
+        return Ok(Json(result["output"].clone()));
+    }
     // This admin route owns admission. The worker owns checkout confinement;
     // repository secrets are passed only for operations that need transport.
     let needs_transport = action == "git_settings"
         || action == "git_tool"
             && matches!(body["operation"].as_str(), Some("fetch" | "pull" | "push"));
-    let trusted = if needs_transport {
-        Some(json!({"repository": repository::transport_for_agent(&app,"shared_default").await?}))
+    let repository = if needs_transport {
+        Some(repository::transport_for_agent(&app, "shared_default").await?)
     } else {
         None
     };
+    // Checkout Git runs in a one-shot container the broker starts as the operator account
+    // (stream D3, security spec BUILD-10): the worker never writes `.git`.
+    if git {
+        let admin = identity["_user_id"].as_str().unwrap_or_default();
+        let result = tools::execute_host_trusted(
+            "checkout_git",
+            &json!({"git": body, "repository": repository}),
+            MANAGER_WORKSPACE,
+            &crate::tools::administrator::build_socket(&app),
+            Some(json!({"user_id":admin,"session_id":MANAGER_WORKSPACE,"administrator":true})),
+            CancellationToken::new(),
+        )
+        .await?;
+        // The broker's own refusal arrives as a failed envelope; the Git result is its output.
+        let result = if result["status"] == "success" {
+            result["output"].clone()
+        } else {
+            result
+        };
+        if result["uncertain"] == true {
+            return Err(crate::conflict(
+                "Git effect uncertain; inspect repository before retry",
+            ));
+        }
+        if result["status"] != "success" {
+            return Err(bad(result["output"]
+                .as_str()
+                .unwrap_or("File Manager operation failed")));
+        }
+        return Ok(Json(result["output"].clone()));
+    }
+    let trusted = repository.map(|repository| json!({ "repository": repository }));
     let result = tools::execute_trusted(
         if git {
             "administrator_file_git"
@@ -88,7 +145,7 @@ pub(crate) async fn action(
             "administrator_file_manager"
         },
         &body,
-        "00000000-0000-0000-0000-000000000000",
+        MANAGER_WORKSPACE,
         &app.tool_socket,
         trusted,
         CancellationToken::new(),
