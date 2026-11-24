@@ -227,6 +227,84 @@ TARGETS = (CONFIG["api_container"], CONFIG["loop_container"])
 # webagent-work: the tool worker's own group, shared with the app only for workspaces and the
 # worker's sockets (stream D1, DATA-5). The API's launcher grants it to the API itself.
 WORK_GID = 1105
+# Who changed each checkout path outside a release commit (stream D2, BUILD-5): File Manager edits
+# through the broker, live-file saves, release promotions and operator adoptions append one line each.
+# A preflight lists changed tracked paths without a newer entry (scheduler.authorship_gate:
+# "report" lists them, "enforce" refuses the release). Lines older than 30 days are dropped once
+# the file passes 1 MiB.
+AUTHORSHIP = Path(CONFIG["state_root"]) / "coordination" / "authorship.jsonl"
+AUTHORSHIP_LOCK = threading.Lock()
+AUTHORSHIP_MAX_BYTES = 1024 * 1024
+AUTHORSHIP_RETENTION_SECONDS = 30 * 24 * 3600
+
+
+def journal_authorship(kind, changes, author, **extra):
+    """Append one entry per (checkout-relative path, sha256 or None, whole tree) change."""
+    if not changes:
+        return
+    now = time.time()
+    lines = "".join(json.dumps({"at": now, "kind": kind, "path": path, "sha256": digest,
+                                **({"tree": True} if tree else {}), "author": author, **extra},
+                               sort_keys=True, separators=(",", ":")) + "\n"
+                    for path, digest, tree in changes)
+    with AUTHORSHIP_LOCK:
+        AUTHORSHIP.parent.mkdir(parents=True, exist_ok=True)
+        with AUTHORSHIP.open("a", encoding="utf-8") as stream:
+            stream.write(lines)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if AUTHORSHIP.stat().st_size > AUTHORSHIP_MAX_BYTES:
+            kept = [line for line in AUTHORSHIP.read_text(encoding="utf-8").splitlines(True)
+                    if _authorship_entry(line).get("at", 0) >= now - AUTHORSHIP_RETENTION_SECONDS]
+            atomic_text = AUTHORSHIP.with_name(AUTHORSHIP.name + ".tmp")
+            atomic_text.write_text("".join(kept), encoding="utf-8")
+            os.replace(atomic_text, AUTHORSHIP)
+
+
+def _authorship_entry(line):
+    try:
+        value = json.loads(line)
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) and isinstance(value.get("path"), str) else {}
+
+
+# File Manager Git on the checkout (stream D3, BUILD-10): the app's own Git page code
+# (`webagent-v3 --checkout-git`) runs in a one-shot container from the API's image as the operator
+# account, so nothing in the app's containers needs write access to `.git`.
+CHECKOUT_GIT_ACTIONS = ("git_status", "git_graph", "git_commit_detail", "git_branches", "git_tree_status",
+                        "git_line_stats", "git_ignore", "git_tool", "git_commit", "git_settings")
+CHECKOUT_GIT_READS = ("git_status", "git_graph", "git_commit_detail", "git_branches", "git_tree_status",
+                      "git_line_stats")
+CHECKOUT_GIT_SECONDS = 300
+
+
+def _strings(value):
+    """Every text value inside `value` (secrets to keep out of error messages)."""
+    if isinstance(value, str):
+        return [value] if len(value) >= 6 else []
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _strings(item)]
+    return []
+
+
+def authorship_latest():
+    """The newest entry time for each journaled path, and the tree entries (path prefixes)."""
+    files, trees = {}, {}
+    with AUTHORSHIP_LOCK:
+        try:
+            text = AUTHORSHIP.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+    for line in text.splitlines():
+        entry = _authorship_entry(line)
+        if not entry or not isinstance(entry.get("at"), (int, float)):
+            continue
+        target = trees if entry.get("tree") else files
+        target[entry["path"]] = max(target.get(entry["path"], 0), entry["at"])
+    return files, trees
 # The browser container runs the API image as another service (`--browser-host`). It is
 # created once by `deploy.py start-browser` and only follows the API image; it is never a
 # release role, so a failure to follow never rolls back the API or loop.
@@ -1722,6 +1800,12 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
 
     def promote_checkout(self, before, after, changed, base=None):
         count = release.promote_checkout(self.source, before, after, changed, context_digest, standalone=True, base_blob=base)
+        job = getattr(self.job_context, "job", None) or {}
+        try:
+            journal_authorship("release", [(p.removeprefix("v3/"), None, False) for p in changed],
+                               {"job_id": job.get("job_id"), "task_id": job.get("task_id")})
+        except OSError:
+            print("Authorship journal unavailable for a promotion", flush=True)
         try:
             # New live files must be readable by the app at once, not at the next maintenance pass.
             release.expose_live(self.source, release.live_patterns(release.entries(after, context_digest)))
@@ -3832,7 +3916,155 @@ class Broker:
             except ValueError:
                 raise ValueError("live JSON file is invalid") from None
         with self.runner.git_lock:
-            return {"sha256": release.write_live(Path(CONFIG["checkout_root"]), args["path"], body, expected)}
+            digest = release.write_live(Path(CONFIG["checkout_root"]), args["path"], body, expected)
+            journal_authorship("live_file", [(args["path"], digest, False)], {"user_id": "live-config"})
+            return {"sha256": digest}
+
+    def checkout_write(self, args, trusted):
+        """A File Manager change in the checkout (release.checkout_write), made by the broker as the
+        checkout owner for the signed-in administrator the app names, and journaled (stream D2).
+        Only the app's own socket identity reaches this: operator and bridge callers are refused
+        this name before the broker sees it."""
+        if trusted.get("administrator") is not True:
+            raise PermissionError("An administrator's File Manager request is required")
+        with self.runner.git_lock:
+            result, changes = release.checkout_write(str(SOURCE), args)
+            journal_authorship("file_manager", changes, {"user_id": trusted["user_id"],
+                                                         "session_id": trusted["session_id"]},
+                               action=args["action"])
+        return result
+
+    def checkout_git(self, args, trusted):
+        """One File Manager Git action on the checkout, run by the app's own Git code in a one-shot
+        container as the operator account (stream D3). `git` is the page's request; `repository`
+        the connection (with its token) for fetch, pull, push and settings, passed on stdin only."""
+        if trusted.get("administrator") is not True:
+            raise PermissionError("An administrator's File Manager request is required")
+        request, repository = args.get("git"), args.get("repository")
+        if (set(args) - {"git", "repository"} or not isinstance(request, dict)
+                or request.get("action") not in CHECKOUT_GIT_ACTIONS
+                or repository is not None and not isinstance(repository, dict)):
+            raise ValueError("Unsupported File Manager Git action")
+        body = canonical({"arguments": request, "trusted": {} if repository is None else {"repository": repository}})
+        if len(body) > 1024 * 1024:
+            raise ValueError("File Manager Git request too large")
+        api = self.runner.inspect(TARGETS[0])
+        import pwd
+        owner = pwd.getpwnam(CONFIG["source_owner"])
+        argv = ["docker", "run", "--rm", "-i", "--name", "webagent-checkout-git-" + uuid.uuid4().hex[:12],
+                "--user", f"{owner.pw_uid}:{owner.pw_gid}", "--group-add", str(SOURCE.stat().st_gid),
+                "--network", api["HostConfig"].get("NetworkMode") or "bridge", "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges:true", "--pids-limit", "256", "--memory", "1g", "--cpus", "2",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m", "--mount", "type=bind,src=" + str(SOURCE) + ",dst=/code",
+                "--entrypoint", "/usr/local/bin/webagent-v3", api["Image"], "--checkout-git"]
+        lock = contextlib.nullcontext() if request["action"] in CHECKOUT_GIT_READS else self.runner.git_lock
+        secrets = [*self.runner.secrets, *_strings(repository)]
+        with lock:
+            try:
+                done = subprocess.run(argv, input=body, capture_output=True, timeout=CHECKOUT_GIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                return {"status": "error", "uncertain": request["action"] not in CHECKOUT_GIT_READS,
+                        "output": "File Manager Git timed out; inspect the repository before retrying"}
+        reply = done.stdout.strip().splitlines()[-1:] if len(done.stdout) <= 4 * 1024 * 1024 else []
+        try:
+            value = json.loads(reply[0]) if reply else None
+        except ValueError:
+            value = None
+        if done.returncode != 0 or not isinstance(value, dict):
+            return {"status": "error", "uncertain": request["action"] not in CHECKOUT_GIT_READS,
+                    "output": "File Manager Git failed: " + scrub(done.stderr.decode("utf-8", "replace"), secrets)[-300:]}
+        if request["action"] == "git_ignore" and value.get("status") == "success":
+            repo = request.get("repo") if request.get("repo") not in (None, "__root__") else ""
+            journal_authorship("file_manager", [((repo + "/" if repo else "") + ".gitignore", None, False)],
+                               {"user_id": trusted["user_id"], "session_id": trusted["session_id"]}, action="git_ignore")
+        return value
+
+    def checkout_git_owner(self, args, trusted):
+        """Operator: make the checkout's `.git` writable by the operator account only (stream D3,
+        BUILD-10): files the worker owned are replaced by copies the operator owns, the group becomes
+        the operator's own, group write, setgid and access lists are removed. Reading stays open.
+        Run after the release that moves File Manager Git to `checkout_git`."""
+        if not trusted.get("local_caller"):
+            raise PermissionError("Operator action required")
+        if set(args) != {"action"}:
+            raise ValueError("No arguments")
+        import pwd
+        owner = pwd.getpwnam(CONFIG["source_owner"])
+        git_dir = SOURCE / ".git"
+        changed = {"replaced": [], "chgrp": 0, "chmod": 0}
+        with self.runner.git_lock:
+            for path in [git_dir, *git_dir.rglob("*")]:
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode):
+                    continue
+                if info.st_uid != owner.pw_uid:
+                    if not stat.S_ISREG(info.st_mode):
+                        raise PermissionError("Not owned by the operator: " + str(path.relative_to(SOURCE)))
+                    copy = path.with_name("." + path.name + ".owner-" + uuid.uuid4().hex[:8])
+                    shutil.copy2(path, copy)
+                    os.replace(copy, path)
+                    changed["replaced"].append(str(path.relative_to(SOURCE)))
+                    info = path.lstat()
+                if info.st_gid != owner.pw_gid:
+                    os.chown(path, -1, owner.pw_gid, follow_symlinks=False)
+                    changed["chgrp"] += 1
+                mode = stat.S_IMODE(info.st_mode) & ~(stat.S_IWGRP | stat.S_IWOTH | stat.S_ISGID)
+                if mode != stat.S_IMODE(info.st_mode):
+                    os.chmod(path, mode)
+                    changed["chmod"] += 1
+            acl = subprocess.run(["setfacl", "-R", "-b", str(git_dir)], capture_output=True, timeout=120)
+        changed["acl_removed"] = acl.returncode == 0
+        return {"status": "done", **changed}
+
+    def authorship_adopt(self, args, trusted):
+        """Operator: record that the operator changed `paths` by hand (e.g. over SSH) and why."""
+        if not trusted.get("local_caller"):
+            raise PermissionError("Operator adoption required")
+        paths, reason = args.get("paths"), args.get("reason")
+        if (set(args) != {"action", "paths", "reason"} or not isinstance(paths, list) or not 1 <= len(paths) <= 200
+                or not isinstance(reason, str) or not 1 <= len(reason) <= 500):
+            raise ValueError("paths (1-200) and a reason are required")
+        for path in paths:
+            if not isinstance(path, str) or not 1 <= len(path) <= 1024 or path.startswith("/") \
+                    or any(part in ("", ".", "..") for part in path.split("/")):
+                raise ValueError("checkout-relative paths required")
+        journal_authorship("adopted", [(path, None, False) for path in paths],
+                           {"user_id": trusted["user_id"]}, reason=reason)
+        return {"status": "adopted", "paths": len(paths)}
+
+    def authorship_report(self, own):
+        """Changed tracked checkout paths (not this task's `own`) with no journal entry newer than
+        their last commit; mode from scheduler.authorship_gate ("report" by default)."""
+        mode = CONFIG["scheduler"].get("authorship_gate", "report")
+        if mode == "off":
+            return {"mode": mode}
+        status = subprocess.run(["git", "-C", str(SOURCE), "status", "--porcelain=v1", "-z", "--untracked-files=no"],
+                                capture_output=True, timeout=30, check=True).stdout.decode("utf-8", "replace")
+        changed, fields = [], status.split("\0")
+        index = 0
+        while index < len(fields):
+            entry = fields[index]
+            index += 1
+            if len(entry) < 4:
+                continue
+            if entry[0] in "RC":
+                index += 1  # the rename's source path follows
+            path = entry[3:]
+            if path not in own:
+                changed.append(path)
+        files, trees = authorship_latest()
+        missing = []
+        for path in sorted(changed)[:200]:
+            journaled = max([files.get(path, 0)] + [at for prefix, at in trees.items()
+                                                    if path == prefix or path.startswith(prefix + "/")])
+            if not journaled:
+                missing.append(path)
+                continue
+            committed = subprocess.run(["git", "-C", str(SOURCE), "log", "-1", "--format=%ct", "--", path],
+                                       capture_output=True, timeout=10).stdout.decode().strip()
+            if committed.isdigit() and int(committed) > journaled:
+                missing.append(path)
+        return {"mode": mode, "changed": len(changed), "unjournaled": missing[:50], "count": len(missing)}
 
     def reconcile_leftovers(self):
         # Disk accounting occurs outside the broker lock with a bounded budget.
@@ -6274,6 +6506,14 @@ class Broker:
             return self.workspace_request(name,args,trusted,workspace)
         if name=="live_file_write":
             return self.live_file_write(args)
+        if name=="checkout_write":
+            return self.checkout_write(args,trusted)
+        if name=="checkout_git":
+            return self.checkout_git(args,trusted)
+        if name=="build_work"and args.get("action")=="checkout_git_owner":
+            return self.checkout_git_owner(args,trusted)
+        if name=="build_work"and args.get("action")=="authorship_adopt":
+            return self.authorship_adopt(args,trusted)
         if name=="v3_cargo_task":return self.cargo_request(args,trusted,workspace)
         if name=="build_work"and args.get("action") in {"retry_verified_failed_release","retry_packaging_release"}:
             return self.retry_verified_failed_release(request,args)
@@ -6938,9 +7178,18 @@ class Broker:
                                     "paths": sorted(mine & set(i["queued_patch"]["paths"]))}
                                    for i in self.work.values() if i is not item and i.get("status") == "open"
                                    and i.get("queued_patch") and mine & set(i["queued_patch"]["paths"])]
-                        return {"task_id": task_id, "synchronization": report,
+                        try:
+                            authorship = self.authorship_report(mine)
+                        except (OSError, subprocess.SubprocessError) as error:
+                            authorship = {"mode": CONFIG["scheduler"].get("authorship_gate", "report"),
+                                          "error": scrub(str(error), self.runner.secrets)[:200]}
+                        refusal = plan.get("refusal")
+                        if refusal is None and authorship.get("mode") == "enforce" and (authorship.get("count") or authorship.get("error")):
+                            refusal = ("Checkout paths changed with no authorship entry: " + ", ".join(authorship.get("unjournaled", [])[:10])
+                                       + "; record operator edits with buildctl authorship-adopt PATH --reason TEXT")
+                        return {"task_id": task_id, "synchronization": report, "authorship": authorship,
                                 "release_plan": {"inputs_sha256": context_digest(task)[0], "operation": plan["operation"], "changed_paths": plan["changed_paths"],
-                                    "refusal": plan.get("refusal"), "broker_install_required": plan.get("broker_install_required", False)},
+                                    "refusal": refusal, "broker_install_required": plan.get("broker_install_required", False)},
                                 **({"rebased": item["rebased"]} if item.get("rebased") else {}),
                                 **({"waiting_overlaps": waiting[:20]} if waiting else {})}
                     if not job or job["status"] != "needs_decision":

@@ -174,6 +174,215 @@ def write_live(root, relative, body, expected):
     return hashlib.sha256(body).hexdigest()
 
 
+# File Manager checkout edits (stream D2, BUILD-4). The app never writes the checkout itself: the
+# broker makes these changes as the checkout owner, with the rules the worker's File Manager used
+# (crates/modules/worker/src/manager.rs): protected folders refused, no link followed, a save only
+# over the bytes the page loaded, a rename never replacing, a delete of at most 2000 entries.
+CHECKOUT_VIRTUAL = "/live-checkout"
+CHECKOUT_HIDDEN = (".git", "data", "target", "workspaces", "rollback", "runtime", "gate-runtime",
+                   "host-build-service", "deployment-secrets", ".cache", "build-jobs")
+CHECKOUT_MAX_FILE = 1024 * 1024
+CHECKOUT_MAX_ENTRIES = 2000
+_DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def checkout_parts(raw, directory=False):
+    """The checkout-relative parts of `raw` (relative, or under /live-checkout)."""
+    if not isinstance(raw, str) or len(raw) > 1024 or "\0" in raw or "\\" in raw:
+        raise ValueError("Invalid File Manager path")
+    raw = "" if raw == CHECKOUT_VIRTUAL else raw.removeprefix(CHECKOUT_VIRTUAL + "/")
+    if not raw:
+        if directory:
+            return []
+        raise ValueError("A file path is required")
+    items = raw.split("/")
+    if raw.startswith("/") or any(item in ("", ".", "..") for item in items):
+        raise ValueError("Path must stay inside the development checkout")
+    if any(item in CHECKOUT_HIDDEN or item.startswith(".v3-") for item in items):
+        raise ValueError("Protected checkout path")
+    return items
+
+
+def checkout_display(items):
+    return CHECKOUT_VIRTUAL + ("/" + "/".join(items) if items else "")
+
+
+def _checkout_directory(root, items, create=False):
+    fd = os.open(root, _DIRECTORY)
+    try:
+        for item in items:
+            if create:
+                try:
+                    os.mkdir(item, 0o2775, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            child = os.open(item, _DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = child
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _checkout_parent(root, raw, create=False):
+    items = checkout_parts(raw)
+    return _checkout_directory(root, items[:-1], create), items[-1], items
+
+
+def _identity(info):
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def _checkout_bytes(parent, name):
+    """The bounded regular file `name` and its status; None when it does not exist."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise ValueError("Only bounded regular files are available") from error
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > CHECKOUT_MAX_FILE:
+            raise ValueError("Only bounded regular files are available")
+        data = stream.read(CHECKOUT_MAX_FILE + 1)
+        if len(data) > CHECKOUT_MAX_FILE or _identity(os.fstat(stream.fileno())) != _identity(before):
+            raise ValueError("File changed during read")
+    return data, before
+
+
+def _rename_noreplace(source, old, target, new):
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.renameat2(source, old.encode(), target, new.encode(), 1) != 0:  # RENAME_NOREPLACE
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _walk_delete(parent, name, budget, remove):
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if stat.S_ISLNK(info.st_mode) and remove:
+        raise ValueError("Symlink entries unavailable")
+    if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        if remove:
+            os.unlink(name, dir_fd=parent)
+        return budget
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("Only ordinary files and directories can be deleted")
+    fd = os.open(name, _DIRECTORY, dir_fd=parent)
+    try:
+        for child in sorted(os.listdir(fd)):
+            budget -= 1
+            if budget < 0 or child in CHECKOUT_HIDDEN or child.startswith(".v3-"):
+                raise ValueError("Directory contains protected or too many entries")
+            budget = _walk_delete(fd, child, budget, remove)
+    finally:
+        os.close(fd)
+    if remove:
+        os.rmdir(name, dir_fd=parent)
+    return budget
+
+
+def checkout_write(root, args):
+    """One File Manager change in the checkout at `root`: `write` (only over `expected_sha256`, empty
+    for a new file, whose missing folders are created), `create` (`kind` file or dir), `rename` (never replacing) or `delete`. Returns
+    (result for the page, changed paths as (checkout-relative path, sha256 or None, whole tree))."""
+    action = args.get("action")
+    known = {"write": {"action", "path", "content", "encoding", "expected_sha256"},
+             "create": {"action", "path", "kind"}, "rename": {"action", "path", "new_path"},
+             "delete": {"action", "path"}}.get(action)
+    if known is None or set(args) != known:
+        raise ValueError("Unsupported File Manager action")
+    if action == "write":
+        content, encoding, expected = args["content"], args["encoding"], args["expected_sha256"]
+        if not isinstance(content, str) or encoding not in ("utf-8", "base64"):
+            raise ValueError("Invalid file content")
+        if encoding == "utf-8":
+            data = content.encode()
+        else:
+            import base64, binascii
+            try:
+                data = base64.b64decode(content, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError("Invalid file encoding") from None
+        if len(data) > CHECKOUT_MAX_FILE:
+            raise ValueError("File exceeds the one MiB editor limit")
+        if not isinstance(expected, str) or not (expected == "" or re.fullmatch(r"[0-9a-f]{64}", expected)):
+            raise ValueError("Expected file digest required")
+        parent, name, items = _checkout_parent(root, args["path"], create=expected == "")
+        temporary = ".v3-file-" + uuid.uuid4().hex
+        try:
+            old = _checkout_bytes(parent, name)
+            if old is None and expected:
+                raise ValueError("File disappeared; reload before saving")
+            if old is not None and hashlib.sha256(old[0]).hexdigest() != expected:
+                raise ValueError("File changed; reload before saving")
+            mode = 0o664 if old is None else stat.S_IMODE(old[1].st_mode)
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+            with os.fdopen(fd, "wb") as output:
+                output.write(data)
+                output.flush()
+                os.fchmod(output.fileno(), mode)
+                os.fsync(output.fileno())
+            if old is None:
+                # A link never replaces a file that appeared meanwhile.
+                os.link(temporary, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+            else:
+                if _identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != _identity(old[1]):
+                    raise ValueError("File changed during save")
+                os.rename(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+            os.fsync(parent)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+            os.close(parent)
+        digest = hashlib.sha256(data).hexdigest()
+        return ({"path": checkout_display(items), "size": len(data), "status": "ok", "sha256": digest},
+                [("/".join(items), digest, False)])
+    if action == "create":
+        if args["kind"] not in ("file", "dir"):
+            raise ValueError("Invalid entry kind")
+        parent, name, items = _checkout_parent(root, args["path"])
+        try:
+            if args["kind"] == "dir":
+                os.mkdir(name, 0o2775, dir_fd=parent)
+            else:
+                os.close(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o664, dir_fd=parent))
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+        empty = None if args["kind"] == "dir" else hashlib.sha256(b"").hexdigest()
+        return ({"path": checkout_display(items), "kind": args["kind"], "status": "ok"},
+                [("/".join(items), empty, args["kind"] == "dir")])
+    if action == "rename":
+        source, old_name, old_items = _checkout_parent(root, args["path"])
+        try:
+            target, new_name, new_items = _checkout_parent(root, args["new_path"])
+            try:
+                if stat.S_ISLNK(os.stat(old_name, dir_fd=source, follow_symlinks=False).st_mode):
+                    raise ValueError("Symlink entries unavailable")
+                _rename_noreplace(source, old_name, target, new_name)
+                os.fsync(source)
+                os.fsync(target)
+            finally:
+                os.close(target)
+        finally:
+            os.close(source)
+        return ({"from": checkout_display(old_items), "to": checkout_display(new_items), "status": "ok"},
+                [("/".join(old_items), None, True), ("/".join(new_items), None, True)])
+    parent, name, items = _checkout_parent(root, args["path"])
+    try:
+        _walk_delete(parent, name, CHECKOUT_MAX_ENTRIES, False)
+        _walk_delete(parent, name, CHECKOUT_MAX_ENTRIES, True)
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+    return ({"path": checkout_display(items), "status": "deleted"}, [("/".join(items), None, True)])
+
+
 def entries(blob, validate):
     validate(blob)
     result = {}

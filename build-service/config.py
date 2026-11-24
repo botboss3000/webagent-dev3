@@ -96,7 +96,7 @@ def validate(value):
  # Retired Code Index keys (code_index_ledger_max_bytes, post_deployment_indexing,
  # documentation_review_order) stay accepted so existing installed configs still load.
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","rollback_keep_releases","rollback_keep_archives","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","failed_scratch_retention_seconds","cargo_download_retention_seconds","orphan_release_seconds","note_ttl_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators","secret_env_names","remote_tests","sidekick","production","container_capacity"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","rollback_keep_releases","rollback_keep_archives","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","failed_scratch_retention_seconds","cargo_download_retention_seconds","orphan_release_seconds","note_ttl_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators","secret_env_names","remote_tests","sidekick","production","container_capacity","authorship_gate"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  cpu=cpu_policy(policy)
  if type(cpu["cpu_budget_millis"])is not int or cpu["cpu_budget_millis"]!=0 and not 1000<=cpu["cpu_budget_millis"]<=max(1,(os.cpu_count()or 1)-1)*1000:raise ValueError("CPU budget must retain host headroom")
@@ -104,6 +104,9 @@ def validate(value):
  policy.update(cpu)
  validate_tuning(policy)
  container_capacity(policy)
+ # Checkout paths changed outside a release without an authorship entry (stream D2): "report"
+ # lists them in preflight, "enforce" refuses the release, "off" skips the check.
+ if policy.get("authorship_gate","report")not in {"report","enforce","off"}:raise ValueError("Invalid authorship gate")
  # The local operator's broker identity; switch only while no local task is open (task keys hash it).
  if policy.get("local_operator","codex-local")not in {"codex-local","t480"}:raise ValueError("Invalid local operator identity")
  # Per-key operator identities a restricted SSH key may name (operator_shell.py); the local operator is always one.

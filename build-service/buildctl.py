@@ -770,6 +770,10 @@ def main():
     rebuild = commands.add_parser("rebuild", help="release the live checkout as it is (dev: changed packages or build; stable: full linked build)")
     rebuild.add_argument("--mode", choices=("dev", "stable"), default="dev")
     rebuild.add_argument("--request-id", required=True)
+    commands.add_parser("checkout-git-owner",help="make the checkout's .git writable by the operator account only (stream D3; run after the release that moves File Manager Git to the broker)")
+    authorship=commands.add_parser("authorship-adopt",help="record that you changed checkout paths by hand (e.g. over SSH), so the authorship check accepts them")
+    authorship.add_argument("paths",nargs="+",help="checkout-relative paths, e.g. docs/security-spec.md")
+    authorship.add_argument("--reason",required=True,help="why the paths were changed by hand")
     adopt = commands.add_parser("adopt", help="operator continuation for an uncertain release; never replays effects")
     adopt.add_argument("job_id")
     not_installed = commands.add_parser("not-installed", help="close an uncertain UI release whose files never went live; never replays effects")
@@ -851,6 +855,10 @@ def main():
         if args.feature_profile is not None:request["feature_profile"]=args.feature_profile
         if args.compiler_memory_cap is not None:request["compiler_memory_cap"]=args.compiler_memory_cap
         print(json.dumps(call("build_work",request),sort_keys=True));return 0
+    if args.command=="checkout-git-owner":
+        print(json.dumps(call("build_work",{"action":"checkout_git_owner"}),sort_keys=True));return 0
+    if args.command=="authorship-adopt":
+        print(json.dumps(call("build_work",{"action":"authorship_adopt","paths":args.paths,"reason":args.reason}),sort_keys=True));return 0
     if args.command=="note":
         request={"action":"note","task_id":args.task_id,"reason":args.text,**({"target_task_id":args.target}if args.target else{})}
         print(json.dumps(board_or_direct(request,{"action":"post","to_task":args.target or args.task_id,"from_task":args.task_id,"text":args.text}),sort_keys=True));return 0

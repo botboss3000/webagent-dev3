@@ -52,6 +52,7 @@
     "browser": {"cpu_weight": 100, "cpu_cap": null, "memory_bytes": 3221225472, "pids_limit": 1024},
     "builds": {"cpu_weight": "idle"}
   },
+  "authorship_gate": "report",
   "secret_env_names": [],
   "sidekick": {
     "enabled": false,

@@ -2807,3 +2807,173 @@ class TerminalScratchRetentionTests(unittest.TestCase):
   jobs={job["job_id"]:job for job in (old,recent,trimmed)}
   work={old["job_id"]:self.item(old["job_id"]),recent["job_id"]:self.item(recent["job_id"])}
   self.assertEqual([old["job_id"],trimmed["job_id"]],[pair[0]for pair in self.host.terminal_scratch_jobs(jobs,work,100000,86400)])
+
+
+class CheckoutWriteTests(unittest.TestCase):
+    """Stream D2: File Manager checkout edits through the broker, and the authorship journal."""
+    def setUp(self):
+        self.release=fixtures.host.release
+        self.folder=tempfile.TemporaryDirectory();self.root=Path(self.folder.name)/"code";self.root.mkdir()
+        (self.root/"ui").mkdir();(self.root/"ui/a.txt").write_text("one\n")
+    def tearDown(self):self.folder.cleanup()
+    def write(self,**args):
+        return self.release.checkout_write(str(self.root),{"action":"write","encoding":"utf-8",**args})
+    def test_saves_only_over_the_loaded_bytes_and_never_protected_paths(self):
+        import hashlib,os
+        old=hashlib.sha256(b"one\n").hexdigest()
+        with self.assertRaisesRegex(ValueError,"File changed"):self.write(path="ui/a.txt",content="two\n",expected_sha256="0"*64)
+        result,changes=self.write(path="/live-checkout/ui/a.txt",content="two\n",expected_sha256=old)
+        self.assertEqual((self.root/"ui/a.txt").read_text(),"two\n")
+        self.assertEqual(result["path"],"/live-checkout/ui/a.txt");self.assertEqual(changes,[("ui/a.txt",result["sha256"],False)])
+        result,_=self.write(path="ui/new.txt",content="new",expected_sha256="")
+        self.assertEqual((self.root/"ui/new.txt").read_text(),"new")
+        # A new file's missing folders are created (checkout_edit of a new path).
+        self.write(path="ui/deep/er/new.txt",content="n",expected_sha256="")
+        self.assertEqual((self.root/"ui/deep/er/new.txt").read_text(),"n")
+        with self.assertRaises(FileNotFoundError):self.write(path="ui/none/a.txt",content="n",expected_sha256=old)
+        self.assertFalse((self.root/"ui/none").exists())
+        with self.assertRaisesRegex(ValueError,"disappeared"):self.write(path="ui/gone.txt",content="x",expected_sha256=old)
+        for bad in (".git/config","data/x","v3/runtime/x","ui/.v3-file-x","../x","/etc/passwd","ui//a.txt","target/x","build-jobs/x"):
+            with self.assertRaises(ValueError,msg=bad):self.write(path=bad,content="x",expected_sha256="")
+        # A link is never followed, for the file or a folder on the way.
+        os.symlink("/etc/hostname",self.root/"ui/link.txt");os.symlink(str(self.root/"ui"),self.root/"alias")
+        with self.assertRaises((ValueError,OSError)):self.write(path="ui/link.txt",content="x",expected_sha256=hashlib.sha256(b"").hexdigest())
+        with self.assertRaises(OSError):self.write(path="alias/a.txt",content="x",expected_sha256=hashlib.sha256(b"two\n").hexdigest())
+        with self.assertRaises(ValueError):self.release.checkout_write(str(self.root),{"action":"write","path":"ui/a.txt","content":"x","encoding":"utf-8","expected_sha256":"","extra":1})
+        with self.assertRaisesRegex(ValueError,"one MiB"):self.write(path="ui/big.txt",content="x"*(1024*1024+1),expected_sha256="")
+        self.assertFalse(any(p.name.startswith(".v3-")for p in (self.root/"ui").iterdir()))
+    def test_create_rename_and_delete_keep_their_guards(self):
+        create=lambda path,kind:self.release.checkout_write(str(self.root),{"action":"create","path":path,"kind":kind})
+        create("ui/folder","dir");create("ui/folder/b.txt","file")
+        with self.assertRaises(FileExistsError):create("ui/folder/b.txt","file")
+        rename=lambda a,b:self.release.checkout_write(str(self.root),{"action":"rename","path":a,"new_path":b})
+        with self.assertRaises(FileExistsError):rename("ui/a.txt","ui/folder/b.txt")
+        result,changes=rename("ui/a.txt","ui/folder/a.txt")
+        self.assertEqual(changes,[("ui/a.txt",None,True),("ui/folder/a.txt",None,True)])
+        (self.root/"ui/folder/.cache").mkdir()
+        delete=lambda path:self.release.checkout_write(str(self.root),{"action":"delete","path":path})
+        with self.assertRaisesRegex(ValueError,"protected"):delete("ui/folder")
+        self.assertTrue((self.root/"ui/folder/a.txt").exists())
+        (self.root/"ui/folder/.cache").rmdir()
+        self.assertEqual(delete("ui/folder")[1],[("ui/folder",None,True)])
+        self.assertFalse((self.root/"ui/folder").exists())
+    def test_broker_action_needs_an_administrator_and_journals_the_author(self):
+        import threading
+        broker=types.SimpleNamespace(runner=types.SimpleNamespace(git_lock=threading.Lock()))
+        journal=Path(self.folder.name)/"authorship.jsonl"
+        with patch.object(fixtures.host,"SOURCE",self.root),patch.object(fixtures.host,"AUTHORSHIP",journal):
+            with self.assertRaises(PermissionError):
+                fixtures.host.Broker.checkout_write(broker,{"action":"create","path":"ui/x","kind":"file"},{"user_id":"u","session_id":"s"})
+            self.assertFalse((self.root/"ui/x").exists())
+            fixtures.host.Broker.checkout_write(broker,{"action":"create","path":"ui/x","kind":"file"},{"user_id":"admin-id","session_id":"s","administrator":True})
+            entry=json.loads(journal.read_text().splitlines()[-1])
+            self.assertEqual((entry["kind"],entry["path"],entry["author"]["user_id"],entry["action"]),("file_manager","ui/x","admin-id","create"))
+            with self.assertRaises(PermissionError):
+                fixtures.host.Broker.authorship_adopt(broker,{"action":"authorship_adopt","paths":["ui/a.txt"],"reason":"r"},{"user_id":"admin-id","session_id":"s","administrator":True})
+            for bad in ({"paths":["/etc/x"],"reason":"r"},{"paths":["a/../b"],"reason":"r"},{"paths":[],"reason":"r"},{"paths":["a"],"reason":""}):
+                with self.assertRaises(ValueError,msg=repr(bad)):
+                    fixtures.host.Broker.authorship_adopt(broker,{"action":"authorship_adopt",**bad},{"user_id":"t480","local_caller":True})
+    def test_preflight_report_lists_hand_edits_until_adopted(self):
+        import subprocess
+        run=lambda *argv:subprocess.run(["git","-C",str(self.root),*argv],check=True,capture_output=True)
+        run("init","-q");run("config","user.email","t@example.test");run("config","user.name","t")
+        (self.root/"ui/b.txt").write_text("b\n");(self.root/"ui/own.txt").write_text("o\n")
+        run("add","-A");run("commit","-q","-m","base")
+        journal=Path(self.folder.name)/"authorship.jsonl"
+        broker=types.SimpleNamespace(runner=types.SimpleNamespace(git_lock=__import__("threading").Lock()))
+        with patch.object(fixtures.host,"SOURCE",self.root),patch.object(fixtures.host,"AUTHORSHIP",journal):
+            report=lambda:fixtures.host.Broker.authorship_report(broker,{"ui/own.txt"})
+            self.assertEqual(report()["count"],0)
+            # A journaled File Manager edit passes; a hand edit is listed; the task's own path is not.
+            fixtures.host.Broker.checkout_write(broker,{"action":"write","path":"ui/a.txt","content":"x","encoding":"utf-8",
+                "expected_sha256":__import__("hashlib").sha256(b"one\n").hexdigest()},{"user_id":"admin-id","session_id":"s","administrator":True})
+            (self.root/"ui/b.txt").write_text("hand\n");(self.root/"ui/own.txt").write_text("task\n")
+            value=report()
+            self.assertEqual((value["mode"],value["unjournaled"],value["count"],value["changed"]),("report",["ui/b.txt"],1,2))
+            # An operator adoption clears it.
+            fixtures.host.Broker.authorship_adopt(broker,{"action":"authorship_adopt","paths":["ui/b.txt"],"reason":"edited over SSH"},{"user_id":"t480","session_id":"s","local_caller":True})
+            self.assertEqual(report()["unjournaled"],[])
+            # An entry older than the path's last commit no longer counts.
+            entries=[json.loads(line)for line in journal.read_text().splitlines()]
+            journal.write_text("".join(json.dumps({**e,"at":e["at"]-3600})+"\n"for e in entries))
+            run("add","ui/b.txt");run("commit","-q","-m","b");(self.root/"ui/b.txt").write_text("again\n")
+            self.assertEqual(report()["unjournaled"],["ui/a.txt","ui/b.txt"])
+            with patch.dict(fixtures.host.CONFIG["scheduler"],{"authorship_gate":"off"}):
+                self.assertEqual(report(),{"mode":"off"})
+    def test_journal_keeps_thirty_days_once_large(self):
+        journal=Path(self.folder.name)/"authorship.jsonl"
+        old=json.dumps({"at":time.time()-40*24*3600,"kind":"adopted","path":"x","author":{}})+"\n"
+        journal.write_text(old*(fixtures.host.AUTHORSHIP_MAX_BYTES//len(old)+1))
+        with patch.object(fixtures.host,"AUTHORSHIP",journal):
+            fixtures.host.journal_authorship("adopted",[("y",None,False)],{"user_id":"t480"})
+        lines=journal.read_text().splitlines()
+        self.assertEqual([json.loads(l)["path"]for l in lines],["y"])
+    def test_config_accepts_only_known_gate_modes(self):
+        for mode in ("report","enforce","off"):
+            self.assertEqual(mode,config.validate({**config.defaults(),"scheduler":{"authorship_gate":mode}})["scheduler"]["authorship_gate"])
+        self.assertEqual("report",config.validate(config.defaults())["scheduler"]["authorship_gate"])
+        for bad in ("warn",True,None):
+            with self.assertRaises(ValueError,msg=repr(bad)):config.validate({**config.defaults(),"scheduler":{"authorship_gate":bad}})
+
+
+class CheckoutGitTests(unittest.TestCase):
+    """Stream D3: File Manager Git runs in a one-shot operator container started by the broker."""
+    def broker(self,stdout,returncode=0,lock=None):
+        import threading,subprocess
+        calls=[]
+        def run(argv,input=None,**kwargs):
+            calls.append((argv,input))
+            return subprocess.CompletedProcess(argv,returncode,stdout,b"failed with secret-token-value")
+        runner=types.SimpleNamespace(git_lock=lock or threading.Lock(),secrets=[],
+            inspect=lambda name:{"Image":"sha256:"+"1"*64,"HostConfig":{"NetworkMode":"bridge"}})
+        return types.SimpleNamespace(runner=runner),calls,run
+    def call(self,broker,args,trusted=None):
+        trusted=trusted or {"user_id":"admin-id","session_id":"s","administrator":True}
+        return fixtures.host.Broker.checkout_git(broker,args,trusted)
+    def test_runs_the_app_git_code_as_the_operator_with_the_token_on_stdin_only(self):
+        import pwd,os
+        broker,calls,run=self.broker(b'{"status":"success","output":{"branch":"main"}}\n')
+        repository={"token":"secret-token-value","url":"https://example.test/r.git"}
+        with patch.object(fixtures.host.subprocess,"run",side_effect=run),patch.dict(fixtures.host.CONFIG,{"source_owner":pwd.getpwuid(os.getuid()).pw_name}):
+            value=self.call(broker,{"git":{"action":"git_tool","operation":"push"},"repository":repository})
+        self.assertEqual(value,{"status":"success","output":{"branch":"main"}})
+        argv,stdin=calls[0]
+        self.assertEqual(argv[-2:],["sha256:"+"1"*64,"--checkout-git"])
+        self.assertEqual(argv[argv.index("--user")+1],f"{os.getuid()}:{os.getgid()}")
+        for flag in ("--read-only","--rm","no-new-privileges:true"):self.assertIn(flag,argv)
+        self.assertEqual(argv[argv.index("--cap-drop")+1],"ALL")
+        self.assertFalse(any("secret-token-value"in a for a in argv))
+        self.assertEqual(json.loads(stdin),{"arguments":{"action":"git_tool","operation":"push"},"trusted":{"repository":repository}})
+    def test_refusals_and_failures_never_show_the_token(self):
+        import pwd,os
+        broker,calls,run=self.broker(b"",returncode=1)
+        with patch.object(fixtures.host.subprocess,"run",side_effect=run),patch.dict(fixtures.host.CONFIG,{"source_owner":pwd.getpwuid(os.getuid()).pw_name}):
+            with self.assertRaises(PermissionError):self.call(broker,{"git":{"action":"git_status"}},{"user_id":"u","session_id":"s"})
+            for bad in ({"git":{"action":"git_rm"}},{"git":"git_status"},{"git":{"action":"git_status"},"extra":1},{"git":{"action":"git_status"},"repository":"x"}):
+                with self.assertRaises(ValueError,msg=repr(bad)):self.call(broker,bad)
+            self.assertEqual(calls,[])
+            value=self.call(broker,{"git":{"action":"git_commit","message":"m"},"repository":{"token":"secret-token-value"}})
+        self.assertEqual((value["status"],value["uncertain"]),("error",True))
+        self.assertNotIn("secret-token-value",value["output"])
+    def test_reads_do_not_wait_for_the_checkout_lock(self):
+        import pwd,os,threading
+        lock=threading.Lock();lock.acquire()
+        broker,calls,run=self.broker(b'{"status":"success","output":{}}\n',lock=lock)
+        with patch.object(fixtures.host.subprocess,"run",side_effect=run),patch.dict(fixtures.host.CONFIG,{"source_owner":pwd.getpwuid(os.getuid()).pw_name}):
+            self.assertEqual(self.call(broker,{"git":{"action":"git_status"}})["status"],"success")
+        lock.release()
+    def test_owner_action_removes_group_write_setgid_and_needs_the_operator(self):
+        import pwd,os,threading,stat as st
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);git=root/".git";(git/"hooks").mkdir(parents=True);(git/"config").write_text("[core]\n")
+            os.chmod(git/"hooks",0o2775);os.chmod(git/"config",0o664)
+            broker=types.SimpleNamespace(runner=types.SimpleNamespace(git_lock=threading.Lock()))
+            with patch.object(fixtures.host,"SOURCE",root),patch.dict(fixtures.host.CONFIG,{"source_owner":pwd.getpwuid(os.getuid()).pw_name}):
+                with self.assertRaises(PermissionError):fixtures.host.Broker.checkout_git_owner(broker,{"action":"checkout_git_owner"},{"user_id":"admin","administrator":True})
+                value=fixtures.host.Broker.checkout_git_owner(broker,{"action":"checkout_git_owner"},{"user_id":"t480","local_caller":True})
+            self.assertEqual(value["status"],"done")
+            for path in (git/"hooks",git/"config"):
+                mode=path.stat().st_mode
+                self.assertFalse(mode&(st.S_IWGRP|st.S_IWOTH|st.S_ISGID),path)
+                self.assertTrue(mode&st.S_IROTH,path)
+            self.assertEqual((git/"config").read_text(),"[core]\n")

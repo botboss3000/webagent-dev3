@@ -617,6 +617,49 @@ through the broker action `live_file_write {path, content, expected_sha256}`: on
 listed file, only while its bytes still match the digest the caller loaded (`null` for
 a new file), JSON must parse, written atomically; the app never writes the source tree.
 
+## File Manager checkout edits and the authorship journal
+
+Since stream D2 nothing in an app container writes the checkout through the file system: the
+administrator File Manager's checkout edits are the broker action `checkout_write` (app socket
+identity only; operator and bridge callers are refused the name, and the app must mark the
+request as an administrator's). The Codebase Admin tool `checkout_edit` uses it too: the worker
+prepares the edited bytes and the app sends them here with the agent's user as author. Actions: `write {path, content, encoding utf-8|base64,
+expected_sha256}` (only over the bytes the page loaded, empty digest for a new file whose missing folders are created, at most
+1 MiB, written atomically, never through a link), `create {path, kind file|dir}`, `rename
+{path, new_path}` (never replaces) and `delete {path}` (at most 2000 entries, stops at protected
+entries). The same paths as before are refused: `.git`, `data`, `target`, `workspaces`,
+`rollback`, `runtime`, `gate-runtime`, `host-build-service`, `deployment-secrets`, `.cache`, `build-jobs` and
+`.v3-*` anywhere in the path. The broker makes the change as the checkout owner (`source_owner`),
+so new files stay in the checkout's group.
+
+The File Manager's Git page on the checkout (stream D3) is the broker action `checkout_git {git,
+repository}` (app socket identity, administrator only): `git` is the page's request (actions
+`git_status`, `git_graph`, `git_commit_detail`, `git_branches`, `git_tree_status`,
+`git_line_stats`, `git_ignore`, `git_tool`, `git_commit`, `git_settings`), `repository` the
+connection with its token for fetch, pull, push and settings. The broker runs the app's own Git
+code (`webagent-v3 --checkout-git`) in a one-shot container from the API's current image, as the
+operator account (`source_owner`, plus the checkout's group), read-only root, all capabilities
+dropped, on the API's network, with the checkout mounted at `/code`, for at most 5 minutes; the
+request (and the token) travels on stdin only and error text is scrubbed of it. Actions that
+change the repository hold the checkout lock; reads do not. A timeout or crash of a changing
+action is reported as uncertain. So nothing in the app's containers needs write access to
+`.git`: `buildctl checkout-git-owner` (operator) then makes `.git` writable by the operator
+account only (files another account owned are replaced by operator-owned copies, group set to the
+operator's own, group write, setgid and access lists removed; reading stays open).
+
+Every change to the checkout outside a release commit is recorded in
+`build-jobs/coordination/authorship.jsonl`, one JSON line per path (`at`, `kind`, `path`,
+`sha256`, `tree` for a whole folder, `author`): `file_manager` (with the administrator's user and
+the action), `live_file` (`live_file_write`), `release` (a release promoting its files, with job
+and task) and `adopted` (an operator's hand edit, recorded with
+`buildctl authorship-adopt PATH... --reason TEXT`). Lines older than 30 days are dropped once the
+file passes 1 MiB.
+
+Preflight reports `authorship`: the tracked checkout paths that differ from `HEAD`, are not the
+task's own and have no journal entry newer than their last commit. `scheduler.authorship_gate`
+chooses what happens: `"report"` (default) only lists them, `"enforce"` refuses the release
+naming the paths, `"off"` skips the check. Plan: report for a week, then enforce.
+
 ## Rebuild current checkout and stable releases
 
 `v3_build_rebuild_checkout {mode, request_id}` (app build socket as the signed-in
