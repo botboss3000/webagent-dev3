@@ -106,6 +106,17 @@ again), when the task closes, or if it is still queued after 2 hours (then
 tell the user which session blocks it). The wait recovers your task itself
 if it orphans meanwhile. Work on files that are not blocked first. Never abandon another session's task to get ahead of it.
 
+The broker keeps your refused edit with the queue request. After every release
+it checks that the edit still fits the new source; when a release changes the
+lines you edit, a board note names those files at once. When your claims are
+granted your task's files are current source: reread only the files you edit
+(and any a note named) before applying again; do not abandon and begin a new
+task because the base moved. An apply that arrives with the grant is moved
+onto current source by itself when it still fits (its receipt says
+`rebased: true`, and checks you ran before were on a different base); when it
+does not fit, the refusal names each file and why, and your task keeps its
+claims while you redo just those edits.
+
 ## Blocker board
 
 Every broker task has a board of short notes that any session can read and
