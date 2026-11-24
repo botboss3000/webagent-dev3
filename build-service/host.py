@@ -2424,8 +2424,13 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         if "v3/src/main.rs"not in paths:raise ValueError("Installed compiler dependency manifest unavailable")
         return paths
     def plugin_hot_swappable(self):
+        socket_path="/runtime/worker/tools.sock"
         for name in TARGETS:
             value=self.inspect(name)
+            # With the worker container on (stream D4) the API reaches the worker on
+            # WORKER_SOCKET, as its own V3_TOOL_SOCKET says; only the two known paths are used.
+            if name==TARGETS[0] and "V3_TOOL_SOCKET="+WORKER_SOCKET in value.get("Config",{}).get("Env",[]):
+                socket_path=WORKER_SOCKET
             if not any(m.get("Destination")=="/opt/v3/assets" and m.get("Source")==str(ASSET_ROOT)
                        and not m.get("RW") for m in value.get("Mounts",[])):
                 return False
@@ -2433,7 +2438,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 return False
         # Ask the installed worker contract, not a filename or source-byte guess.
         program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
-            "s.connect('/runtime/worker/tools.sock'); "
+            "s.connect('"+socket_path+"'); "
             "s.sendall(json.dumps({'version':2,'id':'plugin-protocol','name':'ability_plugins_protocol',"
             "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
             "print(s.makefile('rb').readline(4096).decode())")
