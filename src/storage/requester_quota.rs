@@ -1,5 +1,13 @@
-//! Application-wide requester slots. Absent canonical commits remain reserved.
+//! Application-wide requester slots. An absent canonical commit stays reserved for
+//! [`LEFT_BEHIND_SECONDS`]; after that a slot whose run is in no account's run index is given back.
 use super::*;
+/// How long a held slot whose run is not (or no longer) in its account's run index keeps its
+/// place: admission takes the slot before the run's own commit, so a younger one may be an
+/// admission still in flight. Older ones were left behind (the chat was deleted, or that
+/// commit failed) and would otherwise hold places in every line forever.
+const LEFT_BEHIND_SECONDS: i64 = 600;
+/// Least time between two passes of [`Store::release_left_behind_slots`] per state root.
+const LEFT_BEHIND_PASS_SECONDS: i64 = 60;
 /// A new person refused because the agent serves its most people of the last 30 days.
 pub(crate) const AGENT_USERS_FULL: &str = "Agent user limit reached";
 /// A new person refused because the agent serves its most people at once.
@@ -64,6 +72,8 @@ impl Store {
             ("agent_owner", "TEXT"),
             ("paid", "INTEGER NOT NULL DEFAULT 0"),
             ("first_at", "INTEGER NOT NULL DEFAULT 0"),
+            // When the slot was last taken (Unix seconds; 0 for rows from before this column).
+            ("reserved_at", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             let has: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM pragma_table_info('requester_run_slots') WHERE name=?",
@@ -142,6 +152,7 @@ impl Store {
         static RECONCILE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
         let _one = RECONCILE.lock().await;
         self.requester_slots_schema().await?;
+        self.sweep_left_behind_slots().await;
         // Read canonical WAL snapshots before the app writer. New admissions reserve
         // first. Absence cannot prove an interrupted canonical commit did not happen.
         let mut records = Vec::new();
@@ -375,6 +386,7 @@ impl Store {
                 }
             }
         }
+        let now = crate::now() as i64;
         let mut tx = self.app_pool.begin().await?;
         for (rid, actor, owner, sid, slot) in records {
             match slot {
@@ -395,7 +407,8 @@ impl Store {
                         .await?;
                 }
                 Slot::Retake => {
-                    sqlx::query("UPDATE requester_run_slots SET released=0,sequence=(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots) WHERE run_id=? AND owner_id=? AND released=2")
+                    sqlx::query("UPDATE requester_run_slots SET released=0,sequence=(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots),reserved_at=? WHERE run_id=? AND owner_id=? AND released=2")
+                        .bind(now)
                         .bind(rid)
                         .bind(owner)
                         .execute(&mut *tx)
@@ -403,7 +416,7 @@ impl Store {
                 }
                 Slot::Hold => {
                     let agent = agents.get(&rid).cloned();
-                    sqlx::query("INSERT OR IGNORE INTO requester_run_slots(run_id,requester_id,owner_id,session_id,sequence,agent_id) VALUES(?,?,?,?,(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots),?)").bind(rid).bind(actor).bind(owner).bind(sid).bind(agent).execute(&mut *tx).await?;
+                    sqlx::query("INSERT OR IGNORE INTO requester_run_slots(run_id,requester_id,owner_id,session_id,sequence,agent_id,reserved_at) VALUES(?,?,?,?,(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots),?,?)").bind(rid).bind(actor).bind(owner).bind(sid).bind(agent).bind(now).execute(&mut *tx).await?;
                 }
             }
         }
@@ -465,8 +478,9 @@ impl Store {
                 return Err(anyhow!("Requester reservation mismatch"));
             }
             if released == 2 {
-                sqlx::query("UPDATE requester_run_slots SET released=0,sequence=(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots),first_at=? WHERE run_id=?")
+                sqlx::query("UPDATE requester_run_slots SET released=0,sequence=(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots),first_at=?,reserved_at=? WHERE run_id=?")
                     .bind(first_at)
+                    .bind(now)
                     .bind(rid)
                     .execute(&mut *tx)
                     .await?;
@@ -526,7 +540,7 @@ impl Store {
                         .next()
                         .map(|level| (level, runs));
             }
-            sqlx::query("INSERT INTO requester_run_slots(run_id,requester_id,owner_id,session_id,sequence,agent_id,admin,agent_owner,paid,first_at) VALUES(?,?,?,?,(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots),?,?,?,?,?)").bind(rid).bind(actor).bind(self.current_user_id()).bind(sid).bind(agent).bind(admin).bind(&access.agent_owner_id).bind(paid).bind(first_at).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO requester_run_slots(run_id,requester_id,owner_id,session_id,sequence,agent_id,admin,agent_owner,paid,first_at,reserved_at) VALUES(?,?,?,?,(SELECT COALESCE(MAX(sequence),0)+1 FROM requester_run_slots),?,?,?,?,?,?)").bind(rid).bind(actor).bind(self.current_user_id()).bind(sid).bind(agent).bind(admin).bind(&access.agent_owner_id).bind(paid).bind(first_at).bind(now).execute(&mut *tx).await?;
         }
         tx.commit().await?;
         if let Some((level, runs)) = owner_alert {
@@ -753,6 +767,112 @@ impl Store {
             .execute(&self.app_pool)
             .await?;
         Ok(())
+    }
+
+    /// Give back every slot of chat `sid` stored in this account: the chat was deleted, and its
+    /// runs' records with it, so the account's slot reconcile can no longer find them.
+    pub(crate) async fn release_session_slots(&self, sid: &str) -> Result<()> {
+        self.requester_slots_schema().await?;
+        sqlx::query(
+            "UPDATE requester_run_slots SET released=1 WHERE session_id=? AND owner_id=? AND released<>1",
+        )
+        .bind(sid)
+        .bind(self.current_user_id())
+        .execute(&self.app_pool)
+        .await?;
+        Ok(())
+    }
+
+    /// [`Self::release_left_behind_slots`] at most once per [`LEFT_BEHIND_PASS_SECONDS`] for
+    /// this state root. Best effort: a failure leaves the slots for a later pass.
+    async fn sweep_left_behind_slots(&self) {
+        static LAST: std::sync::LazyLock<
+            std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, i64>>,
+        > = std::sync::LazyLock::new(Default::default);
+        let now = crate::now() as i64;
+        {
+            let Ok(mut last) = LAST.lock() else {
+                return;
+            };
+            let at = last.entry(self.root.clone()).or_insert(0);
+            if now - *at < LEFT_BEHIND_PASS_SECONDS {
+                return;
+            }
+            *at = now;
+        }
+        match self.release_left_behind_slots(now).await {
+            Ok(0) => {}
+            Ok(released) => tracing::info!(released, "Left-behind run slots given back"),
+            Err(error) => tracing::warn!("Left-behind run slots not checked: {error}"),
+        }
+    }
+
+    /// Give back the held and set-aside slots taken more than [`LEFT_BEHIND_SECONDS`] before
+    /// `now` whose run is not going by its account's plain run index: no row there (and no
+    /// pending manager review, whose run has none yet) or a finished run. Follow-up review slots
+    /// are the account reconcile's. Reads only the slot table and the accounts holding such
+    /// slots, never every account. Returns how many slots were given back.
+    pub(crate) async fn release_left_behind_slots(&self, now: i64) -> Result<u64> {
+        self.requester_slots_schema().await?;
+        let before = now - LEFT_BEHIND_SECONDS;
+        let old: Vec<(String, String)> = sqlx::query_as(
+            "SELECT run_id,owner_id FROM requester_run_slots WHERE released<>1 AND reserved_at<=? AND substr(run_id,1,16)<>'followup-review:' ORDER BY owner_id",
+        )
+        .bind(before)
+        .fetch_all(&self.app_pool)
+        .await?;
+        let mut gone = Vec::new();
+        let mut account: Option<(String, Option<sqlx::SqlitePool>)> = None;
+        for (rid, owner) in old {
+            if account.as_ref().map(|(id, _)| id) != Some(&owner) {
+                let path = self
+                    .root
+                    .join("user_data")
+                    .join(&owner)
+                    .join(format!("{owner}.db"));
+                let pool = if path.exists() {
+                    Some(self.for_user(&owner).await?.pool.clone())
+                } else {
+                    None
+                };
+                account = Some((owner.clone(), pool));
+            }
+            let Some((_, Some(pool))) = &account else {
+                // The account's storage is gone, and every run in it.
+                gone.push((rid, owner));
+                continue;
+            };
+            let status: Option<String> =
+                sqlx::query_scalar("SELECT status FROM run_index WHERE id=?")
+                    .bind(&rid)
+                    .fetch_optional(pool)
+                    .await?;
+            let ended = match status.as_deref() {
+                None => sqlx::query_scalar::<_, i64>("SELECT 1 FROM docs WHERE key=?")
+                    .bind(format!("manager_review:{rid}"))
+                    .fetch_optional(pool)
+                    .await?
+                    .is_none(),
+                Some(status) => matches!(status, "completed" | "cancelled" | "failed"),
+            };
+            if ended {
+                gone.push((rid, owner));
+            }
+        }
+        let mut released = 0;
+        let mut tx = self.app_pool.begin().await?;
+        for (rid, owner) in gone {
+            // Still old: a slot taken again meanwhile is a live admission's.
+            released += sqlx::query("UPDATE requester_run_slots SET released=1 WHERE run_id=? AND owner_id=? AND released<>1 AND reserved_at<=?")
+                .bind(rid)
+                .bind(owner)
+                .bind(before)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+        tx.commit().await?;
+        Ok(released)
     }
 }
 
@@ -1188,6 +1308,84 @@ mod tests {
         visitors[0].reconcile_requester_slots().await.unwrap();
         visitors[0].release_run_place("visit-0").await.unwrap();
         assert!(ready(2).await.unwrap());
+    }
+
+    /// The fault of 11-24: a deleted chat's runs kept their slots, so other people's runs on
+    /// the agent waited behind them for ever. Deleting the chat gives its slots back.
+    #[tokio::test]
+    async fn a_deleted_chats_run_slots_no_longer_hold_the_agents_line() {
+        let (_root, store) = opened().await;
+        let people = free_accounts(&store, &["d1", "d2"]).await;
+        let (gone, waiting) = (&people[0], &people[1]);
+        gone.put(
+            "session:d",
+            &json!({"id":"d","agent_id":"shared_default","status":"active","metadata_revision":0}),
+        )
+        .await
+        .unwrap();
+        for rid in ["deleted-0", "deleted-1"] {
+            let mut r = run_on(rid, gone.current_user_id(), "shared_default");
+            r["session_id"] = json!("d");
+            gone.reserve_requester_run(&r).await.unwrap();
+            gone.put(&format!("run:{rid}"), &r).await.unwrap();
+        }
+        let mine = run_on("waits", waiting.current_user_id(), "shared_default");
+        waiting.reserve_requester_run(&mine).await.unwrap();
+        // Ceiling 4: the agent cap is 2, and the other chat's two runs hold both places.
+        let ready = || waiting.requester_claim_ready_within(&mine, "loop-test", capacity(4));
+        assert!(!ready().await.unwrap());
+        gone.delete_agent_session("d").await.unwrap();
+        let held: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM requester_run_slots WHERE session_id='d' AND released<>1",
+        )
+        .fetch_one(&store.app_pool)
+        .await
+        .unwrap();
+        assert_eq!(held, 0);
+        assert!(ready().await.unwrap());
+    }
+
+    /// A slot whose run is in no run index is given back once it is older than an admission
+    /// can take; a young one may be an admission in flight, and a pending manager review has
+    /// no index row yet, so both keep theirs, as does a queued run.
+    #[tokio::test]
+    async fn left_behind_slots_are_given_back_only_when_old_and_runless() {
+        let (_root, store) = opened().await;
+        let people = free_accounts(&store, &["o1", "o2", "o3"]).await;
+        let (lost, reviewed, waiting) = (&people[0], &people[1], &people[2]);
+        for rid in ["lost-0", "lost-1"] {
+            lost.reserve_requester_run(&run_on(rid, lost.current_user_id(), "shared_default"))
+                .await
+                .unwrap();
+        }
+        let review = run_on("review-0", reviewed.current_user_id(), "shared_default");
+        reviewed.reserve_requester_run(&review).await.unwrap();
+        reviewed
+            .put(
+                "manager_review:review-0",
+                &json!({"id":"review-0","session_id":"s","status":"pending_review","run":review}),
+            )
+            .await
+            .unwrap();
+        let mine = run_on("waits", waiting.current_user_id(), "shared_default");
+        waiting.reserve_requester_run(&mine).await.unwrap();
+        waiting.put("run:waits", &mine).await.unwrap();
+        // Ceiling 4: the agent cap is 2; two runless slots and the review are ahead.
+        let ready = || waiting.requester_claim_ready_within(&mine, "loop-test", capacity(4));
+        assert!(!ready().await.unwrap());
+        let now = crate::now() as i64;
+        assert_eq!(store.release_left_behind_slots(now).await.unwrap(), 0);
+        assert!(!ready().await.unwrap());
+        let later = now + LEFT_BEHIND_SECONDS + 1;
+        assert_eq!(store.release_left_behind_slots(later).await.unwrap(), 2);
+        assert!(ready().await.unwrap());
+        let held: Vec<String> = sqlx::query_scalar(
+            "SELECT run_id FROM requester_run_slots WHERE released=0 ORDER BY run_id",
+        )
+        .fetch_all(&store.app_pool)
+        .await
+        .unwrap();
+        assert_eq!(held, ["review-0", "waits"]);
     }
 
     /// An agent `owner` owns, whose Member level has `runs` at once, with the owner's own

@@ -1139,6 +1139,11 @@ impl Store {
         )
         .await?;
         tx.commit().await?;
+        // Its runs' slots go back now; with their records gone, only the left-behind release
+        // (after its wait) could find them, and until then they hold places in every line.
+        if let Err(error) = self.release_session_slots(sid).await {
+            tracing::warn!(%error, "Run slots of a deleted chat not given back");
+        }
         self.remove_blobs(removed.iter().filter_map(|k| k.strip_prefix("attachment:")));
         removed.push(key);
         // The account's own deletion is the moment to purge sessions deleted long ago
