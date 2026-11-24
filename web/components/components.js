@@ -1,13 +1,10 @@
 // The component inventory. The gallery and the pages both read this list, and a
 // fixture checks it against the folders on disk, so it cannot drift silently.
+//
+// These are the frame primitives. The chat components were removed with the
+// chat panel; they come back one at a time, each added here when it lands.
 
 export const components = [
-  {
-    id: 'activity',
-    title: 'Activity group',
-    summary: 'Collapsible group of model steps and tool calls inside one reply.',
-    css: 'activity/activity.css',
-  },
   {
     id: 'badge',
     title: 'Badge and avatar',
@@ -27,18 +24,6 @@ export const components = [
     css: 'card/card.css',
   },
   {
-    id: 'chat-header',
-    title: 'Chat header',
-    summary: 'Agent name row, session chip row and the quiet sub-header strip.',
-    css: 'chat-header/chat-header.css',
-  },
-  {
-    id: 'composer',
-    title: 'Composer',
-    summary: 'Pill input row with attach, dictate and send, plus the token strip.',
-    css: 'composer/composer.css',
-  },
-  {
     id: 'icon',
     title: 'Icon',
     summary: 'Inline SVG icon set; no icon library and no external files.',
@@ -49,12 +34,6 @@ export const components = [
     title: 'List',
     summary: 'Rows of one thing each, with an optional hint and trailing slot.',
     css: 'list/list.css',
-  },
-  {
-    id: 'message',
-    title: 'Message',
-    summary: 'User and agent bubbles in the chat transcript.',
-    css: 'message/message.css',
   },
   {
     id: 'stat',

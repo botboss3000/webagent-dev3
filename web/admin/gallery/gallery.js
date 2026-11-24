@@ -1,5 +1,8 @@
 // Component gallery: lists every component in components.js and shows it live.
 // Administrators only — this page lives under web/admin/, which the server gates.
+//
+// The chat components were removed with the chat panel, so the specimens here are
+// the frame primitives; a ported component adds its specimen when it lands.
 
 import { components } from '../../components/components.js';
 import { icon } from '../../components/icon/icon.js';
@@ -54,53 +57,6 @@ const SPECIMENS = {
     <div class="g-row g-icons">${['grid', 'users', 'cpu', 'settings', 'hammer', 'layers', 'message', 'bot', 'plus', 'book', 'menu', 'sun', 'moon']
       .map((name) => icon(name, 20))
       .join('')}</div>`,
-  'chat-header': `
-    <div class="g-frame">
-      <header class="chat-head">
-        <div class="chat-head-row">
-          <span class="chat-agent-name">WebAgent</span>
-          <span class="chat-head-spacer"></span>
-          <button type="button" class="chat-new-button" aria-label="New conversation">+</button>
-        </div>
-        <div class="chat-head-row">
-          <button type="button" class="chat-session-chip"><span class="chat-session-title">Shell review</span><span class="chat-session-age">2m</span></button>
-        </div>
-      </header>
-    </div>`,
-  message: `
-    <div class="messages">
-      <article class="msg msg-user"><span class="msg-label">You</span><div class="msg-body"><p>A user turn.</p></div></article>
-      <article class="msg msg-agent"><span class="msg-label">Agent</span><div class="msg-body"><p>An agent turn with <code>inline code</code> and a <a href="#/wiki">link</a>.</p></div></article>
-    </div>`,
-  activity: `
-    <div class="activity activity-open">
-      <button type="button" class="activity-head" aria-expanded="true">
-        <span class="activity-chev">›</span>
-        <span class="activity-label">2 tool calls, 1 message</span>
-        <span class="activity-status">Completed</span>
-      </button>
-      <div class="activity-body">
-        <div class="step">
-          <div class="step-head"><span class="step-num">Step 1</span><span class="step-count">2 tool calls</span></div>
-          <div class="step-calls">
-            <details class="call"><summary><span class="call-glyph">R</span><span class="call-label">Read</span><span class="call-chip">shell.css</span><span class="call-note">182 lines</span></summary>
-              <div class="call-detail"><h4>Arguments</h4><pre>{ "path": "web/shell/shell.css" }</pre></div>
-            </details>
-          </div>
-        </div>
-      </div>
-    </div>`,
-  composer: `
-    <div class="composer">
-      <div class="composer-pill">
-        <div class="composer-row">
-          <textarea class="composer-input" rows="1" placeholder="Chat" aria-label="Message"></textarea>
-          <button type="button" class="composer-button" aria-label="Attach a file">+</button>
-          <button type="button" class="composer-button composer-send" aria-label="Send" disabled>↑</button>
-        </div>
-        <div class="composer-stats"><span>in <b>3,184</b></span><span>out <b>612</b></span></div>
-      </div>
-    </div>`,
 };
 
 function card(component) {

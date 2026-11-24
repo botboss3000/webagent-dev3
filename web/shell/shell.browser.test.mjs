@@ -1,6 +1,8 @@
-// Browser fixture for the web/ shell: sidebar, phone drawer, chat panel and grip.
-// Runs the real files from disk through a tiny static server so the module graph,
-// the partial fetch and the CSS all exercise the shipped assets.
+// Browser fixture for the web/ shell: sidebar, main header, empty body, footer,
+// and the phone drawer. Runs the real files from disk through a tiny static
+// server so the module graph and the CSS both exercise the shipped assets.
+//
+// The chat is stripped on purpose: this fixture also proves it is really gone.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -105,34 +107,34 @@ for (const viewport of VIEWPORTS) {
         assert.ok(agentLabels.includes('Fixture Agent'), 'agent from /api/v3/agents is listed');
         assert.ok(agentLabels.includes('New agent'), 'New agent entry is listed');
 
-        // The ported chat panel mounts from its partial, with the sample transcript.
-        await page.waitForSelector('#chat-panel .msg', { state: 'attached' });
-        const messages = await page.$$eval('#chat-panel .msg', (nodes) => nodes.length);
-        assert.ok(messages >= 3, `expected the sample transcript, saw ${messages} messages`);
-        assert.equal(await page.locator('#chat-panel .composer-send').isDisabled(), true, 'send starts disabled');
-        const activityOpen = await page.locator('.activity').first().getAttribute('class');
-        assert.match(activityOpen, /activity-open/, 'activity group starts open');
+        // The shell is header, empty body and footer: three regions, nothing else.
+        assert.equal(await page.locator('.main-head').count(), 1, 'one main header');
+        assert.equal(await page.locator('.main-foot').count(), 1, 'one main footer');
+        assert.equal(await page.locator('.main-head').isVisible(), true, 'header is visible');
+        assert.equal(await page.locator('.main-foot').isVisible(), true, 'footer is visible');
+        assert.equal(await page.locator('#page-title').textContent(), 'All sessions', 'header names the route');
+        assert.equal(await page.locator('#footer-status').textContent(), 'Signed in as administrator');
 
-        const chatWidth = () => page.$eval('#chat-column', (node) => node.getBoundingClientRect().width);
-        // A phone opens on the panel view, so the chat column is hidden there until
-        // the Panel/Chat switch is used; only the desktop measurement is meaningful.
-        const before = viewport.name === 'desktop' ? await chatWidth() : 0;
-        if (viewport.name === 'desktop') {
-          assert.ok(before > 200, `chat column has width on desktop (${before})`);
+        // The body holds only the placeholder page: title plus one line.
+        const bodyLines = await page.$$eval('#page-body > *', (nodes) => nodes.length);
+        assert.ok(bodyLines >= 1, 'the placeholder page rendered into the body');
+
+        // The chat is stripped: no column, no grip, no panel, no transcript.
+        for (const selector of ['#chat-column', '#chat-resize-handle', '#chat-panel', '.msg', '.composer']) {
+          assert.equal(await page.locator(selector).count(), 0, `${selector} must not exist`);
         }
+        const chatVar = await page.evaluate(() =>
+          getComputedStyle(document.documentElement).getPropertyValue('--chat-panel-width').trim(),
+        );
+        assert.equal(chatVar, '', 'the chat width variable is gone');
+
+        // The shell fills the viewport with no sideways overflow at either width.
+        const overflow = await page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        );
+        assert.ok(overflow <= 1, `no horizontal overflow (${overflow})`);
 
         if (viewport.name === 'desktop') {
-          // The grip resizes the chat column by dragging the divider.
-          const handle = await page.locator('#chat-resize-handle').boundingBox();
-          assert.ok(handle && handle.width > 0, 'grip is laid out on desktop');
-          await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
-          await page.mouse.down();
-          await page.mouse.move(handle.x + handle.width / 2 - 90, handle.y + handle.height / 2, { steps: 8 });
-          await page.mouse.up();
-          const after = await chatWidth();
-          assert.ok(after > before + 40, `dragging left widened the chat column (${before} -> ${after})`);
-          assert.equal(await page.evaluate(() => document.body.classList.contains('chat-resizing')), false);
-
           // Collapsing the sidebar leaves an icon rail (the width animates).
           await page.click('#sidebar-toggle');
           assert.equal(await page.evaluate(() => document.body.classList.contains('sidebar-collapsed')), true);
@@ -140,9 +142,13 @@ for (const viewport of VIEWPORTS) {
           const rail = await page.$eval('#sidebar', (node) => node.getBoundingClientRect().width);
           assert.ok(rail <= 80, `collapsed sidebar is a rail (${rail}px)`);
           assert.equal(await page.locator('#sidebar .brand-name').isVisible(), false, 'labels hide in the rail');
+
+          // The main panel takes the whole stage once the rail is narrow.
+          const main = await page.$eval('#main-panel', (node) => node.getBoundingClientRect().width);
+          assert.ok(main > 1000, `main panel fills the width beside the rail (${main}px)`);
         } else {
-          // Phone: the sidebar is a drawer and the grip gives way to the Panel/Chat switch.
-          assert.equal(await page.locator('#chat-resize-handle').isVisible(), false, 'grip hidden at phone width');
+          // Phone: the sidebar is a drawer over the stage.
+          assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');
           await page.click('#menu-open');
           assert.equal(await page.evaluate(() => document.body.classList.contains('menu-open')), true);
           // The drawer slides in, so wait for the transform to settle before measuring.
@@ -152,10 +158,6 @@ for (const viewport of VIEWPORTS) {
           // Click the backdrop to the right of the open drawer, not through the sidebar.
           await page.click('#sidebar-backdrop', { position: { x: viewport.width - 20, y: 300 } });
           assert.equal(await page.evaluate(() => document.body.classList.contains('menu-open')), false);
-
-          await page.click('.phone-switch button[data-view="chat"]');
-          assert.equal(await page.evaluate(() => document.body.classList.contains('view-chat')), true);
-          assert.equal(await page.locator('#chat-column').isVisible(), true, 'chat is reachable on a phone');
         }
 
         assert.deepEqual(errors, [], `no page errors: ${errors.join(' | ')}`);
@@ -180,6 +182,7 @@ test('signed-out visitors get no Administrator group and no admin page', async (
     await page.waitForFunction(() => document.getElementById('page-body')?.textContent?.trim().length > 0);
     const body = await page.$eval('#page-body', (node) => node.textContent);
     assert.match(body, /Administrator only/, 'the admin route refuses without the flag');
+    assert.equal(await page.locator('#footer-status').textContent(), 'Signed out');
     assert.deepEqual(errors, []);
     await page.close();
   });

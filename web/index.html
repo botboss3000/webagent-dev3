@@ -13,13 +13,8 @@
 <link rel="stylesheet" href="./components/list/list.css">
 <link rel="stylesheet" href="./components/stat/stat.css">
 <link rel="stylesheet" href="./components/tile/tile.css">
-<link rel="stylesheet" href="./components/chat-header/chat-header.css">
-<link rel="stylesheet" href="./components/message/message.css">
-<link rel="stylesheet" href="./components/activity/activity.css">
-<link rel="stylesheet" href="./components/composer/composer.css">
-<link rel="stylesheet" href="./chat/chat.css">
 </head>
-<body class="view-panel">
+<body>
 <div class="app">
   <aside id="sidebar" aria-label="Navigation">
     <div class="sidebar-top">
@@ -61,29 +56,21 @@
     </div>
   </aside>
 
-  <main class="stage">
-    <div id="main-panel">
-      <header class="main-head">
-        <button type="button" id="menu-open" class="icon-button" aria-label="Open menu" aria-expanded="false">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-            <path d="M4 7h16M4 12h16M4 17h16"/>
-          </svg>
-        </button>
-        <h1 id="page-title">Sessions</h1>
-        <span class="main-head-note" id="page-note"></span>
-        <div class="phone-switch" role="group" aria-label="View">
-          <button type="button" data-view="panel" class="active" aria-pressed="true">Panel</button>
-          <button type="button" data-view="chat" aria-pressed="false">Chat</button>
-        </div>
-      </header>
-      <div class="main-body" id="page-body"></div>
-    </div>
-
-    <div id="chat-resize-handle" role="separator" aria-label="Resize chat panel" aria-orientation="vertical" aria-controls="main-panel chat-column" tabindex="0"></div>
-
-    <div id="chat-column">
-      <div class="chat-skeleton">Chat panel loading…</div>
-    </div>
+  <main id="main-panel">
+    <header class="main-head">
+      <button type="button" id="menu-open" class="icon-button" aria-label="Open menu" aria-expanded="false">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16"/>
+        </svg>
+      </button>
+      <h1 id="page-title">Sessions</h1>
+      <span class="main-head-note" id="page-note"></span>
+    </header>
+    <div class="main-body" id="page-body"></div>
+    <footer class="main-foot">
+      <span class="main-foot-note">Shell only — components land here one at a time.</span>
+      <span class="main-foot-status" id="footer-status"></span>
+    </footer>
   </main>
 </div>
 <div id="sidebar-backdrop" aria-hidden="true"></div>

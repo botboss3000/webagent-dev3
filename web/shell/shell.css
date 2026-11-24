@@ -1,5 +1,8 @@
-/* Shell layout: sidebar, main panel, chat column, phone drawer.
-   Loaded after tokens.css. Components own their own styles. */
+/* Shell layout: sidebar, main panel (header, empty body, footer) and phone drawer.
+   Loaded after tokens.css. Components own their own styles.
+
+   The chat column is deliberately gone: this shell is the frame only, and
+   components are ported back one at a time. */
 
 .app {
   display: flex;
@@ -284,15 +287,7 @@ body.sidebar-collapsed #sidebar-toggle {
   margin-left: 0;
 }
 
-/* ── Main + split stage ──────────────────────────────────── */
-.stage {
-  flex: 1 1 auto;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  gap: 0;
-}
-
+/* ── Main panel: header, empty body, footer ──────────────── */
 #main-panel {
   flex: 1 1 auto;
   min-width: 0;
@@ -333,6 +328,7 @@ body.sidebar-collapsed #sidebar-toggle {
   text-overflow: ellipsis;
 }
 
+/* The body stays empty until a component is ported into it. */
 .main-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -340,99 +336,36 @@ body.sidebar-collapsed #sidebar-toggle {
   padding: 16px 14px 24px;
 }
 
-/* The phone menu button and the Panel/Chat switch exist only at phone width. */
-#menu-open,
-.phone-switch {
+.main-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-top: var(--border-width) solid var(--border-soft);
+  min-height: 40px;
+  font-size: 11.5px;
+  color: var(--fg-4);
+}
+
+.main-foot-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.main-foot-status {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--fg-3);
+}
+
+/* The phone menu button exists only at drawer width. */
+#menu-open {
   display: none;
 }
 
-.phone-switch {
-  margin-left: auto;
-  gap: 2px;
-  padding: 2px;
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--r-pill);
-  background: var(--bg-tint);
-}
-
-.phone-switch button {
-  min-height: 30px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: var(--r-pill);
-  background: none;
-  color: var(--fg-2);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
-.phone-switch button.active {
-  background: var(--bg-elev);
-  color: var(--fg-1);
-  font-weight: 600;
-}
-
-/* ── Chat column + resize grip ───────────────────────────── */
-#chat-resize-handle {
-  flex: 0 0 14px;
-  width: 14px;
-  position: relative;
-  z-index: 10;
-  display: block;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: col-resize;
-  touch-action: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
-#chat-resize-handle::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 2px;
-  height: 36px;
-  margin: -18px 0 0 -1px;
-  border-radius: var(--r-pill);
-  background: color-mix(in oklab, currentColor 18%, transparent);
-  transition: background 0.15s ease, height 0.15s ease, margin 0.15s ease;
-}
-
-#chat-resize-handle:hover::before,
-#chat-resize-handle:focus-visible::before,
-#chat-resize-handle.resizing::before {
-  height: 56px;
-  margin-top: -28px;
-  background: rgba(var(--brand-rgb), 0.67);
-}
-
-#chat-resize-handle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -4px;
-  border-radius: var(--r-sm);
-}
-
-body.chat-resizing {
-  cursor: col-resize;
-  user-select: none;
-}
-
-body.chat-resizing #chat-column {
-  pointer-events: none;
-}
-
-#chat-column {
-  flex: 0 0 var(--chat-panel-width);
-  width: var(--chat-panel-width);
-  min-width: 240px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-/* ── Phone: sidebar becomes a drawer, one view at a time ─── */
+/* ── Phone: sidebar becomes a drawer ─────────────────────── */
 @media (max-width: 900px) {
   .app {
     padding: 6px;
@@ -468,8 +401,7 @@ body.chat-resizing #chat-column {
     display: none;
   }
 
-  #menu-open,
-  .phone-switch {
+  #menu-open {
     display: inline-flex;
   }
 
@@ -494,34 +426,22 @@ body.chat-resizing #chat-column {
 }
 
 @media (max-width: 700px) {
-  #chat-resize-handle {
-    display: none;
+  .main-head {
+    padding: 8px 10px;
+    min-height: 48px;
   }
 
-  #chat-column {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
+  .main-body {
+    padding: 12px 10px 18px;
   }
 
-  body.view-chat .main-head,
-  body.view-chat .main-body {
-    display: none;
-  }
-
-  body.view-panel #chat-column {
-    display: none;
-  }
-
-  body.view-panel .main-head,
-  body.view-panel .main-body {
-    display: block;
+  .main-foot {
+    padding: 8px 10px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #sidebar,
-  #chat-resize-handle::before {
+  #sidebar {
     transition: none;
   }
 }

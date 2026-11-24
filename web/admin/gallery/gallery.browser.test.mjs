@@ -50,7 +50,7 @@ test('the gallery lists exactly the component folders on disk', async () => {
     .map((entry) => entry.name)
     .sort();
 
-  assert.ok(manifest.length >= 10, `manifest lists components (${manifest.length})`);
+  assert.ok(manifest.length >= 5, `manifest lists components (${manifest.length})`);
   assert.deepEqual([...manifest].sort(), folders, 'every component folder is in the manifest and nothing extra');
 
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');

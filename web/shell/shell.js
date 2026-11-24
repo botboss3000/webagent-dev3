@@ -1,9 +1,11 @@
-// Shell behaviour: theme, sidebar, phone drawer, hash router, chat panel mount.
+// Shell behaviour: theme, sidebar, phone drawer and the hash router.
 // Plain modules, no build step. Admin pages are imported only when an
 // administrator opens them, so a signed-out visitor never fetches that folder.
+//
+// The chat column is gone: this release is the frame only. Components are
+// ported back one at a time, so nothing mounts into #page-body by itself.
 
 import { icon } from '../components/icon/icon.js';
-import { mountChat } from '../chat/chat.js';
 
 const THEME_KEY = 'webagent.web.theme';
 const COLLAPSE_KEY = 'webagent.web.sidebar';
@@ -244,92 +246,6 @@ async function renderRoute() {
   closeMenu();
 }
 
-/* ── Chat resize grip: drag the divider to set the chat column width ── */
-function wireGrip() {
-  const grip = document.getElementById('chat-resize-handle');
-  const stage = document.querySelector('.stage');
-  if (!grip || !stage) return;
-
-  const limits = () => {
-    const width = stage.getBoundingClientRect().width;
-    return { min: Math.min(240, width / 2), max: Math.max(width / 2, width - 320) };
-  };
-
-  const apply = (px) => {
-    const { min, max } = limits();
-    const width = Math.round(Math.min(max, Math.max(min, px)));
-    document.documentElement.style.setProperty('--chat-panel-width', `${width}px`);
-    grip.setAttribute('aria-valuenow', String(width));
-    return width;
-  };
-
-  const { min, max } = limits();
-  grip.setAttribute('aria-valuemin', String(Math.round(min)));
-  grip.setAttribute('aria-valuemax', String(Math.round(max)));
-  grip.setAttribute('aria-valuenow', String(Math.round(grip.parentElement.querySelector('#chat-column')?.getBoundingClientRect().width || 380)));
-
-  let dragging = false;
-  grip.addEventListener('pointerdown', (event) => {
-    dragging = true;
-    grip.classList.add('resizing');
-    document.body.classList.add('chat-resizing');
-    grip.setPointerCapture?.(event.pointerId);
-    event.preventDefault();
-  });
-  grip.addEventListener('pointermove', (event) => {
-    if (!dragging) return;
-    const stageBox = stage.getBoundingClientRect();
-    apply(stageBox.right - event.clientX);
-  });
-  const end = (event) => {
-    if (!dragging) return;
-    dragging = false;
-    grip.classList.remove('resizing');
-    document.body.classList.remove('chat-resizing');
-    if (event?.pointerId !== undefined) grip.releasePointerCapture?.(event.pointerId);
-  };
-  grip.addEventListener('pointerup', end);
-  grip.addEventListener('pointercancel', end);
-  grip.addEventListener('lostpointercapture', end);
-
-  // Keyboard: arrows step, Home/End jump to the clamp limits.
-  grip.addEventListener('keydown', (event) => {
-    const current = Number(grip.getAttribute('aria-valuenow')) || 380;
-    const step = event.shiftKey ? 50 : 10;
-    if (event.key === 'ArrowLeft') apply(current + step);
-    else if (event.key === 'ArrowRight') apply(current - step);
-    else if (event.key === 'Home') apply(limits().max);
-    else if (event.key === 'End') apply(limits().min);
-    else return;
-    event.preventDefault();
-  });
-
-  window.addEventListener('resize', () => {
-    const current = Number(grip.getAttribute('aria-valuenow')) || 380;
-    const { min: lo, max: hi } = limits();
-    grip.setAttribute('aria-valuemin', String(Math.round(lo)));
-    grip.setAttribute('aria-valuemax', String(Math.round(hi)));
-    if (current < lo || current > hi) apply(current);
-  });
-}
-
-/* ── Phone view switch ── */
-function wirePhoneSwitch() {
-  const buttons = document.querySelectorAll('.phone-switch button');
-  const set = (view) => {
-    document.body.classList.toggle('view-chat', view === 'chat');
-    document.body.classList.toggle('view-panel', view !== 'chat');
-    for (const button of buttons) {
-      button.classList.toggle('active', button.dataset.view === view);
-      button.setAttribute('aria-pressed', String(button.dataset.view === view));
-    }
-  };
-  for (const button of buttons) {
-    button.addEventListener('click', () => set(button.dataset.view));
-  }
-  set('panel');
-}
-
 /* ── Boot ── */
 async function boot() {
   applyTheme();
@@ -370,17 +286,18 @@ async function boot() {
 
   state.me = await loadMe();
   state.agents = await loadAgents();
-  // The account footer shows who is signed in; the mock keeps it honest when signed out.
+  // The account footer shows who is signed in; the shell footer echoes the state.
   const nameHost = document.getElementById('account-name');
   if (nameHost) nameHost.textContent = state.me?.is_admin ? 'Administrator' : 'Signed out';
   const roleHost = document.getElementById('account-role');
   if (roleHost) roleHost.textContent = state.me?.is_admin ? 'Manage account' : 'Sign in';
+  const statusHost = document.getElementById('footer-status');
+  if (statusHost) {
+    statusHost.textContent = state.me?.is_admin ? 'Signed in as administrator' : 'Signed out';
+  }
 
   renderNav();
-  wireGrip();
-  wirePhoneSwitch();
   await renderRoute();
-  await mountChat(document.getElementById('chat-column'));
 }
 
 if (document.readyState === 'loading') {
