@@ -15,16 +15,20 @@ use std::time::Duration;
 
 const APP_UID: u32 = 1100;
 const APP_GID: u32 = 1100;
+/// `webagent-work`: the tool worker's own group, shared with the app only for workspaces,
+/// the dispatch control files and the worker's and browser's sockets (stream D1, DATA-5).
+/// Nothing under `/state` belongs to it.
+const WORK_GID: u32 = 1105;
 /// The tool worker's own identity (`webagent-worker`), distinct from any host login.
 const WORKER_UID: u32 = 1103;
 const APP_BINARY: &str = "/usr/local/bin/webagent-v3";
-/// The worker runs as `webagent-worker` (1103) in the app group, with only the
-/// `webagent-source` group (1110) added so checkout_edit can write the checkout, and no
-/// capabilities: application-only files such as the encryption key stay unreadable to tools
-/// and no host login's files are reachable.
+/// The worker runs as `webagent-worker` (1103) in its own group `webagent-work` (1105), not
+/// the app's, with only the `webagent-source` group (1110) added so checkout_edit can write
+/// the checkout, and no capabilities: the app's state folder, the encryption key and
+/// account databases stay out of reach of tools, and no host login's files are reachable.
 const WORKER_IDENTITY: [&str; 8] = [
     "--reuid=1103",
-    "--regid=1100",
+    "--regid=1105",
     "--groups=1110",
     "--inh-caps=-all",
     "--ambient-caps=-all",
@@ -60,19 +64,41 @@ fn chmod(target: &str, mode: u32) -> io::Result<()> {
     std::fs::set_permissions(target, std::fs::Permissions::from_mode(mode))
 }
 
-/// Creates `target` if needed, then sets its owner (group 1100) and mode.
-fn directory(target: &str, uid: u32, mode: u32) -> io::Result<()> {
+/// Creates `target` if needed, then sets its owner and mode.
+fn directory(target: &str, uid: u32, gid: u32, mode: u32) -> io::Result<()> {
     std::fs::create_dir_all(target)?;
-    chown(target, uid, APP_GID)?;
+    chown(target, uid, gid)?;
     chmod(target, mode)
 }
 
-/// Drops to `uid`/`gid` with no supplementary groups and no privilege gain on exec. Only
-/// raw system calls, so it is safe between fork and exec.
-fn drop_to(uid: u32, gid: u32) -> io::Result<()> {
-    // SAFETY: plain system calls with valid arguments.
+/// Gives the browser container's socket folder and its socket, when present, the worker's
+/// group, keeping their owner (the browser identity) and mode. Never follows a symbolic link.
+fn browser_socket_group(folder: &str, socket: &str) -> io::Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+    for (target, folder_expected) in [(folder, true), (socket, false)] {
+        let kind = match std::fs::symlink_metadata(target) {
+            Ok(meta) => meta.file_type(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if (folder_expected && !kind.is_dir()) || (!folder_expected && !kind.is_socket()) {
+            return Err(failed("unexpected browser socket file type"));
+        }
+        let name = path(target)?;
+        // SAFETY: a valid NUL-terminated path; uid -1 keeps the owner.
+        if unsafe { libc::lchown(name.as_ptr(), libc::uid_t::MAX, WORK_GID) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Drops to `uid`/`gid` with only the supplementary `groups` and no privilege gain on exec.
+/// Only raw system calls, so it is safe between fork and exec.
+fn drop_to(uid: u32, gid: u32, groups: &[libc::gid_t]) -> io::Result<()> {
+    // SAFETY: plain system calls with valid arguments; `groups` outlives the call.
     unsafe {
-        if libc::setgroups(0, std::ptr::null()) != 0
+        if libc::setgroups(groups.len(), groups.as_ptr()) != 0
             || libc::setgid(gid) != 0
             || libc::setuid(uid) != 0
             || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
@@ -157,15 +183,19 @@ fn launch() -> io::Result<i32> {
     directory(
         &text(&webagent_configuration::paths::state()),
         APP_UID,
+        APP_GID,
         0o770,
     )?;
+    // Workspaces are shared through the worker's group: the worker creates each session's
+    // folder, the app (which has the group too) reads previews and files from it.
     directory(
         &text(&webagent_configuration::paths::workspaces()),
         1101,
+        WORK_GID,
         0o770,
     )?;
     for folder in [&runtime, &control, &worker_dir] {
-        directory(folder, 0, 0o700)?;
+        directory(folder, 0, 0, 0o700)?;
     }
     for (name, content) in [("dispatch.lock", ""), ("shutoff", "1")] {
         let file = format!("{control}/{name}");
@@ -175,12 +205,23 @@ fn launch() -> io::Result<i32> {
         std::fs::write(&file, content)?;
         chmod(&file, 0o640)?;
     }
+    // The worker reads these two through its group; it may pass through the control folder
+    // but not list it, so anything else the app keeps there stays private.
     for name in ["dispatch.lock", "shutoff"] {
-        chown(&format!("{control}/{name}"), APP_UID, APP_GID)?;
+        chown(&format!("{control}/{name}"), APP_UID, WORK_GID)?;
     }
-    directory(&control, APP_UID, 0o750)?;
-    directory(&worker_dir, WORKER_UID, 0o750)?;
-    directory(&runtime, APP_UID, 0o755)?;
+    directory(&control, APP_UID, WORK_GID, 0o710)?;
+    directory(&worker_dir, WORKER_UID, WORK_GID, 0o750)?;
+    directory(&runtime, APP_UID, APP_GID, 0o755)?;
+    let browser_socket = text(&crate::browser::host::default_socket());
+    // The socket sits in a folder only its owner and group may enter, and the launcher keeps no
+    // capability to read past file modes: it takes the worker's group for this step (the groups
+    // are cleared below before anything starts).
+    // SAFETY: a plain system call with a valid one-element group list.
+    if unsafe { libc::setgroups(1, &WORK_GID) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    browser_socket_group(&format!("{runtime}/browser"), &browser_socket)?;
 
     // SAFETY: plain system calls; the launcher keeps root only to start the worker.
     unsafe {
@@ -189,7 +230,6 @@ fn launch() -> io::Result<i32> {
         }
     }
     let tools_socket = format!("{worker_dir}/tools.sock");
-    let browser_socket = text(&crate::browser::host::default_socket());
     let mut env = vec![
         ("PATH", "/usr/bin:/bin"),
         ("LANG", "C.UTF-8"),
@@ -212,11 +252,12 @@ fn launch() -> io::Result<i32> {
     let mut app = Command::new(APP_BINARY);
     // SAFETY: drop_to only makes raw system calls.
     unsafe {
-        app.pre_exec(|| drop_to(APP_UID, APP_GID));
+        // The API reads workspaces and reaches the worker through the worker's group.
+        app.pre_exec(|| drop_to(APP_UID, APP_GID, &[WORK_GID]));
     }
     let mut app = app.spawn()?;
     // The launcher itself drops to the application identity; it keeps no root privileges.
-    drop_to(APP_UID, APP_GID)?;
+    drop_to(APP_UID, APP_GID, &[])?;
     // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
@@ -255,4 +296,36 @@ fn launch() -> io::Result<i32> {
         .find(|code| *code != 0)
         .unwrap_or(1);
     Ok(code & 0xff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_worker_runs_in_its_own_group_without_the_app_group() {
+        assert!(WORKER_IDENTITY.contains(&"--regid=1105"));
+        assert!(!WORKER_IDENTITY.iter().any(|arg| arg.contains("1100")));
+        assert_eq!(WORK_GID, 1105);
+        assert_ne!(WORK_GID, APP_GID);
+    }
+
+    #[test]
+    fn browser_socket_group_skips_missing_and_refuses_unexpected_files() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let folder = dir.path().join("browser");
+        let socket = folder.join("host.sock");
+        let text = |path: &Path| path.to_string_lossy().into_owned();
+        // No browser container on this server: nothing to change.
+        assert!(browser_socket_group(&text(&folder), &text(&socket)).is_ok());
+        // A plain file where the folder belongs is refused, never changed.
+        std::fs::write(&folder, b"").expect("write");
+        assert!(browser_socket_group(&text(&folder), &text(&socket)).is_err());
+        std::fs::remove_file(&folder).expect("remove");
+        // A link in place of the socket is refused instead of being followed.
+        std::fs::create_dir(&folder).expect("folder");
+        std::os::unix::fs::symlink(dir.path(), &socket).expect("link");
+        let changed = browser_socket_group(&text(&dir.path().join("absent")), &text(&socket));
+        assert!(changed.is_err());
+    }
 }

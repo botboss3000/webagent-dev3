@@ -16,7 +16,7 @@ The app runs as a few containers on one machine. Each has a job and its own limi
 | **API** (`webagent-dev-v3`) | Every page, request and message admission; the tool worker (the isolated Python process that runs approved low-level tools) lives in this container too. Each request is small, but it is the part people feel. | Processor weight (highest), optional processor cap, memory, task limit. |
 | **Agent loops** (`webagent-dev-v3-loop`) | Runs the agents: context, model calls, tool calls, recovery. The container runs `scheduler.loops` loop processes under a small supervisor; accounts are split between them. | Each loop process can use about **one processor thread** (its run steps share one in-process lock), so N loops use up to about N threads. Also the run ceiling and per-agent caps below. |
 | **Browser** (`webagent-dev-v3-browser`) | The private Chromium browsers agents use. | Processor weight, optional cap, memory, task limit, and the browser limits (how many run at once). |
-| **Build jobs** (the broker's compiles and tests) | Building and testing new releases. | The lowest processor weight, plus the broker's own build budget (`cpu_budget_millis`, `cargo_build_jobs`, `test_threads`). |
+| **Build jobs** (the broker's compiles and tests) | Building and testing new releases. | They run only on processor time the app leaves idle (`builds.cpu_weight: "idle"`, the default), plus the broker's own build budget (`cpu_budget_millis`, `cargo_build_jobs`, `test_threads`). |
 | **Shared databases** | SQLite: one `app.db` for the installation and one database per account. | Writes to one database happen one at a time; the number of account databases held open per process is capped. |
 | **Model providers** | The outside services that answer model calls. | Their own rate limits and latency, which no setting here changes. With real models this, not the processors, is usually the first limit. |
 
@@ -53,6 +53,9 @@ What this shows:
   processor.** When every thread is busy, an API request waits for running work's time slice at
   each step, whatever its weight (10000 did no better than 400). Keeping one or two threads free
   keeps the API close to its idle times.
+- Build jobs therefore do not rely on a weight: by default they run as "idle" work, which the
+  kernel schedules only on processor time nothing else wants (`builds.cpu_weight`, section 2.1).
+  On an otherwise idle machine a build still uses every thread it is given and takes its normal time.
 - So size the busy work to leave room: the loop processes use about one thread each, so keep
   `scheduler.loops` at most C − 2; the build budget already leaves one thread (`cpu_budget_millis`
   defaults to C − 1 cores). If something in the loop container can use every thread (many agent
@@ -81,7 +84,7 @@ has the same table).
 | `loop.memory_bytes` | 8 GiB | 1 GiB to host memory | Memory limit for all loop processes together. |
 | `browser.memory_bytes` | 3 GiB | 1 GiB to host memory | Memory limit for all browsers together. |
 | `<role>.pids_limit` | API and loop `null` (= `api_pids_limit`, 1024 on development); browser 1024 | `null` or 256–65536 | Task (process and thread) limit. The loop's is raised to 512 per loop process. |
-| `builds.cpu_weight` | 20 | 1–10000 | Weight of all build jobs together. |
+| `builds.cpu_weight` | `"idle"` | `"idle"` or 1–10000 | Priority of all build jobs together. `"idle"` is systemd's `CPUWeight=idle` (the control group's `cpu.idle` flag): build jobs get a processor only when nothing else wants it, so an app request never waits behind a compile. A number makes it an ordinary weight instead (20 was the earlier default). |
 
 A default memory value larger than a small machine's memory shrinks to that machine's memory; a
 value you set yourself is checked instead. Each container keeps the swap allowance it already had.
@@ -104,7 +107,8 @@ weight to the shares that produce it. Check the result in
    applies the same values, and releases create new containers with them.
 4. One exception: a processor cap added back after a cap was removed live waits for the next
    release (Docker keeps a live-removed cap removed across restarts; the log says so).
-5. The build weight is set when the broker next admits a build.
+5. The build priority (`builds.cpu_weight`) is set when the broker next admits a build. Check it
+   in `/sys/fs/cgroup/webagent.slice/cpu.idle` (1 for `"idle"`) or `cpu.weight` (a number).
 
 ### 2.2 Agent loops and runs
 
@@ -132,7 +136,7 @@ states its range.
 2. **Run ceiling:** with real models a run spends most of its time waiting for the model, so the
    ceiling is usually set by memory, the model providers' rate limits and the per-agent cap, not by
    processors. Raise it in steps and measure.
-3. **Weights:** keep API highest (400), loop and browser normal (100), builds lowest (20). Raise the
+3. **Weights:** keep API highest (400), loop and browser normal (100), builds `"idle"`. Raise the
    browser's weight only if browser tools feel slow while agents are busy.
 4. **Caps:** leave them off unless the machine is shared with something that must be protected,
    or the loop container can fill every thread: then cap the loop at C − 2 so the API always finds
@@ -150,7 +154,7 @@ states its range.
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| Weights API / loop / browser / builds | 400 / 100 / 100 / 20 | Defaults. |
+| Weights API / loop / browser / builds | 400 / 100 / 100 / idle | Defaults. |
 | Caps | none | Use idle threads. |
 | Memory API / loop / browser | 2 / 8 / 3 GiB | Defaults; about 18 GB stays for builds (the compiler takes up to 12 GiB) and the system. |
 | Loops | 1 today; 2–4 once measured | The broker also builds here (`cargo_build_jobs` 10). |

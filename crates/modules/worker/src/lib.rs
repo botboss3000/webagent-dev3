@@ -761,7 +761,7 @@ async fn persistent_call(config: &Config, persistent: &Persistent, request: &Val
         Ok(Ok(ports)) => Ok(terminal::Launch {
             supervisor,
             ports,
-            limits: limits::CommandLimits::read(&limits_path),
+            limits: limits::CommandLimits::for_request(request, &limits_path),
         }),
         Ok(Err(error)) => Err(error.to_string()),
         Err(_) => Err("Port claim failed".to_owned()),

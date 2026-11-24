@@ -73,7 +73,7 @@ pub async fn call(roots: &Roots, runner: &[String], request: &Value) -> Value {
         Err(_) => return json!({"status":"failed","output":"Port claim failed"}),
     };
     let checkout = files::checkout_granted(request);
-    let limits = Confined::Workspace(CommandLimits::read(&roots.command_limits));
+    let limits = Confined::Workspace(CommandLimits::for_request(request, &roots.command_limits));
     match run(
         runner,
         &argv,

@@ -21,7 +21,7 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
         request = {"version": 2, "id": "isolation-test", "workspace": str(uuid.uuid4()),
                    "name": "python", "arguments": {"code": (
                        "import os,json; "
-                       "result={'uid':os.getuid(),'groups':os.getgroups()}; "
+                       "result={'uid':os.getuid(),'gid':os.getgid(),'groups':os.getgroups()}; "
                        "\ntry: os.listdir('/state'); result['state_access']=True"
                        "\nexcept PermissionError: result['state_access']=False"
                        "\ntry: os.close(os.open('/runtime/control/shutoff',os.O_WRONLY)); result['control_write']=True"
@@ -44,11 +44,13 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "success", response)
         result = json.loads(response["output"])
         self.assertEqual(result["uid"], 1103)
-        # The launcher adds only webagent-source; Codebase Admin commands read state too.
+        # Stream D1 (DATA-5): the worker's own group webagent-work (1105), not the app's 1100,
+        # plus only webagent-source; the app's state folder is out of reach of commands.
+        self.assertEqual(result["gid"], 1105)
         self.assertEqual(result["groups"], [1110])
         self.assertTrue(result["source_access"])
         self.assertFalse(result["v2_source_access"])
-        self.assertTrue(result["state_access"])
+        self.assertFalse(result["state_access"])
         self.assertFalse(result["control_write"])
         self.assertFalse(result["secret_env"])
         self.assertFalse(result["app_environ_access"])

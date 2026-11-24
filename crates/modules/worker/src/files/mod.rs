@@ -214,7 +214,7 @@ pub fn call(roots: &Roots, request: &Value) -> Value {
         ));
     }
     let mut result = match route(roots, name, args)
-        .and_then(|args| operation(roots, &base, &args, name, granted))
+        .and_then(|args| operation(roots, &base, &args, name, granted, sent_search(request)))
     {
         Ok(result) => result,
         Err(failure) => failed(&failure),
@@ -520,6 +520,7 @@ fn operation(
     args: &Map<String, Value>,
     name: &str,
     granted: bool,
+    sent: Option<&Value>,
 ) -> Outcome<Value> {
     // checkout_edit is the one direct live-checkout writer; policy can deny it alone.
     let checkout = name == "checkout_edit";
@@ -607,6 +608,7 @@ fn operation(
                 &walk,
                 raw,
                 checkout_top,
+                sent,
                 &mut scan_limited,
             )?
         }
@@ -618,6 +620,7 @@ fn operation(
             args,
             raw,
             checkout_top,
+            sent,
             &mut scan_limited,
         )?,
         _ => return Err(rejected("unknown tool")),
@@ -1072,11 +1075,20 @@ fn list(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome
 
 /// `search_output_bytes` and `search_line_bytes` from the live context configuration,
 /// read on every search so a change applies without a restart.
-fn search_limits(path: &Path) -> Outcome<(usize, usize)> {
-    let config: Value = match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => json!({}),
-        Err(error) => return Err(error.into()),
+/// The search limits the app sent with this call (`trusted.limits.search`, stream D1), so a
+/// worker without the checkout keeps the live values; the live file at `path` otherwise.
+pub(crate) fn sent_search(request: &Value) -> Option<&Value> {
+    request["trusted"]["limits"].get("search")
+}
+
+fn search_limits(sent: Option<&Value>, path: &Path) -> Outcome<(usize, usize)> {
+    let config: Value = match sent {
+        Some(sent) => sent.clone(),
+        None => match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => json!({}),
+            Err(error) => return Err(error.into()),
+        },
     };
     let number = |key: &str, default: i64| match config.get(key) {
         None => Some(default),
@@ -1679,6 +1691,7 @@ fn search(
     args: &Map<String, Value>,
     raw: &str,
     checkout_top: bool,
+    sent: Option<&Value>,
     scan_limited: &mut bool,
 ) -> Outcome<Written> {
     let text = |key: &str| match args.get(key) {
@@ -1735,7 +1748,7 @@ fn search(
         *scan_limited = limited;
         return Ok(Written::Text(text));
     }
-    let (output_bytes, line_bytes) = search_limits(&roots.context_config)?;
+    let (output_bytes, line_bytes) = search_limits(sent, &roots.context_config)?;
     let mut search = Search {
         query,
         regex,

@@ -87,6 +87,21 @@ impl CommandLimits {
             .unwrap_or_default()
     }
 
+    /// The limits the app sent with this call (`trusted.limits.command`: the live file's
+    /// content, stream D1), so a worker without the checkout keeps the live values; the live
+    /// file at `path` when the call carries none. Sent limits are checked like the file:
+    /// invalid ones give the defaults.
+    #[must_use]
+    pub fn for_request(request: &Value, path: &Path) -> Self {
+        match request["trusted"]["limits"].get("command") {
+            Some(sent) => serde_json::to_vec(sent)
+                .ok()
+                .and_then(|bytes| Self::parse(&bytes).ok())
+                .unwrap_or_default(),
+            None => Self::read(path),
+        }
+    }
+
     /// The form the worker hands a supervisor (`V3_COMMAND_LIMITS`).
     #[must_use]
     pub fn to_env(self) -> String {
@@ -153,6 +168,49 @@ mod tests {
             CommandLimits::from_env(Some("{\"processes\":1}")),
             CommandLimits::default()
         );
+    }
+
+    #[test]
+    fn sent_limits_win_over_the_file_and_are_checked_like_it() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("command-limits.json");
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"memory_mb":512,"processes":64,"cpu_seconds":60}"#,
+        )
+        .expect("write limits");
+        let from_file = CommandLimits {
+            memory_bytes: 512 * MIB,
+            processes: 64,
+            cpu_seconds: 60,
+        };
+        assert_eq!(CommandLimits::for_request(&json!({}), &path), from_file);
+        assert_eq!(
+            CommandLimits::for_request(&json!({"trusted":{"checkout":true}}), &path),
+            from_file
+        );
+        let sent = json!({"trusted":{"limits":{"command":
+            {"schema_version":1,"memory_mb":128,"processes":16,"cpu_seconds":20}}}});
+        assert_eq!(
+            CommandLimits::for_request(&sent, &path),
+            CommandLimits {
+                memory_bytes: 128 * MIB,
+                processes: 16,
+                cpu_seconds: 20
+            }
+        );
+        // Out of range or unknown keys never widen a limit: the defaults apply, as for the file.
+        for bad in [
+            json!({"schema_version":1,"memory_mb":1,"processes":16,"cpu_seconds":20}),
+            json!({"schema_version":1,"memory_mb":128,"processes":16,"cpu_seconds":20,"x":1}),
+            json!("unlimited"),
+        ] {
+            let request = json!({"trusted":{"limits":{"command":bad}}});
+            assert_eq!(
+                CommandLimits::for_request(&request, &path),
+                CommandLimits::default()
+            );
+        }
     }
 
     #[test]
