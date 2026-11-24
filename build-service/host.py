@@ -318,6 +318,22 @@ WORKER = CONFIG["api_container"] + "-worker"
 WORKER_NETWORK = "webagent-worker"
 WORKER_FIREWALL = Path("/etc/webagent") / CONFIG["instance"] / "worker" / "worker-firewall.sh"
 WORKER_SOCKET = "/runtime/worker-c/tools.sock"
+# Stream D5: with the external-worker layout the API and the loop mount only the socket folders of
+# `runtime/` they use (docs/capacity.md, "Sockets"), each socket-only folder read-only (a socket
+# still connects through a read-only mount). Every other folder (the broker's own files beside
+# build.sock are private to it anyway, the old in-API worker, browser, promote, worker-legacy) is
+# not in either container. `control` (wake sockets, dispatch lock, shutoff marker, access-policy
+# lock) and `ability-live` (each process's ability overlay cache) are written by both.
+SOCKET_FOLDERS = {
+    "api": (("build", True), ("host", True), ("files", True), ("board", True), ("local-models", True),
+            ("worker-c", True), ("control", False), ("ability-live", False)),
+    "loop": (("build", True), ("host", True), ("board", True), ("local-models", True),
+             ("worker-c", True), ("control", False), ("ability-live", False)),
+}
+# The capabilities the API's launcher (`webagent-v3 --launch`, container root) needs to prepare
+# folders and start its own worker; only the in-API worker layout runs the launcher.
+LAUNCHER_CAPS = ["CAP_CHOWN", "CAP_FOWNER", "CAP_KILL", "CAP_SETGID", "CAP_SETUID"]
+APP_BINARY = "/usr/local/bin/webagent-v3"
 # On SIGTERM the loop drains runs for up to its own `drain_timeout_seconds`
 # (loop-runtime.json, default 180) before shutting down; this is the backstop.
 LOOP_DRAIN_STOP_SECONDS = 240
@@ -1271,13 +1287,101 @@ def capacity_limits(role, loops=1):
     return value
 
 
+def app_runtime():
+    """The host folder mounted (whole, or per socket folder) at the app containers' /runtime."""
+    return Path(_config_module.layout(CONFIG)["/runtime"])
+
+
+def runtime_layout(config, host, role, external, runtime):
+    """`(config, host)` of a release container with the runtime layout for `role`: with the
+    external worker (stream D5) the API and loop mount only their `SOCKET_FOLDERS` (missing optional
+    service folders are left out; the loop keeps its own `/runtime/gate`), and the API runs as the
+    application identity with the worker group, no added capabilities, no launcher and a read-only
+    checkout; otherwise the whole `/runtime` and the API's launcher as before. Pure."""
+    config, host = dict(config), dict(host)
+
+    def runtime_target(target):
+        return isinstance(target, str) and (target == "/runtime" or (target.startswith("/runtime/")
+                                                                      and target != "/runtime/gate"))
+    mounts = [dict(item) for item in host.get("Mounts") or [] if not runtime_target(item.get("Target"))]
+    if host.get("Binds") is not None:
+        host["Binds"] = [item for item in host["Binds"]
+                         if len(item.split(":")) < 2 or not runtime_target(item.split(":")[1])]
+    if external:
+        for name, read_only in SOCKET_FOLDERS[role]:
+            source = Path(runtime, name)
+            if source.is_dir() and not source.is_symlink():
+                mounts.append({"Type": "bind", "Source": str(source), "Target": "/runtime/" + name, "ReadOnly": read_only})
+    else:
+        mounts.append({"Type": "bind", "Source": str(runtime), "Target": "/runtime", "ReadOnly": False})
+    if role == "api":
+        for item in mounts:
+            if item.get("Target") == "/code":
+                item["ReadOnly"] = external
+        if external:
+            config.update(User=str(CONFIG["app_uid"]) + ":" + str(CONFIG["app_gid"]), Cmd=[APP_BINARY])
+            host.update(GroupAdd=[str(WORK_GID)], CapAdd=[])
+        else:
+            config.update(User="", Cmd=[APP_BINARY, "--launch"])
+            host.update(GroupAdd=[], CapAdd=list(LAUNCHER_CAPS))
+    host["Mounts"] = mounts
+    return config, host
+
+
+def prepare_app_runtime(runtime, state, workspaces, reset_shutoff=False):
+    """The API launcher's root work, done by the broker for the external-worker layout (stream D5):
+    the same owners and modes `webagent-v3 --launch` sets on every start (docs/capacity.md), plus
+    `ability-live`, which the app made itself while it had the whole runtime folder. Never follows a
+    symbolic link. `reset_shutoff` writes "1" to the shutoff marker, as the launcher did at each
+    start, so tools stay refused until the starting API restores the saved state."""
+    app, work, worker = CONFIG["app_uid"], WORK_GID, CONFIG["worker_uid"]
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+    def directory(path, uid, gid, mode, create=True):
+        if create and not os.path.lexists(path):
+            os.mkdir(path, 0o700)
+        fd = os.open(path, flags)
+        try:
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, mode)
+        finally:
+            os.close(fd)
+
+    def control_file(path, content):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError("control file is not a regular file")
+            if content is not None:
+                os.ftruncate(fd, 0)
+                os.write(fd, content)
+            os.fchown(fd, app, work)
+            os.fchmod(fd, 0o640)
+        finally:
+            os.close(fd)
+    directory(state, app, CONFIG["app_gid"], 0o770)
+    directory(workspaces, 1101, work, 0o770)
+    directory(runtime, app, CONFIG["app_gid"], 0o755)
+    control = os.path.join(runtime, "control")
+    directory(control, app, work, 0o710)
+    control_file(os.path.join(control, "dispatch.lock"), None)
+    shutoff = os.path.join(control, "shutoff")
+    control_file(shutoff, b"1" if reset_shutoff or not os.path.lexists(shutoff) else None)
+    directory(os.path.join(runtime, "worker-c"), worker, work, 0o750)
+    live = os.path.join(runtime, "ability-live")
+    if not os.path.lexists(live):
+        directory(live, app, CONFIG["app_gid"], 0o755)
+
+
 def worker_container_body(api, image):
     """The Docker create body of the worker container on `image`, from the running API's inspect:
     the worker's own identity and group, no `/state`, no app secrets, read-only checkout and
     release files, workspaces, its own socket folder and the control files (read-only), its own
     network, memory, tasks and processor weight (`container_capacity.worker`)."""
     sources = {m.get("Destination"): m.get("Source") for m in api.get("Mounts") or []}
-    runtime = sources["/runtime"]
+    # Since stream D5 an external-layout API mounts only socket folders; the runtime folder then
+    # comes from the installation layout.
+    runtime = sources.get("/runtime") or str(app_runtime())
     mounts = [{"Type": "bind", "Source": sources[target], "Target": target, "ReadOnly": True}
               for target in ("/code", "/opt/v3/assets", "/opt/v3/abilities", "/opt/v3/config") if target in sources]
     mounts += [{"Type": "bind", "Source": sources["/workspaces"], "Target": "/workspaces", "ReadOnly": False},
@@ -2867,6 +2971,10 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
 
     def create(self, name, image, previous, release_root=None, as_name=None):
         """Create the replacement for target `name`, optionally under the stopped staging name `as_name`."""
+        if release_root is not None and name in TARGETS and self.worker_external_ready():
+            # Stream D5: the folders the per-socket mounts need, as the launcher made them.
+            layout = _config_module.layout(CONFIG)
+            prepare_app_runtime(layout["/runtime"], layout["/state"], layout["/workspaces"])
         config = self.container_config(name, image, previous, release_root)
         conn = DockerHTTP("localhost", timeout=30)
         try:
@@ -2941,7 +3049,12 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                             "V3_ABILITIES_ROOT=" + abilities))
                 # Stream D4: the external-worker layout, only while the switch is on and the host is
                 # ready; otherwise the API's launcher starts its own worker as before.
-                config["Env"] = external_worker_env(env, name, self.worker_external_ready())
+                external = self.worker_external_ready()
+                config["Env"] = external_worker_env(env, name, external)
+                # Stream D5: per-socket mounts and, for the API, no launcher, capabilities or
+                # checkout writes while the worker runs in its own container.
+                config, host = runtime_layout(config, host, "api" if name == TARGETS[0] else "loop",
+                                              external, app_runtime())
                 job=getattr(self.job_context,"job",None)or{}
                 if not re.fullmatch(r"[a-f0-9-]{36}",job.get("job_id","")):raise ValueError("Attributable release container required")
                 config["Labels"]={**(config.get("Labels")or{}),"webagent.release.job":job["job_id"],
@@ -2991,6 +3104,14 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         return {"role": role, "updated": args, "cap_waits_for_deploy": pending}
 
     def start(self, name):
+        if name == TARGETS[0] and self.worker_external_ready():
+            # Stream D5: an API without its launcher; the broker resets the shutoff marker as the
+            # launcher did, so the worker refuses tools until the API restores the saved state.
+            try:
+                layout = _config_module.layout(CONFIG)
+                prepare_app_runtime(layout["/runtime"], layout["/state"], layout["/workspaces"], reset_shutoff=True)
+            except Exception:
+                print("App runtime preparation failed before an API start", flush=True)
         if self.capacity_on_start:
             # Every start of an app container (release, browser sync, rollback, restore) gets
             # the same limits; a failed update never blocks bringing the service back.
