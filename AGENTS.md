@@ -1,17 +1,19 @@
 # V3 development checkout
 
-This independent checkout is `/home/ar/webagent-dev3` on the development server.
-V2 is `/home/ar/webagent-dev2`. Production is outside the scope of this checkout.
-Use SSH to `ar@100.112.23.15` for source, container and repository operations.
+This independent checkout is `/home/ar/webagent-dev3/code` on the development server.
+Production is outside the scope of this checkout. V2 is retired; its code exists
+only as read-only reference in the public repository
+<https://github.com/botboss3000/webagent-dev2>.
+Use SSH to `ar@100.87.9.65` for source, container and repository operations.
 
 Start with `git status --short --branch` and inspect existing diffs. Preserve
 other writers' work. Do not create branches or worktrees without explicit user
 authorization. The main branch contains extracted V3 history; configure a
-separate V3 Git remote before attempting any push. Never point this repository's
-main branch at the V2 remote for a push.
+separate V3 Git remote before attempting any push.
 
-Read `README.md`, `docs/root-migration.md` and the relevant implementation before
-changes. For workflow/storage changes read `docs/workflow-foundation.md`.
+Read `README.md`, `docs/index.md` (the doc index), `docs/root-migration.md` and
+the relevant implementation before changes. For workflow/storage changes read
+`docs/workflow-foundation.md`.
 Development troubleshooting may inspect session databases directly. Isolated
 broker tasks receive read-only SQLite-backup snapshots of all admin/ and
 shared_default/ data, including their database files. Other users, the encryption
@@ -26,7 +28,8 @@ configuration. `build_work` reviews/checks tasks and explicitly finishes an
 authorized release; task creation and edits never deploy.
 
 Operators use the same protected broker through
-`python3 -B /home/ar/webagent-dev3/plugins/abilities/Administrator/v3_build/buildctl.py`.
+`python3 -B /home/ar/webagent-dev3/code/build-service/buildctl.py`
+(with `WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json`).
 Begin an isolated task before source changes. Its snapshot contains stable
 virtual `v3/` and `ui/` archive paths; the live checkout root contains V3 directly.
 Apply standard unified diffs through `git apply --check` and then the exact same
@@ -37,20 +40,20 @@ Cargo output. A check that raced edits is stale. Finish only when development
 deployment is authorized; it queues one tested release. Inspect and resume the
 same durable job after interruptions; never duplicate an uncertain deployment.
 
-Runtime containers are `webagent-dev-v3`, `webagent-dev-v3-loop` and
-`webagent-dev-v3-gate`; preserve their separation and stopped rollback snapshots.
-The API listens at `100.112.23.15:8081`; the public app is
+Runtime containers are `webagent-dev-v3` (API), `webagent-dev-v3-loop` (agent
+loop), `webagent-dev-v3-worker` (tool worker) and `webagent-dev-v3-browser`;
+preserve their separation and stopped rollback snapshots.
+The API listens at `100.87.9.65:8081`; the public app is
 `https://dev.webagent.live/app`. Explain the interruption before replacement.
-The writable `/live-checkout` is only this V3 root. Shared V2 UI assets are fixed
-read-only build inputs. Never restore a writable V2 mount to a V3 container.
+Shared UI assets under `build-service/shared-ui` are fixed read-only build
+inputs; a broker release replaces the frozen mounts.
 
-Before working on abilities, executable plugins, Markdown guidance/documentation, JSON manifests/configuration/schemas, UI assets, Python workers or other non-Rust files, read [Live plugin and non-Rust publication](plugins/abilities/Administrator/codebase_admin/skills/live_plugin_publication.skill.md). Use it to choose the supported release path and apply the direction toward independently replaceable app components, dependency-aware compilation and live asset/configuration updates. Do not infer hot-update support or compilation requirements from file extensions.
+Before working on abilities, executable plugins, Markdown guidance/documentation, JSON manifests/configuration/schemas, UI assets, Python workers or other non-Rust files, read [Live plugin and non-Rust publication](abilities/Administrator/codebase_admin/skills/live_plugin_publication.skill.md). Use it to choose the supported release path and apply the direction toward independently replaceable app components, dependency-aware compilation and live asset/configuration updates. Do not infer hot-update support or compilation requirements from file extensions.
 
-For every UI change, first read the [UI controls guidance](plugins/abilities/Administrator/codebase_admin/skills/ui_controls.skill.md). Apply its default tap-highlight, touch-haptic, and border-state guidance to all buttons and button-like controls.
+For every UI change, first read the [UI controls guidance](abilities/Administrator/codebase_admin/skills/ui_design.skill.md). Apply its default tap-highlight, touch-haptic, and border-state guidance to all buttons and button-like controls.
 
 Also read the Codebase Admin and Diagnostics skills in
-`plugins/abilities/Administrator`, plus `docs/ui-journeys.md`; navigate directly
-to registered routes. Check Code Index availability and report unavailable
-coverage rather than claiming it passed. Keep comments at non-obvious authority,
-worker, recovery and publication boundaries; update `docs/code-tour.md` when the
-execution route changes.
+`abilities/Administrator`, plus `docs/ui-journeys.md`; navigate directly
+to registered routes. Keep comments at non-obvious authority,
+worker, recovery and publication boundaries; update `docs/code-tour.md` only
+when the user asks.
