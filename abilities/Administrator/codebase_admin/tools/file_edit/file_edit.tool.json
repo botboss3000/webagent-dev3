@@ -58,6 +58,13 @@
         "type": "string",
         "pattern": "^[A-Za-z0-9_-]{8,80}$",
         "description": "Stable task-write request ID. Reuse only for identical retries; inspect build_work receipt after uncertainty."
+      },
+      "root": {
+        "type": "string",
+        "enum": [
+          "sandbox"
+        ],
+        "description": "sandbox works in this conversation's sandbox folder (the Sandbox ability's scratch folder; paths relative to it). Omit for app source and container paths."
       }
     },
     "required": [

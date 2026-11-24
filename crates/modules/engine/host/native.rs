@@ -78,7 +78,17 @@ impl
                 generation: &generation,
                 pending_id: &pending_id,
             };
-            if crate::browser::owns(&name) {
+            if tools::native::sandbox::admin_root(&name, &args) {
+                // Codebase Admin's file tools with root sandbox run through sandbox_file.
+                Box::pin(tools::native::sandbox::execute_admin_root(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                ))
+                .await
+            } else if crate::browser::owns(&name) {
                 // Boxed so this branch does not grow the shared dispatch future's stack frame.
                 Box::pin(crate::browser::execute(
                     &app,

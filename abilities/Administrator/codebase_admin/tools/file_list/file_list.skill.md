@@ -9,6 +9,7 @@
 - Optional broker_id selects current, new or returned work.
 - Explicit runtime/workspace paths retain their owning tools.
 - Never deploys.
+- `"root": "sandbox"` works in this conversation's sandbox folder instead (scratch files, not app source): paths are relative to it and it takes path only (omit it for the sandbox root); source fields such as broker_id are refused there. The Sandbox ability's limits apply and the agent must be allowed `sandbox_file`. Without root, paths mean app source as above.
 
 file_list pages use offset from 0 and limit at most 100.
 

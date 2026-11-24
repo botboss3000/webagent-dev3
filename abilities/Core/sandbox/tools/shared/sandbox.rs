@@ -8,7 +8,7 @@
 //! the agent's saved elements is brought up to date.
 use crate::{Call, NativeHost};
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 #[path = "../sandbox_delete/sandbox_delete.rs"]
@@ -96,6 +96,179 @@ pub fn limits() -> Result<Value> {
         }
     }
     Ok(limits)
+}
+
+/// Codebase Admin's file tools that also take `"root": "sandbox"`.
+const ADMIN_FILE_TOOLS: [&str; 4] = ["file_read", "file_write", "file_list", "file_edit"];
+
+/// Whether `name` is a Codebase Admin file tool asked to work in the sandbox folder.
+#[must_use]
+pub fn admin_root(name: &str, args: &Value) -> bool {
+    ADMIN_FILE_TOOLS.contains(&name) && args["root"] == "sandbox"
+}
+
+/// What a Codebase Admin file tool does with `"root": "sandbox"`: one `sandbox_file`
+/// request, or an edit (read, replace, write back).
+#[derive(Debug, PartialEq)]
+enum AdminFile {
+    Request(Value),
+    Edit {
+        path: String,
+        edits: Vec<(String, String)>,
+    },
+}
+
+/// The sandbox form of Codebase Admin tool `name`'s `args`; source-only fields are refused.
+fn admin_request(name: &str, args: &Value) -> Result<AdminFile> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow!("arguments must be an object"))?;
+    let allowed: &[&str] = match name {
+        "file_read" | "file_list" => &["root", "path"],
+        "file_write" => &["root", "path", "content", "delete"],
+        _ => &["root", "path", "old_text", "new_text", "edits"],
+    };
+    if let Some(extra) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        bail!(
+            "{extra} does not apply with root sandbox; {name} takes {} there",
+            allowed[1..].join(", ")
+        );
+    }
+    let path = args["path"].as_str().unwrap_or("");
+    let file = match name {
+        "file_read" => json!({"action":"read","path":path}),
+        "file_list" => json!({"action":"list","path":path}),
+        "file_write" if args["delete"] == true => {
+            if !args["content"].is_null() {
+                bail!("delete takes no content");
+            }
+            json!({"action":"delete","path":path})
+        }
+        "file_write" => json!({"action":"write","path":path,"content":args["content"]}),
+        _ => {
+            if path.is_empty() {
+                bail!("file_edit needs a path");
+            }
+            let mut edits = Vec::new();
+            if let Some(list) = args["edits"].as_array() {
+                if !args["old_text"].is_null() || !args["new_text"].is_null() {
+                    bail!("use edits or old_text/new_text, not both");
+                }
+                for edit in list {
+                    edits.push(edit_pair(&edit["old_text"], &edit["new_text"])?);
+                }
+            } else {
+                edits.push(edit_pair(&args["old_text"], &args["new_text"])?);
+            }
+            if edits.is_empty() || edits.len() > 20 {
+                bail!("edits takes 1 to 20 replacements");
+            }
+            return Ok(AdminFile::Edit {
+                path: path.to_owned(),
+                edits,
+            });
+        }
+    };
+    Ok(AdminFile::Request(file::request(&file)?))
+}
+
+fn edit_pair(old: &Value, new: &Value) -> Result<(String, String)> {
+    match (old.as_str(), new.as_str()) {
+        (Some(old), Some(new)) if !old.is_empty() => Ok((old.to_owned(), new.to_owned())),
+        _ => bail!("each edit needs old_text (not empty) and new_text"),
+    }
+}
+
+/// `text` with every `(old, new)` replacement applied together: each `old` must occur
+/// exactly once in the original and the matched spans may not overlap.
+fn edited(text: &str, edits: &[(String, String)]) -> Result<String> {
+    let mut spans = Vec::new();
+    for (index, (old, new)) in edits.iter().enumerate() {
+        let mut found = text.match_indices(old.as_str());
+        let Some((start, _)) = found.next() else {
+            bail!("edit {} old_text was not found", index + 1);
+        };
+        if found.next().is_some() {
+            bail!("edit {} old_text must match exactly once", index + 1);
+        }
+        spans.push((start, start + old.len(), new.as_str()));
+    }
+    spans.sort_by_key(|span| span.0);
+    if spans.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+        bail!("edits overlap");
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (start, end, new) in spans {
+        out.push_str(&text[at..start]);
+        out.push_str(new);
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    Ok(out)
+}
+
+/// Run Codebase Admin file tool `name` with `"root": "sandbox"` through the `sandbox_file`
+/// handler: the call's own authority, plus a live check that `sandbox_file` is allowed, so
+/// the root never widens what the Sandbox ability permits.
+pub async fn execute_admin_root(
+    host: &dyn NativeHost,
+    call: Call<'_>,
+    name: &str,
+    args: &Value,
+    cancel: CancellationToken,
+) -> Result<Value> {
+    let request = match admin_request(name, args) {
+        Ok(request) => request,
+        Err(error) => {
+            return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                "output":format!("Not run; nothing changed. {error}")}))
+        }
+    };
+    let run = host.authorize(call, name, args, &cancel).await?;
+    if host
+        .dependency(call.sid, &run, "sandbox_file")
+        .await
+        .is_err()
+    {
+        return Ok(json!({"status":"denied","output":
+            "root sandbox uses the Sandbox ability's sandbox_file tool, which this agent cannot use now"}));
+    }
+    let owner = Owner {
+        root: host.store().root.clone(),
+        agent: host.session_agent_id(call.sid).await?,
+        user: host.actor().to_owned(),
+    };
+    sync_saved(host, &owner, call.sid, &run, cancel.clone()).await?;
+    match request {
+        AdminFile::Request(request) => {
+            host.worker("sandbox_file", &request, call.sid, &run, cancel)
+                .await
+        }
+        AdminFile::Edit { path, edits } => {
+            let read = json!({"action":"read","path":path});
+            let read = host
+                .worker("sandbox_file", &read, call.sid, &run, cancel.clone())
+                .await?;
+            if read["status"] != "success" {
+                return Ok(read);
+            }
+            if read["truncated"] == true {
+                return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                    "output":"Not run; nothing changed. The file is larger than one read; edit it with sandbox_python"}));
+            }
+            let next = match edited(read["output"].as_str().unwrap_or_default(), &edits) {
+                Ok(next) => next,
+                Err(error) => {
+                    return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                        "output":format!("Not run; nothing changed. {error}")}))
+                }
+            };
+            let write = file::request(&json!({"action":"write","path":path,"content":next}))?;
+            host.worker("sandbox_file", &write, call.sid, &run, cancel)
+                .await
+        }
+    }
 }
 
 /// Run Sandbox tool `name` under fresh run authority at `call`'s position.
@@ -268,4 +441,76 @@ fn only(args: &Value, allowed: &[&str]) -> Result<()> {
         bail!("Unknown argument {key}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod admin_root_tests {
+    use super::*;
+
+    #[test]
+    fn admin_file_tools_map_onto_sandbox_file_requests() {
+        assert!(admin_root(
+            "file_write",
+            &json!({"root":"sandbox","path":"a"})
+        ));
+        assert!(!admin_root("file_write", &json!({"path":"a"})));
+        assert!(!admin_root("file_search", &json!({"root":"sandbox"})));
+        assert_eq!(
+            admin_request(
+                "file_write",
+                &json!({"root":"sandbox","path":"a/b.txt","content":"x"})
+            )
+            .expect("write"),
+            AdminFile::Request(json!({"action":"write","path":"a/b.txt","content":"x"}))
+        );
+        assert_eq!(
+            admin_request("file_list", &json!({"root":"sandbox"})).expect("list"),
+            AdminFile::Request(json!({"action":"list","path":""}))
+        );
+        assert_eq!(
+            admin_request(
+                "file_write",
+                &json!({"root":"sandbox","path":"a","delete":true})
+            )
+            .expect("delete"),
+            AdminFile::Request(json!({"action":"delete","path":"a"}))
+        );
+        // Source-only fields are refused before anything runs.
+        assert!(admin_request(
+            "file_write",
+            &json!({"root":"sandbox","path":"a","content":"x",
+            "broker_id":"new"})
+        )
+        .is_err());
+        assert!(admin_request("file_write", &json!({"root":"sandbox","path":"a"})).is_err());
+    }
+
+    #[test]
+    fn sandbox_edits_apply_together_or_not_at_all() {
+        let edits = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(old, new)| ((*old).to_owned(), (*new).to_owned()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            edited("one two three", &edits(&[("three", "3"), ("one", "1")])).expect("edit"),
+            "1 two 3"
+        );
+        assert!(edited("a a", &edits(&[("a", "b")])).is_err());
+        assert!(edited("abc", &edits(&[("x", "y")])).is_err());
+        assert!(edited("abcd", &edits(&[("abc", "x"), ("bcd", "y")])).is_err());
+        assert_eq!(
+            admin_request(
+                "file_edit",
+                &json!({"root":"sandbox","path":"n.txt",
+                "old_text":"a","new_text":"b"})
+            )
+            .expect("edit"),
+            AdminFile::Edit {
+                path: "n.txt".to_owned(),
+                edits: edits(&[("a", "b")])
+            }
+        );
+    }
 }

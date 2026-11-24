@@ -55,6 +55,13 @@ pub async fn execute(
             if let Some(draft) = arguments::broker_file(sid, pending_id, name, args)? {
                 let mut reply = broker_call(host, sid, run_id, name, &draft, cancel).await?;
                 // A refused claim stays queued; say how to be woken when it is granted.
+                // A scratch file written as source finds no broker work: name the sandbox.
+                if reply.to_string().contains("No current broker work") {
+                    reply["next"] = json!(
+                        "This path is app source, which needs broker work. For a scratch \
+                        file of your own, call the tool again with root: sandbox."
+                    );
+                }
                 if reply.to_string().contains("ownership_conflict") {
                     reply["next"] = json!(
                         "Your task is now queued for these files behind the \

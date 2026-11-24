@@ -29,6 +29,13 @@
         "type": "integer",
         "minimum": 1,
         "maximum": 100
+      },
+      "root": {
+        "type": "string",
+        "enum": [
+          "sandbox"
+        ],
+        "description": "sandbox works in this conversation's sandbox folder (the Sandbox ability's scratch folder; paths relative to it). Omit for app source and container paths."
       }
     },
     "required": [],

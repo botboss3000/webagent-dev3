@@ -3,6 +3,7 @@
 ## Usage
 
 - Execute Python in this session workspace; reads any container file, writes only the workspace; source changes use broker task tools or checkout_edit; policy-gated
+- The sandbox folder (file tools with `"root": "sandbox"`, `sandbox_file`) is the workspace's `sandbox/` subfolder: write there (`sandbox/notes.txt`) for a file the file tools should read back.
 
 Run approved python commands in the current session workspace. They may read system folders and the checkout's source files (Git history included) and write only this workspace. Application state, other sessions' workspaces, control sockets and the checkout's runtime folders (data/, workspaces/, build-jobs/, target/, runtime/) are unreadable; use the app's APIs for app data. Source writes use broker task file tools, or checkout_edit for a direct live-checkout edit. Control sockets stay excluded. Live runtime policy determines approval and authorization.
 

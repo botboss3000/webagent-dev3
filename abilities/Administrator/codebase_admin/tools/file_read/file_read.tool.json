@@ -30,6 +30,13 @@
         "type": "string",
         "pattern": "^(new|[A-Za-z0-9_-]{8,80})$",
         "description": "Omit to continue current broker work; new creates independent isolated work in this operation; reuse a returned Broker ID to switch. Session identity is automatic. Never invent an ID."
+      },
+      "root": {
+        "type": "string",
+        "enum": [
+          "sandbox"
+        ],
+        "description": "sandbox works in this conversation's sandbox folder (the Sandbox ability's scratch folder; paths relative to it). Omit for app source and container paths."
       }
     },
     "required": [
