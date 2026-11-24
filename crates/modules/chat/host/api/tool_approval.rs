@@ -231,6 +231,12 @@ pub(crate) async fn approval(
             if !settings.enabled || (choice.agent_wide && !settings.agent_wide) {
                 return Err(conflict("Saved approvals are switched off"));
             }
+            let always_free: Vec<String> = run["pending"]["remember"]["free"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|name| name.as_str().map(str::to_owned))
+                .collect();
             let saved_key = saved_approvals::key(agent_id);
             let current = app.store.get(&saved_key).await?.unwrap_or(Value::Null);
             let created_ms = SystemTime::now()
@@ -248,6 +254,7 @@ pub(crate) async fn approval(
                 owner: app.store.current_user_id(),
                 fingerprint,
                 created_ms,
+                always_free: &always_free,
             }
             .to_value();
             Some((saved_key, saved_approvals::add(&current, entry)))

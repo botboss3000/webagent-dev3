@@ -69,7 +69,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
   const modeSlot=document.createElement('div');
   const toolSlot=document.createElement('div');
   host.append(modeSlot,toolSlot);
-  let finishMode=null;const routeChoices=new Map();
+  let finishMode=null;
   // Keyed run/approval cards. A refresh with unchanged display data keeps the same nodes, so text
   // selection, scroll position, focus and typed recovery input survive the frequent run polls.
   const runCards=new Map(),toolCards=new Map();let cycle=null;
@@ -300,8 +300,6 @@ export function mountChatActionPanel({root,guard,request,note}) {
     const details=createCodeBlock(JSON.stringify(approval.messaging_binding||approval.arguments,null,2)).wrap;
     details.id='approval-details-'+approval.id;
     details.hidden=!expanded.has(approval.id);
-    const remembered=document.createElement('input');remembered.type='checkbox';remembered.checked=routeChoices.get(approval.id)===true;remembered.onchange=()=>{routeChoices.set(approval.id,remembered.checked);if(routeChoices.size>100)routeChoices.delete(routeChoices.keys().next().value);};
-    const rememberLabel=document.createElement('label');rememberLabel.append(remembered,document.createTextNode(' Remember this route for queue and steer with these recipient permissions'));
     const toggle=document.createElement('button');
     toggle.type='button';
     toggle.className='chat-action-detail-toggle';
@@ -328,9 +326,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
       {label:plan?'Keep planning':'Deny',kind:'deny',run:()=>decide('deny')}
     ]:[
       // Decision callbacks are supplied by the panel and perform the authenticated API action.
-      {label:approval.repeat_of ? 'Approve repeat' : approval.new_intent_confirmation ? 'Approve additional action' : 'Approve',kind:'approve',run:()=>decide('approve',{
-        ...(approval.messaging_can_remember?{remember_messaging_route:remembered.checked}:{}),
-        ...(saved?.choice()?{remember:saved.choice()}:{})})},
+      {label:approval.repeat_of ? 'Approve repeat' : approval.new_intent_confirmation ? 'Approve additional action' : 'Approve',kind:'approve',run:()=>decide('approve',saved?.choice()?{remember:saved.choice()}:{})},
       {label:'Deny',kind:'deny',run:()=>decide('deny')}
     ];
     if(active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
@@ -340,7 +336,6 @@ export function mountChatActionPanel({root,guard,request,note}) {
     // The critical tool guard's verdict: which message it matched, or why it held the call.
     if(typeof approval.guard?.line==='string'){const text=document.createElement('p');text.textContent=approval.guard.line;node.insertBefore(text,node.lastChild);}
     if(approval.messaging_binding){const text=document.createElement('p');const b=approval.messaging_binding;text.textContent='From '+(b.source_title||b.source_session_id)+' to '+(b.target_title||b.target_session_id)+' · '+b.target_agent_id+' · '+b.delivery;node.insertBefore(text,node.lastChild);}
-    if(approval.messaging_can_remember)node.insertBefore(rememberLabel,node.lastChild);
     if(saved)node.insertBefore(saved.node,node.lastChild);
     if(plan)node.insertBefore(planSummary(plan),node.lastChild);
     return node;
@@ -381,6 +376,6 @@ export function mountChatActionPanel({root,guard,request,note}) {
   // Remove tool-approval cards without affecting a mode confirmation.
   function clearTools(){toolSlot.replaceChildren();toolCards.clear();pendingApprovals=false;updateRoutesVisibility();}
   // Cancel pending confirmation and remove both slots from the supplied composer host.
-  function destroy(){cycle=null;roomObserver?.disconnect();globalThis.visualViewport?.removeEventListener?.('resize',fitRoom);messagingRoutes.destroy();routeChoices.clear();cancelMode();clearRuns();clearSendError();clearCredential();host.replaceChildren();}
+  function destroy(){cycle=null;roomObserver?.disconnect();globalThis.visualViewport?.removeEventListener?.('resize',fitRoom);messagingRoutes.destroy();cancelMode();clearRuns();clearSendError();clearCredential();host.replaceChildren();}
   return {confirmMode,cancelMode,showTool,clearTools,showRun,clearRuns,beginRuns,endRuns,showSendError,clearSendError,showCredential,clearCredential,messagingRoutes,destroy};
 }

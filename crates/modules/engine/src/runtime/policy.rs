@@ -222,7 +222,7 @@ impl<
     /// Records the "Remember this approval" offer on `pending` for the approval card and returns
     /// the saved approval that lets the call run without asking, if any. Only the chat owner's
     /// own runs offer or use them; never in Plan mode, for critical tools, the switch to Auto,
-    /// agent messaging (it keeps its own remembered routes) or another user's credential. A
+    /// agent messaging in a run an agent message started, or another user's credential. A
     /// repeat, separate-action or guard confirmation still asks, but may offer Remember.
     pub async fn saved_approval(
         &self,
@@ -239,10 +239,12 @@ impl<
         let owner = self.store.current_user_id();
         let critical =
             webagent_abilities::tool_definitions::get(&name).is_some_and(|tool| tool.critical);
+        let messaging = H::messaging_owns(&name);
+        let onward =
+            run["received_agent_message"] == true || run["origin_agent_message"].is_object();
         if !settings.enabled
             || mode["execution_mode"] == "plan"
-            || !saved::rememberable_tool(&name, critical)
-            || H::messaging_owns(&name)
+            || !saved::rememberable_call(&name, critical, messaging, onward)
             || run["requester_user_id"]
                 .as_str()
                 .is_some_and(|requester| requester != owner)
@@ -256,7 +258,10 @@ impl<
             self.abilities
                 .tool_abilities(&name, visibility, state, &run["loaded_abilities"]);
         let fingerprint = access.tool_permission_fingerprint(&name, &abilities);
-        pending["remember"] = json!({"agent_wide":settings.agent_wide,"fingerprint":fingerprint});
+        // A messaging approval fixes the destination and delivery; the words stay free.
+        let free: &[&str] = if messaging { &saved::MESSAGE_ARGS } else { &[] };
+        pending["remember"] =
+            json!({"agent_wide":settings.agent_wide,"fingerprint":fingerprint,"free":free});
         if crate::tools::retry_guard::needs_specific_approval(pending) {
             return Ok(None);
         }

@@ -62,6 +62,16 @@ pub fn rememberable_tool(name: &str, critical: bool) -> bool {
     !critical && name != "set_execution_mode"
 }
 
+/// The message arguments of agent-messaging tools: free in a "these values" approval, which
+/// fixes the destination and delivery, not the words.
+pub const MESSAGE_ARGS: [&str; 2] = ["text", "title"];
+
+/// Whether a call may be remembered or run on a saved approval. A messaging call in a run
+/// that an agent message started never may, so one approval cannot relay agent messages.
+pub fn rememberable_call(name: &str, critical: bool, messaging: bool, onward: bool) -> bool {
+    rememberable_tool(name, critical) && !(messaging && onward)
+}
+
 /// What the user chose on the card.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Choice {
@@ -125,6 +135,8 @@ pub struct NewEntry<'a> {
     pub owner: &'a str,
     pub fingerprint: &'a str,
     pub created_ms: u64,
+    /// Arguments left free whatever their length (`MESSAGE_ARGS` for messaging tools).
+    pub always_free: &'a [String],
 }
 
 impl NewEntry<'_> {
@@ -132,8 +144,9 @@ impl NewEntry<'_> {
         // "These values" fixes the short arguments and records the names of the long ones,
         // which a later call may change; it may add no other argument.
         let (fixed, free) = if self.choice.values {
-            let fixed = fixed_values(self.args);
-            let free: Vec<&String> = self
+            let mut fixed = fixed_values(self.args);
+            fixed.retain(|name, _| !self.always_free.contains(name));
+            let mut free: Vec<&String> = self
                 .args
                 .as_object()
                 .map(|fields| {
@@ -143,6 +156,12 @@ impl NewEntry<'_> {
                         .collect()
                 })
                 .unwrap_or_default();
+            let extra: Vec<&String> = self
+                .always_free
+                .iter()
+                .filter(|name| !free.contains(name))
+                .collect();
+            free.extend(extra);
             (Value::Object(fixed.clone()), json!(free))
         } else {
             (Value::Null, Value::Null)
@@ -245,6 +264,7 @@ mod tests {
             owner: "admin",
             fingerprint: "fp",
             created_ms: 1,
+            always_free: &[],
         }
         .to_value()
     }
@@ -375,6 +395,48 @@ mod tests {
         assert!(off.enabled && !off.agent_wide);
         assert!(Settings::from_policy(&json!({"saved_approvals":[]})).is_err());
         assert!(Settings::from_policy(&json!({"saved_approvals":{"other":true}})).is_err());
+    }
+
+    #[test]
+    fn messaging_values_fix_the_destination_not_the_words_and_never_relay() {
+        let free: Vec<String> = MESSAGE_ARGS.iter().map(|name| (*name).to_owned()).collect();
+        let saved = json!({"session_id":"s9","text":"first","delivery":"queue"});
+        let e = NewEntry {
+            id: "m1",
+            choice: Choice {
+                values: true,
+                agent_wide: false,
+            },
+            tool: "message_session",
+            args: &saved,
+            session_id: "s1",
+            agent_id: "shared_default",
+            owner: "admin",
+            fingerprint: "fp",
+            created_ms: 1,
+            always_free: &free,
+        }
+        .to_value();
+        assert_eq!(e["fixed"], json!({"session_id":"s9","delivery":"queue"}));
+        let later = json!({"session_id":"s9","text":"second","delivery":"queue"});
+        let mut call2 = Call {
+            tool: "message_session",
+            args: &later,
+            session_id: "s1",
+            owner: "admin",
+            fingerprint: "fp",
+            settings: Settings::default(),
+        };
+        assert!(matches(&e, &call2));
+        let other = json!({"session_id":"s8","text":"second","delivery":"queue"});
+        call2.args = &other;
+        assert!(!matches(&e, &call2));
+        let now = json!({"session_id":"s9","text":"second","delivery":"now"});
+        call2.args = &now;
+        assert!(!matches(&e, &call2));
+        assert!(rememberable_call("message_session", false, true, false));
+        assert!(!rememberable_call("message_session", false, true, true));
+        assert!(rememberable_call("file_write", false, false, true));
     }
 
     #[test]

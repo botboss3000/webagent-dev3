@@ -125,13 +125,17 @@ POST /api/v3/sessions/{sid}/messaging-routes/{target}. POST accepts only
 expected_revision and client_request_id; it revokes rather than creates grants.
 Browser writes require CSRF. Exact revocation retry returns the original result;
 conflicting revision/input is rejected. Approval uses the existing
-POST /api/v3/approvals/{id}/decision with optional remember_messaging_route.
+POST /api/v3/approvals/{id}/decision. It still accepts remember_messaging_route,
+but the card no longer offers it: a messaging card offers the general "Remember
+this approval" (saved approvals, docs/tool-policy.md), which fixes the target and
+delivery but not the text, and is never offered or used in a run an agent message
+started. Existing routes stay delivery checks for queued messages and stay revocable.
 
 panel mounts mountMessagingRoutes in the notification host, opens it only for
 owner-manageable sessions, disconnects before switching sessions and destroys it
 with the panel. load ignores stale generation/session responses. Revoke retains
 one request ID across transport failure and removes it only after confirmed
-success. chat-action-panel shows approval binding and bounded checkbox state;
+success. chat-action-panel shows the approval binding and the Remember picker;
 message-view renders the agent-origin label rather than calling the sender You.
 These views do not grant authority; the API always rechecks it.
 

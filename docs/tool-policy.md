@@ -46,8 +46,9 @@ any values; unchanged permission fingerprint) marks the call approved and adds a
 `approval:` activity row. Otherwise the waiting call carries a `remember` offer and its card
 shows "Remember this approval"; Approve with `remember` (chat module `tool_approval.rs`)
 writes the entry with the decision. Never offered or used in Plan mode, for critical tools,
-`set_execution_mode`, agent messaging (remembered routes), another user's credential or
-another participant's run; repeat, separate-action and guard confirmations still ask.
+`set_execution_mode`, agent messaging in a run an agent message started, another user's
+credential or another participant's run; repeat, separate-action and guard confirmations
+still ask. A messaging approval leaves `text` and `title` free (`MESSAGE_ARGS`).
 `saved_approvals.enabled` off ignores every entry.
 
 ## 4. The task gate
