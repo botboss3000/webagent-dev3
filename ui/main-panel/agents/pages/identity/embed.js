@@ -5,12 +5,15 @@ export async function renderEmbedSettings(host,request,{agentId}){
  const row=createSubpage(host,{id:'website-chat-widget',title:'Website chat widget',toggleLabel:'Enable website embedding'});
  const section=row.body;row.toggle.disabled=true;
  const status=document.createElement('p');status.className='ac-hint';status.setAttribute('role','status');section.append(status);
+ // The owner's plan line: widget trial state and end date, refreshed after each save.
+ const plan=document.createElement('p');plan.className='ac-hint';plan.dataset.widgetPlan='';section.prepend(plan);
  let current;try{current=await request('/agents/'+encodeURIComponent(agentId)+'/embed')}catch(error){status.textContent='Widget settings unavailable: '+error.message;return}
+ showWidgetPlan(plan,current.widget_plan);
  const enabled=row.toggle;enabled.checked=!!current.config.enabled;enabled.disabled=false;
  // The header switch, guest switch and origins save together with one explicit Save.
  const form=createConfigForm(section,{saveLabel:'Save widget settings',onSave:async values=>{
   current=await request('/agents/'+encodeURIComponent(agentId)+'/embed','PUT',{expected_revision:current.revision,config:{enabled:values.enabled,guest_access:values.guest_access,allowed_origins:values.allowed_origins.split(/\s+/).filter(Boolean)}});
-  status.textContent='Widget settings saved';
+  status.textContent='Widget settings saved';showWidgetPlan(plan,current.widget_plan);
  }});
  form.register('enabled');form.set('enabled',enabled.checked,true);enabled.addEventListener('change',()=>form.set('enabled',enabled.checked));
  const guests=createToggleRow(createConfigList(section,{label:'Widget access'}),{title:'Allow guest chat when the app admits guests',value:!!current.config.guest_access,key:'guest_access',form});
@@ -21,4 +24,13 @@ export async function renderEmbedSettings(host,request,{agentId}){
  section.append(origins,hint);form.attach();
  const snippet=document.createElement('pre');snippet.style.whiteSpace='pre-wrap';snippet.textContent='<script src="'+location.origin+'/ui/embed/loader.js" data-agent="'+agentId+'" async></script>';
  section.append(snippet);
+}
+// Describes the agent owner's widget plan: included, not included, or the one-time trial with its end date.
+function showWidgetPlan(line,plan){
+ const date=at=>new Date(at*1000).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
+ const text=!plan||plan.plan==='included'?'':plan.plan==='not_included'?"The owner's plan doesn't include website widgets.":
+  plan.state==='not_started'?'Widget trial: '+plan.days+' days, starting when a widget is first turned on and saved. It covers all of the owner\'s agents and runs once.':
+  plan.state==='running'?'Widget trial on until '+date(plan.ends_at)+'. It covers all of the owner\'s agents and runs once.':
+  'Widget trial ended on '+date(plan.ends_at)+'. Widgets are paused; their settings and visitor chats are kept. A plan that includes widgets turns them back on.';
+ line.textContent=text;line.hidden=!text;line.dataset.widgetPlan=plan?.state||plan?.plan||'';
 }

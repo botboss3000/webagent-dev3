@@ -301,6 +301,97 @@
       "notes": "Caps the automation ability's max_automations_per_user. The administrator level has none."
     },
     {
+      "id": "access.tier.owner_limits.widgets",
+      "description": "Whether agents owned by an account at this level may have a website chat widget: yes, a one-time trial, or no.",
+      "type": "enum",
+      "enum": [
+        "yes",
+        "trial",
+        "no"
+      ],
+      "pointer": "/tiers/{tier}/owner_limits/widgets",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "free owners get a widget trial",
+        "let plus agents embed a chat on their website",
+        "no website chat for free users"
+      ],
+      "areas": [
+        "agents",
+        "widgets",
+        "access"
+      ],
+      "parameters": {
+        "tier": [
+          "plus",
+          "free",
+          "anonymous"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Absent means yes. A trial starts when the owner first turns a widget on, covers all their agents and never starts again; afterwards widgets pause with their settings and visitor chats kept."
+    },
+    {
+      "id": "access.tier.owner_limits.widget_trial_days",
+      "description": "How many days the one-time website chat widget trial lasts for owners at this level.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/owner_limits/widget_trial_days",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "widget trial lasts 30 days",
+        "make the free widget trial two weeks",
+        "how long can free owners try the chat widget"
+      ],
+      "areas": [
+        "agents",
+        "widgets",
+        "trial"
+      ],
+      "unit": "days",
+      "min": 1,
+      "max": 365,
+      "parameters": {
+        "tier": [
+          "free"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Needed when widgets is trial."
+    },
+    {
+      "id": "access.tier.owner_limits.widget_trial_notice_days",
+      "description": "How many days before the website chat widget trial ends the owner gets a notice.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/owner_limits/widget_trial_notice_days",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "warn owners 7 days before the widget trial ends",
+        "remind me a week before my trial is over",
+        "trial ending reminder"
+      ],
+      "areas": [
+        "agents",
+        "widgets",
+        "notifications"
+      ],
+      "unit": "days",
+      "min": 0,
+      "max": 60,
+      "parameters": {
+        "tier": [
+          "free"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "Absent or 0: only the notice at the end."
+    },
+    {
       "id": "access.tier_names",
       "description": "Display name of an account level.",
       "type": "string",

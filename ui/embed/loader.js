@@ -76,7 +76,8 @@
  // Purpose: Load the public embed descriptor, derive the widget profile, and create the iframe shell and launcher.
  const initialized=(async()=>{
   const response=await fetch(origin+'/api/v3/embed/'+encodeURIComponent(agent)+'/descriptor?origin='+encodeURIComponent(location.origin),{credentials:'omit'});
-  if(!response.ok)throw new Error('Chat embedding is unavailable for this website.');
+  // 503: the owner's widgets are paused; show the server's polite message.
+  if(!response.ok)throw new Error(response.status===503&&(await response.json().catch(()=>({}))).error||'Chat embedding is unavailable for this website.');
   const descriptor=await response.json();
   const {mergeProfile,createFloatingChat,createChatLauncher,createTouchVibration}=await import(origin+'/ui/chat/widget/window.js');
   if(destroyed)throw new Error('Widget destroyed.');

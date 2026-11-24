@@ -11,6 +11,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::Serialize;
 use sha2::Digest;
 use std::sync::Arc;
+use webagent_access::widget_trial::{self, WidgetState, Widgets};
 use webagent_accounts_host::AccountsStore;
 #[derive(Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -35,6 +36,75 @@ fn unauthorized() -> ApiError {
         StatusCode::UNAUTHORIZED,
         "Embedded chat authentication required".into(),
     )
+}
+/// What a visitor sees while the agent owner's widgets are paused (trial over, or the plan has
+/// no widgets): settings and chats are kept, so it is "unavailable", not "denied".
+fn paused() -> ApiError {
+    ApiError(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "This chat is paused and not available right now. Please check back later.".into(),
+    )
+}
+/// The `account_due` kind whose time is an owner's next widget trial notice.
+const WIDGET_TRIAL_DUE: &str = "widget_trial";
+/// How often the API looks for widget trial notices that are due.
+const WIDGET_TRIAL_TICK: std::time::Duration = std::time::Duration::from_secs(60);
+/// How long a notice that could not be written waits before it is tried again (seconds).
+const WIDGET_TRIAL_RETRY: u64 = 3600;
+/// The owner's widget state from their effective `tier` (`None`: unreadable, never serves).
+/// Only a trial tier reads the trial start: one plain indexed read, no decryption.
+async fn widget_state(
+    app: &App,
+    owner: &str,
+    tier: Option<&access::Tier>,
+) -> anyhow::Result<WidgetState> {
+    let Some(tier) = tier else {
+        return Ok(WidgetState::NotIncluded);
+    };
+    let started = if tier.owner_limits.widgets() == Widgets::Trial {
+        app.store
+            .accounts_repository()
+            .widget_trial_started(owner)
+            .await?
+    } else {
+        None
+    };
+    Ok(WidgetState::of(&tier.owner_limits, started, now()))
+}
+/// The agent's owner and their effective tier, for widget routes without a signed-in caller.
+/// An unknown or unreadable tier gives `None`, which never serves (fail closed).
+async fn agent_owner_tier(
+    app: &App,
+    agent: &str,
+) -> anyhow::Result<(String, Option<access::Tier>)> {
+    let owner: String = sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
+        .bind(agent)
+        .fetch_one(&app.store.app_pool)
+        .await?;
+    let tier = match app.store.account_by_id(&owner).await? {
+        Some(account) => {
+            let tier_id = access::Principal::from_account(&account)?.tier_id;
+            app.store.entitlement_tier(&tier_id).await.ok().flatten()
+        }
+        None => None,
+    };
+    Ok((owner, tier))
+}
+/// Refuses a public widget route while the agent owner's widgets are paused.
+async fn widget_serves(app: &App, agent: &str) -> std::result::Result<(), ApiError> {
+    let (owner, tier) = agent_owner_tier(app, agent).await?;
+    if widget_state(app, &owner, tier.as_ref()).await?.serves() {
+        Ok(())
+    } else {
+        Err(paused())
+    }
+}
+/// Whether the widgets of `access`'s agent owner serve now, from the owner tier that access
+/// check already read.
+async fn widget_serves_for(app: &App, access: &access::authority::LiveAccess) -> bool {
+    widget_state(app, &access.agent_owner_id, access.owner_tier.as_ref())
+        .await
+        .is_ok_and(WidgetState::serves)
 }
 fn origin_valid(origin: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(origin) else {
@@ -84,7 +154,48 @@ pub(super) async fn config_get(
     Path(id): Path<String>,
 ) -> Api {
     authority(&app, &identity, &id).await?;
-    Ok(Json(settings(&app, &id).await?))
+    let mut value = settings(&app, &id).await?;
+    let caller = identity["_user_id"].as_str().unwrap_or("");
+    value["widget_plan"] = owner_widget_state(&app, caller, &id).await?.2.view();
+    Ok(Json(value))
+}
+/// The agent's owner, their tier's limits and their widget state, read through `caller`'s
+/// access to the agent.
+async fn owner_widget_state(
+    app: &App,
+    caller: &str,
+    agent: &str,
+) -> std::result::Result<(String, access::OwnerLimits, WidgetState), ApiError> {
+    let access = app.store.live_access(caller, agent).await?;
+    let state = widget_state(app, &access.agent_owner_id, access.owner_tier.as_ref()).await?;
+    let limits = access
+        .owner_tier
+        .map(|tier| tier.owner_limits)
+        .unwrap_or_default();
+    Ok((access.agent_owner_id, limits, state))
+}
+/// Starts the owner's one widget trial now, unless it already started: the `account_due` row
+/// for its notices first (only brought earlier), then the account's start, then the row set
+/// from the stored start. A failed or racing write costs at worst an early visit. Returns the
+/// stored start.
+async fn start_widget_trial(
+    app: &App,
+    owner: &str,
+    limits: &access::OwnerLimits,
+) -> anyhow::Result<u64> {
+    let pool = &app.store.app_pool;
+    let at = now();
+    if let (_, Some(first)) = widget_trial::due_visit(limits, Some(at), at) {
+        webagent_engine::due::earlier(pool, owner, WIDGET_TRIAL_DUE, first).await?;
+    }
+    let started = app
+        .store
+        .accounts_repository()
+        .start_widget_trial(owner, at)
+        .await?;
+    let next = widget_trial::due_visit(limits, Some(started), now()).1;
+    webagent_engine::due::set(pool, owner, WIDGET_TRIAL_DUE, next).await?;
+    Ok(started)
 }
 pub(super) async fn config_put(
     State(app): State<App>,
@@ -113,12 +224,30 @@ pub(super) async fn config_put(
     if old["revision"] != expected {
         return Err(conflict("Embed configuration changed"));
     }
-    let value = json!({"revision":expected.checked_add(1).ok_or_else(||bad("Revision exhausted"))?,"config":config});
+    // Widgets are a plan value of the agent's owner: turning one on starts a trial not yet
+    // started and is refused once the trial is over; a widget already on keeps its settings.
+    let caller = identity["_user_id"].as_str().unwrap_or("");
+    let (owner, limits, mut state) = owner_widget_state(&app, caller, &id).await?;
+    if config.enabled {
+        if let WidgetState::TrialNotStarted { .. } = state {
+            let started = start_widget_trial(&app, &owner, &limits).await?;
+            state = WidgetState::of(&limits, Some(started), now());
+        } else if !state.may_turn_on() && old["config"]["enabled"] != true {
+            return Err(conflict(match state {
+                WidgetState::TrialEnded { .. } => {
+                    "The agent owner's widget trial has ended; widgets work again on a plan that includes them"
+                }
+                _ => "The agent owner's plan does not include website chat widgets",
+            }));
+        }
+    }
+    let mut value = json!({"revision":expected.checked_add(1).ok_or_else(||bad("Revision exhausted"))?,"config":config});
     admin_agent_view(&app, &id)
         .await?
         .store
         .put(&format!("agent:{id}:embed"), &value)
         .await?;
+    value["widget_plan"] = state.view();
     Ok(Json(value))
 }
 pub(super) async fn descriptor(
@@ -136,6 +265,7 @@ pub(super) async fn descriptor(
     {
         return Err(denied());
     }
+    widget_serves(&app, &id).await?;
     // The embed's agent overlay applies exactly as in the authenticated UI response.
     let mut ui = ui_config_value(&app).await?;
     crate::chat_config::apply_to_ui_config(&app.store, &id, &mut ui).await?;
@@ -163,6 +293,7 @@ pub(super) async fn page(
 ) -> std::result::Result<Response, ApiError> {
     let origin = args.get("origin").map(String::as_str).unwrap_or("");
     allowed(&app, &id, origin).await?;
+    widget_serves(&app, &id).await?;
     let root = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| {
         webagent_configuration::paths::app()
             .join("ui")
@@ -286,6 +417,7 @@ pub(super) async fn challenge(
     first_party(&app, &headers)?;
     let origin = required(&body, "origin", 256)?;
     let config = allowed(&app, &id, origin).await?;
+    widget_serves(&app, &id).await?;
     let proof = required(&body, "code_challenge", 43)?;
     if proof.len() != 43
         || !proof
@@ -367,10 +499,12 @@ async fn issue(app: &App, doc: &Value, account: &Value) -> Api {
     let user = account["user_id"].as_str().ok_or_else(denied)?;
     let agent = doc["agent_id"].as_str().ok_or_else(denied)?;
     let config = allowed(app, agent, doc["origin"].as_str().unwrap_or("")).await?;
-    if config["revision"] != doc["revision"]
-        || !app.store.live_access(user, agent).await?.admitted()
-    {
+    let access = app.store.live_access(user, agent).await?;
+    if config["revision"] != doc["revision"] || !access.admitted() {
         return Err(denied());
+    }
+    if !widget_serves_for(app, &access).await {
+        return Err(paused());
     }
     let principal = access::Principal::from_account(account)?;
     if principal.role == access::Role::Administrator {
@@ -458,6 +592,8 @@ pub(super) async fn guest(
     {
         return Err(denied());
     }
+    // A paused widget creates no guest account.
+    widget_serves(&app, &id).await?;
     let client = crate::account_authentication::throttle_client(&app, peer, &headers)?;
     rate(&app, &id, client, "guest").await?;
     // Embedded guests share the daily new-account cap with sign-up and guest login.
@@ -516,6 +652,81 @@ pub(super) async fn revoke(
         "Credential not found".into(),
     ))
 }
+/// Send owners their widget trial notices (7 days before the end, at the end), every minute
+/// until the API stops. Each pass reads only the due `account_due` rows, never every account.
+pub(crate) async fn widget_trial_service(app: App) {
+    loop {
+        tokio::select! {
+            () = app.stop.cancelled() => break,
+            () = tokio::time::sleep(WIDGET_TRIAL_TICK) => {}
+        }
+        if let Err(error) = widget_trial_notices(&app, now()).await {
+            tracing::warn!(%error, "Widget trial notice pass failed");
+        }
+    }
+}
+/// One pass at `now`: each owner whose row is due is read again (tier, trial start) and gets
+/// the notice now due, if any; the row then moves to the next notice or goes. A notice that
+/// cannot be written is tried again in an hour. Returns how many notices were sent.
+pub(crate) async fn widget_trial_notices(app: &App, now: u64) -> anyhow::Result<usize> {
+    let pool = &app.store.app_pool;
+    let mut sent = 0;
+    for owner in webagent_engine::due::passed(pool, WIDGET_TRIAL_DUE, now).await? {
+        let tier = match app.store.account_by_id(&owner).await? {
+            Some(account) => {
+                let tier_id = access::Principal::from_account(&account)?.tier_id;
+                app.store.entitlement_tier(&tier_id).await.ok().flatten()
+            }
+            None => None,
+        };
+        let limits = tier.map(|tier| tier.owner_limits).unwrap_or_default();
+        let started = app
+            .store
+            .accounts_repository()
+            .widget_trial_started(&owner)
+            .await?;
+        let (notice, mut next) = widget_trial::due_visit(&limits, started, now);
+        if let (Some(notice), Some(started)) = (notice, started) {
+            let ends = widget_trial::trial_end(started, limits.widget_trial_days.unwrap_or(0));
+            match app
+                .store
+                .for_user(&owner)
+                .await?
+                .add_notice(
+                    notice.kind(),
+                    notice.severity(),
+                    &widget_trial_message(notice, ends),
+                )
+                .await
+            {
+                Ok(()) => sent += 1,
+                Err(error) => {
+                    tracing::warn!(%error, "Widget trial notice not written; trying again later");
+                    next = Some(now.saturating_add(WIDGET_TRIAL_RETRY));
+                }
+            }
+        }
+        webagent_engine::due::set(pool, &owner, WIDGET_TRIAL_DUE, next).await?;
+    }
+    Ok(sent)
+}
+/// The owner's notice text for `notice` of a trial that ends at `ends` (date in UTC).
+fn widget_trial_message(notice: widget_trial::TrialNotice, ends: u64) -> String {
+    let date = chrono::DateTime::from_timestamp(i64::try_from(ends).unwrap_or(i64::MAX), 0)
+        .map(|at| at.format("%-d %B %Y").to_string())
+        .unwrap_or_default();
+    match notice {
+        widget_trial::TrialNotice::Ending => format!(
+            "Your website chat widget trial ends on {date} (UTC). After that your widgets pause; \
+             their settings and visitor chats are kept, and a plan that includes widgets turns \
+             them back on."
+        ),
+        widget_trial::TrialNotice::Ended => "Your website chat widget trial has ended and your \
+             widgets are paused. Their settings and visitor chats are kept; a plan that \
+             includes widgets turns them back on at once."
+            .into(),
+    }
+}
 // Also used by a long-lived stream; revocation must stop an already-open SSE.
 pub(crate) async fn credential_valid(app: &App, doc: &Value) -> bool {
     let Some(key) = doc["credential_key"].as_str() else {
@@ -559,11 +770,10 @@ pub(crate) async fn credential_valid(app: &App, doc: &Value) -> bool {
         && account["generation"] == doc["generation"]
         && (principal.role != access::Role::Guest
             || registration::mode(app).await.unwrap_or_default() == "public_registered")
-        && app
-            .store
-            .live_access(user, agent)
-            .await
-            .is_ok_and(|a| a.admitted())
+        && match app.store.live_access(user, agent).await {
+            Ok(access) if access.admitted() => widget_serves_for(app, &access).await,
+            _ => false,
+        }
         && app
             .store
             .read_access_policy()
@@ -685,6 +895,10 @@ pub(crate) async fn bearer(app: &App, request: &mut Request) -> std::result::Res
     let auth_key = format!("embed:credential:{}", digest(&json!(token)));
     let mut doc = app.store.get(&auth_key).await?.ok_or_else(unauthorized)?;
     if !credential_valid(app, &doc).await {
+        // A paused widget says so instead of asking the visitor to sign in again.
+        if let Some(agent) = doc["agent_id"].as_str() {
+            widget_serves(app, agent).await?;
+        }
         return Err(unauthorized());
     }
     // Default deny: only the routes the embedded chat calls (credential_routes.rs).
@@ -1490,6 +1704,504 @@ mod tests {
         )
         .await
         .is_err());
+    }
+    /// One request with a sign-in cookie or a widget bearer; returns the status and JSON body.
+    async fn trial_call(
+        app: &App,
+        method: &str,
+        uri: &str,
+        auth: (&str, &str),
+        body: Value,
+    ) -> (StatusCode, Value) {
+        use tower::ServiceExt;
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json");
+        request = match auth {
+            ("cookie", token) => request
+                .header("cookie", format!("v3_session={token}"))
+                .header("x-csrf-token", "fixture-csrf"),
+            ("bearer", token) => request.header("authorization", format!("Bearer {token}")),
+            _ => request,
+        };
+        let response = router(app.clone())
+            .oneshot(
+                request
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    async fn trial_sign_in(app: &App, user: &str) -> String {
+        let token = uuid();
+        let record = app.store.account_by_id(user).await.unwrap().unwrap();
+        app.store
+            .put(
+                &format!("auth:{}", digest(&json!(token))),
+                &json!({"id":uuid(),"user_id":user,"csrf":"fixture-csrf",
+                    "generation":record["generation"],"expires":now()+3600}),
+            )
+            .await
+            .unwrap();
+        token
+    }
+
+    /// A widget credential of `visitor` on `agent` for https://example.com; returns its token.
+    async fn trial_credential(app: &App, visitor: &str, agent: &str) -> String {
+        let generation =
+            app.store.account_by_id(visitor).await.unwrap().unwrap()["generation"].clone();
+        let config = settings(app, agent).await.unwrap();
+        let token = format!("{}{}", uuid(), uuid());
+        let credential_key = format!("embed:credential:{}", digest(&json!(token)));
+        app.store
+            .put(
+                &credential_key,
+                &json!({"id":uuid(),"credential_key":credential_key,"agent_id":agent,
+                    "origin":"https://example.com","revision":config["revision"],
+                    "user_id":visitor,"generation":generation,"expires":now()+3600}),
+            )
+            .await
+            .unwrap();
+        token
+    }
+
+    /// A fresh widget credential of `visitor` on `agent` asks `/user/status` (the embedded
+    /// chat's own refresh): status and body.
+    async fn trial_me(app: &App, visitor: &str, agent: &str) -> (StatusCode, Value) {
+        let token = trial_credential(app, visitor, agent).await;
+        trial_call(
+            app,
+            "GET",
+            "/api/v3/user/status",
+            ("bearer", &token),
+            Value::Null,
+        )
+        .await
+    }
+
+    /// Issues `visitor` a widget credential on `agent` at the current configuration revision.
+    async fn trial_issue(app: &App, visitor: &str, agent: &str) -> Api {
+        let config = settings(app, agent).await.unwrap();
+        let account = app.store.account_by_id(visitor).await.unwrap().unwrap();
+        let doc =
+            json!({"agent_id":agent,"origin":"https://example.com","revision":config["revision"]});
+        issue(app, &doc, &account).await
+    }
+
+    /// Moves the owner's recorded trial start (test only: the app writes it once).
+    async fn set_trial_start(app: &App, owner: &str, at: u64) {
+        sqlx::query("UPDATE user_accounts SET widget_trial_started=? WHERE user_id=?")
+            .bind(i64::try_from(at).unwrap())
+            .bind(owner)
+            .execute(&app.store.app_pool)
+            .await
+            .unwrap();
+    }
+
+    async fn trial_due(app: &App, owner: &str) -> Option<u64> {
+        webagent_engine::due::all(&app.store.app_pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(user, kind, _)| user == owner && kind == WIDGET_TRIAL_DUE)
+            .map(|(_, _, at)| at)
+    }
+
+    /// Free owners get one 30-day widget trial covering all their agents, starting at the first
+    /// widget turned on; after it widgets pause (settings and chats kept) until the owner's
+    /// plan includes widgets, which a second sign-in changes for the widget's next request.
+    #[tokio::test]
+    async fn the_widget_trial_runs_once_then_pauses_until_the_owner_has_plus() {
+        const DAY: u64 = 86_400;
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let mut free = app.store.entitlement_tier("free").await.unwrap().unwrap();
+        let free_revision = free.revision;
+        free.owner_limits.widgets = Some(Widgets::Trial);
+        free.owner_limits.widget_trial_days = Some(30);
+        free.owner_limits.widget_trial_notice_days = Some(7);
+        app.store
+            .save_entitlement_tier(free, free_revision)
+            .await
+            .unwrap();
+        app.store
+            .save_entitlement_tier(
+                crate::access::Tier {
+                    id: "plus".into(),
+                    revision: 0,
+                    allowed_models: vec!["*".into()],
+                    model_policy: None,
+                    max_sessions: 100,
+                    max_active_runs: 25,
+                    daily_turns: None,
+                    owner_limits: crate::access::OwnerLimits {
+                        widgets: Some(Widgets::Yes),
+                        ..Default::default()
+                    },
+                },
+                0,
+            )
+            .await
+            .unwrap();
+        let owner = widget_member(&app, "trial-owner").await;
+        let created = |name: &'static str| {
+            let app = app.clone();
+            let owner = owner.clone();
+            async move {
+                let Json(created) = crate::agents_api::create_agent(
+                    State(app),
+                    Extension(json!({"_user_id":owner})),
+                    Json(crate::agents_api::NewAgent {
+                        client_request_id: format!("{name}-request"),
+                        name: name.into(),
+                        description: None,
+                    }),
+                )
+                .await
+                .unwrap();
+                created["id"].as_str().unwrap().to_owned()
+            }
+        };
+        let agent = created("Trial agent").await;
+        let second = created("Second trial agent").await;
+        let visitor = widget_member(&app, "trial-visitor").await;
+        app.store
+            .set_agent_membership(&visitor, &agent, crate::access::Relationship::Caller, 0)
+            .await
+            .unwrap();
+        let owner_cookie = trial_sign_in(&app, &owner).await;
+        let admin_cookie = trial_sign_in(&app, "admin").await;
+        let embed_uri = format!("/api/v3/agents/{agent}/embed");
+        let descriptor_uri =
+            format!("/api/v3/embed/{agent}/descriptor?origin=https%3A%2F%2Fexample.com");
+        let config = |revision: u64, enabled: bool| {
+            json!({"expected_revision":revision,"config":{"enabled":enabled,
+                "allowed_origins":["https://example.com"]}})
+        };
+        let turn = |revision: u64, enabled: bool| {
+            let app = app.clone();
+            let (uri, cookie, body) = (
+                embed_uri.clone(),
+                owner_cookie.clone(),
+                config(revision, enabled),
+            );
+            async move { trial_call(&app, "PUT", &uri, ("cookie", &cookie), body).await }
+        };
+        // Whether a public widget route answered "paused" (the test fixture has no chat UI
+        // configuration, so an allowed descriptor may still fail later for that reason).
+        let public = |uri: String| {
+            let app = app.clone();
+            async move {
+                let (status, body) = trial_call(&app, "GET", &uri, ("none", ""), Value::Null).await;
+                status == StatusCode::SERVICE_UNAVAILABLE
+                    && body["error"].as_str().is_some_and(|e| e.contains("paused"))
+            }
+        };
+
+        // Not started: the page offers the trial; nothing serves yet.
+        let (status, page) = trial_call(
+            &app,
+            "GET",
+            &embed_uri,
+            ("cookie", &owner_cookie),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            page["widget_plan"],
+            json!({"plan":"trial","state":"not_started","days":30,"serves":false})
+        );
+        assert_eq!(
+            app.store
+                .accounts_repository()
+                .widget_trial_started(&owner)
+                .await
+                .unwrap(),
+            None
+        );
+
+        // Turning the first widget on starts the trial: account start, then a due row 7 days
+        // before its end; the widget serves.
+        let before = now();
+        let (status, saved) = turn(0, true).await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let started = app
+            .store
+            .accounts_repository()
+            .widget_trial_started(&owner)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(started >= before && started <= now());
+        assert_eq!(saved["widget_plan"]["state"], "running");
+        assert_eq!(saved["widget_plan"]["ends_at"], started + 30 * DAY);
+        assert_eq!(trial_due(&app, &owner).await, Some(started + 23 * DAY));
+        assert!(!public(descriptor_uri.clone()).await);
+        let me = trial_me(&app, &visitor, &agent).await;
+        assert_eq!(me.0, StatusCode::OK, "{}", me.1);
+        assert!(trial_issue(&app, &visitor, &agent).await.is_ok());
+
+        // It never restarts: off and on again, or another agent turned on, keeps the start.
+        assert_eq!(turn(1, false).await.0, StatusCode::OK);
+        assert_eq!(turn(2, true).await.0, StatusCode::OK);
+        let (status, other) = trial_call(
+            &app,
+            "PUT",
+            &format!("/api/v3/agents/{second}/embed"),
+            ("cookie", &owner_cookie),
+            config(0, true),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(other["widget_plan"]["ends_at"], started + 30 * DAY);
+        assert_eq!(
+            app.store
+                .accounts_repository()
+                .widget_trial_started(&owner)
+                .await
+                .unwrap(),
+            Some(started)
+        );
+
+        // A session of the visitor, to show chats are kept through the pause.
+        app.store
+            .for_user(&visitor)
+            .await
+            .unwrap()
+            .put(
+                "session:trial-chat",
+                &json!({"id":"trial-chat","agent_id":agent}),
+            )
+            .await
+            .unwrap();
+
+        // The notices: 7 days before the end, then at the end; the row then goes.
+        let ends = started + 30 * DAY;
+        assert_eq!(
+            widget_trial_notices(&app, started + 23 * DAY - 1)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            widget_trial_notices(&app, started + 23 * DAY)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(trial_due(&app, &owner).await, Some(ends));
+        assert_eq!(
+            widget_trial_notices(&app, started + 23 * DAY)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(widget_trial_notices(&app, ends).await.unwrap(), 1);
+        assert_eq!(trial_due(&app, &owner).await, None);
+        let notices = app
+            .store
+            .for_user(&owner)
+            .await
+            .unwrap()
+            .notices()
+            .await
+            .unwrap();
+        let kinds: Vec<_> = notices["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["kind"].clone())
+            .collect();
+        assert_eq!(
+            kinds,
+            [json!("widget_trial_ended"), json!("widget_trial_ending")]
+        );
+
+        // After the end (31 days ago it started): everything a visitor reaches pauses.
+        set_trial_start(&app, &owner, now() - 31 * DAY).await;
+        assert!(public(descriptor_uri.clone()).await);
+        let (status, body) = trial_me(&app, &visitor, &agent).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("paused"),
+            "{body}"
+        );
+        assert_eq!(
+            trial_issue(&app, &visitor, &agent).await.unwrap_err().0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let challenge = trial_call(
+            &app,
+            "POST",
+            &format!("/api/v3/embed/{agent}/challenge"),
+            ("none", ""),
+            json!({"origin":"https://example.com","code_challenge":"a".repeat(43)}),
+        )
+        .await;
+        assert_eq!(challenge.0, StatusCode::SERVICE_UNAVAILABLE);
+        // Settings stay and can still be saved; turning one back on is refused.
+        let (status, page) = trial_call(
+            &app,
+            "GET",
+            &embed_uri,
+            ("cookie", &owner_cookie),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(
+            (status, page["config"]["enabled"].clone()),
+            (StatusCode::OK, json!(true))
+        );
+        assert_eq!(page["widget_plan"]["state"], "ended");
+        assert_eq!(turn(3, true).await.0, StatusCode::OK);
+        assert_eq!(turn(4, false).await.0, StatusCode::OK);
+        let (status, refused) = turn(5, true).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(refused["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("trial has ended"));
+        assert_eq!(turn(5, true).await.0, StatusCode::CONFLICT);
+        assert_eq!(
+            trial_call(
+                &app,
+                "PUT",
+                &format!("/api/v3/agents/{second}/embed"),
+                ("cookie", &owner_cookie),
+                config(1, true)
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert!(app
+            .store
+            .for_user(&visitor)
+            .await
+            .unwrap()
+            .get("session:trial-chat")
+            .await
+            .unwrap()
+            .is_some());
+
+        // Plus from the administrator's second sign-in: the widget's next request serves, and
+        // the owner may turn widgets on again.
+        let set_tier = |tier: &'static str| {
+            let app = app.clone();
+            let (owner, admin) = (owner.clone(), admin_cookie.clone());
+            async move {
+                let current = app.store.account_by_id(&owner).await.unwrap().unwrap();
+                trial_call(&app, "PUT", &format!("/api/v3/admin/access/accounts/{owner}"), ("cookie", &admin),
+                    json!({"expected_revision":current["access_revision"],"status":"active","tier_id":tier})).await.0
+            }
+        };
+        // The second agent's widget stayed on through the pause; nothing about it changes here.
+        app.store
+            .set_agent_membership(&visitor, &second, crate::access::Relationship::Caller, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            trial_me(&app, &visitor, &second).await.0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(set_tier("plus").await, StatusCode::OK);
+        assert_eq!(trial_me(&app, &visitor, &second).await.0, StatusCode::OK);
+        assert!(trial_issue(&app, &visitor, &second).await.is_ok());
+        assert_eq!(turn(5, true).await.0, StatusCode::OK);
+        assert!(!public(descriptor_uri.clone()).await);
+        assert_eq!(trial_me(&app, &visitor, &agent).await.0, StatusCode::OK);
+        // A widget's owner cannot change its own plan.
+        let visitor_cookie = trial_sign_in(&app, &visitor).await;
+        assert_eq!(
+            trial_call(
+                &app,
+                "PUT",
+                &format!("/api/v3/admin/access/accounts/{owner}"),
+                ("cookie", &visitor_cookie),
+                json!({"expected_revision":1,"status":"active","tier_id":"free"})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+
+        // Plus ends: paused again at once, and no second trial.
+        assert_eq!(set_tier("free").await, StatusCode::OK);
+        assert_eq!(
+            trial_me(&app, &visitor, &second).await.0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            trial_me(&app, &visitor, &agent).await.0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(public(descriptor_uri.clone()).await);
+        assert_eq!(turn(6, false).await.0, StatusCode::OK);
+        assert_eq!(turn(7, true).await.0, StatusCode::CONFLICT);
+        assert!(
+            app.store
+                .accounts_repository()
+                .widget_trial_started(&owner)
+                .await
+                .unwrap()
+                .unwrap()
+                < now() - 30 * DAY
+        );
+        assert_eq!(trial_due(&app, &owner).await, None);
+
+        // An administrator-owned agent's widget has no trial and serves.
+        let admin = json!({"_user_id":"admin"});
+        config_put(
+            State(app.clone()),
+            Extension(admin.clone()),
+            Path("shared_default".into()),
+            Json(config(0, true)),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !public(
+                "/api/v3/embed/shared_default/descriptor?origin=https%3A%2F%2Fexample.com".into()
+            )
+            .await
+        );
+        assert_eq!(
+            trial_me(&app, &visitor, "shared_default").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            app.store
+                .accounts_repository()
+                .widget_trial_started("admin")
+                .await
+                .unwrap(),
+            None
+        );
+        let Json(page) = config_get(
+            State(app.clone()),
+            Extension(admin),
+            Path("shared_default".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            page["widget_plan"],
+            json!({"plan":"included","serves":true})
+        );
     }
 }
 

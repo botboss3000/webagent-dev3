@@ -186,7 +186,8 @@ pub struct Tier {
 /// Limits an agent owner's tier sets: on each agent they own, how many people it serves and
 /// whether signed-out visitors may use it (the owner may lower those numbers on each agent,
 /// `MemberAccess`); and shared across all their agents, their runs at once, command processor
-/// time per day and automations (agents owned: `storage.tiers.*.max_published_agents`; storage:
+/// time per day and automations, and whether their agents may have website widgets (agents
+/// owned: `storage.tiers.*.max_published_agents`; storage:
 /// `storage.tiers.*.user_storage_mb`). Absent means no limit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -215,6 +216,15 @@ pub struct OwnerLimits {
     /// administrator) wins. Absent means allowed. Own models are never affected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_models: Option<bool>,
+    /// Whether the owner's agents may have website chat widgets (`widget_trial`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widgets: Option<widget_trial::Widgets>,
+    /// Days a widget trial lasts from the owner's first widget (needed when `widgets` is trial).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_trial_days: Option<u32>,
+    /// Days before a widget trial ends that the owner gets a notice (absent: no early notice).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_trial_notice_days: Option<u32>,
 }
 impl OwnerLimits {
     pub fn unlimited(&self) -> bool {
@@ -226,9 +236,19 @@ impl OwnerLimits {
             && self.runs_at_once.is_none_or(|n| n <= 200)
             && self.compute_seconds_per_day.is_none_or(|n| n <= 8_640_000)
             && self.automations.is_none_or(|n| n <= 200)
+            && self
+                .widget_trial_days
+                .is_none_or(|n| (1..=365).contains(&n))
+            && self.widget_trial_notice_days.is_none_or(|n| n <= 60)
+            && (self.widgets != Some(widget_trial::Widgets::Trial)
+                || self.widget_trial_days.is_some())
     }
     pub fn allows_public_visitors(&self) -> bool {
         self.public_visitors != Some(false)
+    }
+    /// Whether this tier includes widgets (absent: yes).
+    pub fn widgets(&self) -> widget_trial::Widgets {
+        self.widgets.unwrap_or(widget_trial::Widgets::Yes)
     }
     /// These limits, each capped by `upper`'s (a tier ranked above).
     pub fn within(self, upper: &Self) -> Self {
@@ -253,6 +273,14 @@ impl OwnerLimits {
             automations: run_limits::lower(self.automations, upper.automations),
             // A default, not a ceiling: each tier keeps its own.
             catalog_models: self.catalog_models,
+            widgets: match (self.widgets, upper.widgets) {
+                (None, None) => None,
+                _ => Some(self.widgets().min(upper.widgets())),
+            },
+            widget_trial_days: run_limits::lower(self.widget_trial_days, upper.widget_trial_days),
+            widget_trial_notice_days: self
+                .widget_trial_notice_days
+                .or(upper.widget_trial_notice_days),
         }
     }
 }
@@ -771,6 +799,7 @@ pub mod repository;
 pub mod run_limits;
 pub mod saved_approvals;
 pub mod storage;
+pub mod widget_trial;
 pub fn require_administrator(account: &serde_json::Value) -> anyhow::Result<()> {
     if !Principal::from_account(account)?.administrator() {
         anyhow::bail!("Administrator access required");

@@ -2246,3 +2246,26 @@ async fn a_test_persona_sign_in_is_issued_only_for_an_active_test_account() {
         .await
         .is_err());
 }
+#[tokio::test]
+async fn a_widget_trial_starts_once_and_never_again() {
+    let f = Fixture::new().await;
+    let r = f.repo();
+    let owner = f.active("trial-owner").await;
+    assert_eq!(r.widget_trial_started(&owner).await.unwrap(), None);
+    let before = r.auth_epoch(&owner).await.unwrap().unwrap();
+    assert_eq!(r.start_widget_trial(&owner, 1_000).await.unwrap(), 1_000);
+    assert_eq!(r.auth_epoch(&owner).await.unwrap(), Some(before + 1));
+    // A second start (another agent, a recreated agent) keeps the first and writes nothing.
+    assert_eq!(r.start_widget_trial(&owner, 9_000).await.unwrap(), 1_000);
+    assert_eq!(r.widget_trial_started(&owner).await.unwrap(), Some(1_000));
+    assert_eq!(r.auth_epoch(&owner).await.unwrap(), Some(before + 1));
+    // Another account has its own; a missing account has none and cannot start one.
+    let other = f.active("other-owner").await;
+    assert_eq!(r.widget_trial_started(&other).await.unwrap(), None);
+    assert_eq!(r.widget_trial_started("missing").await.unwrap(), None);
+    assert!(r.start_widget_trial("missing", 1_000).await.is_err());
+    // Rewriting the account record (a tier change) keeps the start.
+    let record = r.account_by_id(&owner).await.unwrap().unwrap();
+    f.save(&owner, &record).await;
+    assert_eq!(r.widget_trial_started(&owner).await.unwrap(), Some(1_000));
+}

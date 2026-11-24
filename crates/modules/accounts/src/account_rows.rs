@@ -7,7 +7,8 @@ use anyhow::{ensure, Result};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
 /// Adds the plain columns to databases created before they existed: `auth_epoch` (new rows
-/// start at 0) and `is_test_account` (0 for every existing account).
+/// start at 0), `is_test_account` (0 for every existing account) and `widget_trial_started`
+/// (none).
 pub(crate) async fn ensure_auth_epoch_column(pool: &SqlitePool) -> Result<()> {
     let columns = sqlx::query("PRAGMA table_info(user_accounts)")
         .fetch_all(pool)
@@ -29,7 +30,41 @@ pub(crate) async fn ensure_auth_epoch_column(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
     }
+    if !has("widget_trial_started") {
+        sqlx::query("ALTER TABLE user_accounts ADD COLUMN widget_trial_started INTEGER")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
+}
+
+/// Records that the account's widget trial started at `at` (Unix seconds), once: an account
+/// that already has a start keeps it, so the trial never starts again. Raises `auth_epoch`
+/// when it writes. Returns the stored start (`None`: no such account).
+pub(crate) async fn start_widget_trial(
+    pool: &SqlitePool,
+    user_id: &str,
+    at: i64,
+) -> Result<Option<i64>> {
+    sqlx::query(
+        "UPDATE user_accounts SET widget_trial_started=?,auth_epoch=auth_epoch+1 \
+         WHERE user_id=? AND widget_trial_started IS NULL",
+    )
+    .bind(at)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    widget_trial_started(pool, user_id).await
+}
+
+/// When the account's widget trial started, from the plain column (no decryption).
+pub(crate) async fn widget_trial_started(pool: &SqlitePool, user_id: &str) -> Result<Option<i64>> {
+    let value: Option<Option<i64>> =
+        sqlx::query_scalar("SELECT widget_trial_started FROM user_accounts WHERE user_id=?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(value.flatten())
 }
 
 /// Replaces an existing row's record (and username when given) and raises its `auth_epoch`.
