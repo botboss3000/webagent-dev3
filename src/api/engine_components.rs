@@ -10,37 +10,21 @@ pub(crate) async fn read(State(app): State<App>) -> Api {
     let mut active_runs = 0usize;
     let mut active_tasks = 0usize;
     // Paused and approval-waiting runs leave an account out of the periodic scan, so count
-    // over every account (an administrator page read).
+    // over every account (an administrator page read); an account nobody wrote since its
+    // last count is not opened again.
     for user in crate::agent_loop::every_user_id(&app).await? {
-        let Some(user) = crate::agent_loop::user_app(&app, &user).await else {
+        let Some(counts) = account_counts(&app, &user).await? else {
             continue;
         };
-        for task in user.store.background_scan(None).await? {
-            if matches!(task["status"].as_str(), Some("queued" | "running")) {
-                active_tasks += 1;
-            }
-        }
-        for run in user.store.active_runs().await? {
-            if matches!(
-                run["status"].as_str(),
-                Some("queued" | "running" | "waiting_approval" | "waiting_external")
-            ) {
-                active_runs += 1;
-            }
-            if run["status"] == "paused" {
-                let id = run["id"].as_str().unwrap_or("");
-                let full = user.run(id).await?;
-                if let Some(component) =
-                    full["component_pause"]["component"].as_str().filter(|id| {
-                        crate::engine_components::working_component(id)
-                            || catalog.entries.contains_key(*id)
-                            || catalog.withdrawn.contains(*id)
-                    })
-                {
-                    affected += 1;
-                    *per_component.entry(component.to_owned()).or_default() += 1;
-                }
-            }
+        active_runs += counts.runs;
+        active_tasks += counts.tasks;
+        for component in counts.paused.iter().filter(|id| {
+            crate::engine_components::working_component(id)
+                || catalog.entries.contains_key(*id)
+                || catalog.withdrawn.contains(*id)
+        }) {
+            affected += 1;
+            *per_component.entry(component.clone()).or_default() += 1;
         }
     }
     let mut entries = Vec::new();
@@ -79,6 +63,86 @@ pub(crate) async fn read(State(app): State<App>) -> Api {
  "affected_work":affected,"active_work":{"runs":active_runs,"tasks":active_tasks},"adoption":{"api":adoption("api"),"loop":adoption("loop")}}),
     ))
 }
+/// One account's share of the page: active runs and background tasks, and the component
+/// each component-paused run waits for (filtered against the catalog when the page is built).
+#[derive(Clone, Default)]
+struct Counts {
+    runs: usize,
+    tasks: usize,
+    paused: Vec<String>,
+}
+
+/// Counts per (state root, account), with a hash of the account's database and log marks
+/// taken before they were read. Every write changes a mark, so an equal hash means the counts
+/// still hold.
+type Kept = std::collections::HashMap<(std::path::PathBuf, String), (u64, Counts)>;
+static KEPT: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Accounts opened for a count, per state root (tests read their own root's number).
+#[cfg(test)]
+static OPENED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// One account's counts: kept ones while its files are unchanged (no database access, and
+/// with the change watch no file read either), else read from the account. `None`: the
+/// account could not be opened (skipped, as before).
+async fn account_counts(app: &App, user: &str) -> anyhow::Result<Option<Counts>> {
+    let marks = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        app.store.write_marks(user).hash(&mut hasher);
+        hasher.finish()
+    };
+    let key = (app.store.root.clone(), user.to_owned());
+    let kept = KEPT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key)
+        .filter(|(seen, _)| *seen == marks)
+        .map(|(_, counts)| counts.clone());
+    if kept.is_some() {
+        return Ok(kept);
+    }
+    let Some(user) = crate::agent_loop::user_app(app, user).await else {
+        return Ok(None);
+    };
+    #[cfg(test)]
+    {
+        *OPENED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(app.store.root.clone())
+            .or_default() += 1;
+    }
+    let mut counts = Counts::default();
+    for task in user.store.background_scan(None).await? {
+        if matches!(task["status"].as_str(), Some("queued" | "running")) {
+            counts.tasks += 1;
+        }
+    }
+    for run in user.store.active_runs().await? {
+        if matches!(
+            run["status"].as_str(),
+            Some("queued" | "running" | "waiting_approval" | "waiting_external")
+        ) {
+            counts.runs += 1;
+        }
+        if run["status"] == "paused" {
+            let id = run["id"].as_str().unwrap_or("");
+            let full = user.run(id).await?;
+            if let Some(component) = full["component_pause"]["component"].as_str() {
+                counts.paused.push(component.to_owned());
+            }
+        }
+    }
+    KEPT.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key, (marks, counts.clone()));
+    Ok(Some(counts))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Update {
@@ -192,6 +256,58 @@ mod tests {
                 .find(|item| item["id"] == crate::engine_components::CONTEXT)
                 .unwrap()["available"],
             true
+        );
+    }
+    /// A second read opens no account nobody wrote since the first, with the same numbers; a
+    /// write to the account (a run paused for a component, a run finished) is counted at once.
+    #[tokio::test]
+    async fn an_unwritten_account_is_not_opened_again_and_a_written_one_is_counted() {
+        let (_root, app) = Box::pin(crate::runtime_tests::fixture()).await;
+        let opened = || {
+            OPENED
+                .lock()
+                .unwrap()
+                .get(&app.store.root)
+                .copied()
+                .unwrap_or(0)
+        };
+        let sid = crate::runtime_tests::conversation(&app).await;
+        // One chat per run: a second message to a chat joins its running run.
+        let active = crate::runtime_tests::queued(&app, &sid).await;
+        let other_chat = crate::runtime_tests::conversation(&app).await;
+        let paused = crate::runtime_tests::queued(&app, &other_chat).await;
+        let mut run = app.run(&paused).await.unwrap();
+        run["component_pause"] = json!({"component":crate::engine_components::ASSETS,"version":1});
+        crate::engine_components::pause(&app, &mut run)
+            .await
+            .unwrap();
+        let first = read(State(app.clone())).await.unwrap().0;
+        assert_eq!(first["affected_work"], 1);
+        assert_eq!(first["active_work"]["runs"], 1);
+        let accounts = opened();
+        assert!(accounts >= 1, "the first read opens the accounts");
+        let second = read(State(app.clone())).await.unwrap().0;
+        assert_eq!(second, first);
+        assert_eq!(opened(), accounts, "nothing written: nothing opened again");
+        // The queued run ends and a second run is paused for a component.
+        let mut finished = app.run(&active).await.unwrap();
+        finished["status"] = json!("completed");
+        app.save_override(&mut finished).await.unwrap();
+        let third_chat = crate::runtime_tests::conversation(&app).await;
+        let other = crate::runtime_tests::queued(&app, &third_chat).await;
+        let mut run = app.run(&other).await.unwrap();
+        run["component_pause"] =
+            json!({"component":crate::engine_components::CAPABILITY,"version":1});
+        crate::engine_components::pause(&app, &mut run)
+            .await
+            .unwrap();
+        let third = read(State(app.clone())).await.unwrap().0;
+        assert_eq!(third["affected_work"], 2);
+        assert_eq!(third["active_work"]["runs"], 0);
+        assert_eq!(
+            opened(),
+            accounts + 1,
+            "only the written account is opened again"
         );
     }
     /// All newly registered modules retain independent controls and paused-work counts.
