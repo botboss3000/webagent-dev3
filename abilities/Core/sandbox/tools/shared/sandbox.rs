@@ -116,6 +116,16 @@ enum AdminFile {
         path: String,
         edits: Vec<(String, String)>,
     },
+    /// A write that must not replace an existing file (`mode: create`).
+    Create {
+        path: String,
+        content: String,
+    },
+    /// A write added to the end of an existing file (`mode: append`).
+    Append {
+        path: String,
+        content: String,
+    },
 }
 
 /// The sandbox form of Codebase Admin tool `name`'s `args`; source-only fields are refused.
@@ -125,7 +135,7 @@ fn admin_request(name: &str, args: &Value) -> Result<AdminFile> {
         .ok_or_else(|| anyhow!("arguments must be an object"))?;
     let allowed: &[&str] = match name {
         "file_read" | "file_list" => &["root", "path"],
-        "file_write" => &["root", "path", "content", "delete"],
+        "file_write" => &["root", "path", "content", "delete", "mode"],
         _ => &["root", "path", "old_text", "new_text", "edits"],
     };
     if let Some(extra) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
@@ -139,10 +149,28 @@ fn admin_request(name: &str, args: &Value) -> Result<AdminFile> {
         "file_read" => json!({"action":"read","path":path}),
         "file_list" => json!({"action":"list","path":path}),
         "file_write" if args["delete"] == true => {
-            if !args["content"].is_null() {
-                bail!("delete takes no content");
+            if !args["content"].is_null() || !args["mode"].is_null() {
+                bail!("delete takes no content or mode");
             }
             json!({"action":"delete","path":path})
+        }
+        "file_write" if matches!(args["mode"].as_str(), Some("create" | "append")) => {
+            let content = args["content"]
+                .as_str()
+                .ok_or_else(|| anyhow!("write needs content as text"))?
+                .to_owned();
+            if path.is_empty() {
+                bail!("write needs a path");
+            }
+            let path = path.to_owned();
+            return Ok(if args["mode"] == "create" {
+                AdminFile::Create { path, content }
+            } else {
+                AdminFile::Append { path, content }
+            });
+        }
+        "file_write" if !args["mode"].is_null() && args["mode"] != "replace" => {
+            bail!("mode is create, replace or append")
         }
         "file_write" => json!({"action":"write","path":path,"content":args["content"]}),
         _ => {
@@ -243,6 +271,37 @@ pub async fn execute_admin_root(
     match request {
         AdminFile::Request(request) => {
             host.worker("sandbox_file", &request, call.sid, &run, cancel)
+                .await
+        }
+        AdminFile::Create { path, content } => {
+            let read = json!({"action":"read","path":path});
+            let read = host
+                .worker("sandbox_file", &read, call.sid, &run, cancel.clone())
+                .await?;
+            if read["status"] == "success" {
+                return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                    "output":format!("Not run; nothing changed. {path} already exists; use mode replace or append")}));
+            }
+            let write = file::request(&json!({"action":"write","path":path,"content":content}))?;
+            host.worker("sandbox_file", &write, call.sid, &run, cancel)
+                .await
+        }
+        AdminFile::Append { path, content } => {
+            let read = json!({"action":"read","path":path});
+            let read = host
+                .worker("sandbox_file", &read, call.sid, &run, cancel.clone())
+                .await?;
+            if read["truncated"] == true {
+                return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                    "output":"Not run; nothing changed. The file is larger than one read; append with sandbox_python"}));
+            }
+            // A missing file is started, as an append to nothing.
+            let before = read["output"]
+                .as_str()
+                .filter(|_| read["status"] == "success");
+            let next = format!("{}{content}", before.unwrap_or_default());
+            let write = file::request(&json!({"action":"write","path":path,"content":next}))?;
+            host.worker("sandbox_file", &write, call.sid, &run, cancel)
                 .await
         }
         AdminFile::Edit { path, edits } => {
@@ -483,6 +542,36 @@ mod admin_root_tests {
         )
         .is_err());
         assert!(admin_request("file_write", &json!({"root":"sandbox","path":"a"})).is_err());
+        // The source tool's write modes keep their meaning in the sandbox.
+        assert_eq!(
+            admin_request(
+                "file_write",
+                &json!({"root":"sandbox","path":"a","content":"x",
+                "mode":"replace"})
+            )
+            .expect("replace"),
+            AdminFile::Request(json!({"action":"write","path":"a","content":"x"}))
+        );
+        assert_eq!(
+            admin_request(
+                "file_write",
+                &json!({"root":"sandbox","path":"a","content":"x",
+                "mode":"create"})
+            )
+            .expect("create"),
+            AdminFile::Create {
+                path: "a".to_owned(),
+                content: "x".to_owned()
+            }
+        );
+        assert!(matches!(
+            admin_request(
+                "file_write",
+                &json!({"root":"sandbox","path":"a","content":"x",
+                "mode":"append"})
+            ),
+            Ok(AdminFile::Append { .. })
+        ));
     }
 
     #[test]

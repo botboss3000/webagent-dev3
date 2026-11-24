@@ -21,7 +21,7 @@
           "replace",
           "append"
         ],
-        "description": "Broker task files only; workspace and container writes must omit it. append adds to existing content; create refuses an existing path; replace confirms a deliberate full replace (a replace that removes most of the file is refused without it)."
+        "description": "Broker task files and root sandbox; workspace and container writes must omit it. append adds to existing content; create refuses an existing path; replace confirms a deliberate full replace (a replace that removes most of the file is refused without it)."
       },
       "task_id": {
         "type": "string",

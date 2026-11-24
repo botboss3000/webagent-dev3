@@ -299,6 +299,13 @@ impl<
             else {
                 return Ok(());
             };
+            // A status that arrives after publication never replaces a newer run's flag.
+            if run["closing_late"] == true
+                && !session["flag_run_id"].is_null()
+                && session["flag_run_id"] != run["id"]
+            {
+                return Ok(());
+            }
             let unchanged = ["flag", "flag_source", "notification", "flag_run_id"]
                 .iter()
                 .all(|field| session[*field] == flag[*field]);
@@ -562,13 +569,16 @@ impl<
                         &finished_record(&previous),
                         &finished_record(run),
                     );
+                // A completed run's status (flag and note) may arrive after publication, once.
+                let closing_only = kind == "closing_status" && closing_only_update(&previous, run);
                 if previous["generation"] != run["generation"]
                     || previous["lease_epoch"] != run["lease_epoch"]
                     || previous["run_revision"].as_u64().unwrap_or(0) != expected
                     || (matches!(previous["status"].as_str(),Some("completed"|"cancelled"|"failed"))
                     && previous!=*run
                     // Terminal state/results stay immutable and every existing fence still applies.
-                    && !diagnostic_only)
+                    && !diagnostic_only
+                    && !closing_only)
                     || (previous["status"] != "running"
                         && run["status"] == "running"
                         && previous["lease_epoch"].as_i64().unwrap_or(0) > 0)
@@ -605,7 +615,7 @@ impl<
                 return Err(anyhow!("Run revision missing"));
             }
             // A parked run ends beside the conversation's own run and its waiting messages.
-            if run["status"] == "completed" && run["parked"] != true {
+            if run["status"] == "completed" && run["parked"] != true && kind != "closing_status" {
                 crate::send_future(
                     self.chat.followup_publication_guard(
                         &mut tx,
@@ -679,7 +689,11 @@ impl<
             // saved after those calls.
             // History entries the server adds end the input with their own result; they are
             // saved below, call first, so the latest-result save is skipped for them.
-            if kind != "model_output" && kind != "history_rows" && !diagnostic_only {
+            if kind != "model_output"
+                && kind != "history_rows"
+                && kind != "closing_status"
+                && !diagnostic_only
+            {
                 crate::send_future(self.insert_tool_output(&mut tx, run, sid, rid)).await?;
             }
             if kind == "working_message" && run["module_silent"] != true {
@@ -1485,6 +1499,30 @@ impl<
 pub(crate) mod background;
 
 /// Events that replace the session's history checkpoint: a compaction or a major reorder.
+/// Whether `run` differs from the stored completed `previous` only by a first status (flag
+/// and note) recorded after publication, with that call's usage and activity rows.
+fn closing_only_update(previous: &Value, run: &Value) -> bool {
+    if !previous["closing"].is_null() || !run["closing"].is_object() {
+        return false;
+    }
+    let strip = |value: &Value| {
+        let mut value = value.clone();
+        if let Some(object) = value.as_object_mut() {
+            for key in [
+                "closing",
+                "closing_late",
+                "usage",
+                "_activity_items",
+                "updated_at",
+            ] {
+                object.remove(key);
+            }
+        }
+        value
+    };
+    strip(previous) == strip(run)
+}
+
 fn reshapes_context(kind: &str) -> bool {
     matches!(kind, "context_compacted" | "context_reordered")
 }

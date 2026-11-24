@@ -251,8 +251,8 @@ pub mod controls {
     //! The loop calls gate behavior through these two integral modules.
     pub use super::closing::{
         agent_closing, closer_message, closer_prompt, closing_status, fallback_status,
-        parse_closer, AgentClosing, CloserSettings, ClosingConfig, FlagSource, FlagSpec,
-        SYSTEM_FLAGS,
+        parse_closer, split_trailer, trailer_guidance, AgentClosing, CloserSettings, ClosingConfig,
+        FlagSource, FlagSpec, SYSTEM_FLAGS,
     };
     pub use super::initial::{
         agent_visibility, working_schema, working_text, AgentVisibility, PromotionMode,
@@ -805,6 +805,76 @@ mod closing {
         Ok(status)
     }
 
+    /// The per-step guidance for an agent that labels its own run: the final reply ends with
+    /// the `flag:`/`note:` lines this agent requires, which the app removes before anything
+    /// is shown or kept. Bridges never get it (their harness would keep the lines).
+    pub fn trailer_guidance(config: &ClosingConfig, settings: &AgentClosing) -> String {
+        let mut lines = Vec::new();
+        if settings.require_flag {
+            let flags = config
+                .flags
+                .iter()
+                .filter(|f| f.source == FlagSource::Agent)
+                .map(|f| format!("{} ({})", f.key, f.meaning.as_deref().unwrap_or("")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            lines.push(format!("`flag: <key>` with one of: {flags}"));
+        }
+        if settings.require_notification {
+            let mut note = format!(
+                "`note: <about {} words>`, a glance-sized outcome or next step",
+                config.notification.target_words
+            );
+            if !settings.notification_guidance.trim().is_empty() {
+                note.push_str(&format!(" ({})", settings.notification_guidance.trim()));
+            }
+            lines.push(note);
+        }
+        format!(
+            "Run status: when you write your final reply (a reply with no tool calls), end it \
+             with these lines, each on its own line: {}. The app removes them before the user \
+             sees the reply. Never add them to a reply that calls tools.",
+            lines.join(", then ")
+        )
+    }
+
+    /// Split a final reply into the text the user sees and the status its last lines give.
+    /// `None` when the reply does not end with a valid `flag:`/`note:` block, so the caller
+    /// asks for the status separately; the lines are then still removed from the text.
+    pub fn split_trailer(
+        text: &str,
+        config: &ClosingConfig,
+        settings: &AgentClosing,
+    ) -> (String, Option<Value>) {
+        let mark = |c: char| c.is_whitespace() || matches!(c, '*' | '`' | '"' | '-' | '_');
+        let is_status = |line: &str| {
+            let line = line.trim_matches(mark);
+            line.split_once(':').is_some_and(|(key, _)| {
+                matches!(
+                    key.trim_matches(mark).to_ascii_lowercase().as_str(),
+                    "flag" | "note"
+                )
+            })
+        };
+        let lines: Vec<&str> = text.trim_end().lines().collect();
+        let mut start = lines.len();
+        while start > 0 && (is_status(lines[start - 1]) || lines[start - 1].trim().is_empty()) {
+            start -= 1;
+        }
+        // At most the two status lines and blank lines between them end the reply.
+        let block: Vec<&str> = lines[start..]
+            .iter()
+            .copied()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        if block.is_empty() || block.len() > 2 || start == 0 {
+            return (text.to_owned(), None);
+        }
+        let shown = lines[..start].join("\n").trim_end().to_owned();
+        let status = parse_closer(&block.join("\n"), config, settings).ok();
+        (shown, status)
+    }
+
     /// The status recorded when the closer gives none: the configured fallback flag, only for
     /// agents that require a flag.
     pub fn fallback_status(config: &ClosingConfig, settings: &AgentClosing) -> Value {
@@ -822,6 +892,41 @@ mod closing {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        fn a_reply_trailer_gives_the_status_and_is_removed() {
+            let config = crate::gates::closing_config().unwrap();
+            let all = AgentClosing::default();
+            let (shown, status) = split_trailer(
+                "Here is the answer.\n\nflag: complete\nnote: Answer given",
+                &config,
+                &all,
+            );
+            assert_eq!(shown, "Here is the answer.");
+            let status = status.unwrap();
+            assert_eq!(status["flag"], "complete");
+            assert_eq!(status["notification"], "Answer given");
+            // Markdown around the keys is accepted, as in a closer answer.
+            let (shown, status) = split_trailer(
+                "Done.\n**flag:** waiting\n- note: Build running",
+                &config,
+                &all,
+            );
+            assert_eq!(shown, "Done.");
+            assert_eq!(status.unwrap()["flag"], "waiting");
+            // An invalid block is still removed; the status is asked for separately.
+            let (shown, status) = split_trailer("Done.\nflag: finished\nnote: x", &config, &all);
+            assert_eq!(shown, "Done.");
+            assert!(status.is_none());
+            // A reply without the block, or that is only the block, is left as written.
+            let plain = "No status here.\nJust text.";
+            assert_eq!(
+                split_trailer(plain, &config, &all),
+                (plain.to_owned(), None)
+            );
+            let only = "flag: complete\nnote: Done";
+            assert_eq!(split_trailer(only, &config, &all).0, only);
+            assert!(trailer_guidance(&config, &all).contains("needs_input"));
+        }
         #[test]
         fn closer_accepts_agent_flags_and_keeps_long_notifications() {
             let config = crate::gates::closing_config().unwrap();

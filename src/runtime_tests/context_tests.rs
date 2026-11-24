@@ -891,12 +891,14 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
     assert_ne!(rejected["output"]["content"], raw);
 }
 
-/// A final reply is followed by one private closing turn on the same model. Its request
-/// repeats the final call's request (for the provider cache) plus the reply and the closer
-/// message; the answer sets the session status and is never published. An invalid answer is
-/// retried with its error, then the fallback applies. Each run publishes its reply once.
+/// A final reply labels its own run: the per-step guidance asks for `flag:`/`note:` lines,
+/// which leave the reply before it is shown or kept, so no second call follows. A reply
+/// without them is published at once; one status call then repeats the final request (for
+/// the provider cache) plus the reply and the closer message, outside the run. An invalid
+/// answer is retried with its error, then the fallback applies. Neither the lines nor the
+/// status call ever reach later context, and each run publishes its reply once.
 #[tokio::test]
-async fn closing_turn_reuses_the_request_and_sets_the_status() {
+async fn the_run_status_comes_from_the_reply_or_one_call_after_publication() {
     use axum::{routing::post, Router};
     use std::sync::atomic::AtomicUsize;
     let (_root, mut app) = fixture().await;
@@ -916,10 +918,9 @@ async fn closing_turn_reuses_the_request_and_sets_the_status() {
                     .unwrap()
                     .push(serde_json::from_str(&body).unwrap_or(Value::Null));
                 let text = match seen.fetch_add(1, Ordering::SeqCst) {
-                    0 => "Final answer",
-                    1 => "flag: complete\nnote: All done",
-                    2 => "Second answer",
-                    3 => "I think it went well",
+                    0 => "Final answer\n\nflag: complete\nnote: All done",
+                    1 => "Second answer",
+                    2 => "I think it went well",
                     _ => "flag: finished",
                 };
                 let output = json!({"type":"message","role":"assistant",
@@ -939,10 +940,9 @@ async fn closing_turn_reuses_the_request_and_sets_the_status() {
         axum::serve(listener, mock).await.unwrap();
     });
     app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
-    // Both runs share one session: from its second run on, the request's opening items
-    // are already placed, as in any ongoing conversation.
+    // Both runs share one session, as in any ongoing conversation.
     let sid = conversation(&app).await;
-    let mut sessions = Vec::new();
+    let mut runs = Vec::new();
     for attempt in ["first", "second"] {
         let id = queued(&app, &sid).await;
         running(&app, &id, attempt).await;
@@ -954,45 +954,56 @@ async fn closing_turn_reuses_the_request_and_sets_the_status() {
         )
         .await
         .unwrap();
-        let run = app.run(&id).await.unwrap();
-        assert_eq!(run["status"], "completed");
-        assert!(run["closing_turn"].is_null());
-        sessions.push((sid.clone(), id));
+        // The reply is published before any status call ends.
+        assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+        runs.push(id);
     }
+    // The second run's status arrives after publication.
+    let mut second = Value::Null;
+    for _ in 0..100 {
+        second = app.run(&runs[1]).await.unwrap();
+        if second["closing"].is_object() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(second["closing"]["fallback"], true, "{second}");
     assert_eq!(
         count.load(Ordering::SeqCst),
-        5,
-        "reply, closer; reply, two closers"
+        4,
+        "reply with its status; reply, two status calls"
     );
     let bodies = bodies.lock().unwrap();
     let input = |i: usize| bodies[i]["input"].as_array().unwrap().clone();
-    // The second run's closing request repeats its final request's opening (instructions,
-    // tools and history, which providers cache by prefix); the final request's call note is
-    // not part of the history, so the closing request continues after the reply.
-    let (final_input, closing_input) = (input(2), input(3));
+    // The guidance rides on the per-step message only.
+    assert!(input(0).last().unwrap().to_string().contains("Run status:"));
+    // The first reply's status lines never reach a later request.
+    assert!(!bodies
+        .iter()
+        .skip(1)
+        .any(|body| body.to_string().contains("All done")));
+    // The status call repeats the final request's opening (instructions, tools and
+    // history); the final request's per-step message is not part of it.
+    let (final_input, closing_input) = (input(1), input(2));
     let note = final_input
         .last()
         .is_some_and(|item| item["role"] == "developer");
     let history = final_input.len() - usize::from(note);
     assert_eq!(final_input[..history], closing_input[..history]);
-    let shared = history;
-    assert_eq!(bodies[2]["instructions"], bodies[3]["instructions"]);
-    assert_eq!(bodies[2]["tools"], bodies[3]["tools"]);
-    assert!(closing_input[shared].to_string().contains("Second answer"));
+    assert_eq!(bodies[1]["instructions"], bodies[2]["instructions"]);
+    assert_eq!(bodies[1]["tools"], bodies[2]["tools"]);
+    assert!(closing_input[history].to_string().contains("Second answer"));
     let message = closing_input.last().unwrap().to_string();
     assert!(
-        message.contains("Your reply above is final") && message.contains("flag: <one flag key>")
+        message.contains("Your reply above") && message.contains("flag: <one flag key>"),
+        "{message}"
     );
-    assert!(!message.contains("previous answer was invalid"));
-    assert!(input(4)
+    assert!(input(3)
         .last()
         .unwrap()
         .to_string()
         .contains("previous answer was invalid"));
-    assert!(!bodies
-        .iter()
-        .any(|body| body.to_string().contains("set_closer_status")));
-    // Each run published its own reply once; closing answers were never published.
+    // Each run published its own reply once, without the status lines.
     let (chat, _) = app.store.chat_snapshot(&sid).await.unwrap();
     let replies = chat
         .iter()
@@ -1000,8 +1011,9 @@ async fn closing_turn_reuses_the_request_and_sets_the_status() {
         .map(|row| row["content"].to_string())
         .collect::<Vec<_>>();
     assert_eq!(replies.len(), 2);
-    assert!(replies[0].contains("Final answer") && replies[1].contains("Second answer"));
-    let first = app.run(&sessions[0].1).await.unwrap();
+    assert!(replies[0].contains("Final answer") && !replies[0].contains("flag:"));
+    assert!(replies[1].contains("Second answer"));
+    let first = app.run(&runs[0]).await.unwrap();
     assert_eq!(first["closing"]["flag"], "complete");
     assert_eq!(first["closing"]["notification"], "All done");
     let session = app
@@ -1014,17 +1026,14 @@ async fn closing_turn_reuses_the_request_and_sets_the_status() {
         (session["flag"].as_str(), session["flag_source"].as_str()),
         (Some("unflagged"), Some("system"))
     );
-    // Closing answers stay out of later context; their attempts are activity rows.
-    let (sid, rid) = &sessions[1];
+    // Status attempts are activity rows only.
     let activity = app
         .store
-        .private_run_activity(sid, rid, 0)
+        .private_run_activity(&sid, &runs[1], 0)
         .await
         .unwrap()
         .to_string();
     assert!(activity.contains("closing_status") && activity.contains("fallback"));
-    let run = app.run(rid).await.unwrap();
-    assert!(!run["input"].to_string().contains("went well"));
     server.abort();
 }
 

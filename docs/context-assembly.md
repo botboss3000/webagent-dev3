@@ -16,7 +16,7 @@ up to the first byte that changed.
 | Retained rows R1, R2, ... | Per fold: loaded skills (`load_skill` results), the latest `set_execution_mode` result, one combined Main Notes change, one combined task list change | Written once by their fold, then unchanged until a merge or major reorder |
 | Summary blocks B1, B2, ... | One summary per fold | A merge rewrites the oldest ones into one |
 | Verbatim tail | Recent turns word for word, with any skills, notes changes and mode changes made since the last fold | Grows each call; a fold summarizes its older part |
-| Per-step guidance message | The mode's turn guidance, the one-line session task state and, once per new run-health issue, a review prompt | Sent after the history for one call only, never saved, so it never breaks the cache |
+| Per-step guidance message | The mode's turn guidance, the one-line session task state, the run status request (models the app calls directly) and, once per new run-health issue, a review prompt | Sent after the history for one call only, never saved, so it never breaks the cache |
 
 Four events reshape the request:
 
@@ -365,12 +365,13 @@ providers and for bridge harnesses.
 The list belongs to the session: every participant's runs get the snapshot, step line and
 reminders, and the agent's tool calls write the session owner's list.
 
-**End-of-turn reminder.** When the agent's final reply leaves open steps, the run saves
-`task_reminder` (`draft`, `message`, `pending: true`) and makes one more call instead of
-publishing. The run is reloaded before a response is handled, so the response is recognised
-by the saved `pending` flag, which it clears. An answer that calls no tool is dropped and
-the draft publishes (the closer, when enabled, then runs on the draft); an answer that calls
-tools continues the run, and its later final reply publishes. It fires at most once per run.
+**Turn end.** When a final reply publishes, the server settles the list once
+(`settle`, saved with `by: turn_end`): requests still unfiled are set aside as answered in
+the reply, and every open section whose steps are all finished (or that has none) closes
+with the reply as its summary. This change is not delivered to the agent as a row; the
+step line of the next call shows only sections still open, and the snapshot shows the
+closed section after its next rebuild. There is no end-of-turn reminder and no extra call
+(removed 2026-11-23).
 
 **Compaction.** A fold keeps every task list change from its range and the verbatim tail
 (agent writes and user-edit rows) as one combined `task_list_read` exchange among its
@@ -424,6 +425,11 @@ harness session, which it resumes while the history only grows.
   `evidence` should name result ids. Step times record the evidence window without ids.
 - A fold changes the history prefix, so the next call starts a fresh harness session with
   the compacted history (or a fork of a checkpoint session where the harness supports it).
+- Private requests never enter the chat's harness session: a background summary and the
+  run status call are answered from a throwaway fork on Claude, OpenCode and Codex, and by
+  the System model on Muse, Antigravity and Gemini, which cannot fork (Antigravity's CLI can
+  only resume or continue a conversation). See **Run status (flag and note) stays out of
+  context**.
 - Every WebAgent tool reaches the harness model as a full native tool definition, so it can
   call any listed tool and load its skill by name. OpenCode runs its tool server with code
   mode off (`"codemode": false` in `opencode_config`); Claude runs with tool search off
@@ -434,6 +440,27 @@ harness session, which it resumes while the history only grows.
   session at its next call. The tool definitions lead the provider's request, so such a
   change costs that call its cached prefix; the tool list changes only on a direct change
   (see **What the tool definitions depend on**).
+
+## Run status (flag and note) stays out of context
+
+Each finished run leaves a status for the session list: a flag (`complete`, `needs_input`,
+`waiting`, `unverified`, `failed`) and a note of about five words. The flags, the closer
+prompt and the attempts live in `config/engine/gates/closing_status.json` and
+`closing_status.md`; Agent Identity turns the status and its parts on or off. Nothing
+about it is ever part of a model call's history, and the reply is never held for it
+(`crates/modules/engine/src/runtime/run.rs`, `gates.rs` `closing`).
+
+| Route | When | How the status is made | What the model's context keeps |
+| --- | --- | --- | --- |
+| In the reply | A model the app calls directly | The per-step guidance message asks the final reply (no tool calls) to end with `flag:` and `note:` lines. `reply_trailer` cuts them from the reply before it joins the history or is published; a valid block is the status. No extra call | Nothing: the request is one call only and the lines never reach history |
+| Status call, same model | A direct model whose reply lacked a valid block | After publication, one call repeats the final request (instructions, tools, history, for the provider cache) plus the reply and the closer message; an invalid answer is retried with its error, then the fallback flag applies | Nothing: the call is outside the run |
+| Fork | Claude, OpenCode and Codex bridges (they never get the in-reply request: their harness would keep the lines) | The same status call, sent as a fork of the chat's harness session, answered and thrown away | Nothing: the chat's own harness session never sees the closer |
+| System model | Muse, Antigravity and Gemini bridges (no fork) | The System model gets a short request (the user's request and the reply) in its own bridge session, `<session>:closing`, never the chat's; no System model means the fallback flag | Nothing |
+
+The late status is recorded once on the finished run (`save_run` kind `closing_status`,
+which may change only `closing`, its usage and activity rows) and copied to the session
+list, unless a newer run's flag is already there. Each attempt is a `closing:` activity
+row; context assembly skips those steps. A user's next message never waits for it.
 
 ## Provider-specific projection
 
