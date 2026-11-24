@@ -44,6 +44,9 @@ authoritative; loading guidance never grants a tool or deployment.
 - Preserve other writers' changes and all runtime data.
 - Any change to access, identity, background work, storage, run limits or
   dependencies also follows `docs/build-protocol.md` (the unified plan's rules).
+- Capacity (how processors, memory and run limits are shared, every capacity
+  setting, sizing a server, measuring the most active users) is in
+  `docs/capacity.md`; a change to any of those settings or limits updates it.
 
 ## Smallest complete change
 
