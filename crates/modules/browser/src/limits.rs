@@ -105,11 +105,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shipped_file_parses() {
-        // The file is live: an administrator may change its values (it held 10 per app after
-        // 2026-11-21), so it only has to parse within the accepted ranges.
+    fn shipped_file_parses_to_the_defaults() {
+        // The file is live; a lasting change of one of its values changes `Limits::default`
+        // in the same patch, so a missing or broken file falls back to what is in force.
         let bytes = include_bytes!("../../../../config/browser/browser-limits.json");
-        Limits::parse(bytes).unwrap();
+        assert_eq!(Limits::parse(bytes).unwrap(), Limits::default());
     }
 
     #[test]

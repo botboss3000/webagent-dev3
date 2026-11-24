@@ -114,6 +114,28 @@
       "min": 30,
       "max": 3600,
       "bounds": "validator"
+    },
+    {
+      "id": "browser.limits.min_extension_version",
+      "description": "Oldest Browser Extension version that may take actions; older installs are refused and told to download the extension again.",
+      "type": "string",
+      "pointer": "/min_extension_version",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "require browser extension 0.3.0 or newer",
+        "stop serving old browser extensions",
+        "which extension version is still accepted"
+      ],
+      "areas": [
+        "browser",
+        "extension",
+        "security"
+      ],
+      "max_length": 32,
+      "bounds": "validator",
+      "notes": "Three numbers, like 0.2.0."
     }
   ],
   "excluded": {
