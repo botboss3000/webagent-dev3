@@ -1328,13 +1328,16 @@ def runtime_layout(config, host, role, external, runtime):
     return config, host
 
 
-def prepare_app_runtime(runtime, state, workspaces, reset_shutoff=False):
-    """The API launcher's root work, done by the broker for the external-worker layout (stream D5):
-    the same owners and modes `webagent-v3 --launch` sets on every start (docs/capacity.md), plus
-    `ability-live`, which the app made itself while it had the whole runtime folder. Never follows a
-    symbolic link. `reset_shutoff` writes "1" to the shutoff marker, as the launcher did at each
-    start, so tools stay refused until the starting API restores the saved state."""
-    app, work, worker = CONFIG["app_uid"], WORK_GID, CONFIG["worker_uid"]
+def prepare_app_runtime(runtime, state, workspaces, reset_shutoff=False, ids=None):
+    """The API launcher's root work, for the external-worker layout (stream D5): the same owners and
+    modes `webagent-v3 --launch` sets on every start (docs/capacity.md), plus `ability-live`, which
+    the app made itself while it had the whole runtime folder. Never follows a symbolic link.
+    `reset_shutoff` writes "1" to the shutoff marker, as the launcher did at each start, so tools
+    stay refused until the starting API restores the saved state. Self-contained (standard library
+    only, ids passed in): the broker runs it in a one-shot container, `Runner.prepare_app_runtime`,
+    because the broker's own process may not change file owners."""
+    import os, stat
+    app, app_gid, work, worker = ids or (CONFIG["app_uid"], CONFIG["app_gid"], WORK_GID, CONFIG["worker_uid"])
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
     def directory(path, uid, gid, mode, create=True):
@@ -1359,9 +1362,9 @@ def prepare_app_runtime(runtime, state, workspaces, reset_shutoff=False):
             os.fchmod(fd, 0o640)
         finally:
             os.close(fd)
-    directory(state, app, CONFIG["app_gid"], 0o770)
+    directory(state, app, app_gid, 0o770)
     directory(workspaces, 1101, work, 0o770)
-    directory(runtime, app, CONFIG["app_gid"], 0o755)
+    directory(runtime, app, app_gid, 0o755)
     control = os.path.join(runtime, "control")
     directory(control, app, work, 0o710)
     control_file(os.path.join(control, "dispatch.lock"), None)
@@ -1370,7 +1373,13 @@ def prepare_app_runtime(runtime, state, workspaces, reset_shutoff=False):
     directory(os.path.join(runtime, "worker-c"), worker, work, 0o750)
     live = os.path.join(runtime, "ability-live")
     if not os.path.lexists(live):
-        directory(live, app, CONFIG["app_gid"], 0o755)
+        directory(live, app, app_gid, 0o755)
+
+
+def app_runtime_ready(runtime):
+    """Whether the folders the per-socket mounts need already exist (real folders, not links)."""
+    return all(os.path.isdir(os.path.join(runtime, name)) and not os.path.islink(os.path.join(runtime, name))
+               for name in ("control", "worker-c", "ability-live"))
 
 
 def worker_container_body(api, image):
@@ -2862,6 +2871,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 self.retain_image(image,job_id)
                 job.setdefault("image_receipts",{})[name]=image_reuse_module.record(self,job,blob,name,image,context_sha256)
                 job.setdefault("images",{})[name]=image
+            if role=="api":
+                self._package_browser(job,blob,artifacts)
             self.resource_progress(job)
             return built[role][0],(compiler_log if role=="api"else"")+"".join(built[name][1]for name in roles)
         tag = TARGETS[1 if role=="loop" else 0]+":job-"+job_id
@@ -2873,6 +2884,23 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             raise ValueError("invalid image identity")
         self.retain_image(image,job_id)
         return image, log
+
+    def _package_browser(self,job,blob,artifacts):
+        """Stream D6: the browser container's own image (Dockerfile stage `browser`), packaged after
+        the release's api and loop images from the same verified artifacts. It is a follower image,
+        never one of the release's `images`: a failure is recorded in `follower_images_error` and
+        the browser container keeps following the API image, as before."""
+        cache=getattr(self,"package_cache",None)
+        if cache is None or not cache.enabled:return
+        try:
+            dockerfile=release.entries(blob,context_digest)["v3/Dockerfile"][1].decode()
+            if "browser" not in packaging_cache_module.stages(dockerfile):return
+            image=self._package_roles(job,blob,artifacts,["browser"])["browser"][0]
+            self.retain_image(image,job["job_id"])
+            job.setdefault("follower_images",{})["browser"]=image
+            job.pop("follower_images_error",None)
+        except Exception as error:
+            job["follower_images_error"]=scrub(str(error),self.secrets)[:300]
 
     def _package_roles(self,job,blob,artifacts,roles):
         """Package each role's context, then build every image concurrently on one BuildKit daemon.
@@ -2973,8 +3001,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         """Create the replacement for target `name`, optionally under the stopped staging name `as_name`."""
         if release_root is not None and name in TARGETS and self.worker_external_ready():
             # Stream D5: the folders the per-socket mounts need, as the launcher made them.
-            layout = _config_module.layout(CONFIG)
-            prepare_app_runtime(layout["/runtime"], layout["/state"], layout["/workspaces"])
+            self.prepare_app_runtime(image)
         config = self.container_config(name, image, previous, release_root)
         conn = DockerHTTP("localhost", timeout=30)
         try:
@@ -3000,6 +3027,30 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             return json.loads(reply)["Id"]
         finally:
             conn.close()
+
+    def prepare_app_runtime(self, image, reset_shutoff=False):
+        """Run `prepare_app_runtime` in a one-shot container on `image` as root with only CHOWN,
+        FOWNER and DAC_OVERRIDE, no network and a read-only root, mounting only the state,
+        workspaces and runtime folders (the pattern `deploy.py start-browser` uses for the browser
+        folders). When it cannot run, a release still goes ahead if the folders already exist."""
+        layout = _config_module.layout(CONFIG)
+        runtime, state, workspaces = layout["/runtime"], layout["/state"], layout["/workspaces"]
+        ids = (CONFIG["app_uid"], CONFIG["app_gid"], WORK_GID, CONFIG["worker_uid"])
+        program = (inspect.getsource(prepare_app_runtime) + "\nprepare_app_runtime('/r', '/s', '/w', "
+                   + repr(bool(reset_shutoff)) + ", " + repr(ids) + ")\n")
+        name = "webagent-runtime-prepare-" + uuid.uuid4().hex[:12]
+        argv = ["docker", "run", "--rm", "--name", name, "--user", "0:0", "--network", "none", "--read-only",
+                "--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--cap-add", "DAC_OVERRIDE",
+                "--security-opt", "no-new-privileges", "--pids-limit", "16", "--memory", "64m", "--memory-swap", "64m",
+                "--mount", "type=bind,src=" + str(runtime) + ",dst=/r", "--mount", "type=bind,src=" + str(state) + ",dst=/s",
+                "--mount", "type=bind,src=" + str(workspaces) + ",dst=/w", "--entrypoint", "python3", image, "-I", "-B", "-c", program]
+        try:
+            self.command(argv, timeout=60)
+        except Exception as error:
+            subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+            if reset_shutoff or not app_runtime_ready(str(runtime)):
+                raise
+            print("App runtime preparation skipped: " + scrub(str(error), self.secrets)[:200], flush=True)
 
     def worker_external_ready(self):
         """Whether releases start the external-worker layout: `scheduler.worker_container` is on and
@@ -3108,8 +3159,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             # Stream D5: an API without its launcher; the broker resets the shutoff marker as the
             # launcher did, so the worker refuses tools until the API restores the saved state.
             try:
-                layout = _config_module.layout(CONFIG)
-                prepare_app_runtime(layout["/runtime"], layout["/state"], layout["/workspaces"], reset_shutoff=True)
+                self.prepare_app_runtime(self.inspect(name)["Image"], reset_shutoff=True)
             except Exception:
                 print("App runtime preparation failed before an API start", flush=True)
         if self.capacity_on_start:
@@ -8427,6 +8477,26 @@ class Broker:
         finally:
             self._save(job)
 
+    def _browser_image(self, job, api_image):
+        """The image the browser container runs with the API on `api_image` (stream D6): the browser
+        image packaged with that API image (this job's, or the job that built a reused or restored
+        API image), when it still exists; otherwise the API image itself, as before D6."""
+        own = (job.get("follower_images") or {}).get("browser")
+        candidates = [own] if own and (job.get("images") or {}).get("api") in (None, api_image) else []
+        for other in sorted(getattr(self, "jobs", {}).values(), key=lambda item: item.get("created_at") or 0, reverse=True):
+            browser = (other.get("follower_images") or {}).get("browser")
+            if browser and (other.get("images") or {}).get("api") == api_image:
+                candidates.append(browser)
+        for image in candidates:
+            if not isinstance(image, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+                continue
+            try:
+                if self.runner.command(["docker", "image", "inspect", "--format", "{{.Id}}", image], timeout=30).strip() == image:
+                    return image
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                continue
+        return api_image
+
     def _sync_browser(self, job):
         """Move the browser container onto the image the API now runs, keeping its own
         configuration; restore it on failure. Never raises: the outcome is recorded in
@@ -8441,7 +8511,7 @@ class Broker:
             previous = runner.inspect_recovery(BROWSER)
             if previous is None:
                 return
-            image = runner.inspect(TARGETS[0])["Image"]
+            image = self._browser_image(job, runner.inspect(TARGETS[0])["Image"])
             if previous["Image"] == image:
                 job["browser_sync"] = {"status": "current", "image": image}
                 return

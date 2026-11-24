@@ -15,11 +15,13 @@ import threading
 import time
 import uuid
 
-ROLES = ("api", "loop")
+# Stream D6: `browser` is optional: a Dockerfile without that stage packages api and loop as before.
+ROLES = ("api", "loop", "browser")
+OPTIONAL_ROLES = ("browser",)
 # Optional dependency stages: prepared with network like the runtime bases, then consumed offline
 # by name (`COPY --from=voice ...`). Each is a pinned Debian stage of RUN steps only.
 DEPENDENCIES = ("voice",)
-ALIASES = {"api": "webagent_runtime_api", "loop": "webagent_runtime_loop",
+ALIASES = {"api": "webagent_runtime_api", "loop": "webagent_runtime_loop", "browser": "webagent_runtime_browser",
            "voice": "webagent_dependency_voice"}
 DIGEST = re.compile(r"sha256:([a-f0-9]{64})")
 KEY = re.compile(r"[a-f0-9]{64}")
@@ -61,7 +63,7 @@ def stages(dockerfile):
         result[name] = {"image": match[1], "header": match[0].strip(),
                         "body": dockerfile[match.end():matches[i + 1].start() if i + 1 < len(matches) else len(dockerfile)]}
     if not {"preview_tunnel", "tested_builder", "api", "loop"} <= set(result) <= {
-            "preview_tunnel", "tested_builder", "api", "loop", *DEPENDENCIES}:
+            "preview_tunnel", "tested_builder", "api", "loop", *OPTIONAL_ROLES, *DEPENDENCIES}:
         raise ValueError("Unsupported runtime dependency stage graph")
     return result
 
@@ -165,6 +167,8 @@ def package_dockerfile(dockerfile, role):
         if name in graph:
             output += "FROM " + ALIASES[name] + " AS " + name + "\n"
     for current in ROLES:
+        if current in OPTIONAL_ROLES and current not in graph:
+            continue
         body = graph[current]["body"]
         start = re.search(r"^COPY ", body, re.M)
         if start is None:
@@ -291,7 +295,9 @@ class PackagingCache:
         dockerfile = files["v3/Dockerfile"][1].decode()
         helper = self.helper()
         workers = self.config.get("scheduler", {}).get("package_cache_download_workers", 4)
-        result = {role: runtime_recipe(dockerfile, role, helper, generation, workers) for role in ROLES}
+        graph = stages(dockerfile)
+        result = {role: runtime_recipe(dockerfile, role, helper, generation, workers) for role in ROLES
+                  if role in graph}
         # Dependency stages download only checksum-pinned files, so the weekly APT refresh
         # (a new generation) does not rebuild them: their key follows their own recipe only.
         for name in DEPENDENCIES:

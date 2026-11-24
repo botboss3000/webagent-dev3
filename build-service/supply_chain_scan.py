@@ -19,6 +19,10 @@ from pathlib import Path
 TRIVY = "aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c"  # v0.76.1
 ROOT = Path("/home/ar/webagent-dev3/supply-chain")
 CONTAINERS = {"api": "webagent-dev-v3", "loop": "webagent-dev-v3-loop", "gate": "webagent-dev-v3-gate"}
+# Stream D6: the worker and browser containers have their own images (or, before that, run the API
+# image); each is scanned when the container exists. When one of them runs an image another role
+# already has (the worker on the API image), that role's reports are copied instead of a rescan.
+OPTIONAL_CONTAINERS = {"worker": "webagent-dev-v3-worker", "browser": "webagent-dev-v3-browser"}
 WEEK = 7 * 86400
 KEEP = 20
 # Crate sources copied into the api image for optimization work carry their own
@@ -76,6 +80,20 @@ def record_failure(error):
     latest.write_text(json.dumps(last, indent=1))
 
 
+def optional_images():
+    """The image of each `OPTIONAL_CONTAINERS` container that exists; none when Docker cannot say."""
+    images = {}
+    for role, name in OPTIONAL_CONTAINERS.items():
+        try:
+            found = subprocess.run(["docker", "inspect", "-f", "{{.Image}}", name], text=True,
+                                   capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if found.returncode == 0 and re.fullmatch(r"sha256:[0-9a-f]{64}", found.stdout.strip()):
+            images[role] = found.stdout.strip()
+    return images
+
+
 def main():
     force = "--force" in sys.argv
     (ROOT / "cache").mkdir(parents=True, exist_ok=True)
@@ -85,6 +103,7 @@ def main():
     except BlockingIOError:
         return 0
     images = {role: run(["docker", "inspect", "-f", "{{.Image}}", name]).strip() for role, name in CONTAINERS.items()}
+    images.update(optional_images())
     # The release tree is the parent of the frozen abilities mount (.../releases/<job>/v3).
     abilities = run(["docker", "inspect", "-f",
                      '{{range .Mounts}}{{if eq .Destination "/opt/v3/abilities"}}{{.Source}}{{end}}{{end}}', CONTAINERS["api"]]).strip()
@@ -121,7 +140,13 @@ def main():
         if ui_lock:
             trivy(["fs", "--skip-db-update", "--scanners", "vuln", "--format", "json", "/src"], folder / "ui.json",
                   [(ui_lock, f"/src/{UI_LOCK}")])
+        scanned = {}
         for role, image in images.items():
+            if role in OPTIONAL_CONTAINERS and image in scanned:
+                for suffix in (".json", ".sbom.cdx.json"):
+                    shutil.copyfile(folder / f"{scanned[image]}{suffix}", folder / f"{role}{suffix}")
+                continue
+            scanned[image] = role
             run(["docker", "save", image, "-o", str(work / f"{role}.tar")], timeout=1800)
             common = ["image", "--skip-db-update", "--skip-dirs", SKIP_DIRS, "--input", f"/in/{role}.tar"]
             trivy([*common, "--scanners", "vuln", "--format", "json"], folder / f"{role}.json", [(work, "/in")])

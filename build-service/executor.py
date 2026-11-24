@@ -2376,7 +2376,7 @@ class Executor:
         files=entries(blob);dockerfile=files["v3/Dockerfile"][1].decode()
         prefixes=None
         if role is not None:
-            if role not in {"api","loop"}:raise ValueError("Fixed packaging role required")
+            if role not in {"api","loop","browser"}:raise ValueError("Fixed packaging role required")
             stages=list(re.finditer(r"^FROM .+ AS ([a-z_]+)$",dockerfile,re.M))
             selected=next((i for i,value in enumerate(stages)if value[1]==role),None)
             if selected is None:raise ValueError("Runtime image stage unavailable")
