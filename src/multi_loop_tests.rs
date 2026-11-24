@@ -1,4 +1,7 @@
 //! Several agent-loop processes on one state root (multi-loop study, risk 1 and the C5 limits).
+//! These tests start real processes, so they are not in the per-release suite (the broker runs it
+//! at 8 threads beside other builds, where starting loop processes failed); run them on their own
+//! with `cargo test --bin webagent-v3 multi_loop -- --ignored`. They run one at a time.
 //! Each test starts real loop processes: this test binary run again as a loop
 //! ([`loop_child_process`]), with the same code the loop container runs. A debug-build hook
 //! (`V3_TEST_LOOP_FILTER_OFF`) lets two loops visit the same accounts, so the claim, lease and
@@ -10,6 +13,13 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use webagent_engine::partition::loop_for;
 
+/// How long a test waits for a condition (a loop serving, a run finishing) before it fails: long,
+/// so a loaded machine is slower but never fails; each wait ends as soon as the condition holds.
+const PATIENCE: Duration = Duration::from_secs(300);
+
+/// One process test at a time: each starts two or three loop processes.
+static PROCESSES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// The child half: this test binary run as loop `V3_LOOP_INDEX` of `V3_LOOPS`.
 #[test]
 #[ignore = "started by the multi-loop tests as a loop process"]
@@ -17,7 +27,9 @@ fn loop_child_process() {
     if std::env::var_os("V3_TEST_LOOP_CHILD").is_none() {
         return;
     }
+    // Few threads: the test machine runs the suite at 8 threads beside other builds.
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()
         .expect("loop runtime");
@@ -65,7 +77,20 @@ impl Loop {
         if filter_off {
             command.env("V3_TEST_LOOP_FILTER_OFF", "1");
         }
-        Self(command.spawn().expect("loop process starts"))
+        // A busy machine can refuse a new process for a moment (EAGAIN): try again, and say why
+        // when it keeps refusing.
+        let mut attempts = 0;
+        loop {
+            match command.spawn() {
+                Ok(child) => return Self(child),
+                Err(error) if attempts < 30 => {
+                    attempts += 1;
+                    eprintln!("loop process {index} did not start ({error}); retrying");
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+                Err(error) => panic!("loop process {index} did not start: {error}"),
+            }
+        }
     }
     /// Ask for a drain, as `docker stop` does.
     fn stop(&self) {
@@ -110,10 +135,7 @@ async fn start_loops(
             .unwrap_or(0)
                 == 1
         };
-        assert!(
-            eventually(Duration::from_secs(60), serving).await,
-            "loop {index} serves"
-        );
+        assert!(eventually(PATIENCE, serving).await, "loop {index} serves");
     }
     started
 }
@@ -224,18 +246,15 @@ async fn ready(app: &App) -> Option<u32> {
 }
 
 #[tokio::test]
+#[ignore = "starts real loop processes; run on its own: cargo test --bin webagent-v3 multi_loop -- --ignored"]
 async fn a_second_process_for_the_same_loop_index_is_refused() {
+    let _serial = PROCESSES.lock().await;
     let (root, app) = fixture().await;
     let _first = Loop::start(root.path(), 0, 1, false);
-    assert!(
-        eventually(Duration::from_secs(60), || async {
-            ready(&app).await == Some(1)
-        })
-        .await
-    );
+    assert!(eventually(PATIENCE, || async { ready(&app).await == Some(1) }).await);
     let mut second = Loop::start(root.path(), 0, 1, false);
     assert!(
-        eventually(Duration::from_secs(30), || {
+        eventually(PATIENCE, || {
             let exited = second.exited();
             async move { exited == Some(false) }
         })
@@ -246,15 +265,12 @@ async fn a_second_process_for_the_same_loop_index_is_refused() {
 }
 
 #[tokio::test]
+#[ignore = "starts real loop processes; run on its own: cargo test --bin webagent-v3 multi_loop -- --ignored"]
 async fn loops_started_with_different_counts_never_serve_at_once() {
+    let _serial = PROCESSES.lock().await;
     let (root, app) = fixture().await;
     let mut single = Loop::start(root.path(), 0, 1, false);
-    assert!(
-        eventually(Duration::from_secs(60), || async {
-            ready(&app).await == Some(1)
-        })
-        .await
-    );
+    assert!(eventually(PATIENCE, || async { ready(&app).await == Some(1) }).await);
     // Loop 1 of 2 starts while the single loop lives: it stays outside, nothing is written.
     let mut later = Loop::start(root.path(), 1, 2, false);
     tokio::time::sleep(Duration::from_secs(8)).await;
@@ -269,7 +285,7 @@ async fn loops_started_with_different_counts_never_serve_at_once() {
     // loop 0 of 2 both serve.
     single.stop();
     assert!(
-        eventually(Duration::from_secs(60), || {
+        eventually(PATIENCE, || {
             let exited = single.exited();
             async move { exited.is_some() }
         })
@@ -277,32 +293,24 @@ async fn loops_started_with_different_counts_never_serve_at_once() {
         "the single loop drains and exits"
     );
     let first = Loop::start(root.path(), 0, 2, false);
-    assert!(
-        eventually(Duration::from_secs(90), || async {
-            ready(&app).await == Some(2)
-        })
-        .await
-    );
+    assert!(eventually(PATIENCE, || async { ready(&app).await == Some(2) }).await);
     drop(first);
 }
 
 #[tokio::test]
+#[ignore = "starts real loop processes; run on its own: cargo test --bin webagent-v3 multi_loop -- --ignored"]
 async fn two_loops_visiting_one_account_execute_each_run_once() {
+    let _serial = PROCESSES.lock().await;
     let (root, app) = fixture().await;
     scripted_model(&app).await;
     let loops = start_loops(&app, root.path(), &checkout(), 2, true).await;
-    assert!(
-        eventually(Duration::from_secs(60), || async {
-            ready(&app).await == Some(2)
-        })
-        .await
-    );
+    assert!(eventually(PATIENCE, || async { ready(&app).await == Some(2) }).await);
     let mut runs = Vec::new();
     for _ in 0..6 {
         runs.push(message(&app, "THINK 3000\nREPLY done").await);
     }
     for run in &runs {
-        let completed = eventually(Duration::from_secs(120), || async {
+        let completed = eventually(PATIENCE, || async {
             status(&app, run).await == "completed"
         })
         .await;
@@ -323,23 +331,15 @@ async fn two_loops_visiting_one_account_execute_each_run_once() {
 }
 
 #[tokio::test]
+#[ignore = "starts real loop processes; run on its own: cargo test --bin webagent-v3 multi_loop -- --ignored"]
 async fn a_killed_loops_run_is_taken_back_only_once_its_loop_is_gone() {
+    let _serial = PROCESSES.lock().await;
     let (root, app) = fixture().await;
     scripted_model(&app).await;
     let mut loops = start_loops(&app, root.path(), &checkout(), 2, true).await;
-    assert!(
-        eventually(Duration::from_secs(60), || async {
-            ready(&app).await == Some(2)
-        })
-        .await
-    );
+    assert!(eventually(PATIENCE, || async { ready(&app).await == Some(2) }).await);
     let run = message(&app, "THINK 40000\nREPLY done").await;
-    assert!(
-        eventually(Duration::from_secs(30), || async {
-            status(&app, &run).await == "running"
-        })
-        .await
-    );
+    assert!(eventually(PATIENCE, || async { status(&app, &run).await == "running" }).await);
     // Kill (SIGKILL, no drain) the loop that claimed it.
     let owner: String = sqlx::query_scalar("SELECT lease_owner FROM run_index WHERE id=?")
         .bind(&run)
@@ -356,10 +356,7 @@ async fn a_killed_loops_run_is_taken_back_only_once_its_loop_is_gone() {
     // The other loop takes it back only after the killed loop's row went stale (8-10 s) or the
     // lease lapsed (30 s), at its next 10-second recovery pass.
     assert!(
-        eventually(Duration::from_secs(60), || async {
-            claims(&app, &run).await == 2
-        })
-        .await,
+        eventually(PATIENCE, || async { claims(&app, &run).await == 2 }).await,
         "claimed again"
     );
     assert!(
@@ -367,7 +364,7 @@ async fn a_killed_loops_run_is_taken_back_only_once_its_loop_is_gone() {
         "{:?}",
         killed.elapsed()
     );
-    let completed = eventually(Duration::from_secs(120), || async {
+    let completed = eventually(PATIENCE, || async {
         status(&app, &run).await == "completed"
     })
     .await;
@@ -464,7 +461,9 @@ async fn account_on(app: &App, index: u32, name: &str) -> App {
 }
 
 #[tokio::test]
+#[ignore = "starts real loop processes; run on its own: cargo test --bin webagent-v3 multi_loop -- --ignored"]
 async fn the_servers_run_ceiling_and_reserved_slot_hold_across_two_loops() {
+    let _serial = PROCESSES.lock().await;
     let (root, app) = fixture().await;
     scripted_model(&app).await;
     // Ceiling 10, 8 slots kept for administrators: 2 ordinary runs at once, over both loops.
@@ -474,12 +473,7 @@ async fn the_servers_run_ceiling_and_reserved_slot_hold_across_two_loops() {
     std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
     std::fs::copy(code.join("config/access/policy.json"), policy).unwrap();
     let _loops = start_loops(&app, root.path(), &code, 2, false).await;
-    assert!(
-        eventually(Duration::from_secs(60), || async {
-            ready(&app).await == Some(2)
-        })
-        .await
-    );
+    assert!(eventually(PATIENCE, || async { ready(&app).await == Some(2) }).await);
     let mut users = Vec::new();
     for (index, name) in [(0, "first"), (0, "second"), (1, "third"), (1, "fourth")] {
         users.push(account_on(&app, index, name).await);
@@ -494,7 +488,7 @@ async fn the_servers_run_ceiling_and_reserved_slot_hold_across_two_loops() {
             .await
             .unwrap()
     };
-    let two = eventually(Duration::from_secs(30), || async { going().await == 2 }).await;
+    let two = eventually(PATIENCE, || async { going().await == 2 }).await;
     if !two {
         for index in 0..2 {
             eprintln!("loop {index}:\n{}", problems(root.path(), index));
@@ -521,7 +515,7 @@ async fn the_servers_run_ceiling_and_reserved_slot_hold_across_two_loops() {
     // The administrator's run starts beside them, in the reserved slot.
     let admin_run = message(&app, "THINK 3000\nREPLY done").await;
     assert!(
-        eventually(Duration::from_secs(20), || async {
+        eventually(PATIENCE, || async {
             status(&app, &admin_run).await != "queued"
         })
         .await
@@ -529,7 +523,7 @@ async fn the_servers_run_ceiling_and_reserved_slot_hold_across_two_loops() {
     // Never more than 2 ordinary runs at once, until all are done.
     let start = Instant::now();
     let mut done = false;
-    while start.elapsed() < Duration::from_secs(90) && !done {
+    while start.elapsed() < PATIENCE && !done {
         let mut running = 0;
         let mut finished = 0;
         for (user, run) in &runs {
@@ -567,5 +561,5 @@ async fn the_servers_run_ceiling_and_reserved_slot_hold_across_two_loops() {
         assert_eq!(served_by(user.clone(), run.clone()).await, expected);
     }
     assert_eq!(served_by(app.clone(), admin_run.clone()).await, 0);
-    assert!(eventually(Duration::from_secs(10), || async { going().await == 0 }).await);
+    assert!(eventually(PATIENCE, || async { going().await == 0 }).await);
 }

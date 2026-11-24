@@ -71,7 +71,8 @@ fn start(program: &Path, index: u32, loops: u32) -> Result<tokio::process::Child
 }
 
 /// Run `loops` loop children of `program` until a stop signal, then forward it and wait for
-/// every child to finish its drain. Returns an error when a child keeps exiting quickly.
+/// every child to finish its drain. A child that cannot be started counts as one that exited at
+/// once. Returns an error when a child keeps exiting (or failing to start) quickly.
 pub async fn supervise(loops: u32, program: &Path) -> Result<()> {
     let (events, mut received) = mpsc::unbounded_channel();
     let mut pids: Vec<Option<u32>> = vec![None; loops as usize];
@@ -95,9 +96,20 @@ pub async fn supervise(loops: u32, program: &Path) -> Result<()> {
         if index > 0 {
             tokio::time::sleep(START_GAP).await;
         }
-        let child = start(program, index, loops)?;
-        pids[index as usize] = child.id();
-        watch(index, child, events.clone());
+        match start(program, index, loops) {
+            Ok(child) => {
+                pids[index as usize] = child.id();
+                watch(index, child, events.clone());
+            }
+            // A loaded machine can refuse a new process for a moment: counted like an exit.
+            Err(error) => {
+                let _ = events.send(Event::Exited {
+                    index,
+                    ran: Duration::ZERO,
+                    status: format!("not started: {error}"),
+                });
+            }
+        }
     }
     tracing::info!(loops, "Loop supervisor started its loops");
     let mut signal = webagent_platform::signal::terminate()?;
@@ -134,9 +146,13 @@ pub async fn supervise(loops: u32, program: &Path) -> Result<()> {
                     pids[index as usize] = child.id();
                     watch(index, child, events.clone());
                 }
+                // Counted like an exit: tried again after a pause, given up after five.
                 Err(error) => {
-                    failure = Some(anyhow!("Loop {index} could not be restarted: {error}"));
-                    break;
+                    let _ = events.send(Event::Exited {
+                        index,
+                        ran: Duration::ZERO,
+                        status: format!("not started: {error}"),
+                    });
                 }
             },
             None => break,
@@ -199,6 +215,14 @@ mod tests {
             exits.exited(Duration::from_secs(600)),
             Verdict::Restart(Duration::from_secs(1))
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_that_cannot_start_is_retried_then_given_up() {
+        // A program that does not exist fails every start: five tries, then the supervisor stops.
+        let result = supervise(1, Path::new("/nonexistent/webagent-loop")).await;
+        assert!(result.is_err_and(|e| e.to_string().contains("5 times")));
     }
 
     #[cfg(unix)]
