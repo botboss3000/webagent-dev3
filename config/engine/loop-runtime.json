@@ -9,7 +9,6 @@
   "scheduler": {
     "background_rescan_interval_ms": 5000,
     "drain_timeout_seconds": 180,
-    "loops": 2,
     "max_active_runs": 10,
     "max_attachment_reads": 32,
     "max_background_workers": 4,
