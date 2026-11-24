@@ -31,6 +31,22 @@ class PublicationTests(unittest.TestCase):
             compile(args[-1],"<protocol probe>","exec")
             return json.dumps({"version":2,"id":"plugin-protocol","result":{"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}})
         runner.command=command;self.assertTrue(runner.plugin_hot_swappable())
+    def test_adoption_probe_follows_the_api_worker_socket(self):
+        # Stream D4 (0ad17c12): with the worker container on, the API's own V3_TOOL_SOCKET names the
+        # worker container's socket and the probe must use it; any other value keeps the old path.
+        def probe(env):
+            runner=fixtures.host.Runner();sockets=[]
+            runner.inspect=lambda name:{"Mounts":[{"Destination":"/opt/v3/assets","Source":str(fixtures.host.ASSET_ROOT),"RW":False}],
+                "Config":{"Env":["V3_UI_ROOT=/opt/v3/assets/current/v3/ui",*env]}}
+            def command(args,**kwargs):
+                sockets.append(args[-1].split("s.connect('")[1].split("'")[0])
+                self.assertEqual(args[:4],["docker","exec","--user",str(fixtures.host.CONFIG["app_uid"])+":"+str(fixtures.host.WORK_GID)])
+                return json.dumps({"version":2,"id":"plugin-protocol","result":{"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}})
+            runner.command=command;self.assertTrue(runner.plugin_hot_swappable());return sockets
+        self.assertEqual(fixtures.host.WORKER_SOCKET,"/runtime/worker-c/tools.sock")
+        self.assertEqual(probe(["V3_TOOL_SOCKET="+fixtures.host.WORKER_SOCKET,"V3_EXTERNAL_WORKER=1"]),[fixtures.host.WORKER_SOCKET])
+        self.assertEqual(probe([]),["/runtime/worker/tools.sock"])
+        self.assertEqual(probe(["V3_TOOL_SOCKET=/elsewhere/tools.sock"]),["/runtime/worker/tools.sock"])
 if __name__=="__main__":unittest.main()
 
 class ArtifactCacheTests(unittest.TestCase):
