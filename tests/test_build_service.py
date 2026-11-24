@@ -493,8 +493,15 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
     self.assertTrue(kwargs.get("private_raw"))
     compile(argv[-1],"<worker capability probe>","exec")
     return json.dumps({"version":2,"id":request_id,"result":{"status":"success","output":output}})
-   with patch.object(runner,"command",side_effect=command):
+   with patch.object(runner,"command",side_effect=command)as called:
     self.assertTrue(probe())
+   # Stream D1: asked first as the app with the worker's group, which a D1 worker requires.
+   self.assertEqual(str(fixtures.host.CONFIG["app_uid"])+":"+str(fixtures.host.WORK_GID),called.call_args_list[0].args[0][3])
+   # A release from before D1 refuses that identity; the app identity alone is tried next.
+   replies=[RuntimeError("permission denied"),json.dumps({"version":2,"id":request_id,"result":{"status":"success","output":output}})]
+   with patch.object(runner,"command",side_effect=replies)as called:
+    self.assertTrue(probe())
+   self.assertEqual(str(fixtures.host.CONFIG["app_uid"]),called.call_args_list[1].args[0][3])
    for invalid in ({"status":"success","output":output},{"version":1,"id":request_id,"result":{"status":"success","output":output}},{"version":2,"id":"wrong-id","result":{"status":"success","output":output}},{"version":2,"id":request_id,"result":{"status":"success","output":{}}}):
     with patch.object(runner,"command",return_value=json.dumps(invalid)):
      self.assertFalse(probe())

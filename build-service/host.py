@@ -2238,11 +2238,16 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             "s.sendall(json.dumps({'version':2,'id':'plugin-protocol','name':'ability_plugins_protocol',"
             "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
             "print(s.makefile('rb').readline(4096).decode())")
-        try:
-            reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),
-                TARGETS[0],"python3","-I","-B","-c",program],timeout=15,private_raw=True))
-            return reply.get("version")==2 and reply.get("id")=="plugin-protocol" and reply.get("result")=={"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}
-        except (OSError,RuntimeError,ValueError):return False
+        # Since stream D1 the app reaches the worker's socket through the worker's group
+        # (webagent-work); a release from before D1 still serves it to the app group.
+        for user in (str(CONFIG["app_uid"])+":"+str(WORK_GID),str(CONFIG["app_uid"])):
+            try:
+                reply=json.loads(self.command(["docker","exec","--user",user,
+                    TARGETS[0],"python3","-I","-B","-c",program],timeout=15,private_raw=True))
+                if reply.get("version")==2 and reply.get("id")=="plugin-protocol" and reply.get("result")=={"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}:
+                    return True
+            except (OSError,RuntimeError,ValueError):continue
+        return False
 
     def boot_adoption(self):
         """Read the protected local boot host over its authenticated bounded Unix socket."""
