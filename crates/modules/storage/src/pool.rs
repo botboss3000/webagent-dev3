@@ -167,9 +167,7 @@ async fn set_up_schema(pool: SqlitePool, events: bool, runs: bool) -> Result<Sql
             .iter()
             .any(|row| row.get::<String, _>("name") == "run_id")
         {
-            sqlx::query("ALTER TABLE events ADD COLUMN run_id TEXT")
-                .execute(&pool)
-                .await?;
+            add_column(&pool, "events", "run_id", "TEXT").await?;
         }
         // Each progress update is a full run snapshot, so a new one replaces the older ones.
         sqlx::raw_sql(
@@ -254,9 +252,7 @@ async fn set_up_schema(pool: SqlitePool, events: bool, runs: bool) -> Result<Sql
             .iter()
             .any(|row| row.get::<String, _>("name") == "execution_metadata")
         {
-            sqlx::query("ALTER TABLE interactions ADD COLUMN execution_metadata BLOB")
-                .execute(&pool)
-                .await?;
+            add_column(&pool, "interactions", "execution_metadata", "BLOB").await?;
         }
         let columns = sqlx::query("PRAGMA table_info(run_index)")
             .fetch_all(&pool)
@@ -265,9 +261,7 @@ async fn set_up_schema(pool: SqlitePool, events: bool, runs: bool) -> Result<Sql
             .iter()
             .any(|r| r.get::<String, _>("name") == "enqueue_seq")
         {
-            sqlx::query("ALTER TABLE run_index ADD COLUMN enqueue_seq INTEGER")
-                .execute(&pool)
-                .await?;
+            add_column(&pool, "run_index", "enqueue_seq", "INTEGER").await?;
         }
         sqlx::query("UPDATE run_index SET enqueue_seq=rowid WHERE enqueue_seq IS NULL")
             .execute(&pool)
@@ -285,15 +279,25 @@ async fn set_up_schema(pool: SqlitePool, events: bool, runs: bool) -> Result<Sql
             ("lease_expires_at", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             if !columns.iter().any(|r| r.get::<String, _>("name") == name) {
-                sqlx::query(&format!(
-                    "ALTER TABLE run_index ADD COLUMN {name} {declaration}"
-                ))
-                .execute(&pool)
-                .await?;
+                add_column(&pool, "run_index", name, declaration).await?;
             }
         }
     }
     Ok(pool)
+}
+
+/// Add a column to a table unless another process (the API or another loop setting up the same
+/// database at the same moment) added it first.
+async fn add_column(pool: &SqlitePool, table: &str, name: &str, declaration: &str) -> Result<()> {
+    match sqlx::query(&format!(
+        "ALTER TABLE {table} ADD COLUMN {name} {declaration}"
+    ))
+    .execute(pool)
+    .await
+    {
+        Err(error) if error.to_string().contains("duplicate column name") => Ok(()),
+        result => result.map(|_| ()).map_err(Into::into),
+    }
 }
 
 /// Rebuilds a chat table created before run-status `notice` rows existed.

@@ -216,6 +216,7 @@
     "/context/max_context_bytes": "Scheduler internals; not offered in v1.",
     "/scheduler/background_rescan_interval_ms": "Scheduler internals; not offered in v1.",
     "/scheduler/drain_timeout_seconds": "Scheduler internals; not offered in v1.",
+    "/scheduler/loops": "Agent-loop process count; takes effect only when the loop container restarts (docs/recovery-policy.md).",
     "/scheduler/max_unresolved_runs": "Scheduler internals; not offered in v1.",
     "/scheduler/message_detach_grace_ms": "Scheduler internals; not offered in v1.",
     "/scheduler/poll_interval_ms": "Scheduler internals; not offered in v1.",

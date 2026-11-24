@@ -790,7 +790,7 @@ pub(crate) fn ability_problems(
     problems
 }
 
-async fn run_process() -> Result<()> {
+pub(crate) async fn run_process() -> Result<()> {
     // Before any database opens: every account's database needs several open files.
     let open_files = webagent_platform::process::raise_open_file_limit();
     if std::env::args().any(|argument| argument == "--boot-plan") {
@@ -961,6 +961,15 @@ async fn run_process() -> Result<()> {
         return Err(anyhow!("Invalid v3 process role"));
     }
     let desktop = role == "desktop";
+    // With `scheduler.loops` above 1 the loop container's program only starts and watches that
+    // many loop processes of itself (`webagent_engine::supervisor`); each child is told its
+    // index. One loop runs in this process, as before.
+    if role == "loop" && std::env::var_os("V3_LOOP_INDEX").is_none() {
+        let loops = loop_runtime::Config::live()?.0.scheduler.loops;
+        if loops > 1 {
+            return webagent_engine::supervisor::supervise(loops, &std::env::current_exe()?).await;
+        }
+    }
     // A loop process is loop `V3_LOOP_INDEX` of `V3_LOOPS` (one loop by default) and serves
     // only its share of the accounts; it must know that before it opens any (see
     // `webagent_engine::partition`). A desktop process is the one loop.
@@ -1029,6 +1038,10 @@ async fn run_process() -> Result<()> {
     mcp::bridge::init(&root, service_role).await;
     store.migrate_agent_storage(&root).await?;
     let (runtime, runtime_path) = loop_runtime::Config::live()?;
+    // The API routes wake hints over the configured loops until readiness reads the live ones.
+    if member.is_none() {
+        webagent_engine::partition::set_routes(runtime.scheduler.loops);
+    }
     // The live policy file, reread at call boundaries; fail start-up only if it is invalid.
     let compaction_config_path = context_compaction::Config::configured_path();
     context_compaction::Config::configured()?;

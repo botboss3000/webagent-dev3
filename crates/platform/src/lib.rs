@@ -221,6 +221,25 @@ pub mod process {
     pub fn raise_open_file_limit() -> Option<u64> {
         None
     }
+
+    /// Ask the child process `pid` to stop (SIGTERM), as a container stop asks the loop: it
+    /// drains its runs and exits. The loop supervisor forwards a stop to its loops with it.
+    #[cfg(unix)]
+    pub fn request_stop(pid: u32) -> std::io::Result<()> {
+        let pid = libc::pid_t::try_from(pid)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        // SAFETY: kill only sends a signal to the given process; no memory is shared.
+        if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub fn request_stop(_pid: u32) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 }
 
 pub mod ffi {

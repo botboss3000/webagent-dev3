@@ -20,6 +20,7 @@ pub mod usage_ledger;
 // one fails, so components stay unavailable.
 #[cfg_attr(not(target_os = "linux"), path = "sandbox_unsupported.rs")]
 pub mod sandbox;
+pub mod supervisor;
 pub mod wake;
 pub mod workflow;
 pub mod context {

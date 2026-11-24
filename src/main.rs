@@ -132,6 +132,8 @@ mod memory;
 mod model_selection;
 #[path = "../crates/modules/models/host/api/selection.rs"]
 mod model_selection_api;
+#[cfg(test)]
+mod multi_loop_tests;
 #[path = "../crates/modules/models/host/platform_catalog.rs"]
 mod platform_catalog;
 #[path = "../crates/modules/models/host/provider/mod.rs"]

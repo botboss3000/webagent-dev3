@@ -50,6 +50,17 @@ pub struct Scheduler {
     /// Attachment downloads served at once; more wait up to ten seconds for a slot.
     #[serde(default = "default_max_attachment_reads")]
     pub max_attachment_reads: usize,
+    /// Agent-loop processes in the loop container (1 to 16), each serving its share of the
+    /// accounts. Read when the loop container starts: a change takes effect at its restart.
+    /// Left out of the file at 1, so a release without this setting can still read it.
+    #[serde(default = "default_loops", skip_serializing_if = "is_one_loop")]
+    pub loops: u32,
+}
+fn default_loops() -> u32 {
+    1
+}
+fn is_one_loop(loops: &u32) -> bool {
+    *loops == 1
 }
 fn default_max_background_workers() -> usize {
     4
@@ -221,6 +232,7 @@ impl<C: SchemaCatalog> Default for Config<C> {
                 max_background_workers: default_max_background_workers(),
                 max_media_requests: default_max_media_requests(),
                 max_attachment_reads: default_max_attachment_reads(),
+                loops: default_loops(),
             },
             context: Context {
                 max_context_bytes: 262144,
@@ -303,6 +315,7 @@ impl<C: SchemaCatalog> Config<C> {
             || !(10..=60000).contains(&self.scheduler.poll_interval_ms)
             || !(1000..=3600000).contains(&self.scheduler.recovery_interval_ms)
             || self.scheduler.drain_timeout_seconds > 1800
+            || !(1..=crate::partition::MAX_LOOPS).contains(&self.scheduler.loops)
             || self.cache.document_budget_bytes > 268435456
             || self.cache.context_budget_bytes > 67108864
         {

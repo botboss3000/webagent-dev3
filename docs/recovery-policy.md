@@ -204,7 +204,16 @@ serves only the accounts whose id hashes to it (`webagent_engine::partition`; th
 always loop 0, with board notes and the local model warm-up). It keeps its own lock
 (`loop-k.lock`), wake socket (`dispatch-wake-k.sock`) and restart mark (`restart-cause-k.json`);
 loop 0 keeps the single-loop names. A loop does not start while a live loop of another index runs
-with a different `n`, and stops when one appears. Host-level recovery of unhealthy
+with a different `n`, and stops when one appears.
+
+`scheduler.loops` in `config/engine/loop-runtime.json` (1 to 16, absent means 1) sets `n`. It is
+read when the loop container starts: with `n` above 1 its program supervises `n` loop processes of
+itself, forwards a stop (SIGTERM) to each and waits for their drains, restarts a loop that exits
+on its own after 1, 2, 4 and 8 seconds, and exits (Docker then restarts the container) after a
+loop's fifth exit within a minute of starting. To change `n`, edit the setting and restart the
+loop container; to go back to one loop, remove the setting (a release without it rejects the
+file while it is there) and restart. The server-wide run ceiling `scheduler.max_active_runs` and
+the administrator's reserved runs are counted over every loop in `running_runs` (`app.db`). Host-level recovery of unhealthy
 containers is described in `docs/boot-supervisor.md`.
 
 **Background work after a restart.**
