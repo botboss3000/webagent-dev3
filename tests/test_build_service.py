@@ -2977,3 +2977,91 @@ class CheckoutGitTests(unittest.TestCase):
                 self.assertFalse(mode&(st.S_IWGRP|st.S_IWOTH|st.S_ISGID),path)
                 self.assertTrue(mode&st.S_IROTH,path)
             self.assertEqual((git/"config").read_text(),"[core]\n")
+
+
+
+class WorkerContainerTests(unittest.TestCase):
+    """Stream D4: the worker container follows the API, off by default, never fails a release."""
+    def api(self,runtime,external=True):
+        env=["PATH=/usr/bin","V3_ADMIN_PASSWORD_FILE=/state/x","PROVIDER_TOKEN=secret-value"]+(["V3_EXTERNAL_WORKER=1"]if external else[])
+        return {"Image":"sha256:"+"2"*64,"Config":{"Env":env},
+                "Mounts":[{"Destination":"/runtime","Source":str(runtime)},{"Destination":"/workspaces","Source":"/srv/w"},
+                          {"Destination":"/code","Source":"/srv/c"},{"Destination":"/state","Source":"/srv/s"},
+                          {"Destination":"/opt/v3/assets","Source":"/srv/a"},{"Destination":"/opt/v3/abilities","Source":"/srv/ab"}]}
+    def test_container_has_no_state_no_app_secrets_and_its_own_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder)/"browser").mkdir()
+            body=fixtures.host.worker_container_body(self.api(folder),"sha256:"+"2"*64)
+        mounts={m["Target"]:m for m in body["HostConfig"]["Mounts"]}
+        self.assertNotIn("/state",mounts)
+        self.assertEqual(set(mounts),{"/code","/opt/v3/assets","/opt/v3/abilities","/workspaces","/runtime/worker","/runtime/control","/runtime/browser"})
+        for target in ("/code","/opt/v3/assets","/opt/v3/abilities","/runtime/control"):self.assertTrue(mounts[target]["ReadOnly"],target)
+        self.assertEqual(mounts["/runtime/worker"]["Source"],folder+"/worker-c")
+        self.assertFalse(any("secret-value"in e or "ADMIN" in e for e in body["Env"]))
+        self.assertIn("V3_BROWSER_HOST=/runtime/browser/host.sock",body["Env"])
+        self.assertEqual(body["User"],str(fixtures.host.CONFIG["worker_uid"])+":1105")
+        host=body["HostConfig"]
+        self.assertEqual((host["ReadonlyRootfs"],host["CapDrop"],host["SecurityOpt"],host["NetworkMode"]),
+                         (True,["ALL"],["no-new-privileges:true"],"webagent-worker"))
+        limits=fixtures.host.capacity_limits("worker")
+        self.assertEqual((host["Memory"],host["PidsLimit"],host["CpuShares"]),(limits["memory_bytes"],limits["pids_limit"],config.cpu_shares(50)))
+        self.assertEqual(body["Cmd"],["/usr/local/bin/webagent-v3","--tool-worker"])
+    def test_releases_use_the_external_layout_only_when_switched_on_and_ready(self):
+        env=lambda name,ready:fixtures.host.external_worker_env(["A=1","V3_TOOL_SOCKET=/old","V3_EXTERNAL_WORKER=1"],name,ready)
+        api,loop=fixtures.host.TARGETS
+        self.assertEqual(env(api,False),["A=1"]);self.assertEqual(env(loop,False),["A=1"])
+        self.assertEqual(env(api,True),["A=1","V3_TOOL_SOCKET=/runtime/worker-c/tools.sock","V3_EXTERNAL_WORKER=1"])
+        self.assertEqual(env(loop,True),["A=1","V3_TOOL_SOCKET=/runtime/worker-c/tools.sock"])
+        runner=fixtures.host.Runner();runner.command=lambda *a,**k:"[]"
+        with tempfile.TemporaryDirectory() as folder:
+            firewall=Path(folder)/"worker-firewall.sh"
+            with patch.object(fixtures.host,"WORKER_FIREWALL",firewall):
+                for switch in (None,False,True):
+                    policy={**fixtures.host.CONFIG["scheduler"]};policy.pop("worker_container",None)
+                    if switch is not None:policy["worker_container"]=switch
+                    with patch.dict(fixtures.host.CONFIG,{"scheduler":policy}):
+                        self.assertFalse(runner.worker_external_ready())
+                        firewall.write_text("#!/bin/sh\n")
+                        self.assertEqual(runner.worker_external_ready(),switch is True)
+                        def missing(*a,**k):raise RuntimeError("no such network")
+                        runner.command=missing
+                        self.assertFalse(runner.worker_external_ready())
+                        runner.command=lambda *a,**k:"[]";firewall.unlink()
+        self.assertFalse(fixtures.host._config_module.scheduler_defaults()["worker_container"])
+        with self.assertRaises(ValueError):config.validate({**config.defaults(),"scheduler":{"worker_container":"on"}})
+    def sync(self,api,previous,healthy=True):
+        calls=[]
+        class Runner:
+            secrets=[]
+            def inspect(self,name):return api
+            def inspect_recovery(self,name):return previous if name==fixtures.host.WORKER else None
+            def create_body(self,body,as_name):calls.append(("create",as_name))
+            def stop(self,name,seconds=30):calls.append(("stop",name))
+            def rename(self,name,target):calls.append(("rename",name,target))
+            def start(self,name):calls.append(("start",name))
+            def healthy(self,name,image):return healthy
+            def command(self,argv,**kwargs):return fixtures.host.WORKER+"-pre-build-old\n"
+            def remove(self,name):calls.append(("remove",name))
+        job={"job_id":"j"*36}
+        broker=types.SimpleNamespace(runner=Runner(),_save=lambda job:None)
+        with tempfile.TemporaryDirectory() as folder:
+            api["Mounts"][0]["Source"]=folder
+            fixtures.host.Broker._sync_worker(broker,job)
+        return job["worker_sync"],calls
+    def test_sync_follows_the_api_and_never_raises(self):
+        W=fixtures.host.WORKER
+        # API with the layout and no worker yet: created, started, checked.
+        status,calls=self.sync(self.api("/x"),None)
+        self.assertEqual(status["status"],"completed");self.assertIn(("start",W),calls)
+        # An older worker: replaced, one backup kept, older backups removed.
+        status,calls=self.sync(self.api("/x"),{"Image":"sha256:"+"9"*64,"State":{"Running":True}})
+        self.assertEqual(status["rollback"],W+"-pre-build-"+"j"*36);self.assertIn(("remove",W+"-pre-build-old"),calls)
+        # API without the layout (switch off, or a rollback to an API with its own worker): stopped.
+        status,calls=self.sync(self.api("/x",external=False),{"Image":"sha256:"+"2"*64,"State":{"Running":True}})
+        self.assertEqual((status["status"],calls),("stopped",[("stop",W)]))
+        self.assertEqual(self.sync(self.api("/x",external=False),None)[0]["status"],"off")
+        # An unhealthy new worker: the previous one is restored, the release is not failed.
+        status,calls=self.sync(self.api("/x"),{"Image":"sha256:"+"9"*64,"State":{"Running":True}},healthy=False)
+        self.assertEqual((status["status"],status["restored"]),("failed",True))
+        self.assertIn(("rename",W+"-pre-build-"+"j"*36,W),calls)
+        self.assertEqual(fixtures.host.capacity_role("/"+W),"worker")

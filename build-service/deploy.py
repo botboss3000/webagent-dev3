@@ -60,10 +60,10 @@ def start_browser(c):
   if not Path(required).is_file():raise RuntimeError("Browser host setup missing: "+required)
  run(["docker","network","inspect","webagent-browser"],stdout=subprocess.DEVNULL)
  # The browser folders move to the browser identity; the socket folder lets the worker's
- # group in (setgid, so the socket keeps that group).
+ # group webagent-work (1105, stream D1) in (setgid, so the socket keeps that group).
  run(["docker","run","--rm","--user","0:0","--network","none","--mount","type=bind,src="+str(runtime)+",dst=/r","--entrypoint","/bin/sh",image,"-c",
-  "mkdir -p /r/worker/browser /r/browser && chown -R 1104:1104 /r/worker/browser && chmod 0700 /r/worker/browser && chown 1104:1100 /r/browser && chmod 2750 /r/browser"])
- run(["docker","run","-d","--name",name,"--restart","unless-stopped","--read-only","--user","1104:1104","--group-add","1100",
+  "mkdir -p /r/worker/browser /r/browser && chown -R 1104:1104 /r/worker/browser && chmod 0700 /r/worker/browser && chown 1104:1105 /r/browser && chmod 2750 /r/browser"])
+ run(["docker","run","-d","--name",name,"--restart","unless-stopped","--read-only","--user","1104:1104","--group-add","1105",
   "--cap-drop","ALL","--security-opt","no-new-privileges:true","--security-opt","seccomp="+BROWSER_SECURITY,"--security-opt","apparmor=webagent-browser",
   "--network","webagent-browser","--pids-limit","1024","--memory","3g","--cpus","2",
   "--tmpfs","/tmp:rw,nosuid,nodev,size=512m",

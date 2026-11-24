@@ -218,10 +218,10 @@ its default:
 
 | Role / key | Default | Range | Effect |
 |---|---|---|---|
-| `api`, `loop`, `browser` `.cpu_weight` | 400, 100, 100 | 1–10000 (100 = normal) | cgroup processor weight while processors are contended; given to Docker as CPU shares (runc: 1024 shares = 100). |
+| `api`, `loop`, `browser`, `worker` `.cpu_weight` | 400, 100, 100, 50 | 1–10000 (100 = normal) | cgroup processor weight while processors are contended; given to Docker as CPU shares (runc: 1024 shares = 100). |
 | `.cpu_cap` | `null` (no cap) | `null` or 1–cores (may be fractional) | Hard processor limit. The loop's cap is raised to loops + 1 when `scheduler.loops` asks for more. |
-| `.memory_bytes` | 2 GiB, 8 GiB, 3 GiB | api ≥ 512 MiB, loop and browser ≥ 1 GiB; ≤ host memory | Memory limit. The container's existing swap allowance is kept. A default above a small host's memory shrinks to it. |
-| `.pids_limit` | `null` (= `api_pids_limit`), `null`, 1024 | `null` or 256–65536 | Task limit. The loop's is raised to 512 per loop process. |
+| `.memory_bytes` | 2 GiB, 8 GiB, 3 GiB, 2 GiB | api and worker ≥ 512 MiB, loop and browser ≥ 1 GiB; ≤ host memory | Memory limit. The container's existing swap allowance is kept. A default above a small host's memory shrinks to it. |
+| `.pids_limit` | `null` (= `api_pids_limit`), `null`, 1024, 1024 | `null` or 256–65536 | Task limit. The loop's is raised to 512 per loop process. |
 | `builds.cpu_weight` | `"idle"` | `"idle"` or 1–10000 | Processor priority of `webagent.slice` and the build slices under it (they compete with `system.slice`, where the app containers run). `"idle"` is systemd `CPUWeight=idle` (cgroup `cpu.idle`): builds run only on processor time nothing else wants, so a waking app request never waits behind a compile. A number is an ordinary weight (20 was the earlier default). Set at the next build admission. |
 
 When it applies: every start of an app container by the broker (release, browser
@@ -275,6 +275,27 @@ buildctl job JOB_ID     # test_group_result: each repetition, each test, failure
   `v3_opt_in_tests` (bounded, strict, no links), which feeds the Dashboard card and the
   administrator alert. The timer is written by the installer, which is the previous release's
   code, so it appears from the second install after this change.
+
+### Worker container (stream D4, off by default)
+
+`scheduler.worker_container` (default `false`) moves the tool worker out of the API container into
+its own container `<api>-worker`, a follower like the browser container. It takes effect only when
+the host is ready: the Docker network `webagent-worker` exists and its firewall script
+`/etc/webagent/<instance>/worker/worker-firewall.sh` is installed (the operator sets both up, like
+the browser's network; containers on it must reach no host address, no LAN and no Tailscale peer,
+only the internet's ports 80 and 443). Then each release starts the API and loop with
+`V3_TOOL_SOCKET=/runtime/worker-c/tools.sock` and the API with `V3_EXTERNAL_WORKER=1` (its
+launcher starts no worker of its own), and after a healthy release the broker (re)creates the
+worker container on the API's image: user 1103 with group 1105 (`webagent-work`), read-only root,
+all capabilities dropped, no `/state` mount and no app secrets, the checkout and release files
+read-only, `/workspaces`, `runtime/worker-c` as its `/runtime/worker`, the control files read-only
+and the browser socket folder; memory, tasks and processor weight from
+`container_capacity.worker` (2 GiB, 1024, weight 50: below the loops, above builds). A failure
+never fails the release: the previous worker container is restored and `worker_sync` records it.
+When the API runs without that layout (switch off, host not ready, or a rollback to an older
+release) the broker stops the worker container. The separate socket folder means a rollback to a
+release whose API starts its own worker (on `runtime/worker`) never puts two workers on one
+socket. One previous worker container is kept for restoring.
 
 ## New broker files need two installs
 

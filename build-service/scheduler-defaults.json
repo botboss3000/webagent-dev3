@@ -50,9 +50,11 @@
     "api": {"cpu_weight": 400, "cpu_cap": null, "memory_bytes": 2147483648, "pids_limit": null},
     "loop": {"cpu_weight": 100, "cpu_cap": null, "memory_bytes": 8589934592, "pids_limit": null},
     "browser": {"cpu_weight": 100, "cpu_cap": null, "memory_bytes": 3221225472, "pids_limit": 1024},
+    "worker": {"cpu_weight": 50, "cpu_cap": null, "memory_bytes": 2147483648, "pids_limit": 1024},
     "builds": {"cpu_weight": "idle"}
   },
   "authorship_gate": "report",
+  "worker_container": false,
   "secret_env_names": [],
   "sidekick": {
     "enabled": false,

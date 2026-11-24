@@ -309,6 +309,15 @@ def authorship_latest():
 # created once by `deploy.py start-browser` and only follows the API image; it is never a
 # release role, so a failure to follow never rolls back the API or loop.
 BROWSER = CONFIG["api_container"] + "-browser"
+# Stream D4: the tool worker's own container, a follower like the browser container: created on the
+# API's image after a healthy release when the API runs the external-worker layout, stopped when it
+# does not, never a release role. Its socket folder is `runtime/worker-c` (mounted at /runtime/worker
+# inside it), so a rollback to a release whose API starts its own worker on `runtime/worker` never
+# puts two workers on one socket.
+WORKER = CONFIG["api_container"] + "-worker"
+WORKER_NETWORK = "webagent-worker"
+WORKER_FIREWALL = Path("/etc/webagent") / CONFIG["instance"] / "worker" / "worker-firewall.sh"
+WORKER_SOCKET = "/runtime/worker-c/tools.sock"
 # On SIGTERM the loop drains runs for up to its own `drain_timeout_seconds`
 # (loop-runtime.json, default 180) before shutting down; this is the backstop.
 LOOP_DRAIN_STOP_SECONDS = 240
@@ -1245,7 +1254,7 @@ def configured_loops():
 
 def capacity_role(name):
     """The `container_capacity` role of an app container name, or None for any other container."""
-    return {TARGETS[0]: "api", TARGETS[1]: "loop", BROWSER: "browser"}.get(name.lstrip("/"))
+    return {TARGETS[0]: "api", TARGETS[1]: "loop", BROWSER: "browser", WORKER: "worker"}.get(name.lstrip("/"))
 
 
 def capacity_limits(role, loops=1):
@@ -1260,6 +1269,47 @@ def capacity_limits(role, loops=1):
             value["cpu_cap"] = max(value["cpu_cap"], loops + 1)
         value["pids_limit"] = max(value["pids_limit"], 512 * loops)
     return value
+
+
+def worker_container_body(api, image):
+    """The Docker create body of the worker container on `image`, from the running API's inspect:
+    the worker's own identity and group, no `/state`, no app secrets, read-only checkout and
+    release files, workspaces, its own socket folder and the control files (read-only), its own
+    network, memory, tasks and processor weight (`container_capacity.worker`)."""
+    sources = {m.get("Destination"): m.get("Source") for m in api.get("Mounts") or []}
+    runtime = sources["/runtime"]
+    mounts = [{"Type": "bind", "Source": sources[target], "Target": target, "ReadOnly": True}
+              for target in ("/code", "/opt/v3/assets", "/opt/v3/abilities", "/opt/v3/config") if target in sources]
+    mounts += [{"Type": "bind", "Source": sources["/workspaces"], "Target": "/workspaces", "ReadOnly": False},
+               {"Type": "bind", "Source": runtime + "/worker-c", "Target": "/runtime/worker", "ReadOnly": False},
+               {"Type": "bind", "Source": runtime + "/control", "Target": "/runtime/control", "ReadOnly": True}]
+    # The same environment the API's launcher gives its own worker, and nothing else.
+    env = ["PATH=/usr/bin:/bin", "LANG=C.UTF-8", "V3_TOOL_SOCKET=/runtime/worker/tools.sock",
+           "V3_TOOL_CLIENT_UID=" + str(CONFIG["app_uid"])]
+    if Path(runtime, "browser").is_dir():
+        mounts.append({"Type": "bind", "Source": runtime + "/browser", "Target": "/runtime/browser", "ReadOnly": False})
+        env.append("V3_BROWSER_HOST=/runtime/browser/host.sock")
+    host = capacity_host({}, capacity_limits("worker"))
+    host.update(ReadonlyRootfs=True, CapDrop=["ALL"], SecurityOpt=["no-new-privileges:true"],
+                NetworkMode=WORKER_NETWORK, RestartPolicy={"Name": "unless-stopped"},
+                Tmpfs={"/tmp": "rw,nosuid,nodev,size=64m", "/run": "rw,nosuid,nodev,size=16m"}, Mounts=mounts)
+    return {"Image": image, "User": str(CONFIG["worker_uid"]) + ":" + str(WORK_GID), "Env": env,
+            "Entrypoint": ["/usr/bin/tini", "--"], "Cmd": ["/usr/local/bin/webagent-v3", "--tool-worker"],
+            "Labels": {"webagent.release.role": "worker-follower", "webagent.release.instance": CONFIG["instance"]},
+            "Healthcheck": {"Test": ["CMD-SHELL", "test -S /runtime/worker/tools.sock"], "Interval": 30 * 10**9,
+                            "Timeout": 5 * 10**9, "StartPeriod": 10 * 10**9, "Retries": 3},
+            "StopTimeout": 15, "HostConfig": host}
+
+
+def external_worker_env(env, name, ready):
+    """A release container's environment with the external-worker layout when `ready`: the API
+    and loop reach the worker container's socket, and the API's launcher starts no worker."""
+    env = [value for value in env if not value.startswith(("V3_TOOL_SOCKET=", "V3_EXTERNAL_WORKER="))]
+    if ready:
+        env.append("V3_TOOL_SOCKET=" + WORKER_SOCKET)
+        if name == TARGETS[0]:
+            env.append("V3_EXTERNAL_WORKER=1")
+    return env
 
 
 def capacity_host(previous, limits):
@@ -2575,7 +2625,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 connection.close()
 
     def inspect(self, name):
-        if name not in (*TARGETS, BROWSER) and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name) for target in (*TARGETS, BROWSER)):
+        if name not in (*TARGETS, BROWSER, WORKER) and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name) for target in (*TARGETS, BROWSER, WORKER)):
             raise ValueError("container outside development target")
         value = json.loads(self.command(["docker", "inspect", name], timeout=30, private_raw=True))[0]
         self.secrets.extend(secret_env_values(value.get("Config", {}).get("Env") or []))
@@ -2583,7 +2633,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
 
     def inspect_recovery(self,name):
         """Discover only fixed release names; a Docker error never means absent."""
-        if name not in (*TARGETS, BROWSER) and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name)for target in (*TARGETS, BROWSER)):
+        if name not in (*TARGETS, BROWSER, WORKER) and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name)for target in (*TARGETS, BROWSER, WORKER)):
             raise ValueError("Recovery container outside development target")
         identities=self.command(["docker","ps","--all","--no-trunc","--filter","name=^/"+name+"$","--format","{{.ID}}"],timeout=30).splitlines()
         if not identities:return None
@@ -2825,6 +2875,32 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         finally:
             conn.close()
 
+    def create_body(self, body, as_name):
+        """Create a container from a complete Docker create body (the worker follower)."""
+        conn = DockerHTTP("localhost", timeout=30)
+        try:
+            conn.request("POST", "/containers/create?name=" + as_name, body=canonical(body), headers={"Content-Type": "application/json"})
+            response = conn.getresponse()
+            reply = response.read(1024 * 1024)
+            if response.status != 201:
+                raise RuntimeError("worker container create failed (" + str(response.status) + "): " + docker_error(reply, self.secrets))
+            return json.loads(reply)["Id"]
+        finally:
+            conn.close()
+
+    def worker_external_ready(self):
+        """Whether releases start the external-worker layout: `scheduler.worker_container` is on and
+        the host has the worker network and its firewall script (set up by the operator, README)."""
+        if CONFIG["scheduler"].get("worker_container") is not True:
+            return False
+        if not WORKER_FIREWALL.is_file():
+            return False
+        try:
+            self.command(["docker", "network", "inspect", WORKER_NETWORK], timeout=30)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return False
+        return True
+
     def container_config(self, name, image, previous, release_root=None):
         """Compute and validate one replacement's Docker create body; no Docker effects."""
         # Docker engine JSON preserves the inspected container configuration,
@@ -2858,7 +2934,9 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                                   if m.get("Target") in release.ABILITY_TARGETS), "/opt/v3/abilities")
                 env.extend(("V3_UI_ROOT=/opt/v3/assets/current/v3/ui",
                             "V3_ABILITIES_ROOT=" + abilities))
-                config["Env"] = env
+                # Stream D4: the external-worker layout, only while the switch is on and the host is
+                # ready; otherwise the API's launcher starts its own worker as before.
+                config["Env"] = external_worker_env(env, name, self.worker_external_ready())
                 job=getattr(self.job_context,"job",None)or{}
                 if not re.fullmatch(r"[a-f0-9-]{36}",job.get("job_id","")):raise ValueError("Attributable release container required")
                 config["Labels"]={**(config.get("Labels")or{}),"webagent.release.job":job["job_id"],
@@ -8062,6 +8140,7 @@ class Broker:
                         if not self.runner.healthy(name, job["images"][role]):
                             raise RuntimeError("replacement V3 " + role + " not healthy; rollback material retained")
                 self._sync_browser(job)
+                self._sync_worker(job)
                 if self.runner.ui_hot_swappable():
                     self.runner.promote_live_ui(self._current_release_blob(), blob, job.get("changed_paths", ()), self._task_base(job))
                     self._phase(job, "checking_ui")
@@ -8146,6 +8225,68 @@ class Broker:
                 if job["status"] not in ("uncertain", "interrupted"):
                     self._start_next()
 
+    def _sync_worker(self, job):
+        """Make the worker container follow the API (stream D4): on the API's image while the API runs
+        the external-worker layout (`V3_EXTERNAL_WORKER=1`), stopped otherwise, so a rollback to an API
+        that starts its own worker leaves this one stopped. Never raises and never fails a release;
+        the outcome is `job["worker_sync"]`. Keeps one previous worker container for restoring."""
+        runner = self.runner
+        if not hasattr(runner, "inspect_recovery"):
+            return
+        job_id = job["job_id"]
+        backup, candidate = WORKER + "-pre-build-" + job_id, WORKER + "-candidate-build-" + job_id
+        moved = started = False
+        try:
+            api = runner.inspect(TARGETS[0])
+            external = "V3_EXTERNAL_WORKER=1" in (api.get("Config", {}).get("Env") or [])
+            previous = runner.inspect_recovery(WORKER)
+            if not external:
+                if previous is not None and previous.get("State", {}).get("Running"):
+                    runner.stop(WORKER, 15)
+                    job["worker_sync"] = {"status": "stopped"}
+                else:
+                    job["worker_sync"] = {"status": "off"}
+                return
+            image = api["Image"]
+            if previous is not None and previous["Image"] == image and previous.get("State", {}).get("Running"):
+                job["worker_sync"] = {"status": "current", "image": image}
+                return
+            with host_phase(job, "syncing_worker"):
+                runner.create_body(worker_container_body(api, image), candidate)
+                if previous is not None:
+                    runner.stop(WORKER, 15)
+                    runner.rename(WORKER, backup)
+                    moved = True
+                runner.rename(candidate, WORKER)
+                started = True
+                runner.start(WORKER)
+                if not runner.healthy(WORKER, image):
+                    raise RuntimeError("worker container not healthy on the new image")
+            job["worker_sync"] = {"status": "completed", "image": image, **({"rollback": backup} if moved else {})}
+            # Older worker backups are not needed: one previous container is enough to restore.
+            for line in runner.command(["docker", "ps", "--all", "--format", "{{.Names}}", "--filter",
+                                        "name=^/" + WORKER + "-pre-build-"], timeout=30).splitlines():
+                if line.strip() and line.strip() != backup:
+                    runner.remove(line.strip())
+        except Exception as error:
+            reason = scrub(str(error), runner.secrets)[:300]
+            restored = False
+            try:
+                if started:
+                    runner.stop(WORKER, 15)
+                    runner.rename(WORKER, WORKER + "-failed-build-" + job_id)
+                elif runner.inspect_recovery(candidate) is not None:
+                    runner.rename(candidate, WORKER + "-failed-build-" + job_id)
+                if moved:
+                    runner.rename(backup, WORKER)
+                    runner.start(WORKER)
+                    restored = True
+            except Exception as restore_error:
+                reason += "; restore failed: " + scrub(str(restore_error), runner.secrets)[:200]
+            job["worker_sync"] = {"status": "failed", "reason": reason, "restored": restored}
+        finally:
+            self._save(job)
+
     def _sync_browser(self, job):
         """Move the browser container onto the image the API now runs, keeping its own
         configuration; restore it on failure. Never raises: the outcome is recorded in
@@ -8204,6 +8345,7 @@ class Broker:
                 result = self.ui_publication.auto_restore_backend(job)
                 outcome = {"status": "restored", "restored_release_id": result.get("restored_release_id")}
                 self._sync_browser(job)
+                self._sync_worker(job)
                 note = "; the captured predecessor containers were restored automatically and the candidates quarantined"
             except Exception as restore_error:
                 outcome = {"status": "failed", "reason": scrub(str(restore_error), self.runner.secrets)[:300]}
