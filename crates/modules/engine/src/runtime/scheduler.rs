@@ -314,20 +314,38 @@ impl<
             });
             let background = tokio::spawn(app.clone().background_service());
             let keep_alive = tokio::spawn(app.clone().keep_alive_service());
-            let owner = uuid();
+            // The loop process's owner id, admitted by the member fence at start (a fresh one
+            // when the scheduler runs without it, as in tests).
+            let owner = crate::partition::member_owner().unwrap_or_else(uuid);
             let heartbeat_app = app.clone();
             let heartbeat_owner = owner.clone();
+            let member = crate::partition::own().unwrap_or_default();
             let heartbeat = tokio::spawn(async move {
                 loop {
                     if heartbeat_app.stop.is_cancelled() {
                         break;
                     }
-                    if let Err(error) = crate::send_future(
-                        heartbeat_app.store.write_loop_heartbeat(&heartbeat_owner),
-                    )
+                    match crate::send_future(heartbeat_app.store.beat_loop_member(
+                        member,
+                        &heartbeat_owner,
+                        crate::partition::MemberState::Serving,
+                    ))
                     .await
                     {
-                        tracing::error!("Loop heartbeat failed: {error}");
+                        Ok(true) => {}
+                        // A loop started with another count is alive: stop serving at once so
+                        // no account is served by two loops; the supervisor restarts this one
+                        // and the fence holds it until the count agrees.
+                        Ok(false) => {
+                            tracing::error!(
+                                index = member.index,
+                                loops = member.loops,
+                                "A live loop runs with a different loop count; stopping"
+                            );
+                            heartbeat_app.stop.cancel();
+                            break;
+                        }
+                        Err(error) => tracing::error!("Loop heartbeat failed: {error}"),
                     }
                     tokio::select! {_=heartbeat_app.stop.cancelled()=>break,_=tokio::time::sleep(Duration::from_secs(2))=>{}}
                 }

@@ -190,10 +190,16 @@ async fn set_up_schema(pool: SqlitePool, events: bool, runs: bool) -> Result<Sql
         crate::revisions::install_user(&pool).await?;
     }
     if events && !runs {
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS loop_heartbeat(
-            singleton INTEGER PRIMARY KEY CHECK(singleton=1),owner TEXT NOT NULL,
-            protocol_version INTEGER NOT NULL CHECK(protocol_version=1),updated_at INTEGER NOT NULL)")
-            .execute(&pool).await?;
+        // One liveness row per agent-loop process (index `idx` of `n` loops); the single-loop
+        // heartbeat table it replaced is dropped.
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS loop_members(
+            idx INTEGER PRIMARY KEY,n INTEGER NOT NULL,owner TEXT NOT NULL,
+            started_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,serving INTEGER NOT NULL);
+            DROP TABLE IF EXISTS loop_heartbeat",
+        )
+        .execute(&pool)
+        .await?;
     }
     if runs {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS action_lock(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL); INSERT OR IGNORE INTO action_lock VALUES(1,0); CREATE TABLE IF NOT EXISTS action_index(id TEXT PRIMARY KEY,resource TEXT NOT NULL,intent_key TEXT NOT NULL,state TEXT NOT NULL); CREATE INDEX IF NOT EXISTS action_intent ON action_index(resource,intent_key);").execute(&pool).await?;

@@ -96,8 +96,8 @@ impl<
     pub async fn scheduler_runs(&self) -> Result<Vec<(String, String)>> {
         self.repository().scheduler_runs().await
     }
-    pub async fn run_lease_until(&self, rid: &str) -> Result<Option<i64>> {
-        self.repository().run_lease_until(rid).await
+    pub async fn run_lease(&self, rid: &str) -> Result<crate::repository::RunLease> {
+        self.repository().run_lease(rid).await
     }
     pub async fn renew_run_lease(
         &self,
@@ -110,14 +110,18 @@ impl<
             .renew_run_lease(rid, generation, owner, epoch)
             .await
     }
-    pub async fn write_loop_heartbeat(&self, owner: &str) -> Result<()> {
-        self.repository().write_loop_heartbeat(owner).await
+    pub async fn beat_loop_member(
+        &self,
+        member: crate::partition::Member,
+        owner: &str,
+        state: crate::partition::MemberState,
+    ) -> Result<bool> {
+        self.repository()
+            .beat_loop_member(member, owner, state)
+            .await
     }
-    pub async fn loop_fresh(&self, seconds: i64) -> Result<bool> {
-        self.repository().loop_fresh(seconds).await
-    }
-    pub async fn clear_loop_heartbeat(&self) -> Result<()> {
-        self.repository().clear_loop_heartbeat().await
+    pub async fn live_loop_owners(&self, except: Option<u32>) -> Result<Vec<String>> {
+        self.repository().live_loop_owners(except).await
     }
     pub async fn acknowledge_loop_commands(&self) -> Result<usize> {
         self.repository().acknowledge_loop_commands().await

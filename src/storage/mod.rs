@@ -233,7 +233,11 @@ impl Store {
         store.pin_conversation_privacy().await?;
         webagent_engine::due::schema(&store.app_pool).await?;
         webagent_engine::usage_ledger::schema(&store.app_pool).await?;
-        for user in store.all_user_ids().await? {
+        // A loop process opens (and migrates) only the accounts it serves; the API opens every
+        // account.
+        let mut users = store.all_user_ids().await?;
+        webagent_engine::partition::retain_owned(&mut users);
+        for user in users {
             store.for_user(&user).await?;
             // Migrated; close the pool so start-up does not keep a connection per account.
             if user != "admin" {
@@ -1467,17 +1471,30 @@ impl Store {
             .renew_run_lease(rid, generation, owner, epoch)
             .await
     }
-    /// Publish the current loop owner liveness using the fixed heartbeat protocol.
-    pub async fn write_loop_heartbeat(&self, owner: &str) -> Result<()> {
-        self.engine_repository().write_loop_heartbeat(owner).await
+    /// Join or renew this loop's member row; `false` while a live loop runs with another count.
+    pub async fn beat_loop_member(
+        &self,
+        member: webagent_engine::partition::Member,
+        owner: &str,
+        state: webagent_engine::partition::MemberState,
+    ) -> Result<bool> {
+        self.engine_repository()
+            .beat_loop_member(member, owner, state)
+            .await
     }
-    /// Check whether a compatible loop heartbeat is within the caller allowed age.
-    pub async fn loop_fresh(&self, seconds: i64) -> Result<bool> {
-        self.engine_repository().loop_fresh(seconds).await
+    /// The loop count when every loop of it is live (readiness), else `None`.
+    pub async fn loops_ready(&self) -> Result<Option<u32>> {
+        self.engine_repository().loops_ready().await
     }
-    /// Invalidate recorded loop liveness without deleting its protocol or owner identity.
-    pub async fn clear_loop_heartbeat(&self) -> Result<()> {
-        self.engine_repository().clear_loop_heartbeat().await
+    /// Remove this loop's member row at the end of its drain.
+    pub async fn leave_loop_members(
+        &self,
+        member: webagent_engine::partition::Member,
+        owner: &str,
+    ) -> Result<()> {
+        self.engine_repository()
+            .leave_loop_members(member, owner)
+            .await
     }
     // Validate and mark accepted commands as seen. The queued run remains the
     // authority for execution, so acknowledging a command does not erase work.

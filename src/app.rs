@@ -941,11 +941,16 @@ async fn run_process() -> Result<()> {
     if role == "health" {
         let url = format!("sqlite://{}?mode=ro", root.join("db/app.db").display());
         let pool = sqlx::SqlitePool::connect(&url).await?;
-        let age:Option<i64>=sqlx::query_scalar(
-            "SELECT CAST(strftime('%s','now') AS INTEGER)-updated_at FROM loop_heartbeat WHERE singleton=1 AND protocol_version=1")
-            .fetch_optional(&pool).await?;
+        // Healthy when every loop 0..n has a serving member row younger than 10 s and all live
+        // rows agree on n (the same rule as the API's readiness).
+        let counts: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT n,sum(serving) FROM loop_members
+            WHERE updated_at BETWEEN unixepoch()-10 AND unixepoch() AND idx<n GROUP BY n",
+        )
+        .fetch_all(&pool)
+        .await?;
         pool.close().await;
-        return if age.is_some_and(|age| age >= 0 && age <= 10) {
+        return if matches!(counts.as_slice(), [(loops, live)] if loops == live) {
             Ok(())
         } else {
             Err(anyhow!("V3 loop heartbeat is stale"))
@@ -956,8 +961,19 @@ async fn run_process() -> Result<()> {
         return Err(anyhow!("Invalid v3 process role"));
     }
     let desktop = role == "desktop";
+    // A loop process is loop `V3_LOOP_INDEX` of `V3_LOOPS` (one loop by default) and serves
+    // only its share of the accounts; it must know that before it opens any (see
+    // `webagent_engine::partition`). A desktop process is the one loop.
+    let member = match role.as_str() {
+        "loop" => Some(webagent_engine::partition::Member::from_environment()?),
+        "desktop" => Some(webagent_engine::partition::Member::default()),
+        _ => None,
+    };
+    if let Some(member) = member {
+        webagent_engine::partition::join(member);
+    }
     std::fs::create_dir_all(&root)?;
-    // One loop per installation: the lock is runtime coordination, never kept in state.
+    // One process per loop index: the lock is runtime coordination, never kept in state.
     // The container launcher (`--launch`) creates the control files; a desktop process
     // has no launcher, so it creates any that are missing (dispatch starts switched on).
     if desktop {
@@ -969,13 +985,18 @@ async fn run_process() -> Result<()> {
             }
         }
     }
-    let lock = if role == "loop" || desktop {
+    let lock = if let Some(member) = member {
         std::fs::create_dir_all(control_root())?;
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(control_root().join("loop.lock"))?;
+            .open(
+                control_root().join(webagent_engine::partition::indexed_name(
+                    "loop.lock",
+                    member.index,
+                )),
+            )?;
         lock.try_lock()
             .map_err(|_| anyhow!("Another v3 loop owns this state"))?;
         Some(lock)
@@ -1114,14 +1135,43 @@ async fn serve_loop(app: App, lock: Option<std::fs::File>, stop: CancellationTok
     let progress = agent_loop::watchdog::Progress::new();
     let _watchdog = agent_loop::watchdog::Watchdog::start(progress.clone())?;
     restore_worker_control(&app).await?;
+    let member = webagent_engine::partition::own().unwrap_or_default();
+    let owner = uuid();
+    let mut signal = webagent_platform::signal::terminate()?;
+    // The member fence: serve nothing while a live loop of another index runs with a different
+    // loop count (an old process during a count change), so no account is served twice.
+    loop {
+        progress.at(agent_loop::watchdog::Stage::Startup);
+        let starting = webagent_engine::partition::MemberState::Starting;
+        match app.store.beat_loop_member(member, &owner, starting).await {
+            Ok(true) => break,
+            Ok(false) => tracing::warn!(
+                index = member.index,
+                loops = member.loops,
+                "A live loop runs with a different loop count; waiting"
+            ),
+            Err(error) => tracing::error!("Loop member fence unavailable: {error}"),
+        }
+        tokio::select! {
+            _=signal.recv()=>return Ok(()),
+            _=tokio::signal::ctrl_c()=>return Ok(()),
+            _=stop.cancelled()=>return Ok(()),
+            _=tokio::time::sleep(Duration::from_secs(2))=>{}
+        }
+    }
+    webagent_engine::partition::set_member_owner(&owner);
     recover(&app, true).await?;
     app.ready.store(true, Ordering::Release);
     let slots = app.store.clone();
     tokio::spawn(async move { slots.prime_requester_slots().await });
     // Load the local inference model and embed the skill catalog before the first message;
-    // best effort, so a failure only slows the first list_skills.
+    // best effort, so a failure only slows the first list_skills. Loop 0 only: the model is
+    // loaded once for the installation, not once per loop.
     let warm = app.clone();
     tokio::spawn(async move {
+        if member.index != 0 {
+            return;
+        }
         let started = std::time::Instant::now();
         match crate::tools::core_skills::warm_inference(&warm).await {
             Some(items) => tracing::info!(
@@ -1136,7 +1186,6 @@ async fn serve_loop(app: App, lock: Option<std::fs::File>, stop: CancellationTok
         app.clone(),
         progress.clone(),
     )));
-    let mut signal = webagent_platform::signal::terminate()?;
     tokio::select! {
         _=signal.recv()=>{},
         _=tokio::signal::ctrl_c()=>{},
@@ -1151,10 +1200,20 @@ async fn serve_loop(app: App, lock: Option<std::fs::File>, stop: CancellationTok
     // step, so a planned restart cuts off only calls that outlast the timeout.
     app.ready.store(false, Ordering::Release);
     // Mark this restart as planned for startup recovery, unless the broker already
-    // recorded its deploy job there.
-    let cause = app.control_dir.join("restart-cause.json");
+    // recorded its deploy job there. The broker writes loop 0's mark; another loop copies it.
+    let shared = app.control_dir.join("restart-cause.json");
+    let cause = app
+        .control_dir
+        .join(webagent_engine::partition::indexed_name(
+            "restart-cause.json",
+            member.index,
+        ));
     if !cause.exists() {
-        let _ = std::fs::write(&cause, br#"{"planned":true}"#);
+        let planned = std::fs::read(&shared)
+            .ok()
+            .filter(|_| member.index != 0)
+            .unwrap_or_else(|| br#"{"planned":true}"#.to_vec());
+        let _ = std::fs::write(&cause, planned);
     }
     let drain = Duration::from_secs(app.runtime.read().await.scheduler.drain_timeout_seconds);
     let started = tokio::time::Instant::now();
@@ -1192,7 +1251,7 @@ async fn serve_loop(app: App, lock: Option<std::fs::File>, stop: CancellationTok
     for token in app.active.lock().await.values() {
         token.cancel();
     }
-    let _ = app.store.clear_loop_heartbeat().await;
+    let _ = app.store.leave_loop_members(member, &owner).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     app.store.pool.close().await;
     app.store.agent_pool.close().await;

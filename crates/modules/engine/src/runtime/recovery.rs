@@ -9,6 +9,7 @@ use super::ports::{
 use super::Runtime;
 use crate::context::abilities::Catalog;
 use crate::ports::{AdmissionEffects, ChatEffects, NotificationEffects, ToolJournal, UsageEffects};
+use crate::repository::RunLease;
 use crate::tools;
 use crate::{now, status};
 use anyhow::bail;
@@ -354,7 +355,8 @@ impl<
         if notes.is_empty() {
             return Ok(());
         }
-        let users = app.user_ids(true).await?;
+        // The owning session may be in any account, whichever loop serves it.
+        let users = app.store.all_user_ids().await?;
         let now = now();
         let mut marks = Vec::new();
         let mut woken = std::collections::BTreeSet::new();
@@ -765,11 +767,12 @@ impl<
             ),
         )
     }
-    /// A planned restart's mark (`restart-cause.json` in the control directory): written by
-    /// the loop on SIGTERM, or first by the broker with its deploy job and owning session.
-    /// Startup recovery deletes it, so a later crash is never mistaken for a planned restart.
+    /// A planned restart's mark (`restart-cause.json` in the control directory, loop k's
+    /// `restart-cause-k.json`): written by the loop on SIGTERM, or first by the broker with its
+    /// deploy job and owning session (other loops copy that one into their own). Startup
+    /// recovery deletes it, so a later crash is never mistaken for a planned restart.
     fn restart_cause(app: &Self) -> Option<Value> {
-        let path = app.handles.control_dir.join("restart-cause.json");
+        let path = app.handles.control_dir.join(restart_cause_name());
         serde_json::from_slice::<Value>(&std::fs::read(path).ok()?)
             .ok()
             .filter(Value::is_object)
@@ -811,6 +814,11 @@ impl<
                 }
             }
         };
+        // Which loop processes are alive, read once when a running run is first met: start-up
+        // counts only other loops (this index's previous process is gone, whatever its row
+        // says); a periodic pass also counts this process itself.
+        let mut live: Option<Vec<String>> = None;
+        let own = crate::partition::own().unwrap_or_default();
         for user in app.user_ids(startup).await? {
             let user_app = match app.for_user_view(&user).await {
                 Ok(view) => view,
@@ -848,18 +856,34 @@ impl<
                 {
                     continue;
                 }
-                // Periodic recovery takes back a `running` run only after its lease expired: the
-                // loop that claimed it renews the lease every 5 s, so a run another loop process
-                // is still executing is left alone. Start-up recovery is unchanged while only one
-                // loop exists. A failed lease read skips the run until the next pass.
-                if !startup && status(&view) == "running" {
-                    match user_app.store.run_lease_until(id).await {
-                        Ok(until) if !lease_lost(until, now() as i64) => continue,
-                        Ok(_) => {}
+                // A `running` run is taken back only when its lease lapsed or the loop holding it
+                // is not a live member: a loop renews its runs' leases every 5 s, so a run another
+                // live loop is executing is left alone. A failed read skips it until next pass.
+                if status(&view) == "running" {
+                    let lease = match user_app.store.run_lease(id).await {
+                        Ok(lease) => lease,
                         Err(error) => {
                             tracing::warn!(run_id = %id, %error, "Run lease unreadable; recovery retries next pass");
                             continue;
                         }
+                    };
+                    if live.is_none() {
+                        let except = startup.then_some(own.index);
+                        match app.store.live_loop_owners(except).await {
+                            Ok(mut owners) => {
+                                if !startup {
+                                    owners.extend(crate::partition::member_owner());
+                                }
+                                live = Some(owners);
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "Loop members unreadable; recovery retries next pass");
+                                continue;
+                            }
+                        }
+                    }
+                    if !lease_lost(&lease, now() as i64, live.as_deref().unwrap_or_default()) {
+                        continue;
                     }
                 }
                 let mut run = user_app.run(id).await?;
@@ -1008,11 +1032,14 @@ impl<
             }
             Self::follow_detached_builds(&user_app).await?;
         }
-        if let Err(error) = Self::follow_board(app).await {
-            tracing::warn!("Board note delivery deferred: {error:#}");
+        // Board notes are delivered once for the installation, by loop 0.
+        if own.index == 0 {
+            if let Err(error) = Self::follow_board(app).await {
+                tracing::warn!("Board note delivery deferred: {error:#}");
+            }
         }
         if startup {
-            let _ = std::fs::remove_file(app.handles.control_dir.join("restart-cause.json"));
+            let _ = std::fs::remove_file(app.handles.control_dir.join(restart_cause_name()));
         }
         Ok(())
     }
@@ -1179,11 +1206,22 @@ enum BuildPoll {
     Waiting(Option<Value>),
 }
 
-/// Whether a `running` run's lease, ending at `until` (unix seconds, from the run index), has
-/// lapsed at `now`: the same bound the save fence uses (`until < now`). A run with no index
-/// row counts as lapsed, as every unexecuted running run did before this guard.
-pub(crate) fn lease_lost(until: Option<i64>, now: i64) -> bool {
-    until.is_none_or(|until| until < now)
+/// Whether recovery may take back a `running` run: its lease (from the run index) has lapsed at
+/// `now`, the same bound the save fence uses (`until < now`), or the loop process holding it is
+/// not among `live_owners`. A run with no index row counts as lapsed, as every unexecuted
+/// running run did before this guard.
+pub(crate) fn lease_lost(lease: &RunLease, now: i64, live_owners: &[String]) -> bool {
+    lease.until.is_none_or(|until| until < now)
+        || lease
+            .owner
+            .as_ref()
+            .is_none_or(|owner| !live_owners.contains(owner))
+}
+
+/// This loop's restart mark in the control directory (loop 0: `restart-cause.json`).
+pub fn restart_cause_name() -> String {
+    let index = crate::partition::own().unwrap_or_default().index;
+    crate::partition::indexed_name("restart-cause.json", index)
 }
 
 #[cfg(test)]
@@ -1191,15 +1229,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn periodic_recovery_takes_back_a_running_run_only_after_its_lease_lapsed() {
+    fn recovery_takes_back_a_running_run_only_after_its_lease_lapsed_or_its_loop_died() {
         let now = 1_000;
-        // The owning loop renews every 5 s for 30 s: a held lease keeps the run with it.
-        assert!(!lease_lost(Some(now + 30), now));
-        assert!(!lease_lost(Some(now), now));
+        let live = vec!["loop-a".to_owned()];
+        let lease = |until: Option<i64>, owner: Option<&str>| RunLease {
+            until,
+            owner: owner.map(str::to_owned),
+        };
+        // The owning loop is alive and renews every 5 s for 30 s: the run stays with it.
+        assert!(!lease_lost(
+            &lease(Some(now + 30), Some("loop-a")),
+            now,
+            &live
+        ));
+        assert!(!lease_lost(&lease(Some(now), Some("loop-a")), now, &live));
         // Lapsed (the loop task died without settling) or never indexed: take it back.
-        assert!(lease_lost(Some(now - 1), now));
-        assert!(lease_lost(Some(0), now));
-        assert!(lease_lost(None, now));
+        assert!(lease_lost(
+            &lease(Some(now - 1), Some("loop-a")),
+            now,
+            &live
+        ));
+        assert!(lease_lost(&lease(Some(0), Some("loop-a")), now, &live));
+        assert!(lease_lost(&lease(None, None), now, &live));
+        // Held by a loop that is no longer a live member: take it back without waiting.
+        assert!(lease_lost(
+            &lease(Some(now + 30), Some("loop-b")),
+            now,
+            &live
+        ));
+        assert!(lease_lost(&lease(Some(now + 30), None), now, &live));
+        assert!(lease_lost(&lease(Some(now + 30), Some("loop-a")), now, &[]));
     }
 
     #[test]

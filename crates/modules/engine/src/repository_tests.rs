@@ -666,7 +666,10 @@ async fn recovery_reads_a_claimed_runs_lease_from_the_plain_index() {
     let f = Fixture::new().await;
     let mut run = f.initial().await;
     let r = f.repo();
-    assert_eq!(r.run_lease_until("missing").await.unwrap(), None);
+    assert_eq!(
+        r.run_lease("missing").await.unwrap(),
+        crate::repository::RunLease::default()
+    );
     assert!(r
         .claim_run(&mut run, "loop-a", "generation-a")
         .await
@@ -675,16 +678,20 @@ async fn recovery_reads_a_claimed_runs_lease_from_the_plain_index() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    let until = r.run_lease_until("r").await.unwrap();
-    // A live claim: periodic recovery in another loop must leave it alone.
-    assert!(until.is_some_and(|until| until >= now + 25));
-    assert!(!crate::runtime::recovery::lease_lost(until, now));
+    let lease = r.run_lease("r").await.unwrap();
+    let live = vec!["loop-a".to_owned()];
+    // A live claim by a live loop: recovery in another loop must leave it alone.
+    assert_eq!(lease.owner.as_deref(), Some("loop-a"));
+    assert!(lease.until.is_some_and(|until| until >= now + 25));
+    assert!(!crate::runtime::recovery::lease_lost(&lease, now, &live));
+    // Its loop is gone: taken back at once.
+    assert!(crate::runtime::recovery::lease_lost(&lease, now, &[]));
     // The owner stopped renewing and the lease lapsed: recovery may take it back.
     sqlx::query("UPDATE run_index SET lease_expires_at=? WHERE id='r'")
         .bind(now - 1)
         .execute(&f.pool)
         .await
         .unwrap();
-    let until = r.run_lease_until("r").await.unwrap();
-    assert!(crate::runtime::recovery::lease_lost(until, now));
+    let lease = r.run_lease("r").await.unwrap();
+    assert!(crate::runtime::recovery::lease_lost(&lease, now, &live));
 }

@@ -1245,12 +1245,19 @@ async fn startup_resume_setting_stops_safe_runs_and_settled_writes() {
     let settled = app.run(&write_id).await.unwrap();
     assert_eq!(settled["status"], "stopped");
     assert_eq!(settled["uncertain"], false);
-    // Non-startup recovery leaves a running run alone while its lease is held (another loop
-    // process may be executing it) and repairs it once the lease expired.
+    // Non-startup recovery leaves a running run alone while its lease is held by a live loop
+    // (another loop process is executing it) and repairs it once the lease expired.
+    sqlx::query("INSERT INTO loop_members(idx,n,owner,started_at,updated_at,serving) VALUES(1,2,'fixture-loop',unixepoch(),unixepoch(),1)")
+        .execute(&app.store.app_pool)
+        .await
+        .unwrap();
     let sid3 = conversation(&app).await;
     let lease_id = queued(&app, &sid3).await;
     running(&app, &lease_id, "lease-generation").await;
     recover(&app, false).await.unwrap();
+    assert_eq!(app.run(&lease_id).await.unwrap()["status"], "running");
+    // Start-up recovery of loop 0 also leaves another live loop's run alone.
+    recover(&app, true).await.unwrap();
     assert_eq!(app.run(&lease_id).await.unwrap()["status"], "running");
     sqlx::query("UPDATE run_index SET lease_expires_at=lease_expires_at-60 WHERE id=?")
         .bind(&lease_id)
@@ -1259,6 +1266,16 @@ async fn startup_resume_setting_stops_safe_runs_and_settled_writes() {
         .unwrap();
     recover(&app, false).await.unwrap();
     assert_eq!(app.run(&lease_id).await.unwrap()["status"], "queued");
+    // A run whose loop is no longer a live member is taken back before its lease lapses.
+    let sid4 = conversation(&app).await;
+    let orphan_id = queued(&app, &sid4).await;
+    running(&app, &orphan_id, "orphan-generation").await;
+    sqlx::query("UPDATE loop_members SET updated_at=updated_at-60")
+        .execute(&app.store.app_pool)
+        .await
+        .unwrap();
+    recover(&app, false).await.unwrap();
+    assert_eq!(app.run(&orphan_id).await.unwrap()["status"], "queued");
     // Corrupt optional configuration must not suppress mandatory classification.
     sqlx::query("UPDATE docs SET value=? WHERE key='service:boot_orphan_resume'")
         .bind(
@@ -12260,6 +12277,84 @@ async fn compaction_only_run_folds_without_a_model_call() {
 }
 
 #[tokio::test]
+async fn a_loop_started_with_another_count_waits_until_the_other_loops_are_gone() {
+    use webagent_engine::partition::{Member, MemberState};
+    const SERVING: MemberState = MemberState::Serving;
+    let (_root, app) = fixture().await;
+    let single = Member::new(0, 1).unwrap();
+    // A loop past the fence but still in its start-up recovery does not make readiness yet.
+    assert!(app
+        .store
+        .beat_loop_member(single, "single", MemberState::Starting)
+        .await
+        .unwrap());
+    assert_eq!(app.store.loops_ready().await.unwrap(), None);
+    let (first, second) = (Member::new(0, 2).unwrap(), Member::new(1, 2).unwrap());
+    assert!(app
+        .store
+        .beat_loop_member(single, "single", SERVING)
+        .await
+        .unwrap());
+    assert_eq!(app.store.loops_ready().await.unwrap(), Some(1));
+    // Loop 1 of 2 is refused while the single loop lives.
+    assert!(!app
+        .store
+        .beat_loop_member(second, "pair-1", SERVING)
+        .await
+        .unwrap());
+    assert_eq!(app.store.loops_ready().await.unwrap(), Some(1));
+    // Loop 0 of 2 holds index 0's lock, so the single loop's row is a dead process's: replaced.
+    assert!(app
+        .store
+        .beat_loop_member(first, "pair-0", SERVING)
+        .await
+        .unwrap());
+    // Not ready until loop 1 of 2 is live too.
+    assert_eq!(app.store.loops_ready().await.unwrap(), None);
+    assert!(app
+        .store
+        .beat_loop_member(second, "pair-1", SERVING)
+        .await
+        .unwrap());
+    assert_eq!(app.store.loops_ready().await.unwrap(), Some(2));
+    let repository = app.store.engine_repository();
+    assert_eq!(
+        repository.live_loop_owners(Some(0)).await.unwrap(),
+        vec!["pair-1".to_owned()]
+    );
+    // A one-loop process starting now is refused while loop 1 of 2 lives.
+    assert!(!app
+        .store
+        .beat_loop_member(single, "single-again", SERVING)
+        .await
+        .unwrap());
+    // Stale rows do not count: the loops stopped renewing more than 10 s ago.
+    sqlx::query("UPDATE loop_members SET updated_at=updated_at-60")
+        .execute(&app.store.app_pool)
+        .await
+        .unwrap();
+    assert_eq!(app.store.loops_ready().await.unwrap(), None);
+    assert!(repository.live_loop_owners(None).await.unwrap().is_empty());
+    assert!(app
+        .store
+        .beat_loop_member(single, "single-again", SERVING)
+        .await
+        .unwrap());
+    assert_eq!(app.store.loops_ready().await.unwrap(), Some(1));
+    // Leaving at the end of a drain removes only the leaver's own row.
+    app.store
+        .leave_loop_members(single, "someone-else")
+        .await
+        .unwrap();
+    assert_eq!(app.store.loops_ready().await.unwrap(), Some(1));
+    app.store
+        .leave_loop_members(single, "single-again")
+        .await
+        .unwrap();
+    assert_eq!(app.store.loops_ready().await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn loop_liveness_does_not_wait_for_the_shared_application_pool() {
     let (_root, app) = fixture().await;
     // Every slot of the shared application pool is busy, as under heavy load.
@@ -12268,14 +12363,23 @@ async fn loop_liveness_does_not_wait_for_the_shared_application_pool() {
         held.push(app.store.app_pool.acquire().await.unwrap());
     }
     let limit = std::time::Duration::from_secs(10);
-    tokio::time::timeout(limit, app.store.write_loop_heartbeat("liveness-owner"))
-        .await
-        .expect("heartbeat waited for the shared pool")
-        .unwrap();
-    assert!(tokio::time::timeout(limit, app.store.loop_fresh(30))
-        .await
-        .expect("readiness waited for the shared pool")
-        .unwrap());
+    let member = webagent_engine::partition::Member::default();
+    let serving = webagent_engine::partition::MemberState::Serving;
+    assert!(tokio::time::timeout(
+        limit,
+        app.store
+            .beat_loop_member(member, "liveness-owner", serving)
+    )
+    .await
+    .expect("heartbeat waited for the shared pool")
+    .unwrap());
+    assert_eq!(
+        tokio::time::timeout(limit, app.store.loops_ready())
+            .await
+            .expect("readiness waited for the shared pool")
+            .unwrap(),
+        Some(1)
+    );
     drop(held);
 }
 

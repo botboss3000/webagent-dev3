@@ -1030,12 +1030,15 @@ impl<
     /// in turn ([`Self::for_user_view`]) and lets it go before the next, so the storage bound on
     /// connected account databases can close the idle ones; a list of views of every account
     /// held a thread per account open and reached the loop's 1,024-task limit.
+    /// Only the accounts this loop process serves (see [`crate::partition`]).
     pub async fn user_ids(&self, every: bool) -> Result<Vec<String>> {
-        if every {
-            self.store.all_user_ids().await
+        let mut users = if every {
+            self.store.all_user_ids().await?
         } else {
-            self.store.scan_user_ids().await
-        }
+            self.store.scan_user_ids().await?
+        };
+        crate::partition::retain_owned(&mut users);
+        Ok(users)
     }
 }
 /// C8: how long an account whose visit finished is taken as it was while nothing is written

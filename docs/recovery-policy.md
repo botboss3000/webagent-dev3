@@ -187,12 +187,24 @@ startup resume is disabled; explicit resume required"), the shutoff is on, the m
 authorized, or the chat's participation changed.
 
 While running, the loop repeats this check every `scheduler.recovery_interval_ms` = 10000 for runs
-marked running that no process is executing. A run whose processing errors three times on the same
+marked running that no process is executing: a running run is taken back only when its lease has
+lapsed (the owning loop renews it every 5 s for 30 s) or its lease owner is not a live loop member.
+Start-up recovery takes back every running run of the loop's own accounts except one leased to a
+live loop of another index. A run whose processing errors three times on the same
 turn pauses with "Paused after 3 failed attempts".
 
-**Unexpected hangs.** The loop writes a heartbeat every 2 seconds. Its watchdog warns after 120
-seconds without progress and exits after 180 seconds so that Docker restarts it. `/health/ready`
-fails when the loop heartbeat is older than 10 seconds. Host-level recovery of unhealthy
+**Unexpected hangs.** Each loop process writes its row in `loop_members` (`app.db`) every 2
+seconds. Its watchdog warns after 120 seconds without progress and exits after 180 seconds so that
+Docker restarts it. `/health/ready` and the loop container's health check fail unless every loop
+`0..n` has a serving row (written once its start-up recovery is done) younger than 10 seconds
+and all live rows agree on `n`.
+
+**Several loop processes.** Loop `k` of `n` (`V3_LOOP_INDEX`, `V3_LOOPS`; one loop by default)
+serves only the accounts whose id hashes to it (`webagent_engine::partition`; the administrator is
+always loop 0, with board notes and the local model warm-up). It keeps its own lock
+(`loop-k.lock`), wake socket (`dispatch-wake-k.sock`) and restart mark (`restart-cause-k.json`);
+loop 0 keeps the single-loop names. A loop does not start while a live loop of another index runs
+with a different `n`, and stops when one appears. Host-level recovery of unhealthy
 containers is described in `docs/boot-supervisor.md`.
 
 **Background work after a restart.**

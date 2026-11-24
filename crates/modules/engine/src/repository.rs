@@ -1,5 +1,6 @@
 //! Engine-owned run checkpoints, generation/lease fencing and durable dispatcher protocol.
 //! All foreign-owner effects use the caller's existing SQL transaction.
+use crate::partition::{Member, MemberState};
 use crate::ports::{AdmissionEffects, ChatEffects, NotificationEffects, Records, UsageEffects};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -21,6 +22,18 @@ fn index_status(run: &Value) -> &str {
     }
 }
 /// Notification shown when an external effect may have happened before the run ended.
+/// A loop member row younger than this (seconds) is live; the heartbeat writes every 2 s.
+pub const MEMBER_FRESH_SECONDS: i64 = 10;
+
+/// A claimed run's lease as the plain run index records it (`None` when the run has no row).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunLease {
+    /// When the lease ends (unix seconds).
+    pub until: Option<i64>,
+    /// The loop process (its member owner id) that holds it.
+    pub owner: Option<String>,
+}
+
 const UNCERTAIN_NOTE: &str = "May have partly run; check before retrying";
 
 /// The session flag a settled run leaves: the closing status after a normal finish,
@@ -1247,16 +1260,17 @@ impl<
         }
     }
 
-    /// When a run's lease ends (unix seconds), from the plain run index alone (no decrypt);
-    /// `None` when the run has no index row. Periodic recovery reads it before taking back a
-    /// `running` run, so it never requeues one whose owning loop is still renewing it.
-    pub async fn run_lease_until(&self, rid: &str) -> Result<Option<i64>> {
-        Ok(
-            sqlx::query_scalar("SELECT lease_expires_at FROM run_index WHERE id=?")
+    /// A claimed run's lease from the plain run index alone (no decrypt): when it ends (unix
+    /// seconds) and which loop process holds it. Recovery reads it before taking back a
+    /// `running` run, so it never requeues one whose owning loop is alive and renewing it.
+    pub async fn run_lease(&self, rid: &str) -> Result<RunLease> {
+        let row: Option<(Option<i64>, Option<String>)> =
+            sqlx::query_as("SELECT lease_expires_at,lease_owner FROM run_index WHERE id=?")
                 .bind(rid)
                 .fetch_optional(self.pool)
-                .await?,
-        )
+                .await?;
+        let (until, owner) = row.unwrap_or_default();
+        Ok(RunLease { until, owner })
     }
 
     pub async fn renew_run_lease(
@@ -1316,23 +1330,74 @@ impl<
         Ok(pools.lock().unwrap().entry(path).or_insert(pool).clone())
     }
 
-    pub async fn write_loop_heartbeat(&self, owner: &str) -> Result<()> {
+    /// Join, or renew, this loop process's row in `loop_members` (one row per loop index,
+    /// written every 2 s). Refused (`false`, nothing written) while a live member of another
+    /// index was started with a different loop count, since two counts would serve some
+    /// accounts twice. The caller holds its index's lock file, so an older row of its own index
+    /// belongs to a process that is gone and is replaced.
+    pub async fn beat_loop_member(
+        &self,
+        member: Member,
+        owner: &str,
+        state: MemberState,
+    ) -> Result<bool> {
         let pool = self.liveness_pool().await?;
-        sqlx::query("INSERT INTO loop_heartbeat(singleton,owner,protocol_version,updated_at) VALUES(1,?,1,strftime('%s','now')) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner,protocol_version=1,updated_at=excluded.updated_at")
-            .bind(owner).execute(&pool).await?;
-        Ok(())
+        // One statement, so the check and the write are one transaction.
+        let written = sqlx::query(
+            "INSERT INTO loop_members(idx,n,owner,started_at,updated_at,serving)
+            SELECT ?1,?2,?3,unixepoch(),unixepoch(),?5 WHERE NOT EXISTS(SELECT 1 FROM loop_members
+                WHERE idx<>?1 AND n<>?2 AND updated_at BETWEEN unixepoch()-?4 AND unixepoch())
+            ON CONFLICT(idx) DO UPDATE SET n=excluded.n,owner=excluded.owner,
+                started_at=CASE WHEN owner=excluded.owner THEN started_at ELSE excluded.started_at END,
+                updated_at=excluded.updated_at,serving=excluded.serving",
+        )
+        .bind(member.index)
+        .bind(member.loops)
+        .bind(owner)
+        .bind(MEMBER_FRESH_SECONDS)
+        .bind(state == MemberState::Serving)
+        .execute(&pool)
+        .await?
+        .rows_affected();
+        Ok(written == 1)
     }
 
-    pub async fn loop_fresh(&self, seconds: i64) -> Result<bool> {
+    /// The loop count when every loop `0..n` is live and serving (past its start-up recovery)
+    /// and all live rows agree on `n`; `None` when a loop is missing, stale or still starting, or
+    /// two counts are live at once. Readiness and the loop container's health check ask this.
+    pub async fn loops_ready(&self) -> Result<Option<u32>> {
         let pool = self.liveness_pool().await?;
-        let age:Option<i64>=sqlx::query_scalar(
-            "SELECT CAST(strftime('%s','now') AS INTEGER)-updated_at FROM loop_heartbeat WHERE singleton=1 AND protocol_version=1")
-            .fetch_optional(&pool).await?;
-        Ok(age.is_some_and(|age| age >= 0 && age <= seconds))
+        let counts: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT n,sum(serving) FROM loop_members
+            WHERE updated_at BETWEEN unixepoch()-? AND unixepoch() AND idx<n GROUP BY n",
+        )
+        .bind(MEMBER_FRESH_SECONDS)
+        .fetch_all(&pool)
+        .await?;
+        Ok(match counts.as_slice() {
+            [(loops, live)] if loops == live => u32::try_from(*loops).ok(),
+            _ => None,
+        })
     }
 
-    pub async fn clear_loop_heartbeat(&self) -> Result<()> {
-        sqlx::query("UPDATE loop_heartbeat SET updated_at=0 WHERE singleton=1")
+    /// Owners (lease owner ids) of the live loop members, except loop `except` when given.
+    pub async fn live_loop_owners(&self, except: Option<u32>) -> Result<Vec<String>> {
+        let pool = self.liveness_pool().await?;
+        Ok(sqlx::query_scalar(
+            "SELECT owner FROM loop_members
+            WHERE updated_at BETWEEN unixepoch()-? AND unixepoch() AND idx IS NOT ?",
+        )
+        .bind(MEMBER_FRESH_SECONDS)
+        .bind(except)
+        .fetch_all(&pool)
+        .await?)
+    }
+
+    /// Remove this loop's member row at the end of its drain.
+    pub async fn leave_loop_members(&self, member: Member, owner: &str) -> Result<()> {
+        sqlx::query("DELETE FROM loop_members WHERE idx=? AND owner=?")
+            .bind(member.index)
+            .bind(owner)
             .execute(self.app_pool)
             .await?;
         Ok(())

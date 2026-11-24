@@ -312,7 +312,8 @@ impl Store {
     }
 
     /// Every account id, read again only when `user_accounts` gained a row (one counting
-    /// statement instead of listing every account on each scan and slot reconcile).
+    /// statement instead of listing every account on each scan and slot reconcile). In a loop
+    /// process, only the accounts it serves (see `webagent_engine::partition`).
     pub(crate) async fn account_ids(&self) -> Result<Vec<String>> {
         let version: (i64, i64) =
             sqlx::query_as("SELECT count(*),coalesce(max(rowid),0) FROM user_accounts")
@@ -326,7 +327,8 @@ impl Store {
         {
             return Ok(cached.users.clone());
         }
-        let users = self.all_user_ids().await?;
+        let mut users = self.all_user_ids().await?;
+        webagent_engine::partition::retain_owned(&mut users);
         *ACCOUNTS.lock().map_err(registry_error)? = Some(Accounts {
             root: self.root.clone(),
             version,

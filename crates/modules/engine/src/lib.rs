@@ -10,6 +10,7 @@ pub mod due;
 pub mod gates;
 pub mod model_client;
 pub mod output;
+pub mod partition;
 pub mod ports;
 pub mod publication;
 pub mod repository;

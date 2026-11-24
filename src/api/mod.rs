@@ -574,7 +574,11 @@ pub(super) fn router(app: App) -> Router {
                 && sqlx::query("SELECT 1").execute(&app.store.app_pool).await.is_ok()
                 && sqlx::query("SELECT 1").execute(&app.store.pool).await.is_ok()
                 && sqlx::query("SELECT 1").execute(&app.store.agent_pool).await.is_ok()
-                && app.store.loop_fresh(10).await.unwrap_or(false);
+                // Every loop is live; their count also routes this process's wake hints.
+                && match app.store.loops_ready().await {
+                    Ok(Some(loops)) => {webagent_engine::partition::set_routes(loops); true}
+                    _ => false,
+                };
             (if healthy{StatusCode::OK}else{StatusCode::SERVICE_UNAVAILABLE},Json(json!({"ready":healthy,"catalog_version":app.abilities.version()})))
         }))
         .merge(webagent_webapp::pages::routes(std::path::Path::new(&ui)))

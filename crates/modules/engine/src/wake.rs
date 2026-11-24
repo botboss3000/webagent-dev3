@@ -116,34 +116,54 @@ fn emit(account: Option<(&str, Kind)>) {
     }
     signal().notify_one();
 }
-fn socket(control_dir: &Path) -> PathBuf {
-    control_dir.join("dispatch-wake.sock")
+/// Loop `index`'s hint socket: loop 0 keeps `dispatch-wake.sock`, loop k `dispatch-wake-k.sock`.
+fn socket(control_dir: &Path, index: u32) -> PathBuf {
+    control_dir.join(crate::partition::indexed_name("dispatch-wake.sock", index))
 }
-async fn send(control_dir: &Path, message: Vec<u8>) {
-    let path = socket(control_dir);
+async fn send(control_dir: &Path, index: u32, message: &[u8]) {
+    let path = socket(control_dir, index);
     let _ = tokio::time::timeout(Duration::from_millis(100), async move {
         if let Ok(mut stream) = webagent_platform::ipc::connect(&path).await {
-            let _ = stream.write_all(&message).await;
+            let _ = stream.write_all(message).await;
         }
     })
     .await;
 }
-/// A hint about everything (settings and other changes that are not one account's).
+/// A hint about everything (settings and other changes that are not one account's): every
+/// loop gets it and looks at its own accounts.
 pub async fn notify(control_dir: &Path) {
     emit(None);
-    send(control_dir, b"W".to_vec()).await;
+    for index in targets(None, crate::partition::routes()) {
+        send(control_dir, index, b"W").await;
+    }
 }
-/// A hint naming one account. An id that is not a valid account id is sent as a hint about
-/// everything instead.
+/// The loops a hint goes to: the one serving the named account, or all of them.
+fn targets(user: Option<&str>, loops: u32) -> Vec<u32> {
+    match user {
+        Some(user) => vec![crate::partition::loop_for(user, loops)],
+        None => (0..loops.max(1)).collect(),
+    }
+}
+/// A hint naming one account, sent to the loop that serves it. An id that is not a valid
+/// account id is sent as a hint about everything instead. A loop process takes the hint in
+/// itself only for an account it serves.
 pub async fn notify_account(control_dir: &Path, user: &str, kind: Kind) {
     if !webagent_access::valid_id(user) || user.len() > MAX_ID {
         return notify(control_dir).await;
     }
-    emit(Some((user, kind)));
+    if crate::partition::owns(user) {
+        emit(Some((user, kind)));
+    }
+    let message = named_message(user, kind);
+    for index in targets(Some(user), crate::partition::routes()) {
+        send(control_dir, index, &message).await;
+    }
+}
+fn named_message(user: &str, kind: Kind) -> Vec<u8> {
     let mut message = vec![b'W', kind.byte()];
     message.extend_from_slice(user.as_bytes());
     message.push(b'\n');
-    send(control_dir, message).await;
+    message
 }
 /// Parse one message read from the socket: `W` alone, or `W`, a kind byte, an account id and a
 /// newline. Anything else is ignored; an invalid id is not trusted to name anything.
@@ -177,7 +197,8 @@ pub async fn listener(
         io::AsyncReadExt,
         net::{UnixListener, UnixStream},
     };
-    let path = socket(control_dir);
+    let own = crate::partition::own().unwrap_or_default();
+    let path = socket(control_dir, own.index);
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if !std::os::unix::fs::FileTypeExt::is_socket(&meta.file_type()) {
             return Err(anyhow!("Wake path is not a socket"));
@@ -190,6 +211,7 @@ pub async fn listener(
     let listener = UnixListener::bind(&path)?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
     let expected_uid = std::fs::metadata(&path)?.uid();
+    let control = control_dir.to_path_buf();
     Ok(tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -202,7 +224,15 @@ pub async fn listener(
                             stream.take((MAX_ID+3) as u64).read_to_end(&mut message)).await;
                         if read.is_ok(){
                             match parse(&message){
-                                Some(Some((user,kind)))=>emit(Some((&user,kind))),
+                                Some(Some((user,kind))) if crate::partition::owns(&user)=>emit(Some((&user,kind))),
+                                // A sender that routed over a stale loop count: pass the hint
+                                // on to the loop that serves the account (one hop).
+                                Some(Some((user,kind)))=>{
+                                    let index=crate::partition::loop_for(&user,own.loops);
+                                    if index!=own.index{
+                                        send(&control,index,&named_message(&user,kind)).await;
+                                    }
+                                }
                                 Some(None)=>emit(None),
                                 None=>{}
                             }
@@ -250,6 +280,50 @@ mod tests {
         assert_eq!(parse(b"Wxadmin\n"), None);
         assert_eq!(parse(b"Wradmin"), None);
         assert_eq!(parse(b"X"), None);
+    }
+    #[test]
+    fn named_hints_go_to_the_serving_loop_and_others_to_every_loop() {
+        assert_eq!(targets(Some("guest_ab12"), 1), vec![0]);
+        assert_eq!(targets(Some("guest_ab12"), 2), vec![1]);
+        assert_eq!(targets(Some("user_one"), 2), vec![0]);
+        assert_eq!(targets(Some("admin"), 4), vec![0]);
+        assert_eq!(targets(None, 1), vec![0]);
+        assert_eq!(targets(None, 3), vec![0, 1, 2]);
+        assert_eq!(
+            socket(Path::new("/c"), 0),
+            PathBuf::from("/c/dispatch-wake.sock")
+        );
+        assert_eq!(
+            socket(Path::new("/c"), 2),
+            PathBuf::from("/c/dispatch-wake-2.sock")
+        );
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_hint_reaches_only_the_socket_of_its_loop() {
+        use tokio::io::AsyncReadExt;
+        let dir = tempfile::tempdir().unwrap();
+        let first = tokio::net::UnixListener::bind(socket(dir.path(), 0)).unwrap();
+        let second = tokio::net::UnixListener::bind(socket(dir.path(), 1)).unwrap();
+        let message = named_message("guest_ab12", Kind::Run);
+        for index in targets(Some("guest_ab12"), 2) {
+            send(dir.path(), index, &message).await;
+        }
+        let (mut stream, _) = tokio::time::timeout(Duration::from_secs(1), second.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut received = Vec::new();
+        stream.read_to_end(&mut received).await.unwrap();
+        assert_eq!(
+            parse(&received),
+            Some(Some(("guest_ab12".into(), Kind::Run)))
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), first.accept())
+                .await
+                .is_err()
+        );
     }
     #[test]
     fn named_accounts_follow_each_cursor() {

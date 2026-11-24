@@ -290,10 +290,11 @@ async fn pools_create_plane_schema_with_profile_permissions() {
     ] {
         assert!(user_tables.iter().any(|t| t == table), "{table}");
     }
-    assert!(!user_tables.iter().any(|t| t == "loop_heartbeat"));
+    assert!(!user_tables.iter().any(|t| t == "loop_members"));
     let app_tables = tables(app.clone()).await;
     assert!(
-        app_tables.iter().any(|t| t == "loop_heartbeat")
+        app_tables.iter().any(|t| t == "loop_members")
+            && !app_tables.iter().any(|t| t == "loop_heartbeat")
             && !app_tables.iter().any(|t| t == "run_index")
     );
     let columns: Vec<String> =

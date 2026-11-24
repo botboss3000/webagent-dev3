@@ -62,19 +62,22 @@ pub async fn earlier(pool: &SqlitePool, user: &str, kind: &str, at: u64) -> Resu
     Ok(())
 }
 
-/// Accounts whose deadline of `kind` has passed by `now` (one indexed read).
+/// Accounts whose deadline of `kind` has passed by `now` (one indexed read); in a loop
+/// process, only the accounts it serves (see [`crate::partition`]).
 pub async fn passed(pool: &SqlitePool, kind: &str, now: u64) -> Result<Vec<String>> {
-    Ok(sqlx::query_scalar(
+    let mut users = sqlx::query_scalar(
         "SELECT user_id FROM account_due WHERE next_due_at<=? AND kind=? ORDER BY next_due_at",
     )
     .bind(i64::try_from(now).unwrap_or(i64::MAX))
     .bind(kind)
     .fetch_all(pool)
-    .await?)
+    .await?;
+    crate::partition::retain_owned(&mut users);
+    Ok(users)
 }
 
-/// Every stored deadline: `(account, kind, time)`. The table holds one row per account that
-/// has a deadline at all, so it stays small.
+/// Every stored deadline: `(account, kind, time)`; in a loop process, only those of the accounts
+/// it serves. The table holds one row per account that has a deadline at all, so it stays small.
 pub async fn all(pool: &SqlitePool) -> Result<Vec<(String, String, u64)>> {
     let rows: Vec<(String, String, i64)> =
         sqlx::query_as("SELECT user_id,kind,next_due_at FROM account_due")
@@ -82,6 +85,7 @@ pub async fn all(pool: &SqlitePool) -> Result<Vec<(String, String, u64)>> {
             .await?;
     Ok(rows
         .into_iter()
+        .filter(|(user, _, _)| crate::partition::owns(user))
         .map(|(user, kind, at)| (user, kind, u64::try_from(at).unwrap_or(0)))
         .collect())
 }
