@@ -50,7 +50,8 @@
           "host_approval",
           "supply_chain_fixable",
           "supply_chain_failed",
-          "supply_chain_stale"
+          "supply_chain_stale",
+          "opt_in_tests_failed"
         ]
       }
     },
@@ -85,7 +86,8 @@
           "host_approval",
           "supply_chain_fixable",
           "supply_chain_failed",
-          "supply_chain_stale"
+          "supply_chain_stale",
+          "opt_in_tests_failed"
         ]
       },
       "bounds": "validator"
@@ -230,6 +232,8 @@
     "/events/supply_chain_failed/threshold": "Dependency scan alerts are raised once per new finding set or state change; threshold does not apply.",
     "/events/supply_chain_failed/window_seconds": "Dependency scan alerts are raised once per new finding set or state change; window does not apply.",
     "/events/supply_chain_stale/threshold": "Dependency scan alerts are raised once per new finding set or state change; threshold does not apply.",
-    "/events/supply_chain_stale/window_seconds": "Dependency scan alerts are raised once per new finding set or state change; window does not apply."
+    "/events/supply_chain_stale/window_seconds": "Dependency scan alerts are raised once per new finding set or state change; window does not apply.",
+    "/events/opt_in_tests_failed/threshold": "The nightly opt-in test alert is raised once per new set of failed tests; threshold does not apply.",
+    "/events/opt_in_tests_failed/window_seconds": "The nightly opt-in test alert is raised once per new set of failed tests; window does not apply."
   }
 }

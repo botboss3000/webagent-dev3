@@ -76,6 +76,12 @@ pub async fn supply_chain(host: &dyn AdministrationHost) -> Result<Value, ApiErr
     broker(host, "v3_supply_chain", json!({})).await
 }
 
+/// The broker's bounded projection of the newest nightly opt-in test summary (administrator
+/// only; parse it with `webagent_administration::opt_in_tests::parse`).
+pub async fn opt_in_tests(host: &dyn AdministrationHost) -> Result<Value, ApiError> {
+    broker(host, "v3_opt_in_tests", json!({})).await
+}
+
 /// Mark one retained-work notice reviewed.
 pub async fn review_leftover(host: &dyn AdministrationHost, id: &str) -> Result<Value, ApiError> {
     if !valid_notice_id(id) {

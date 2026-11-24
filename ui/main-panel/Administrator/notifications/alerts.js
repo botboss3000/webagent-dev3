@@ -11,6 +11,7 @@ const LABELS = {
   supply_chain_fixable: 'New fixable high/critical dependency findings',
   supply_chain_failed: 'Dependency scan failed',
   supply_chain_stale: 'Dependency scan stale',
+  opt_in_tests_failed: 'Nightly opt-in tests failed',
 };
 const CHANNELS = {in_app: 'In-app (this page)', ntfy: 'ntfy push', email: 'Email', twilio: 'SMS (Twilio)'};
 

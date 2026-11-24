@@ -13,5 +13,6 @@ pub mod dashboard;
 pub mod find_ranking;
 pub mod notices;
 pub mod schemas;
+pub mod opt_in_tests;
 pub mod supply_chain;
 pub mod tools;

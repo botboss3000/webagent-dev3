@@ -391,6 +391,19 @@
       ],
       "fields": [],
       "backend": "connected"
+    },
+    {
+      "id": "opt_in_tests",
+      "label": "Opt-in tests",
+      "icon": "flask-conical",
+      "w": 6,
+      "h": 3,
+      "order": 27,
+      "sections": [
+        "opt_in_tests"
+      ],
+      "fields": [],
+      "backend": "connected"
     }
   ]
 }

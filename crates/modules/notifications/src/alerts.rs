@@ -15,7 +15,8 @@ const MAX_BYTES: u64 = 16 * 1024;
 /// `host_approval` is one host action waiting on the Host Admin page (raised per request).
 /// The `supply_chain_*` kinds come from the dependency scan watch (administration module):
 /// new high or critical findings with a fix, a failed or unreadable scan, a stale scan.
-pub const KINDS: [&str; 7] = [
+/// `opt_in_tests_failed` comes from the nightly opt-in test watch: a new set of failed tests.
+pub const KINDS: [&str; 8] = [
     "login_failed",
     "login_blocked",
     "rate_limited",
@@ -23,6 +24,7 @@ pub const KINDS: [&str; 7] = [
     "supply_chain_fixable",
     "supply_chain_failed",
     "supply_chain_stale",
+    "opt_in_tests_failed",
 ];
 /// Delivery channels; only `in_app` is implemented.
 pub const CHANNELS: [&str; 4] = ["in_app", "ntfy", "email", "twilio"];
@@ -242,6 +244,10 @@ impl Raised {
             "supply_chain_stale" => format!(
                 "The dependency scan has not run for more than {} days, or its scanner stopped checking; see the Dashboard",
                 self.count
+            ),
+            "opt_in_tests_failed" => format!(
+                "The nightly opt-in tests failed{}; see the Dashboard's opt-in tests card",
+                self.detail()
             ),
             other => format!("{} {other} events within {minutes} min", self.count),
         }

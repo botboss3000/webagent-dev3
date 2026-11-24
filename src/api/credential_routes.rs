@@ -197,6 +197,7 @@ pub(crate) const ROUTES: &[Route] = &[
     none("/api/v3/admin/models/catalog/validate"),
     none("/api/v3/admin/modules"),
     none("/api/v3/admin/modules/{id}"),
+    none("/api/v3/admin/opt-in-tests"),
     none("/api/v3/admin/production"),
     none("/api/v3/admin/production/{release_id}/decision"),
     none("/api/v3/admin/publication/status"),

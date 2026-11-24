@@ -145,7 +145,8 @@ impl SchedulerRequest {
 pub fn reply_complete(name: &str, response: &Value) -> bool {
     response["status"] == "success"
         && (name != "v3_build_dashboard" || response["output"]["jobs"].is_array())
-        && (name != "v3_supply_chain" || response["output"]["available"].is_boolean())
+        && (!matches!(name, "v3_supply_chain" | "v3_opt_in_tests")
+            || response["output"]["available"].is_boolean())
         && (!matches!(name, "v3_build_result" | "v3_build_cancel")
             || response["output"].get("job").is_some())
 }

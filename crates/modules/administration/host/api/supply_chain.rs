@@ -5,6 +5,10 @@
 //! (`v3_supply_chain`); the app container gains no new mount or file access. The projection is
 //! parsed again strictly by `webagent_administration::supply_chain`. The route answers 404 to
 //! any caller who is not a signed-in administrator, so its existence is not disclosed.
+//!
+//! The nightly opt-in test run (`v3_opt_in_tests`, parsed by
+//! `webagent_administration::opt_in_tests`) shares the route layer and the watch: it is the
+//! other report-only host check the Dashboard shows and alerts on.
 use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
@@ -21,6 +25,7 @@ use crate::{Api, ApiError, App, State};
 pub(crate) fn router(app: &App) -> Router<App> {
     Router::new()
         .route("/admin/supply-chain", get(read))
+        .route("/admin/opt-in-tests", get(read_opt_in))
         .route_layer(middleware::from_fn_with_state(app.clone(), hidden))
 }
 
@@ -83,6 +88,30 @@ async fn read() -> Api {
     Err(ApiError(StatusCode::NOT_FOUND, "Not found".into()))
 }
 
+/// The opt-in tests card: the newest nightly run's view, or `unavailable` when the broker
+/// cannot be reached and `unreadable` when its report is refused.
+#[cfg(feature = "administrator")]
+async fn read_opt_in(State(app): State<App>) -> Api {
+    use webagent_administration::opt_in_tests;
+    let output = webagent_administration_host::dashboard::opt_in_tests(
+        &crate::tools::administrator::Host(&app),
+    )
+    .await;
+    let view = match output {
+        Ok(output) => match opt_in_tests::parse(&output) {
+            Ok(report) => opt_in_tests::view(&report, now()),
+            Err(_) => serde_json::json!({"schema_version":1,"state":"unreadable","groups":[]}),
+        },
+        Err(_) => serde_json::json!({"schema_version":1,"state":"unavailable","groups":[]}),
+    };
+    Ok(axum::Json(view))
+}
+
+#[cfg(not(feature = "administrator"))]
+async fn read_opt_in() -> Api {
+    Err(ApiError(StatusCode::NOT_FOUND, "Not found".into()))
+}
+
 /// Read the scan summary every `check_seconds` (one broker read; no per-account work) and
 /// raise an administrator alert for new fixable high/critical findings, a failed or
 /// unreadable scan, or a stale scan. What was alerted is kept in one memory row, so a restart
@@ -101,6 +130,9 @@ pub(crate) async fn watch(app: App) {
         wait = std::time::Duration::from_secs(every);
         if let Err(error) = check(&app, thresholds).await {
             tracing::debug!("Dependency scan check deferred: {error}");
+        }
+        if let Err(error) = check_opt_in(&app).await {
+            tracing::debug!("Opt-in test check deferred: {error}");
         }
     }
 }
@@ -176,6 +208,43 @@ async fn check(
     Ok(())
 }
 
+/// One pass over the nightly opt-in test summary: alert once per new set of failed tests.
+#[cfg(all(feature = "administrator", unix))]
+async fn check_opt_in(app: &App) -> anyhow::Result<()> {
+    use webagent_administration::opt_in_tests::{self, Memory, MEMORY_KEY};
+    use webagent_notifications::alerts;
+    if !webagent_administration::tools::installed() {
+        return Ok(());
+    }
+    let mut caller = app.clone();
+    caller.store = app
+        .store
+        .for_user(&super::host_admin::watch_administrator(app).await?)
+        .await?;
+    // A broker that cannot be reached, or a refused report, decides nothing.
+    let output = webagent_administration_host::dashboard::opt_in_tests(
+        &crate::tools::administrator::Host(&caller),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.1))?;
+    let report = opt_in_tests::parse(&output)?;
+    let pool = &app.store.app_pool;
+    let memory = Memory::from_value(alerts::memory(pool, MEMORY_KEY).await?.as_ref());
+    let decision = opt_in_tests::decide(&report, &memory);
+    let stamp = i64::try_from(crate::now()).unwrap_or(i64::MAX);
+    if let Some(detail) = decision.alert {
+        if let Some(mut alert) = alerts::single(&alerts::Config::live(), "opt_in_tests_failed") {
+            alert.detail = Some(detail);
+            alerts::deliver(pool, &alert, stamp).await?;
+        }
+    }
+    // Remember only after the alert is recorded: a failed write retries on the next pass.
+    if decision.memory != memory {
+        alerts::remember(pool, MEMORY_KEY, &decision.memory.to_value(), stamp).await?;
+    }
+    Ok(())
+}
+
 #[cfg(all(test, feature = "administrator"))]
 mod tests {
     use axum::body::Body;
@@ -244,10 +313,36 @@ mod tests {
             )
             .await
             .unwrap();
-        let hidden = crate::router(app)
+        let hidden = crate::router(app.clone())
             .oneshot(request(Some(&token)))
             .await
             .unwrap();
         assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+        // The opt-in tests card's route answers the same way: 401 signed out, 404 to a member,
+        // and a state (never fake results) to an administrator without a broker.
+        let opt_in = |token: Option<&str>| {
+            let mut builder = Request::builder().uri("/api/v3/admin/opt-in-tests");
+            if let Some(token) = token {
+                builder = builder.header("cookie", format!("v3_session={token}"));
+            }
+            builder.body(Body::empty()).unwrap()
+        };
+        let signed_out = crate::router(app.clone()).oneshot(opt_in(None)).await.unwrap();
+        assert_eq!(signed_out.status(), StatusCode::UNAUTHORIZED);
+        let member = crate::router(app.clone())
+            .oneshot(opt_in(Some(&token)))
+            .await
+            .unwrap();
+        assert_eq!(member.status(), StatusCode::NOT_FOUND);
+        let allowed = crate::router(app).oneshot(opt_in(Some(&admin))).await.unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(allowed.into_body(), 65536)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert!(matches!(
+            value["state"].as_str(),
+            Some("unavailable" | "unreadable")
+        ));
     }
 }
