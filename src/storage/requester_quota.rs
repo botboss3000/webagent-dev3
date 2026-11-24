@@ -19,7 +19,7 @@ pub(crate) fn limit_refusal(error: &anyhow::Error) -> bool {
 /// How long a person counts as one of an agent's users after their last message (seconds).
 const AGENT_USER_WINDOW: i64 = 30 * 86_400;
 impl Store {
-    async fn requester_slots_schema(&self) -> Result<()> {
+    pub(super) async fn requester_slots_schema(&self) -> Result<()> {
         // Checked once per state root and process; every admission ran it before.
         static READY: std::sync::LazyLock<
             std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
@@ -46,6 +46,10 @@ impl Store {
             .execute(&self.app_pool)
             .await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS requester_run_slots(run_id TEXT PRIMARY KEY,requester_id TEXT NOT NULL,owner_id TEXT NOT NULL,session_id TEXT NOT NULL,released INTEGER NOT NULL DEFAULT 0,sequence INTEGER NOT NULL,replaced_by TEXT); CREATE INDEX IF NOT EXISTS requester_run_slots_actor ON requester_run_slots(requester_id,released)").execute(&self.app_pool).await?;
+        // A chat's accounts by session (board note delivery).
+        sqlx::query("CREATE INDEX IF NOT EXISTS requester_run_slots_session ON requester_run_slots(session_id)")
+            .execute(&self.app_pool)
+            .await?;
         // `agent_id` and `admin` (the requester was an administrator when last checked) serve the
         // per-agent cap; `released` is 0 while held, 1 once the run finished and 2 while it is
         // stopped, paused or parked (taken again when it resumes). `agent_owner` (the agent's
@@ -947,6 +951,29 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+    /// Board note delivery finds a chat's account from its runs' slot rows, read from the shared
+    /// database without opening any account; a chat with no run is not known there.
+    #[tokio::test]
+    async fn a_chats_accounts_are_named_by_its_run_slots() {
+        use webagent_engine::runtime::ports::ScopedStorage as _;
+        let (_root, one, two, actor) = setup().await;
+        assert!(one.session_accounts("s").await.unwrap().is_empty());
+        one.reserve_requester_run(&run("first", &actor))
+            .await
+            .unwrap();
+        assert_eq!(
+            two.session_accounts("s").await.unwrap(),
+            [one.current_user_id()]
+        );
+        // A second run of the chat stored in another account names that account too.
+        two.reserve_requester_run(&run("second", one.current_user_id()))
+            .await
+            .unwrap();
+        let mut both = vec![one.current_user_id(), two.current_user_id()];
+        both.sort_unstable();
+        assert_eq!(one.session_accounts("s").await.unwrap(), both);
+        assert!(one.session_accounts("other").await.unwrap().is_empty());
     }
     #[tokio::test]
     async fn concurrent_cross_owner_reservations_enforce_requester_cap_and_retry_after_reopen() {

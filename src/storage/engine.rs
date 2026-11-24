@@ -350,6 +350,24 @@ impl webagent_engine::runtime::ports::ScopedStorage for Store {
     fn scan_user_ids(&self) -> impl std::future::Future<Output = Result<Vec<String>>> + Send {
         Store::scan_user_ids(self)
     }
+    fn session_accounts<'a>(
+        &'a self,
+        sid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send + 'a {
+        async move {
+            // The slot table appears with the first run admission; set it up once per process.
+            self.requester_slots_schema().await?;
+            // Every admitted run holds a slot row naming the account that stores its chat (a
+            // shared chat's runs are stored with its owner).
+            let users: Vec<String> = sqlx::query_scalar(
+                "SELECT DISTINCT owner_id FROM requester_run_slots WHERE session_id=? ORDER BY owner_id",
+            )
+            .bind(sid)
+            .fetch_all(&self.app_pool)
+            .await?;
+            Ok(users)
+        }
+    }
     fn contents_mark(&self, user: &str) -> Option<u64> {
         use std::hash::{Hash, Hasher};
         let marks = self.write_marks(user);

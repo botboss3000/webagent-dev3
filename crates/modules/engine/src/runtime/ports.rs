@@ -15,6 +15,14 @@ pub trait ScopedStorage:
     fn all_user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
     /// Accounts a periodic scan must visit now; idle, unchanged accounts are left closed.
     fn scan_user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
+    /// The accounts the shared database names for chat `sid`: a hint of where to look, never
+    /// an authority (the caller still reads the chat there). Empty: not known.
+    fn session_accounts<'a>(
+        &'a self,
+        _sid: &'a str,
+    ) -> impl Future<Output = Result<Vec<String>>> + Send + 'a {
+        async { Ok(Vec::new()) }
+    }
     /// C7: a mark of `user`'s stored contents read without opening the account (its database
     /// file and log), equal while nothing was written or checkpointed. `None`: unknown, which
     /// always counts as changed.

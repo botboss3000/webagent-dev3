@@ -366,26 +366,38 @@ impl<
         if notes.is_empty() {
             return Ok(());
         }
-        // The owning session may be in any account, whichever loop serves it.
-        let users = app.store.all_user_ids().await?;
         let now = now();
         let mut marks = Vec::new();
         let mut woken = std::collections::BTreeSet::new();
+        // Every account, read only when a chat is not where the shared database points.
+        let mut every: Option<Vec<String>> = None;
         for note in &notes {
             let (Some(id), Some(sid)) = (note["id"].as_str(), note["owner_session"].as_str())
             else {
                 continue;
             };
-            let mut owner = None;
-            for user in &users {
-                // One account at a time; an unreadable one is skipped.
-                let Ok(view) = app.for_user_view(user).await else {
-                    continue;
-                };
-                if let Some(session) = view.store.get(&crate::key("session", sid)).await? {
-                    owner = Some((view, session));
-                    break;
+            // The owning chat may be in any account, whichever loop serves it: look in the
+            // accounts the shared database names for it first, and in the others only when it
+            // is not there (a chat older than its run slots).
+            let named = match app.store.session_accounts(sid).await {
+                Ok(named) => named,
+                Err(error) => {
+                    tracing::warn!(%error, "Chat accounts unreadable; looking in every account");
+                    Vec::new()
                 }
+            };
+            let mut owner = Self::session_in(app, &named, sid).await?;
+            if owner.is_none() {
+                if every.is_none() {
+                    every = Some(app.store.all_user_ids().await?);
+                }
+                let rest: Vec<String> = every
+                    .iter()
+                    .flatten()
+                    .filter(|user| !named.contains(user))
+                    .cloned()
+                    .collect();
+                owner = Self::session_in(app, &rest, sid).await?;
             }
             let outcome = match owner {
                 None => "gone",
@@ -432,6 +444,19 @@ impl<
             board::call(&json!({"action":"delivered","user":"app","notes":marks})).await?;
         }
         Ok(())
+    }
+    /// The first of `users` whose account stores chat `sid`, with the chat; an unreadable
+    /// account is skipped.
+    async fn session_in(app: &Self, users: &[String], sid: &str) -> Result<Option<(Self, Value)>> {
+        for user in users {
+            let Ok(view) = app.for_user_view(user).await else {
+                continue;
+            };
+            if let Some(session) = view.store.get(&crate::key("session", sid)).await? {
+                return Ok(Some((view, session)));
+            }
+        }
+        Ok(None)
     }
     /// Follow one background claim wait; its end is a background notice that wakes the agent.
     async fn follow_claim_wait(app: &Self, task: &mut Value, follow: &Value) -> Result<()> {
@@ -1368,7 +1393,10 @@ fn granted(task: &str, edit: &Value, outcome: &Replayed) -> Value {
             output["receipt"] = json!({"request_id":receipt["request_id"],"paths":receipt["paths"],
                 "rebased":receipt["rebased"] == true,"base_changed_paths":receipt["base_changed_paths"],
                 "workspace_inputs_sha256":receipt["workspace_inputs_sha256"]});
-            let rebased = if receipt["rebased"] == true {
+            let changed = receipt["base_changed_paths"]
+                .as_array()
+                .is_some_and(|paths| !paths.is_empty());
+            let rebased = if receipt["rebased"] == true && changed {
                 format!(
                     " onto current source (releases changed {} meanwhile; checks you ran before \
                      were on a different base)",
@@ -1651,6 +1679,14 @@ mod tests {
         let message = output["message"].as_str().unwrap();
         assert!(message.contains("applied your queued edit to docs/a.md onto current source"));
         assert!(message.contains("Do not apply it again") && message.contains("d1"));
+        // The base moved but none of the task's files changed: nothing to say about it.
+        let quiet = json!({"status":"success","rebased":true,"base_changed_paths":[],
+            "workspace_inputs_sha256":"d1"});
+        let result = granted("task-one", &edit, &Replayed::Applied(quiet));
+        assert!(!result["output"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("onto current source"));
         let result = granted(
             "task-one",
             &edit,
