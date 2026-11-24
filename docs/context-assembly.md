@@ -471,7 +471,7 @@ and retains endpoint, credential, transport and publication authority.
 | Provider profile | Placement and replay |
 | --- | --- |
 | OpenAI subscription | Responses items, developer instruction placement, subscription session cache key |
-| DeepSeek | Chat-completions system placement, implicit prefix caching, original DeepSeek reasoning replay |
+| DeepSeek | Chat-completions system placement, implicit prefix caching, original DeepSeek reasoning replay (an empty string on turns with none) |
 | Other installed compatible chat endpoints | Their existing chat-completions prefix profile, without foreign reasoning fields |
 | Typesafe | Decision profile; ordinary chat projection is rejected |
 

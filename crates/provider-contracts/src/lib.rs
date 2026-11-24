@@ -600,9 +600,13 @@ pub fn materialize(request: &RequestV1, result: &ResultV1) -> Result<Materialize
                     assistant["tool_calls"] = json!(calls);
                 }
                 if preserve_reasoning {
-                    if let Some(reasoning) = group_reasoning(input, *message, calls)? {
-                        assistant["reasoning_content"] = reasoning;
-                    }
+                    // DeepSeek's thinking mode requires `reasoning_content` on every
+                    // assistant message in a tool-carrying conversation. Turns with no
+                    // reasoning (server-added rows such as task_list_read, and history
+                    // imported from other providers) replay an empty string.
+                    let reasoning = group_reasoning(input, *message, calls)?
+                        .unwrap_or_else(|| Value::String(String::new()));
+                    assistant["reasoning_content"] = json!(reasoning);
                 }
                 messages.push(assistant);
             }

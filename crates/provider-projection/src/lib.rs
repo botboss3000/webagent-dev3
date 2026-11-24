@@ -197,6 +197,34 @@ mod tests {
         assert_eq!(tools[0]["function"]["name"], "z_read");
         assert_eq!(tools[1]["function"]["name"], "a_read");
     }
+    /// A server-added exchange with no stored reasoning still replays an empty
+    /// `reasoning_content`, keeping DeepSeek's thinking-mode tool loop valid.
+    #[test]
+    fn deepseek_server_added_rows_replay_empty_reasoning() {
+        let mut request = request(ProviderIdV1::Deepseek);
+        let RequestV1::Project { input, .. } = &mut request else {
+            unreachable!()
+        };
+        input.push(json!({"type":"function_call","call_id":"task_list_read-1",
+            "name":"task_list_read","arguments":"{\"revision\":13}"}));
+        input.push(
+            json!({"type":"function_call_output","call_id":"task_list_read-1",
+            "output":"revision 13"}),
+        );
+        let result = project(&request).unwrap();
+        let MaterializedV1::ChatCompletions { messages, .. } =
+            materialize(&request, &result).unwrap()
+        else {
+            panic!("Compatible expected")
+        };
+        let assistant = messages
+            .iter()
+            .rev()
+            .find(|message| message["role"] == "assistant")
+            .expect("server-added assistant message");
+        assert_eq!(assistant["reasoning_content"], "");
+        assert!(assistant["content"].is_null());
+    }
     /// Subscription replay preserves opaque Responses reasoning but removes foreign private fields.
     #[test]
     fn subscription_keeps_responses_items_and_native_developer_placement() {
