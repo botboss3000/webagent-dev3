@@ -1,0 +1,49 @@
+/* Card: a bordered surface holding one idea. Everything else composes it. */
+
+.card {
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.card-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.card-body {
+  font-size: 13px;
+  color: var(--fg-2);
+}
+
+.card-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+/* Raised: floats above the panel background. */
+.card-raised {
+  box-shadow: var(--shadow-rest);
+}
+
+.card-flat {
+  background: var(--bg-tint);
+  border-color: transparent;
+}

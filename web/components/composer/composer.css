@@ -1,0 +1,138 @@
+/* Composer: the pill input row at the bottom of the chat panel. */
+
+.composer {
+  padding: 8px 10px 10px;
+  border-top: var(--border-width) solid var(--border-soft);
+}
+
+.composer-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: var(--border-width) solid var(--chat-pill-border);
+  border-radius: var(--r-2xl);
+  background: var(--bg-elev-2);
+}
+
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  min-height: 34px;
+}
+
+.composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  max-height: 132px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--fg-1);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+}
+
+.composer-input::placeholder {
+  color: var(--fg-4);
+}
+
+.composer-pill:focus-within {
+  border-color: var(--accent-line);
+}
+
+.composer-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--fg-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.composer-button:hover {
+  background: var(--bg-tint);
+  color: var(--fg-1);
+}
+
+.composer-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Send is the one filled control, and only while there is text to send. */
+.composer-send {
+  background: var(--accent);
+  color: var(--bg-0);
+}
+
+.composer-send:hover {
+  background: var(--accent-hover);
+  color: var(--bg-0);
+}
+
+.composer-send:disabled {
+  background: var(--bg-tint-2);
+  color: var(--fg-4);
+  cursor: default;
+}
+
+/* Footer strip: token counts and the row handle, kept quiet. */
+.composer-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px 2px;
+  font-size: 11px;
+  color: var(--fg-4);
+}
+
+.composer-stats b {
+  font-weight: 600;
+  color: var(--fg-3);
+}
+
+.composer-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-4);
+  cursor: pointer;
+}
+
+.composer-handle::before {
+  content: '';
+  width: 32px;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.composer-handle:hover {
+  color: var(--fg-2);
+}
+
+@media (max-width: 700px) {
+  .composer {
+    padding: 6px 8px 8px;
+  }
+}

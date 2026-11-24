@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebAgent</title>
+<!-- Stylesheets first: tokens, then the shell frame, then one file per component. -->
+<link rel="stylesheet" href="./shell/tokens.css">
+<link rel="stylesheet" href="./shell/shell.css">
+<link rel="stylesheet" href="./components/badge/badge.css">
+<link rel="stylesheet" href="./components/button/button.css">
+<link rel="stylesheet" href="./components/card/card.css">
+<link rel="stylesheet" href="./components/list/list.css">
+<link rel="stylesheet" href="./components/stat/stat.css">
+<link rel="stylesheet" href="./components/tile/tile.css">
+<link rel="stylesheet" href="./components/chat-header/chat-header.css">
+<link rel="stylesheet" href="./components/message/message.css">
+<link rel="stylesheet" href="./components/activity/activity.css">
+<link rel="stylesheet" href="./components/composer/composer.css">
+<link rel="stylesheet" href="./chat/chat.css">
+</head>
+<body class="view-panel">
+<div class="app">
+  <aside id="sidebar" aria-label="Navigation">
+    <div class="sidebar-top">
+      <span class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M4 12a8 8 0 0 1 16 0M4 12a8 8 0 0 0 16 0M8 12h8"/>
+          </svg>
+        </span>
+        <span class="brand-name">WebAgent</span>
+      </span>
+      <button type="button" id="sidebar-toggle" class="icon-button" aria-label="Collapse sidebar" aria-expanded="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M15 6l-6 6 6 6"/>
+        </svg>
+      </button>
+    </div>
+    <nav id="sidebar-nav" class="sidebar-scroll" aria-label="Sections"></nav>
+    <div class="sidebar-foot">
+      <button type="button" id="account-button" class="account-button">
+        <span class="account-avatar" aria-hidden="true">A</span>
+        <span class="account-text">
+          <span class="account-name" id="account-name">Loading…</span>
+          <span class="account-role" id="account-role">Manage account</span>
+        </span>
+        <span class="account-chev" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M9 6l6 6-6 6"/>
+          </svg>
+        </span>
+      </button>
+      <button type="button" id="theme-toggle" class="nav-item" aria-label="Toggle light and dark theme" aria-pressed="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+        </svg>
+        <span class="nav-label">Light / dark</span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <div id="main-panel">
+      <header class="main-head">
+        <button type="button" id="menu-open" class="icon-button" aria-label="Open menu" aria-expanded="false">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M4 7h16M4 12h16M4 17h16"/>
+          </svg>
+        </button>
+        <h1 id="page-title">Sessions</h1>
+        <span class="main-head-note" id="page-note"></span>
+        <div class="phone-switch" role="group" aria-label="View">
+          <button type="button" data-view="panel" class="active" aria-pressed="true">Panel</button>
+          <button type="button" data-view="chat" aria-pressed="false">Chat</button>
+        </div>
+      </header>
+      <div class="main-body" id="page-body"></div>
+    </div>
+
+    <div id="chat-resize-handle" role="separator" aria-label="Resize chat panel" aria-orientation="vertical" aria-controls="main-panel chat-column" tabindex="0"></div>
+
+    <div id="chat-column">
+      <div class="chat-skeleton">Chat panel loading…</div>
+    </div>
+  </main>
+</div>
+<div id="sidebar-backdrop" aria-hidden="true"></div>
+<script type="module" src="./shell/shell.js"></script>
+</body>
+</html>

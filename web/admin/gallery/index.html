@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Component gallery · WebAgent</title>
+<!-- Administrator-only page: the server gates the whole /web/admin/ folder. -->
+<link rel="stylesheet" href="../../shell/tokens.css">
+<link rel="stylesheet" href="../../components/badge/badge.css">
+<link rel="stylesheet" href="../../components/button/button.css">
+<link rel="stylesheet" href="../../components/card/card.css">
+<link rel="stylesheet" href="../../components/list/list.css">
+<link rel="stylesheet" href="../../components/stat/stat.css">
+<link rel="stylesheet" href="../../components/tile/tile.css">
+<link rel="stylesheet" href="../../components/chat-header/chat-header.css">
+<link rel="stylesheet" href="../../components/message/message.css">
+<link rel="stylesheet" href="../../components/activity/activity.css">
+<link rel="stylesheet" href="../../components/composer/composer.css">
+<link rel="stylesheet" href="./gallery.css">
+</head>
+<body>
+<div class="gallery-page">
+  <header class="gallery-top">
+    <div>
+      <h1 class="gallery-page-title">Component gallery</h1>
+      <p class="card-hint"><span id="gallery-count">0</span> components, generated from the inventory the pages use.</p>
+    </div>
+    <a class="btn btn-sm" href="/web/index.html">Open the shell</a>
+  </header>
+  <main id="gallery-grid" class="gallery-grid"></main>
+</div>
+<script type="module" src="./gallery.js"></script>
+</body>
+</html>

@@ -1,0 +1,196 @@
+/* WebAgent web/ design tokens.
+   Copied from ui/shared/css/design-system.css so web/ owns its palette and never
+   imports /ui/. Same token names, same formulas: change a raw swatch here and the
+   whole new UI follows. Fonts are system stacks because web/ ships no binaries. */
+
+:root {
+  /* Brand / accent — dark default = white */
+  --brand: #ffffff;
+  --brand-strong: #e6e6e6;
+  --brand-rgb: 255, 255, 255;
+
+  /* Secondary tone — neutral grey */
+  --purple: #d9d9d9;
+  --purple-strong: #bfbfbf;
+  --purple-rgb: 217, 217, 217;
+
+  /* Status hues */
+  --success: #22c55e;
+  --success-rgb: 34, 197, 94;
+  --warning: #eab308;
+  --warning-rgb: 234, 179, 8;
+  --danger: #ef4444;
+  --danger-rgb: 239, 68, 68;
+
+  /* Neutral ink for hairlines and shadows */
+  --ink-rgb: 255, 255, 255;
+  --shadow-rgb: 0, 0, 0;
+
+  /* Surfaces: --bg-0, --bg-elev and --bg-tint are the raw swatches;
+     every other step derives from them plus the text anchors. */
+  --bg-0: #000000;
+  --bg-0-rgb: 0, 0, 0;
+  --bg-1: color-mix(in oklab, var(--bg-0) 97%, var(--fg-1));
+  --bg-2: color-mix(in oklab, var(--bg-0) 93%, var(--fg-1));
+  --bg-elev: #0d0d0d;
+  --bg-elev-2: color-mix(in oklab, var(--bg-elev) 90%, var(--fg-1));
+  --bg-tint: #1a1a1a;
+  --bg-tint-2: color-mix(in oklab, var(--bg-tint) 82%, var(--fg-1));
+  --border: #333333;
+  --border-soft: color-mix(in oklab, var(--border) 55%, var(--bg-0));
+  --border-strong: color-mix(in oklab, var(--border) 65%, var(--fg-1));
+  --border-width: 1px;
+
+  --fg-1: #ffffff;
+  --fg-2: color-mix(in oklab, var(--fg-1) 65%, var(--fg-3));
+  --fg-3: #a3a3a3;
+  --fg-4: color-mix(in oklab, var(--fg-3) 70%, var(--bg-0));
+
+  --ambient-2-rgb: 64, 64, 64;
+
+  /* Derived semantic tokens — wiring, not palette */
+  --accent: var(--brand);
+  --accent-hover: var(--brand-strong);
+  --accent-soft: rgba(var(--brand-rgb), 0.08);
+  --accent-mid: rgba(var(--brand-rgb), 0.19);
+  --accent-line: rgba(var(--brand-rgb), 0.33);
+  --success-soft: rgba(var(--success-rgb), 0.19);
+  --success-mid: rgba(var(--success-rgb), 0.4);
+  --warning-soft: rgba(var(--warning-rgb), 0.19);
+  --danger-soft: rgba(var(--danger-rgb), 0.08);
+  --danger-mid: rgba(var(--danger-rgb), 0.25);
+
+  /* Bubbles stay theme-derived; only the borders are named here. */
+  --user-bubble-border: var(--border);
+  --agent-bubble-border: var(--border);
+  --chat-pill-border: var(--border);
+
+  /* Depth knob: every neutral shadow alpha is multiplied by --shadow-strength */
+  --shadow-strength: 1;
+  --shadow-rest:
+    0 1px 0 rgba(var(--ink-rgb), calc(0.03 * var(--shadow-strength))) inset,
+    0 1px 2px rgba(var(--shadow-rgb), calc(0.25 * var(--shadow-strength))),
+    0 8px 24px -12px rgba(var(--shadow-rgb), calc(0.45 * var(--shadow-strength)));
+  --shadow-float:
+    0 1px 0 rgba(var(--ink-rgb), calc(0.04 * var(--shadow-strength))) inset,
+    0 4px 14px -4px rgba(var(--shadow-rgb), calc(0.5 * var(--shadow-strength))),
+    0 16px 40px -16px rgba(var(--brand-rgb), calc(0.18 * var(--shadow-strength)));
+  --shadow-lg: 0 14px 40px -12px rgba(var(--shadow-rgb), calc(0.55 * var(--shadow-strength)));
+  --shadow-modal: 0 30px 80px -20px rgba(var(--shadow-rgb), calc(0.6 * var(--shadow-strength)));
+
+  /* Roundness knob: every radius is a base size times --radius-scale */
+  --radius-scale: 1;
+  --r-xs: calc(4px * var(--radius-scale));
+  --r-sm: calc(6px * var(--radius-scale));
+  --r-md: calc(8px * var(--radius-scale));
+  --r-lg: calc(10px * var(--radius-scale));
+  --r-xl: calc(14px * var(--radius-scale));
+  --r-2xl: calc(18px * var(--radius-scale));
+  --r-3xl: calc(24px * var(--radius-scale));
+  --r-pill: calc(999px * var(--radius-scale));
+
+  /* Typography — system stacks, no vendored font files */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Shell geometry */
+  --sidebar-width: 244px;
+  --sidebar-rail: 68px;
+  --chat-panel-width: 380px;
+  --shell-gap: 8px;
+  --row-h: 38px;
+}
+
+body.light-mode {
+  --brand: #000000;
+  --brand-strong: #1a1a1a;
+  --brand-rgb: 0, 0, 0;
+
+  --purple: #262626;
+  --purple-strong: #404040;
+  --purple-rgb: 38, 38, 38;
+
+  --success: #16a34a;
+  --success-rgb: 22, 163, 74;
+  --warning: #ca8a04;
+  --warning-rgb: 202, 138, 4;
+  --danger: #dc2626;
+  --danger-rgb: 220, 38, 38;
+
+  --ink-rgb: 120, 124, 135;
+  --shadow-rgb: 120, 124, 135;
+
+  --bg-0: #ffffff;
+  --bg-0-rgb: 255, 255, 255;
+  --bg-1: color-mix(in oklab, var(--bg-0) 97%, var(--fg-1));
+  --bg-2: color-mix(in oklab, var(--bg-0) 93%, var(--fg-1));
+  --bg-elev: #f5f5f5;
+  --bg-elev-2: color-mix(in oklab, var(--bg-elev) 90%, var(--fg-1));
+  --bg-tint: #e8e8e8;
+  --bg-tint-2: color-mix(in oklab, var(--bg-tint) 82%, var(--fg-1));
+  --border: #cccccc;
+  --border-soft: color-mix(in oklab, var(--border) 55%, var(--bg-0));
+  --border-strong: color-mix(in oklab, var(--border) 65%, var(--fg-1));
+
+  --fg-1: #000000;
+  --fg-2: color-mix(in oklab, var(--fg-1) 65%, var(--fg-3));
+  --fg-3: #666666;
+  --fg-4: color-mix(in oklab, var(--fg-3) 70%, var(--bg-0));
+
+  --ambient-2-rgb: 217, 217, 217;
+
+  --accent: var(--brand);
+  --accent-hover: var(--brand-strong);
+  --accent-soft: rgba(var(--brand-rgb), 0.14);
+  --accent-mid: rgba(var(--brand-rgb), 0.38);
+  --accent-line: rgba(var(--brand-rgb), 0.38);
+  --success-soft: rgba(var(--success-rgb), 0.12);
+  --success-mid: rgba(var(--success-rgb), 0.38);
+  --warning-soft: rgba(var(--warning-rgb), 0.19);
+  --danger-soft: rgba(var(--danger-rgb), 0.1);
+  --danger-mid: rgba(var(--danger-rgb), 0.25);
+
+  --shadow-rest:
+    0 1px 2px rgba(var(--shadow-rgb), calc(0.08 * var(--shadow-strength))),
+    0 8px 24px -12px rgba(var(--shadow-rgb), calc(0.18 * var(--shadow-strength)));
+  --shadow-float:
+    0 4px 14px -4px rgba(var(--shadow-rgb), calc(0.18 * var(--shadow-strength))),
+    0 18px 40px -16px rgba(var(--brand-rgb), calc(0.18 * var(--shadow-strength)));
+  --shadow-lg: 0 14px 40px -12px rgba(var(--shadow-rgb), calc(0.22 * var(--shadow-strength)));
+  --shadow-modal: 0 30px 80px -20px rgba(var(--shadow-rgb), calc(0.3 * var(--shadow-strength)));
+}
+
+/* Base page: palette-driven glow over the base surface, same as the current app. */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-1);
+  background:
+    radial-gradient(70% 50% at 0% 0%, rgba(var(--brand-rgb), 0.06), transparent 60%),
+    radial-gradient(60% 50% at 100% 100%, rgba(var(--ambient-2-rgb), 0.05), transparent 60%),
+    var(--bg-0);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--font-mono);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}

@@ -1,0 +1,527 @@
+/* Shell layout: sidebar, main panel, chat column, phone drawer.
+   Loaded after tokens.css. Components own their own styles. */
+
+.app {
+  display: flex;
+  height: 100dvh;
+  padding: var(--shell-gap);
+  gap: var(--shell-gap);
+  overflow: hidden;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+#sidebar {
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-rest);
+  transition: flex-basis 0.18s ease, width 0.18s ease;
+}
+
+body.sidebar-collapsed #sidebar {
+  flex-basis: var(--sidebar-rail);
+  width: var(--sidebar-rail);
+}
+
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 6px;
+  min-height: 52px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: var(--r-md);
+  background: var(--bg-tint);
+  color: var(--fg-1);
+}
+
+.brand-name {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--fg-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.icon-button:hover {
+  background: var(--bg-tint);
+  color: var(--fg-1);
+}
+
+.icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+#sidebar-toggle {
+  margin-left: auto;
+}
+
+.sidebar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 8px;
+  scrollbar-width: thin;
+}
+
+.nav-group {
+  padding: 6px 0 2px;
+}
+
+.nav-group + .nav-group {
+  border-top: var(--border-width) solid var(--border-soft);
+  margin-top: 4px;
+}
+
+.nav-group-title {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 8px;
+  margin: 1px 0;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--fg-2);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.nav-item:hover {
+  background: var(--bg-tint);
+  color: var(--fg-1);
+}
+
+.nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--fg-1);
+  font-weight: 600;
+}
+
+.nav-item svg {
+  flex: 0 0 auto;
+}
+
+.nav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+.nav-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: var(--r-pill);
+  background: var(--bg-tint-2);
+  color: var(--fg-1);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sidebar-foot {
+  border-top: var(--border-width) solid var(--border-soft);
+  padding: 8px;
+}
+
+.account-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.account-button:hover {
+  background: var(--bg-tint);
+}
+
+.account-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.account-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: var(--r-pill);
+  background: var(--accent-mid);
+  color: var(--fg-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.account-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.account-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-role {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+.account-chev {
+  flex: 0 0 auto;
+  color: var(--fg-3);
+}
+
+/* Collapsed rail: icons only, labels and group titles hidden. */
+body.sidebar-collapsed .brand-name,
+body.sidebar-collapsed .nav-label,
+body.sidebar-collapsed .nav-count,
+body.sidebar-collapsed .nav-group-title,
+body.sidebar-collapsed .account-text,
+body.sidebar-collapsed .account-chev {
+  display: none;
+}
+
+body.sidebar-collapsed .nav-item,
+body.sidebar-collapsed .account-button {
+  justify-content: center;
+  padding: 0;
+}
+
+body.sidebar-collapsed .nav-group {
+  border-top: 0;
+}
+
+body.sidebar-collapsed .sidebar-top {
+  justify-content: center;
+  padding: 10px 6px 6px;
+}
+
+body.sidebar-collapsed #sidebar-toggle {
+  margin-left: 0;
+}
+
+/* ── Main + split stage ──────────────────────────────────── */
+.stage {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  gap: 0;
+}
+
+#main-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-elev);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-rest);
+  overflow: hidden;
+}
+
+.main-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: var(--border-width) solid var(--border-soft);
+  min-height: 54px;
+}
+
+.main-head h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.main-head-note {
+  font-size: 12px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.main-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 14px 24px;
+}
+
+/* The phone menu button and the Panel/Chat switch exist only at phone width. */
+#menu-open,
+.phone-switch {
+  display: none;
+}
+
+.phone-switch {
+  margin-left: auto;
+  gap: 2px;
+  padding: 2px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-tint);
+}
+
+.phone-switch button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--fg-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.phone-switch button.active {
+  background: var(--bg-elev);
+  color: var(--fg-1);
+  font-weight: 600;
+}
+
+/* ── Chat column + resize grip ───────────────────────────── */
+#chat-resize-handle {
+  flex: 0 0 14px;
+  width: 14px;
+  position: relative;
+  z-index: 10;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#chat-resize-handle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 36px;
+  margin: -18px 0 0 -1px;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, currentColor 18%, transparent);
+  transition: background 0.15s ease, height 0.15s ease, margin 0.15s ease;
+}
+
+#chat-resize-handle:hover::before,
+#chat-resize-handle:focus-visible::before,
+#chat-resize-handle.resizing::before {
+  height: 56px;
+  margin-top: -28px;
+  background: rgba(var(--brand-rgb), 0.67);
+}
+
+#chat-resize-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+  border-radius: var(--r-sm);
+}
+
+body.chat-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.chat-resizing #chat-column {
+  pointer-events: none;
+}
+
+#chat-column {
+  flex: 0 0 var(--chat-panel-width);
+  width: var(--chat-panel-width);
+  min-width: 240px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Phone: sidebar becomes a drawer, one view at a time ─── */
+@media (max-width: 900px) {
+  .app {
+    padding: 6px;
+    gap: 6px;
+  }
+
+  #sidebar {
+    position: fixed;
+    inset: 6px auto 6px 6px;
+    z-index: 40;
+    width: min(280px, calc(100vw - 60px));
+    flex-basis: auto;
+    transform: translateX(calc(-100% - 12px));
+    transition: transform 0.2s ease;
+  }
+
+  body.menu-open #sidebar {
+    transform: translateX(0);
+  }
+
+  #sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  body:not(.menu-open) #sidebar-backdrop {
+    display: none;
+  }
+
+  #sidebar-toggle {
+    display: none;
+  }
+
+  #menu-open,
+  .phone-switch {
+    display: inline-flex;
+  }
+
+  body.sidebar-collapsed #sidebar {
+    width: min(280px, calc(100vw - 60px));
+  }
+
+  body.sidebar-collapsed .brand-name,
+  body.sidebar-collapsed .nav-label,
+  body.sidebar-collapsed .nav-count,
+  body.sidebar-collapsed .nav-group-title,
+  body.sidebar-collapsed .account-text,
+  body.sidebar-collapsed .account-chev {
+    display: block;
+  }
+
+  body.sidebar-collapsed .nav-item,
+  body.sidebar-collapsed .account-button {
+    justify-content: flex-start;
+    padding: 0 8px;
+  }
+}
+
+@media (max-width: 700px) {
+  #chat-resize-handle {
+    display: none;
+  }
+
+  #chat-column {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  body.view-chat .main-head,
+  body.view-chat .main-body {
+    display: none;
+  }
+
+  body.view-panel #chat-column {
+    display: none;
+  }
+
+  body.view-panel .main-head,
+  body.view-panel .main-body {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #sidebar,
+  #chat-resize-handle::before {
+    transition: none;
+  }
+}

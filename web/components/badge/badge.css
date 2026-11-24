@@ -1,0 +1,58 @@
+/* Badge + avatar: small status labels and identity circles used by rows and cards. */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+  padding: 0 8px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-tint);
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.badge-live {
+  border-color: transparent;
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.badge-count {
+  color: var(--fg-3);
+  font-weight: 500;
+}
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-pill);
+  background: var(--bg-tint-2);
+  color: var(--fg-1);
+  font-size: 12px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.avatar-sm {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
+
+.avatar-lg {
+  width: 40px;
+  height: 40px;
+  font-size: 15px;
+}
+
+.avatar-accent {
+  background: var(--accent-mid);
+}
