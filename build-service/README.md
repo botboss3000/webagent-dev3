@@ -64,6 +64,31 @@ the live checkout or containers by hand. All commands below run **on the server*
    Apply again with a new patch from the same workcopy for later edits.
    The reply lists the claims the edit took (`module:` scopes); broad ones such
    as `module:broker` or `module:workspace` block other writers.
+   **Queued applies.** When another task holds the files, the apply is refused with
+   the blockers and `queued_patch` (your request ID, paths and `fit`): the broker
+   stores the patch on your waiting task. Apply again with the same request ID,
+   patch and digest until it succeeds; the queue orders tasks, not requests, so
+   you keep your place. When your turn comes the broker moves your tree to current
+   published source and applies the stored patch if it still fits there by a clean
+   context match (no 3-way merge, no fuzz; changed files need context lines). The
+   receipt then carries `rebased: true`, `rebased_onto`, `base_changed_paths`,
+   `base_commits` (checkout commits that changed those files) and `check_evidence`:
+   checks you ran before were on a different base. Preflight shows the same under
+   `rebased`. If it no longer fits, the apply is refused naming each path and why
+   (changed in or next to the patched lines, deleted or renamed upstream, added
+   upstream while the patch creates it, a mode change, or `build-service/` mixed
+   with other files); your task keeps the claims, its tree is current, and you
+   reread only those files and apply a corrected patch with a new request ID and
+   the current digest. Held claims still drop when the heartbeat lapses (orphan
+   rules under "Failed releases" below), so a dead session blocks nobody for long.
+   After every release the broker dry-runs each stored patch against the new
+   source; when one stops fitting it leaves a blocker-board note on that task at
+   once. Send a corrected patch made on the current published files, with a new
+   request ID and the same digest: it replaces the queued one and keeps your place.
+   A releasing task's preflight lists under `waiting_overlaps` the waiting tasks
+   whose stored patch touches files it changes. Only the stored request may still
+   use its pre-refresh digest, once, after a grant another call took (for example a
+   `reserve`); every other apply is judged against the current digest.
 5. Optional server checks: `check TASK --check check|test|fmt|clippy|ui_test [--test-filter NAME] --expected DIGEST --request-id ID`.
    A release runs the full suite anyway; use checks to catch errors before queueing.
    `ui_test` runs the browser fixtures the task's changed paths select, exactly as a

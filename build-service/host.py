@@ -958,6 +958,72 @@ def inspect_source_patch_corrected(root, patch):
     return paths, patch
 
 
+def patch_sections(patch):
+    """Split a checked diff into its per-file sections, keyed by V3-relative path."""
+    sections, path, lines = {}, None, []
+    for line in patch.splitlines(True):
+        match = re.match(r"diff --git a/(\S+) b/\S+", line)
+        if match:
+            if path is not None:
+                sections[path] = "".join(lines)
+            path, lines = match.group(1), []
+        lines.append(line)
+    if path is not None:
+        sections[path] = "".join(lines)
+    return sections
+
+
+def blob_files(blob, paths):
+    """(mode, body) of the named V3 paths in a source archive, without unpacking the rest."""
+    wanted, found = {"v3/" + p: p for p in paths}, {}
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as archive:
+        for member in archive:
+            name = member.name.removeprefix("./")
+            if member.isfile() and name in wanted:
+                found[wanted[name]] = (member.mode & 0o777, archive.extractfile(member).read())
+    return found
+
+
+def file_digests(files):
+    """Comparable identity of each file: its mode and the SHA-256 of its bytes."""
+    return {p: [mode, hashlib.sha256(body).hexdigest()] for p, (mode, body) in files.items()}
+
+
+def queued_patch_fit(source, patch, paths, before, after):
+    """Does a patch made on the `before` files still fit the `after` files in `source`?
+
+    Returns (changed, reasons): the patched paths whose base changed and, per path, why the
+    patch cannot be moved onto it. Refuses rather than guesses: only a clean context match counts
+    (no 3-way merge, no fuzz), and a changed file's hunks must carry context lines, because a
+    zero-context hunk on a moved base would land at a stale line number unchecked.
+    """
+    changed = sorted(p for p in paths if before.get(p) != after.get(p))
+    build = [p for p in paths if p.startswith("build-service/")]
+    if changed and build and len(build) != len(paths):
+        return changed, {p: "build-service/ mixed with other files; a broker patch carries build-service files alone"
+                         for p in paths}
+    sections, reasons = patch_sections(patch), {}
+    for path in changed:
+        old, new, text = before.get(path), after.get(path), sections.get(path, "")
+        if old is not None and new is None:
+            reasons[path] = "deleted or renamed upstream"
+        elif old is None:
+            reasons[path] = "added upstream, and the patch creates it"
+        elif (old[0] ^ new[0]) & 0o111 or re.search(r"^(old|new) mode ", text, re.M):
+            reasons[path] = "file mode changed"
+        else:
+            try:
+                source_git(source, ["apply", "--check", "--whitespace=error", "-"], text.encode())
+            except ValueError:
+                reasons[path] = "changed upstream in or next to the patched lines"
+    if not reasons:
+        try:
+            source_git(source, ["apply", "--check", "--unidiff-zero", "--whitespace=error", "-"], patch.encode())
+        except ValueError:
+            reasons = {p: "the whole patch no longer applies" for p in (changed or paths)}
+    return changed, reasons
+
+
 # Environment no longer carried into a replacement container: the diagnostics browser-login
 # bridge these configured was removed from the app (2026-11-23); old containers may still hold them.
 RETIRED_ENV = ("V3_BROWSER_LOGIN_TOKEN", "V3_BROWSER_LOGIN_CALLER_ID")
@@ -3689,6 +3755,116 @@ class Broker:
             return blob
         return self.runner.snapshot()
 
+    def _release_id(self):
+        """The job whose candidate _current_release_blob serves, without reading it."""
+        best = None
+        for job in self.jobs.values():
+            if job.get("isolated") and (job["status"] == "completed" or job.get("operator_adopted_at")):
+                key = (job.get("finished_at", job["created_at"]), job["job_id"])
+                best = key if best is None or key > best else best
+        return best[1] if best else None
+
+    # Queued patches (2026-11-23). A blocked source apply stores its patch on the waiting task. After
+    # each release the broker dry-runs it against the new source and leaves a board note on the task
+    # once it stops fitting; a new apply from the task replaces it without losing the queue place
+    # (the queue orders tasks, not requests). At the grant the patch is moved onto the refreshed tree
+    # when it still fits cleanly, else refused with the claims held and the paths named.
+    def _queue_patch(self, item, request_id, digest, patch, paths, inputs, base, base_at):
+        queued = item.get("queued_patch")
+        if not (queued and queued["request_sha256"] == digest
+                and queued["acquisition_revision"] == item.get("acquisition_revision")):
+            item["queued_patch"] = {
+                "request_id": request_id, "request_sha256": digest, "patch": patch,
+                "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(), "paths": paths,
+                "inputs_sha256": inputs, "acquisition_revision": item.get("acquisition_revision"),
+                "base": base, "base_at": base_at, "stored_at": time.time()}
+            try:
+                self.queued_patch_fits(only=item)
+            except Exception:  # noqa: BLE001 - the dry run is advice; never turn a queue reply into an error
+                pass
+            self._save_work()
+        queued = item["queued_patch"]
+        return {"request_id": queued["request_id"], "paths": queued["paths"], "fit": queued.get("fit")}
+
+    def _release_files_root(self, blob, paths, folder):
+        """Write only the named files of a source archive under folder/v3 for a checked dry run."""
+        files = blob_files(blob, paths)
+        source = Path(folder) / "v3"
+        for path, (mode, body) in files.items():
+            target = source / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+            target.chmod(mode)
+        source.mkdir(exist_ok=True)
+        return source, files
+
+    def queued_patch_fits(self, only=None):
+        """Dry-run each stored queued patch against the current release once per release."""
+        items = [only] if only else [i for i in self.work.values()
+                                     if i.get("status") == "open" and i.get("queued_patch")]
+        if not items:
+            return
+        key, blob = self._release_id(), None
+        if key is None:
+            blob = self.runner.snapshot()
+            key = "checkout:" + context_digest(blob)[0]
+        todo = [i for i in items if (i["queued_patch"].get("fit") or {}).get("release") != key]
+        if not todo:
+            return
+        blob = blob or self._current_release_blob()
+        scratch = self.work_dir / "queued-fit"
+        scratch.mkdir(parents=True, exist_ok=True)
+        for item in todo:
+            queued, previous = item["queued_patch"], item["queued_patch"].get("fit")
+            with tempfile.TemporaryDirectory(dir=scratch) as folder:
+                try:
+                    source, files = self._release_files_root(blob, queued["paths"], folder)
+                    changed, reasons = queued_patch_fit(source, queued["patch"], queued["paths"],
+                                                        queued["base"], file_digests(files))
+                except (ValueError, OSError) as error:
+                    changed, reasons = [], {"(patch)": "dry run failed: " + str(error)[:160]}
+            fit = {"release": key, "fits": not reasons, "changed": changed, "reasons": reasons, "at": time.time()}
+            queued["fit"] = fit
+            if reasons and (previous is None or previous.get("fits")):
+                where = "; ".join(f"{p} ({r})" for p, r in sorted(reasons.items()))[:450]
+                text = (f"Release {key[:8]} changed files your queued patch (request {queued['request_id']}) needs, "
+                        f"and it no longer fits: {where}. Send a corrected patch now with a new request_id "
+                        "(same task and expected_inputs_sha256, made on the current published files): it replaces "
+                        "the queued one and keeps your place. Otherwise your turn's apply is refused with the claims held.")[:1000]
+                try:
+                    self.scheduler.board.call({"action": "post", "author": "broker", "verified": True,
+                                               "to_task": item["task_id"], "text": text})
+                except ValueError:
+                    pass  # Board away: the fit still comes back with every queued apply.
+        self._save_work()
+
+    def _inspect_against_release(self, patch):
+        """Check a replacement queued patch against the current release, not the waiting tree."""
+        blob = self._current_release_blob()
+        scratch = self.work_dir / "queued-fit"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as folder:
+            source, files = self._release_files_root(blob, list(patch_sections(patch)), folder)
+            paths, patch = inspect_source_patch_corrected(source, patch)
+        return paths, patch, file_digests(files)
+
+    def _base_commits(self, paths, since):
+        """Checkout commits since the task's old base that touched these paths (bounded, best effort)."""
+        checkout = getattr(self.runner, "source", None)
+        if not paths or checkout is None:
+            return []
+        env = {"PATH": "/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8", "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_OPTIONAL_LOCKS": "0"}
+        try:
+            result = subprocess.run(["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "log",
+                                     "-n", "20", "--format=%h %s", f"--since=@{int(since)}", "--", *paths],
+                                    cwd=checkout, env=env, capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if result.returncode:
+            return []
+        return [line[:160] for line in result.stdout.decode("utf-8", "replace").splitlines()[:20]]
+
 
     def _sync_report(self, live, candidate, changed, offset=0, base=None):
         return release.checkout_drift(live, self.runner.snapshot(), candidate,
@@ -6362,18 +6538,76 @@ class Broker:
                 if (self.active is not None or self.active_ui is not None) and not isolated:
                     raise ValueError("build active; source apply denied")
                 tree = self.work_dir / "trees" / item["key"] if isolated else self.runner.source
-                current, _ = context_digest(
-                    release.snapshot(tree, TASK_CONTEXT, context_digest) if isolated else self.runner.snapshot())
-                if current != args["expected_inputs_sha256"]:
+                before_blob = release.snapshot(tree, TASK_CONTEXT, context_digest) if isolated else self.runner.snapshot()
+                current, _ = context_digest(before_blob)
+                queued = item.get("queued_patch") if isolated else None
+                # Only the exact stored request may still use its pre-refresh digest, and only for the
+                # acquisition that refreshed the tree after it was stored (another call took the grant).
+                # Anything else is judged against the current digest.
+                stored = bool(queued and queued["request_id"] == request_id and queued["request_sha256"] == digest
+                              and args["expected_inputs_sha256"] == queued["inputs_sha256"] != current
+                              and item.get("acquisition_revision") != queued["acquisition_revision"])
+                if current != args["expected_inputs_sha256"] and not stored:
                     raise ValueError("stale source inputs")
                 source = tree / "v3"
-                paths, patch = inspect_source_patch_corrected(source, patch)
-                self.scheduler.guard(item,trusted,workspace,paths,request_id,patch=patch)
-                if isolated and context_digest(release.snapshot(tree,TASK_CONTEXT,context_digest))[0]!=current:
-                    raise ValueError("Queued task refreshed to current source; reread before applying a patch")
+                base_at = (tree / "baseline.tar").stat().st_mtime if isolated else time.time()
+                before, from_release = None, False
+                if stored:
+                    paths, patch, before, base_at = queued["paths"], queued["patch"], queued["base"], queued["base_at"]
+                else:
+                    try:
+                        paths, patch = inspect_source_patch_corrected(source, patch)
+                    except ValueError:
+                        # A replacement for a queued patch that stopped fitting is made on the current
+                        # release; the waiting tree still holds the old base.
+                        if not (queued and self.scheduler.waiting(item)):
+                            raise
+                        paths, patch, before = self._inspect_against_release(patch)
+                        base_at, from_release = time.time(), True
+                try:
+                    self.scheduler.guard(item,trusted,workspace,paths,request_id,patch=patch)
+                except scheduler_module.Conflict as conflict:
+                    if not isolated:
+                        raise
+                    if stored:
+                        summary = {"request_id": queued["request_id"], "paths": queued["paths"], "fit": queued.get("fit")}
+                    else:
+                        if before is None:
+                            before = file_digests(blob_files(before_blob, paths))
+                        summary = self._queue_patch(item, request_id, digest, patch, paths, current, before, base_at)
+                    raise scheduler_module.Conflict({**conflict.details, "queued_patch": summary}) from None
+                rebase = None
+                if isolated:
+                    after_blob = release.snapshot(tree, TASK_CONTEXT, context_digest)
+                    onto = context_digest(after_blob)[0]
+                    if stored or onto != current:
+                        # The grant moved the tree to current source: move the patch with it when it
+                        # still fits cleanly. One acquisition, one use of the stored patch.
+                        item.pop("queued_patch", None)
+                        if before is None:
+                            before = file_digests(blob_files(before_blob, paths))
+                        changed, reasons = queued_patch_fit(source, patch, paths, before,
+                                                            file_digests(blob_files(after_blob, paths)))
+                        if reasons:
+                            self._save_work()
+                            where = "; ".join(f"{p} ({r})" for p, r in sorted(reasons.items()))
+                            raise ValueError("Queued task refreshed to current source; the patch no longer fits: " + where
+                                             + ". The claims stay held: reread these files and apply a corrected patch "
+                                             "with a new request_id and expected_inputs_sha256 " + onto
+                                             + " (the task's other files are current already)")
+                        rebase = {"rebased": True, "rebased_onto": onto, "base_changed_paths": changed,
+                                  "base_commits": self._base_commits(changed, base_at - 60),
+                                  "check_evidence": "stale: earlier check results ran on a different base; "
+                                                    "check again or rely on the release build, which re-runs every test"}
+                    elif from_release:
+                        raise ValueError("replacement patch does not apply to the task tree")
+                    elif queued:
+                        item.pop("queued_patch", None)
                 receipt = {"task_id": task_id, "request_id": request_id, "request_sha256": digest,
                            "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
-                           "status": "dispatching", "paths": paths}
+                           "status": "dispatching", "paths": paths, **(rebase or {})}
+                if rebase:
+                    item["rebased"] = {"request_id": request_id, **rebase}
                 item["applies"][request_id] = receipt
                 self._save_work()
                 try:
@@ -6455,9 +6689,18 @@ class Broker:
                         else:
                             _, own = release.candidate(base, task, base, context_digest, allow_empty=True)
                             plan = self._release_plan(own, changed, candidate, base, trusted)
+                        mine = {p.removeprefix("v3/") for p in plan["changed_paths"]}
+                        # Waiting tasks whose queued patch touches files this release changes: their
+                        # patch is moved onto this release at their turn, or refused if it no longer fits.
+                        waiting = [{"task_id": i["task_id"], "session": self.scheduler.session(i["key"]),
+                                    "paths": sorted(mine & set(i["queued_patch"]["paths"]))}
+                                   for i in self.work.values() if i is not item and i.get("status") == "open"
+                                   and i.get("queued_patch") and mine & set(i["queued_patch"]["paths"])]
                         return {"task_id": task_id, "synchronization": report,
                                 "release_plan": {"inputs_sha256": context_digest(task)[0], "operation": plan["operation"], "changed_paths": plan["changed_paths"],
-                                    "refusal": plan.get("refusal"), "broker_install_required": plan.get("broker_install_required", False)}}
+                                    "refusal": plan.get("refusal"), "broker_install_required": plan.get("broker_install_required", False)},
+                                **({"rebased": item["rebased"]} if item.get("rebased") else {}),
+                                **({"waiting_overlaps": waiting[:20]} if waiting else {})}
                     if not job or job["status"] != "needs_decision":
                         raise ValueError("Only a paused pre-effect job can be decided")
                     if args.get("expected_sync_digest") != report["digest"]:

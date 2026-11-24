@@ -550,6 +550,14 @@ class Scheduler:
         self.store.orphan(self.orphan_after,max(self.orphan_after,1800))
         self.settle();self.trim_registry()
         self.board.push([{"label":i["task_id"],"session":self.session(i["key"]),**self.board_owner(i)}for i in list(self.broker.work.values())if self.live(i.get("key"))])
+        # Dry-run waiting tasks' stored patches once per new release; a failure only delays the note.
+        try:self.broker.queued_patch_fits()
+        except Exception:pass  # noqa: BLE001 - advice only; housekeeping must keep running
+    def waiting(self,item):
+        """The task waits in the queue: it requested claims it does not hold."""
+        try:value=self.store.get(item["key"])
+        except ValueError:return False
+        return value["state"]=="waiting"and bool(value["requested"])
     def board_owner(self,item):
         """The chat a task's notes are delivered to: an in-app (v3) chat by its session ID, else the local harness."""
         origin=self.origin(item["key"])
