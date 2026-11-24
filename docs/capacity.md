@@ -195,8 +195,9 @@ account on each loop; a loop-1 account's sandbox command ran in the worker conta
 runs on one agent five ran across both loops and the sixth waited while an administrator's run
 started; with 12 runs asked for, exactly 10 ran at once. Idle cost: the two loops together used
 about the same processor time as one loop (4.1 % against 3.9 % of a core over 10 minutes while
-other work ran). Session naming could not be checked at either loop count: its "system" model
-role had no answering model that day. The Dashboard and Builds pages show no loop count or
+other work ran). Session naming works on both loops (title 2 s after the reply) once the default
+agent's "system" model role is an API model; with the bridge model it had no answer at either loop
+count. The Dashboard and Builds pages show no loop count or
 per-loop state (the Dashboard's run counts cover only the signed-in account's runs on the current
 agent). To go back to one loop: remove `loops` from `scheduler` (administrator configuration
 save of `loop_runtime`) and restart the loop container; remove it as well before rolling back to
