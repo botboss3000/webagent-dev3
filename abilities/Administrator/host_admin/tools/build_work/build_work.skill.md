@@ -98,24 +98,36 @@ writer.
 ## Waiting for claims
 
 A file edit refused with `ownership_conflict` is not lost: your task is now
-queued for those files behind the named blockers. Do not tell the user you are
-blocked or ask them to say retry. Call `wait` with your `broker_id` (no
-`job_id`) and end your turn; it runs in the background and a notice wakes you
-when the task holds its claims (then reread the files and apply your edits
-again), when the task closes, or if it is still queued after 2 hours (then
-tell the user which session blocks it). The wait recovers your task itself
-if it orphans meanwhile. Work on files that are not blocked first. Never abandon another session's task to get ahead of it.
+queued for those files behind the named blockers, and the broker keeps that
+edit with the queue request. Do not tell the user you are blocked or ask them
+to say retry. Call `wait` with your `broker_id` (no `job_id`) right away, in
+the same turn, and end your turn. The wait runs in the background and sends
+your refused edit again about once a minute, which keeps your place; at your
+turn the broker applies it onto current source when it still fits. Its notice
+wakes you when the task holds its claims and says what became of the edit
+(`edit` in the result):
 
-The broker keeps your refused edit with the queue request. After every release
-it checks that the edit still fits the new source; when a release changes the
-lines you edit, a board note names those files at once. When your claims are
-granted your task's files are current source: reread only the files you edit
-(and any a note named) before applying again; do not abandon and begin a new
-task because the base moved. An apply that arrives with the grant is moved
-onto current source by itself when it still fits (its receipt says
-`rebased: true`, and checks you ran before were on a different base); when it
-does not fit, the refusal names each file and why, and your task keeps its
-claims while you redo just those edits.
+- `applied`: done; do not apply it again. When the receipt says `rebased`,
+  other releases changed the task's files meanwhile and checks you ran before
+  were on a different base. Use the `workspace_inputs_sha256` it gives for
+  your next edit.
+- `conflict`: the edit no longer fits current source; `conflicts` names the
+  files. Reread only those and redo just those edits. Your task keeps its
+  claims, and its other files are current already.
+- `not_applied`: reread the named file and apply the edit again.
+
+The notice also comes when the task closes, or if it is still queued after 2
+hours (then tell the user which session blocks it). The wait recovers your
+task itself if it orphans meanwhile. Make no other edit to this task until
+the notice: it changes the task's inputs, and the queued edit must then be
+redone. Never abandon another session's task to get ahead of it.
+
+The broker keeps only the newest refused edit of a task. After every release
+it checks that edit still fits the new source; when a release changes the
+lines you edit, a board note names those files at once. Then send the
+corrected edit; when it is refused as queued again, call `wait` again: only
+your newest wait sends an edit. Do not abandon and begin a new task because
+the base moved.
 
 ## Blocker board
 

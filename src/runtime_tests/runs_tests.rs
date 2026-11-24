@@ -1699,3 +1699,140 @@ async fn loop_liveness_does_not_wait_for_the_shared_application_pool() {
     );
     drop(held);
 }
+
+/// A claim wait sends the task's refused edit again through the file tool's own path (same
+/// request ID, admitted again) instead of a bare reservation: while the task is queued that
+/// renews the request, and at its turn the broker's stored-patch apply answers with the
+/// receipt, so the agent is told the edit was applied. With the tool denied since, nothing
+/// reaches the broker and the agent is told to redo the edit.
+#[tokio::test]
+#[cfg(feature = "administrator")]
+#[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
+async fn a_claim_wait_sends_the_refused_edit_and_reports_its_receipt() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
+    for denied in [false, true] {
+        let (_root, app) = fixture().await;
+        let sid = conversation(&app).await;
+        activate_codebase(&app, &sid).await;
+        if denied {
+            set_tool_permission(&app, "file_edit", access::Permission::Deny).await;
+        }
+        let id = queued(&app, &sid).await;
+        let mut run = app.run(&id).await.unwrap();
+        run["loaded_abilities"] = json!(["codebase_admin"]);
+        run["pending"] = json!({"id":"wait-pending","call_id":"wait-call","name":"build_work",
+            "state":"executing","arguments":{"action":"wait","broker_id":"queued-task-1"}});
+        app.save(&mut run).await.unwrap();
+        let edit = json!({"broker_id":"queued-task-1","path":"docs/a.md","old_text":"a",
+            "new_text":"b","expected_inputs_sha256":"d1"});
+        let external = json!({"name":"build_work","external_job":{"kind":"v3_build",
+            "claims_for":"queued-task-1","submitted_at":now(),
+            "replay":{"name":"file_edit","arguments":edit,"pending_id":"edit-pending"}}});
+        // The background record a `wait` call detaches (engine `background_detach_record`).
+        let task_id = format!("claim-wait-{id}");
+        let task = json!({"id":task_id,"user_id":app.store.current_user_id(),
+            "agent_id":run["agent_id"],"session_id":sid,"run_id":id,"call_id":"wait-call",
+            "name":"build_work","arguments":{"action":"wait"},"detached":true,
+            "external_pending":external,"parked_approval":false,"status":"running",
+            "revision":0,"created_at":now(),"created_at_ms":now() * 1000,"lease_until":now() + 30});
+        assert!(app.store.background_cas(&task, None).await.unwrap());
+        // The broker double: the task waits for one path; the first edit is still queued, the
+        // second is applied at the task's turn (rebased onto current source).
+        let listener = UnixListener::bind(&app.build_socket).unwrap();
+        let (seen, mut requests) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let server = tokio::spawn(async move {
+            let mut edits = 0;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let call: Value = serde_json::from_str(&line).unwrap();
+                seen.send(call.clone()).unwrap();
+                let reply = if call["name"] == "file_edit" {
+                    edits += 1;
+                    if edits == 1 {
+                        json!({"id":call["id"],"status":"failed","output":{"kind":"ownership_conflict",
+                            "queued_patch":{"request_id":call["arguments"]["request_id"]}}})
+                    } else {
+                        json!({"id":call["id"],"status":"success","output":{"status":"success",
+                            "request_id":call["arguments"]["request_id"],"paths":["docs/a.md"],
+                            "rebased":true,"base_changed_paths":["docs/a.md"],
+                            "workspace_inputs_sha256":"d2"}})
+                    }
+                } else if call["arguments"]["action"] != "reservations" {
+                    json!({"id":call["id"],"status":"success","output":{"acquired":false}})
+                } else {
+                    json!({"id":call["id"],"status":"success","output":{"tasks":[{
+                        "label":"queued-task-1","owned_by_caller":true,"state":"waiting",
+                        "requested":["path:docs/a.md"],"heartbeat":0,"revision":3,"epoch":1}]}})
+                };
+                let reply = test_rpc_reply(&call, reply);
+                reader
+                    .get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        recover(&app, false).await.unwrap();
+        let first = app.store.background_get(&task_id).await.unwrap().unwrap();
+        if denied {
+            // Refused at admission: the wait keeps the request alive with a reservation and
+            // sends no edit; once granted it reports the edit as not applied.
+            assert_eq!(first["status"], "running");
+            let mut names = Vec::new();
+            while let Ok(call) = requests.try_recv() {
+                names.push((call["name"].clone(), call["arguments"]["action"].clone()));
+            }
+            assert!(
+                names.iter().all(|(name, _)| name != "file_edit"),
+                "{names:?}"
+            );
+            assert!(
+                names.contains(&(json!("build_work"), json!("reserve"))),
+                "{names:?}"
+            );
+            server.abort();
+            continue;
+        }
+        assert_eq!(
+            first["status"], "running",
+            "still queued after the first send"
+        );
+        recover(&app, false).await.unwrap();
+        let done = app.store.background_get(&task_id).await.unwrap().unwrap();
+        server.abort();
+        assert_eq!(done["status"], "completed");
+        let output = &done["result"]["output"];
+        assert_eq!(output["status"], "claims_granted");
+        assert_eq!(output["edit"], "applied");
+        assert_eq!(output["receipt"]["rebased"], true);
+        assert!(output["message"]
+            .as_str()
+            .unwrap()
+            .contains("Do not apply it again"));
+        let mut sent = Vec::new();
+        while let Ok(call) = requests.try_recv() {
+            if call["name"] == "file_edit" {
+                sent.push(call);
+            } else {
+                assert_eq!(
+                    call["arguments"]["action"], "reservations",
+                    "no bare reserve"
+                );
+            }
+        }
+        assert_eq!(sent.len(), 2);
+        let request_id = webagent_administration::arguments::retry_id(&sid, "edit-pending");
+        for call in &sent {
+            // The original tool call exactly: same arguments and broker request ID, with a
+            // fresh access fingerprint from the file tool's own admission.
+            assert_eq!(call["arguments"]["request_id"], request_id);
+            assert_eq!(call["arguments"]["path"], "docs/a.md");
+            assert_eq!(call["arguments"]["expected_inputs_sha256"], "d1");
+            assert!(call["trusted"]["access_fingerprint"].is_string());
+        }
+    }
+}

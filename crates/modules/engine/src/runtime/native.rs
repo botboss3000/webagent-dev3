@@ -88,6 +88,19 @@ pub trait NativeDispatch<S: Sync, C: SchemaCatalog, B: Sync, H: SessionBinding>:
         authority: &'a str,
     ) -> impl Future<Output = Result<String>> + Send + 'a;
     fn recovery_build_socket(&self, view: View<'_, S, C, B, H>) -> std::path::PathBuf;
+    /// Send a Codebase Admin file edit the broker refused while its task waited for claims
+    /// again, through the same tool path and authority checks as the original call `pending`
+    /// of run `run` (so the same broker request ID). At the task's turn the broker applies the
+    /// stored patch, rebased onto current source when it still fits.
+    fn replay_file_edit<'a>(
+        &'a self,
+        view: View<'a, S, C, B, H>,
+        sid: &'a str,
+        run: &'a str,
+        name: &'a str,
+        args: &'a Value,
+        pending: &'a str,
+    ) -> impl Future<Output = Result<Value>> + Send + 'a;
 
     fn naming_service<'a>(
         &'a self,

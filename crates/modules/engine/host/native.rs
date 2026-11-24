@@ -618,6 +618,37 @@ impl
     ) -> PathBuf {
         crate::tools::administrator::build_socket(&self.host.app(view))
     }
+    fn replay_file_edit<'a>(
+        &'a self,
+        view: View<
+            'a,
+            Store,
+            loop_runtime::NativeSchemas,
+            abilities::Catalog,
+            shared_chat::SessionAccess,
+        >,
+        sid: &'a str,
+        run: &'a str,
+        name: &'a str,
+        args: &'a Value,
+        pending: &'a str,
+    ) -> impl std::future::Future<Output = Result<Value>> + Send + 'a {
+        async move {
+            let app = self.host.app(view);
+            // The tool path admits the call again: a revoked tool or account refuses it.
+            crate::tools::administrator::execute(
+                &app,
+                sid,
+                run,
+                name,
+                args,
+                pending,
+                0,
+                CancellationToken::new(),
+            )
+            .await
+        }
+    }
 
     fn naming_service<'a>(
         &'a self,

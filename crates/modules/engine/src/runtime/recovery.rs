@@ -245,7 +245,9 @@ impl<
     /// stage, and report the job's end as a background notice that wakes the agent. After a
     /// session stop the task is quiet: the chip still updates but no notice is sent.
     async fn follow_detached_builds(app: &Self) -> Result<()> {
-        for mut task in app.store.background_scan(None).await? {
+        let tasks = app.store.background_scan(None).await?;
+        let newest = newest_claim_waits(&tasks);
+        for mut task in tasks {
             if task["detached"] != true
                 || task["status"] != "running"
                 || !task["external_pending"].is_object()
@@ -255,7 +257,16 @@ impl<
             let sid = task["session_id"].as_str().unwrap_or_default().to_owned();
             let follow = json!({"id":task["run_id"],"session_id":sid,
                 "pending":task["external_pending"]});
-            if follow["pending"]["external_job"]["claims_for"].is_string() {
+            if let Some(broker_id) = follow["pending"]["external_job"]["claims_for"].as_str() {
+                // Only the newest wait of a task sends its edit: an older one would put back
+                // the edit a newer refused edit replaced at the broker.
+                let key = (sid.clone(), broker_id.to_owned());
+                if newest.get(&key).map(String::as_str) != task["id"].as_str() {
+                    let result = json!({"status":"success","output":{"status":"superseded",
+                        "broker_id":broker_id,"message":"A newer wait follows this task."}});
+                    Self::end_claim_wait(app, &mut task, &sid, result, false).await?;
+                    continue;
+                }
                 Self::follow_claim_wait(app, &mut task, &follow).await?;
                 continue;
             }
@@ -439,6 +450,17 @@ impl<
             }
         };
         let sid = follow["session_id"].as_str().unwrap_or_default();
+        Self::end_claim_wait(app, task, sid, result, true).await
+    }
+    /// Complete a claim wait with `result`; with `notify` (and the session not stopped) its
+    /// end is a background notice that wakes the agent.
+    async fn end_claim_wait(
+        app: &Self,
+        task: &mut Value,
+        sid: &str,
+        result: Value,
+        notify: bool,
+    ) -> Result<()> {
         let output = &result["output"];
         let broker_id = output["broker_id"].as_str().unwrap_or("task");
         let revision = task["revision"].as_u64().unwrap_or(0);
@@ -453,7 +475,7 @@ impl<
         app.store
             .background_delivered(task, "background_notice")
             .await?;
-        if task["quiet"] == true {
+        if !notify || task["quiet"] == true {
             return Ok(());
         }
         let status = output["status"].as_str().unwrap_or("ended");
@@ -706,7 +728,15 @@ impl<
             .as_array()
             .map(|q| q.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
+        let replay = Some(&run["pending"]["external_job"]["replay"])
+            .filter(|edit| matches!(edit["name"].as_str(), Some("file_edit" | "file_write")));
         if requested.is_empty() {
+            if let Some(edit) = replay {
+                // Granted by another call, or applied by a send whose reply was lost: the same
+                // request returns its receipt, or says why it cannot apply now.
+                let reply = Self::replay(app, run, sid, edit).await;
+                return Ok(BuildPoll::Done(granted(task, edit, &replayed(&reply))));
+            }
             return done("claims_granted", format!("Task {task} now holds its claims. Reread the files, then apply your edits again."));
         }
         let waited = now().saturating_sub(
@@ -731,6 +761,21 @@ impl<
         }
         if (now() as f64) - beat < CLAIM_RETRY_SECONDS && row["state"] != "orphaned" {
             return Ok(BuildPoll::Waiting(None));
+        }
+        // Sending the refused edit again also renews the request; at the task's turn the
+        // broker applies it onto current source when it still fits.
+        if let Some(edit) = replay {
+            let reply = Self::replay(app, run, sid, edit).await;
+            tracing::info!(task, status = %reply["status"], "claim wait sent the queued edit again");
+            match replayed(&reply) {
+                Replayed::Queued => return Ok(BuildPoll::Waiting(None)),
+                outcome @ (Replayed::Applied(_) | Replayed::NoLongerFits(..)) => {
+                    return Ok(BuildPoll::Done(granted(task, edit, &outcome)));
+                }
+                // Refused before the grant (for example the task changed since): keep the
+                // request alive below; once granted the edit is sent once more.
+                Replayed::NotApplied(_) => {}
+            }
         }
         let revision = &row["revision"];
         let paths: Vec<&str> = requested
@@ -766,6 +811,24 @@ impl<
                 reason.chars().take(300).collect::<String>()
             ),
         )
+    }
+    /// Send a claim wait's refused file edit again through its own tool path; an admission
+    /// or transport failure reads as a refusal (nothing applied).
+    async fn replay(app: &Self, run: &Value, sid: &str, edit: &Value) -> Value {
+        let rid = run["id"].as_str().unwrap_or_default();
+        let name = edit["name"].as_str().unwrap_or_default();
+        let pending = edit["pending_id"].as_str().unwrap_or_default();
+        app.native
+            .replay_file_edit(
+                app.native_view(),
+                sid,
+                rid,
+                name,
+                &edit["arguments"],
+                pending,
+            )
+            .await
+            .unwrap_or_else(|error| json!({"status":"failed","output":format!("{error:#}")}))
     }
     /// A planned restart's mark (`restart-cause.json` in the control directory, loop k's
     /// `restart-cause-k.json`): written by the loop on SIGTERM, or first by the broker with its
@@ -1204,6 +1267,181 @@ pub(super) async fn note_build_job<S: super::ports::ScopedStorage>(
     }
 }
 
+/// Remember a Codebase Admin file edit the broker refused because its task waits for claims
+/// (the newest per task, as the broker keeps only that one), so a claim wait can send it
+/// again. It is kept beside the run checkpoint, never in the model input.
+pub(super) fn note_queued_edit(
+    run: &mut Value,
+    name: &str,
+    args: &Value,
+    pending: &str,
+    reply: &Value,
+) {
+    let Some(task) = args["broker_id"]
+        .as_str()
+        .or_else(|| args["task_id"].as_str())
+    else {
+        return;
+    };
+    if reply["status"] == "success" || reply["output"]["kind"] != "ownership_conflict" {
+        return;
+    }
+    if !run["_queued_edits"].is_object() {
+        run["_queued_edits"] = json!({});
+    }
+    run["_queued_edits"][task] = json!({"name":name,"arguments":args,"pending_id":pending});
+}
+
+/// Take the refused edit kept for `task`, or null when there is none.
+pub(super) fn take_queued_edit(run: &mut Value, task: &Value) -> Value {
+    let Some(edits) = run.get_mut("_queued_edits").and_then(Value::as_object_mut) else {
+        return Value::Null;
+    };
+    let edit = task
+        .as_str()
+        .and_then(|task| edits.remove(task))
+        .unwrap_or(Value::Null);
+    if edits.is_empty() {
+        if let Some(run) = run.as_object_mut() {
+            run.remove("_queued_edits");
+        }
+    }
+    edit
+}
+
+/// What sending a queued edit again found.
+#[derive(Debug, PartialEq)]
+enum Replayed {
+    /// Applied now, or earlier by the same request: the broker's receipt.
+    Applied(Value),
+    /// Still queued behind other tasks' claims.
+    Queued,
+    /// The task got its claims but the edit no longer fits current source: these paths, and
+    /// the broker's reason.
+    NoLongerFits(Vec<String>, String),
+    /// Refused for another reason, with nothing applied.
+    NotApplied(String),
+}
+
+fn replayed(reply: &Value) -> Replayed {
+    if reply["status"] == "success" {
+        return if reply["output"]["status"] == "success" {
+            Replayed::Applied(reply["output"].clone())
+        } else {
+            Replayed::NotApplied(format!(
+                "the broker recorded the apply as {}; read its receipt before editing",
+                reply["output"]["status"]
+            ))
+        };
+    }
+    if reply["output"]["kind"] == "ownership_conflict" {
+        return Replayed::Queued;
+    }
+    let text = reply["output"]
+        .as_str()
+        .map_or_else(|| reply["output"].to_string(), str::to_owned);
+    if let Some((_, rest)) = text.split_once("no longer fits: ") {
+        let list = rest
+            .split_once(". The claims stay held")
+            .map_or(rest, |(list, _)| list);
+        let paths = list
+            .split("; ")
+            .filter_map(|item| {
+                item.split_once(" (")
+                    .map(|(path, _)| path.trim().to_owned())
+            })
+            .filter(|path| !path.is_empty())
+            .collect();
+        return Replayed::NoLongerFits(paths, text);
+    }
+    Replayed::NotApplied(text)
+}
+
+/// A claim wait's result once its task holds the claims, saying what became of the edit.
+fn granted(task: &str, edit: &Value, outcome: &Replayed) -> Value {
+    let path = edit["arguments"]["path"].as_str().unwrap_or("the file");
+    let bounded = |text: &str| text.chars().take(300).collect::<String>();
+    let mut output = json!({"status":"claims_granted","broker_id":task});
+    let message = match outcome {
+        Replayed::Applied(receipt) => {
+            output["edit"] = json!("applied");
+            output["receipt"] = json!({"request_id":receipt["request_id"],"paths":receipt["paths"],
+                "rebased":receipt["rebased"] == true,"base_changed_paths":receipt["base_changed_paths"],
+                "workspace_inputs_sha256":receipt["workspace_inputs_sha256"]});
+            let rebased = if receipt["rebased"] == true {
+                format!(
+                    " onto current source (releases changed {} meanwhile; checks you ran before \
+                     were on a different base)",
+                    receipt["base_changed_paths"]
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "Task {task} now holds its claims and the broker applied your queued edit to \
+                 {path}{rebased}. Do not apply it again. Your next edit uses \
+                 expected_inputs_sha256 {}.",
+                receipt["workspace_inputs_sha256"]
+                    .as_str()
+                    .unwrap_or("from a fresh read")
+            )
+        }
+        Replayed::NoLongerFits(paths, text) => {
+            output["edit"] = json!("conflict");
+            output["conflicts"] = json!(paths);
+            format!(
+                "Task {task} now holds its claims, but your queued edit no longer fits current \
+                 source ({}). Reread only {} and redo those edits; the task's other files are \
+                 current already.",
+                bounded(text),
+                paths.join(", ")
+            )
+        }
+        Replayed::NotApplied(text) => {
+            output["edit"] = json!("not_applied");
+            format!(
+                "Task {task} now holds its claims, but your queued edit to {path} was not \
+                 applied ({}). Reread {path} and apply it again.",
+                bounded(text)
+            )
+        }
+        Replayed::Queued => {
+            output["edit"] = json!("not_applied");
+            format!("Task {task} now holds its claims. Reread {path}, then apply your edit again.")
+        }
+    };
+    output["message"] = json!(message);
+    json!({"status":"success","output":output})
+}
+
+/// The newest running claim wait of each session's task, by start time: the one that sends
+/// the task's edit.
+fn newest_claim_waits(tasks: &[Value]) -> std::collections::HashMap<(String, String), String> {
+    let mut newest = std::collections::HashMap::<(&str, &str), (&Value, &str)>::new();
+    for task in tasks {
+        let (Some(sid), Some(broker_id), Some(id)) = (
+            task["session_id"].as_str(),
+            task["external_pending"]["external_job"]["claims_for"].as_str(),
+            task["id"].as_str(),
+        ) else {
+            continue;
+        };
+        if task["detached"] != true || task["status"] != "running" {
+            continue;
+        }
+        let started = &task["created_at_ms"];
+        let entry = newest.entry((sid, broker_id)).or_insert((started, id));
+        let later = (started.as_u64(), id) > (entry.0.as_u64(), entry.1);
+        if later {
+            *entry = (started, id);
+        }
+    }
+    newest
+        .into_iter()
+        .map(|((sid, broker_id), (_, id))| ((sid.to_owned(), broker_id.to_owned()), id.to_owned()))
+        .collect()
+}
+
 /// How long a queued claim request is followed before the agent is told it is still queued.
 const CLAIM_WAIT_SECONDS: u64 = 7200;
 /// How often a queued claim request is retried; well inside the broker's orphan window.
@@ -1318,6 +1556,144 @@ mod tests {
             &json!("status"),
             &json!({"status":"queued","job_id":"j"})
         ));
+    }
+
+    #[test]
+    fn a_refused_edit_is_kept_per_task_for_its_claim_wait_and_taken_once() {
+        let conflict = json!({"status":"failed","output":{"kind":"ownership_conflict",
+            "queued_patch":{"request_id":"broker-1","paths":["docs/a.md"]}}});
+        let args = json!({"broker_id":"task-one","path":"docs/a.md","old_text":"a","new_text":"b"});
+        let mut run = json!({"id":"r"});
+        // Applied edits and other refusals keep nothing.
+        note_queued_edit(
+            &mut run,
+            "file_edit",
+            &args,
+            "p0",
+            &json!({"status":"success","output":{}}),
+        );
+        note_queued_edit(
+            &mut run,
+            "file_edit",
+            &args,
+            "p0",
+            &json!({"status":"failed","output":"stale task inputs"}),
+        );
+        assert!(run["_queued_edits"].is_null());
+        note_queued_edit(
+            &mut run,
+            "file_edit",
+            &json!({"path":"docs/a.md"}),
+            "p0",
+            &conflict,
+        );
+        assert!(
+            run["_queued_edits"].is_null(),
+            "an edit without a task is not kept"
+        );
+        note_queued_edit(&mut run, "file_edit", &args, "p1", &conflict);
+        // A later refused edit of the same task replaces it, as the broker's stored patch does.
+        note_queued_edit(&mut run, "file_write", &args, "p2", &conflict);
+        let other = json!({"task_id":"task-two","path":"b.md","content":"x"});
+        note_queued_edit(&mut run, "file_write", &other, "p3", &conflict);
+        let edit = take_queued_edit(&mut run, &json!("task-one"));
+        assert_eq!(
+            edit,
+            json!({"name":"file_write","arguments":args,"pending_id":"p2"})
+        );
+        assert!(take_queued_edit(&mut run, &json!("task-one")).is_null());
+        assert_eq!(
+            take_queued_edit(&mut run, &json!("task-two"))["pending_id"],
+            "p3"
+        );
+        assert!(
+            run.get("_queued_edits").is_none(),
+            "nothing left beside the run"
+        );
+        assert!(take_queued_edit(&mut run, &Value::Null).is_null());
+    }
+
+    #[test]
+    fn a_sent_again_edit_reads_as_applied_queued_no_longer_fitting_or_not_applied() {
+        let receipt = json!({"status":"success","request_id":"broker-1","paths":["docs/a.md"],
+            "rebased":true,"base_changed_paths":["docs/a.md"],"workspace_inputs_sha256":"d1"});
+        let applied = replayed(&json!({"status":"success","output":receipt}));
+        assert_eq!(applied, Replayed::Applied(receipt.clone()));
+        let uncertain = json!({"status":"success","output":{"status":"uncertain"}});
+        assert!(
+            matches!(replayed(&uncertain), Replayed::NotApplied(text) if text.contains("uncertain"))
+        );
+        let queued =
+            json!({"status":"failed","output":{"kind":"ownership_conflict"},"next":"wait"});
+        assert_eq!(replayed(&queued), Replayed::Queued);
+        let refusal = "Queued task refreshed to current source; the patch no longer fits: \
+            docs/a.md (changed in or next to the patched lines); src/b.rs (deleted or renamed \
+            upstream). The claims stay held: reread these files and apply a corrected patch";
+        let Replayed::NoLongerFits(paths, text) =
+            replayed(&json!({"status":"failed","output":refusal}))
+        else {
+            panic!("a refusal naming paths is a conflict");
+        };
+        assert_eq!(paths, ["docs/a.md", "src/b.rs"]);
+        assert_eq!(text, refusal);
+        let stale = json!({"status":"failed","output":"stale task inputs; current is x"});
+        assert_eq!(
+            replayed(&stale),
+            Replayed::NotApplied("stale task inputs; current is x".into())
+        );
+
+        let edit = json!({"name":"file_edit","arguments":{"path":"docs/a.md"}});
+        let result = granted("task-one", &edit, &applied);
+        let output = &result["output"];
+        assert_eq!(output["status"], "claims_granted");
+        assert_eq!(output["edit"], "applied");
+        assert_eq!(output["receipt"]["workspace_inputs_sha256"], "d1");
+        let message = output["message"].as_str().unwrap();
+        assert!(message.contains("applied your queued edit to docs/a.md onto current source"));
+        assert!(message.contains("Do not apply it again") && message.contains("d1"));
+        let result = granted(
+            "task-one",
+            &edit,
+            &replayed(&json!({"status":"failed","output":refusal})),
+        );
+        assert_eq!(result["output"]["edit"], "conflict");
+        assert_eq!(
+            result["output"]["conflicts"],
+            json!(["docs/a.md", "src/b.rs"])
+        );
+        assert!(result["output"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Reread only docs/a.md, src/b.rs"));
+        let result = granted("task-one", &edit, &replayed(&stale));
+        assert_eq!(result["output"]["edit"], "not_applied");
+        assert!(result["output"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Reread docs/a.md and apply it again"));
+    }
+
+    #[test]
+    fn only_the_newest_running_wait_of_a_task_sends_its_edit() {
+        let wait = |id: &str, sid: &str, task: &str, at: u64, status: &str| {
+            json!({"id":id,"session_id":sid,"detached":true,"status":status,"created_at_ms":at,
+                "external_pending":{"external_job":{"claims_for":task}}})
+        };
+        let tasks = [
+            wait("old", "s1", "task-one", 10, "running"),
+            wait("new", "s1", "task-one", 20, "running"),
+            wait("done", "s1", "task-one", 30, "completed"),
+            wait("other-task", "s1", "task-two", 5, "running"),
+            wait("other-chat", "s2", "task-one", 1, "running"),
+            json!({"id":"build","session_id":"s1","detached":true,"status":"running",
+                "external_pending":{"external_job":{"job_id":"j"}}}),
+        ];
+        let newest = newest_claim_waits(&tasks);
+        let key = |sid: &str, task: &str| (sid.to_owned(), task.to_owned());
+        assert_eq!(newest[&key("s1", "task-one")], "new");
+        assert_eq!(newest[&key("s1", "task-two")], "other-task");
+        assert_eq!(newest[&key("s2", "task-one")], "other-chat");
+        assert_eq!(newest.len(), 3);
     }
 
     #[test]

@@ -1830,6 +1830,9 @@ impl<
         }
         match result {
             Ok(value) => {
+                if matches!(name.as_str(), "file_edit" | "file_write") {
+                    super::recovery::note_queued_edit(&mut run, &name, &args, &pending_id, &value);
+                }
                 if matches!(name.as_str(), "v3_build_work" | "build_work")
                     && value["status"] == "success"
                 {
@@ -1849,10 +1852,18 @@ impl<
                     // as a background task: the agent is free, and recovery follows the job
                     // and reports its end, or a slow or stalled stage, as a background notice.
                     let claims = value["output"]["status"] == "waiting_claims";
+                    // A claim wait sends the task's refused edit again each poll, so the broker
+                    // applies it at the task's turn instead of the agent redoing it.
+                    let replay = if claims {
+                        super::recovery::take_queued_edit(&mut run, &value["output"]["broker_id"])
+                    } else {
+                        Value::Null
+                    };
                     run["pending"]["external_job"] = json!({"kind":"v3_build",
                             "task_id":args["task_id"],"expected_inputs_sha256":args["expected_inputs_sha256"],
                             "job_id":value["output"]["job_id"],"submitted_at":now(),
-                            "claims_for":if claims { value["output"]["broker_id"].clone() } else { Value::Null }});
+                            "claims_for":if claims { value["output"]["broker_id"].clone() } else { Value::Null },
+                            "replay":replay});
                     super::recovery::note_build_job(app.store.records(), &run, &value["output"])
                         .await;
                     let external = run["pending"].clone();
@@ -1873,10 +1884,12 @@ impl<
                         let result = if claims {
                             json!({"status":"running","call_id":task_id,
                             "broker_id":value["output"]["broker_id"],"output":
-                            "Your task is queued for its claims as a background call. You get a \
-                             background notice when it holds them (then reread the files and apply \
-                             your edits again), or if it closes or is still queued after 2 hours. \
-                             End your turn now: do not retry or poll."})
+                            "Your task is queued for its claims as a background call. At its \
+                             turn the broker applies your refused edit itself when it still fits \
+                             current source. You get a background notice when the task holds its \
+                             claims (it says whether that edit was applied or which files to redo), \
+                             or if it closes or is still queued after 2 hours. End your turn now: \
+                             do not retry or poll."})
                         } else {
                             json!({"status":"running","call_id":task_id,"job_id":job,
                             "broker_task_id":args["task_id"],"inputs_sha256":args["expected_inputs_sha256"],
