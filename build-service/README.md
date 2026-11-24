@@ -207,6 +207,32 @@ is divided by weight (weight × (1 + priority + up to 2 for steps running past
 15 min)), rebalanced every few seconds as steps start and end. Memory, disk,
 packaging and admission keys are described in their own sections below.
 
+### App container capacity (`container_capacity`)
+
+The app containers share the processors by weight instead of hard caps, and build jobs
+get the lowest weight, so an idle processor is always usable and a build cannot starve
+the app. The design and how to choose values for a server are in `docs/capacity.md`.
+One section under `scheduler`, with a key set per role; a role or key left out keeps
+its default:
+
+| Role / key | Default | Range | Effect |
+|---|---|---|---|
+| `api`, `loop`, `browser` `.cpu_weight` | 400, 100, 100 | 1–10000 (100 = normal) | cgroup processor weight while processors are contended; given to Docker as CPU shares (runc: 1024 shares = 100). |
+| `.cpu_cap` | `null` (no cap) | `null` or 1–cores (may be fractional) | Hard processor limit. The loop's cap is raised to loops + 1 when `scheduler.loops` asks for more. |
+| `.memory_bytes` | 2 GiB, 8 GiB, 3 GiB | api ≥ 512 MiB, loop and browser ≥ 1 GiB; ≤ host memory | Memory limit. The container's existing swap allowance is kept. A default above a small host's memory shrinks to it. |
+| `.pids_limit` | `null` (= `api_pids_limit`), `null`, 1024 | `null` or 256–65536 | Task limit. The loop's is raised to 512 per loop process. |
+| `builds.cpu_weight` | 20 | 1–10000 | Processor weight of `webagent.slice` and the build slices under it (they compete with `system.slice`, where the app containers run). |
+
+When it applies: every start of an app container by the broker (release, browser
+sync, rollback, restore) brings it to these values first, and a broker start updates
+the running containers live with `docker update` (no restart, no rebuild). So to
+change a value, edit the installed file and restart the broker while idle, as for the
+build keys above; the log prints `Container capacity <role>: updated`. One exception:
+a processor cap added back after a cap was removed live takes effect at the next
+release (Docker keeps a live-removed cap removed across restarts). Retained-image
+reconfiguration (`reconfigure.py`) keeps the HostConfig it selects. The build weight
+is set when the scheduler next initializes its slice (each admitted build).
+
 Build output redacts the values of the app containers' environment variables only
 when the variable's name contains key, token, password, passwd, secret, credential,
 cookie, auth or private (any case), plus the names listed in `secret_env_names`

@@ -1097,16 +1097,64 @@ def configured_loops():
     return value if type(value) is int and 1 <= value <= 16 else 1
 
 
-def loop_limits(previous, loops):
-    """The loop container's CPU and task limits for `loops` loop processes: at least one CPU
-    per loop and one for its helpers (a container without a CPU limit keeps none), and at
-    least 512 tasks per loop for their start-up bursts. One loop keeps the values it has."""
+def capacity_role(name):
+    """The `container_capacity` role of an app container name, or None for any other container."""
+    return {TARGETS[0]: "api", TARGETS[1]: "loop", BROWSER: "browser"}.get(name.lstrip("/"))
+
+
+def capacity_limits(role, loops=1):
+    """The limits one app role runs with (docs/capacity.md): the operator's settings, a missing
+    task limit taken from `api_pids_limit`, and for `loops` loop processes at least one
+    processor each plus one for helpers when capped and 512 tasks each. Never lowers a value."""
+    value = dict(_config_module.container_capacity(CONFIG.get("scheduler") or {})[role])
+    if value["pids_limit"] is None:
+        value["pids_limit"] = CONFIG["api_pids_limit"]
+    if role == "loop" and loops > 1:
+        if value["cpu_cap"] is not None:
+            value["cpu_cap"] = max(value["cpu_cap"], loops + 1)
+        value["pids_limit"] = max(value["pids_limit"], 512 * loops)
+    return value
+
+
+def capacity_host(previous, limits):
+    """HostConfig carrying `limits`: processor weight as Docker CPU shares, the cap as NanoCpus
+    (0 = none), memory and tasks. The container's own swap allowance is kept as it was."""
     host = dict(previous)
-    if loops > 1:
-        if host.get("NanoCpus"):
-            host["NanoCpus"] = max(host["NanoCpus"], (loops + 1) * 10**9)
-        host["PidsLimit"] = max(host.get("PidsLimit") or 0, 512 * loops)
+    memory, swap = previous.get("Memory") or 0, previous.get("MemorySwap") or 0
+    if swap > 0:
+        # MemorySwap is memory plus swap; keep the swap part (none when they were equal).
+        swap = limits["memory_bytes"] + max(0, swap - memory)
+    host.update(CpuShares=_config_module.cpu_shares(limits["cpu_weight"]),
+                NanoCpus=int(limits["cpu_cap"] * 10**9) if limits["cpu_cap"] else 0,
+                CpuQuota=0, CpuPeriod=0, Memory=limits["memory_bytes"], MemorySwap=swap,
+                PidsLimit=limits["pids_limit"])
     return host
+
+
+def capacity_update(host, limits):
+    """`docker update` arguments that bring a container with HostConfig `host` to `limits`
+    ([] when it already matches) and whether a cap must wait for the next deploy. Docker
+    cannot clear NanoCpus live, so a cap is removed with --cpu-quota -1, which survives
+    restarts; a cap added back after that would not survive one, so it waits."""
+    wanted = capacity_host(host, limits)
+    args = []
+    if host.get("CpuShares") != wanted["CpuShares"]:
+        args += ["--cpu-shares", str(wanted["CpuShares"])]
+    removed = host.get("CpuQuota") == -1
+    current = None if removed or not host.get("NanoCpus") else host["NanoCpus"]
+    pending = False
+    if limits["cpu_cap"] is None and current is not None:
+        args += ["--cpu-quota", "-1"]
+    elif limits["cpu_cap"] is not None and current != wanted["NanoCpus"]:
+        if removed:
+            pending = True
+        else:
+            args += ["--cpus", str(limits["cpu_cap"])]
+    if (host.get("Memory"), host.get("MemorySwap")) != (wanted["Memory"], wanted["MemorySwap"]):
+        args += ["--memory", str(wanted["Memory"]), "--memory-swap", str(wanted["MemorySwap"])]
+    if host.get("PidsLimit") != wanted["PidsLimit"]:
+        args += ["--pids-limit", str(wanted["PidsLimit"])]
+    return args, pending
 
 
 def loop_plugin_mounts(previous):
@@ -2660,9 +2708,11 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                     "webagent.release.role":"api"if name==TARGETS[0]else"loop","webagent.release.instance":CONFIG["instance"]}
         if name == TARGETS[1]:
             host = loop_plugin_mounts(host)
-            if release_root is not None:
-                # Several agent-loop processes run in this one container (multi-loop).
-                host = loop_limits(host, configured_loops())
+        if capacity_role(name) and (release_root is not None or name == BROWSER):
+            # Processor weight, optional cap, memory and tasks from `container_capacity`; the loop
+            # scales for its loop processes (multi-loop). Retained-image reconfiguration keeps its
+            # explicitly selected HostConfig.
+            host = capacity_host(host, capacity_limits(capacity_role(name), configured_loops()))
         # Container-id-derived values must not be reused. Preserve configured
         # mounts, network, limits, ports, restart policy and security options.
         host.pop("ContainerIDFile", None)
@@ -2676,7 +2726,35 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
     def remove(self, name):
         self.command(["docker", "rm", name], timeout=30)
 
+    # Off only for retained-image reconfiguration, which selects its own HostConfig.
+    capacity_on_start = True
+
+    def apply_capacity(self, name):
+        """Bring one app container's limits to `container_capacity` with `docker update` (live
+        when running, kept for its next start when stopped). Returns its role, the arguments
+        applied and whether a cap waits for the next deploy; None for other containers."""
+        # Restoration starts a predecessor by its container ID; release names go through recovery discovery.
+        if re.fullmatch(r"[0-9a-f]{64}", name):
+            value = json.loads(self.command(["docker", "inspect", name], timeout=30, private_raw=True))[0]
+            self.secrets.extend(secret_env_values(value.get("Config", {}).get("Env") or []))
+        else:
+            value = self.inspect_recovery(name)
+        role = capacity_role(value["Name"]) if value else None
+        if not role:
+            return None
+        args, pending = capacity_update(value["HostConfig"], capacity_limits(role, configured_loops()))
+        if args:
+            self.command(["docker", "update", *args, value["Id"]], timeout=30)
+        return {"role": role, "updated": args, "cap_waits_for_deploy": pending}
+
     def start(self, name):
+        if self.capacity_on_start:
+            # Every start of an app container (release, browser sync, rollback, restore) gets
+            # the same limits; a failed update never blocks bringing the service back.
+            try:
+                self.apply_capacity(name)
+            except Exception:
+                print("Container capacity update deferred for a starting container", flush=True)
         self.command(["docker", "start", name], timeout=30)
 
     def release_healthy(self):
@@ -7903,6 +7981,16 @@ def main():
         raise SystemExit("Unix listener required")
     bridge_listener = socket.socket(fileno=arguments.bridge_listener_fd) if arguments.bridge_listener_fd is not None else None
     broker = Broker(runner=Runner(snapshot_helper=arguments.snapshot_helper, snapshot_socket=arguments.snapshot_socket))
+    # A changed `container_capacity` takes effect at broker start: running app containers are
+    # updated live (no restart, no rebuild); only a cap added back after a live removal waits.
+    for name in (*TARGETS, BROWSER):
+        try:
+            outcome = broker.runner.apply_capacity(name)
+            if outcome:
+                print("Container capacity " + outcome["role"] + ": " + ("updated" if outcome["updated"] else "unchanged")
+                      + ("; processor cap waits for the next deploy" if outcome["cap_waits_for_deploy"] else ""), flush=True)
+        except Exception:
+            print("Container capacity update deferred", flush=True)
     async def run():
         task = asyncio.create_task(serve(broker, listener, bridge_listener))
         async def notice_postprocess():

@@ -44,6 +44,7 @@ def apply(config_path,candidate_path,task_id,dry_run=False):
     os.environ["WEBAGENT_BUILD_CONFIG"]=str(config_path)
     host=module("reconfiguration_host",Path(previous["service_dir"])/"host.py")
     runner=host.Runner()
+    runner.capacity_on_start=False
     before={role:runner.inspect(previous[role+"_container"])for role in ("api","loop")}
     if "api"in change["services"]:
         address=candidate["bind_address"]

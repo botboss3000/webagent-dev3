@@ -894,18 +894,101 @@ class BuildTests(unittest.TestCase):
                          mounted["Mounts"][-1])
         self.assertFalse(any(m["Target"] == "/code" for m in mounted["Mounts"]))
 
-    def test_loop_container_limits_grow_with_the_loop_count_only(self):
-        previous = {"NanoCpus": 4 * 10**9, "PidsLimit": 1024, "Memory": 8 * 1024**3}
-        self.assertEqual(previous, host.loop_limits(previous, 1))
-        self.assertEqual(previous, host.loop_limits(previous, 2))
-        four = host.loop_limits(previous, 4)
-        self.assertEqual(5 * 10**9, four["NanoCpus"])
-        self.assertEqual(2048, four["PidsLimit"])
-        self.assertEqual(previous["Memory"], four["Memory"])
+    def test_container_capacity_defaults_weights_and_loop_scaling(self):
+        api = host.capacity_limits("api")
+        self.assertEqual((400, None, host.CONFIG["api_pids_limit"]), (api["cpu_weight"], api["cpu_cap"], api["pids_limit"]))
+        self.assertEqual(100, host.capacity_limits("loop")["cpu_weight"])
+        self.assertEqual(1024, host.capacity_limits("browser")["pids_limit"])
+        # Four loops: at least 512 tasks each; no cap stays none, a cap grows to loops + 1.
+        four = host.capacity_limits("loop", 4)
+        self.assertEqual((None, max(2048, host.CONFIG["api_pids_limit"])), (four["cpu_cap"], four["pids_limit"]))
+        capped = {**host.CONFIG["scheduler"], "container_capacity": {"loop": {"cpu_cap": 2}}}
+        with patch.dict(host.CONFIG, {"scheduler": capped}):
+            self.assertEqual(5, host.capacity_limits("loop", 4)["cpu_cap"])
+            self.assertEqual(2, host.capacity_limits("loop", 1)["cpu_cap"])
+            self.assertEqual(400, host.capacity_limits("api")["cpu_weight"])
+        self.assertIsNone(host.capacity_role("webagent-other"))
+        self.assertEqual("browser", host.capacity_role("/" + host.BROWSER))
+
+    def test_container_capacity_settings_are_validated(self):
+        config = host._config_module
+        def check(value):
+            return config.container_capacity({"container_capacity": value})
+        merged = check({"api": {"cpu_weight": 800}})
+        self.assertEqual((800, 2147483648), (merged["api"]["cpu_weight"], merged["api"]["memory_bytes"]))
+        self.assertEqual(20, merged["builds"]["cpu_weight"])
+        self.assertEqual(1.5, check({"browser": {"cpu_cap": 1.5}})["browser"]["cpu_cap"])
+        for bad in ({"api": {"cpu_weight": 0}}, {"api": {"cpu_weight": 10001}}, {"api": {"cpu_weight": True}},
+                    {"loop": {"cpu_cap": 0.5}}, {"loop": {"cpu_cap": (os.cpu_count() or 1) + 1}},
+                    {"api": {"memory_bytes": 256 * 1024**2}}, {"api": {"memory_bytes": 2**60}},
+                    {"loop": {"pids_limit": 100}}, {"api": {"swap": 1}}, {"gate": {}},
+                    {"builds": {"cpu_weight": 0}}, {"builds": {"cap": 1}}, {"api": 400}, []):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                check(bad)
+        # A reviewed default above a small host's memory shrinks to it instead of refusing.
+        with patch.object(config, "host_memory_bytes", return_value=4 * 1024**3):
+            self.assertEqual(4 * 1024**3, check({})["loop"]["memory_bytes"])
+            with self.assertRaises(ValueError):
+                check({"loop": {"memory_bytes": 8 * 1024**3}})
+        # runc 1.3+ conversion as measured on the server: 1024, 4096, 3000 shares -> 100, 303, 236.
+        self.assertEqual([100, 303, 236], [config.runc_cpu_weight(v) for v in (1024, 4096, 3000)])
+        for weight in (1, 20, 100, 400, 10000):
+            self.assertEqual(weight, config.runc_cpu_weight(config.cpu_shares(weight)))
+
+    def test_container_capacity_host_and_live_update(self):
+        limits = {"cpu_weight": 400, "cpu_cap": None, "memory_bytes": 2 * 1024**3, "pids_limit": 1024}
+        previous = {"NanoCpus": 4 * 10**9, "CpuShares": 0, "Memory": 2 * 1024**3, "MemorySwap": 3 * 1024**3,
+                    "PidsLimit": 1024, "ReadonlyRootfs": True, "CapDrop": ["ALL"]}
+        created = host.capacity_host(previous, limits)
+        self.assertEqual((0, host._config_module.cpu_shares(400), 3 * 1024**3), (created["NanoCpus"], created["CpuShares"], created["MemorySwap"]))
+        self.assertEqual((True, ["ALL"]), (created["ReadonlyRootfs"], created["CapDrop"]))
         self.assertEqual(4 * 10**9, previous["NanoCpus"])
-        # No CPU limit stays none; a missing task limit gets one.
-        self.assertEqual(0, host.loop_limits({"NanoCpus": 0}, 3)["NanoCpus"])
-        self.assertEqual(1536, host.loop_limits({}, 3)["PidsLimit"])
+        # Swap allowance kept when memory changes; none stays none.
+        bigger = host.capacity_host(previous, {**limits, "memory_bytes": 4 * 1024**3})
+        self.assertEqual(5 * 1024**3, bigger["MemorySwap"])
+        self.assertEqual(4 * 1024**3, host.capacity_host({"Memory": 1, "MemorySwap": 1}, {**limits, "memory_bytes": 4 * 1024**3})["MemorySwap"])
+        self.assertEqual(([], False), host.capacity_update(created, limits))
+        args, pending = host.capacity_update(previous, limits)
+        self.assertFalse(pending)
+        self.assertEqual(["--cpu-shares", str(created["CpuShares"]), "--cpu-quota", "-1"], args)
+        removed = {**created, "NanoCpus": 4 * 10**9, "CpuQuota": -1}
+        self.assertEqual(([], False), host.capacity_update(removed, limits))
+        # Docker cannot make a live re-cap after a removal survive a restart: it waits for a deploy.
+        self.assertEqual(([], True), host.capacity_update(removed, {**limits, "cpu_cap": 3}))
+        self.assertEqual((["--cpus", "3"], False), host.capacity_update(created, {**limits, "cpu_cap": 3}))
+        self.assertEqual(["--memory", str(4 * 1024**3), "--memory-swap", str(5 * 1024**3), "--pids-limit", "2048"],
+                         host.capacity_update(created, {**limits, "memory_bytes": 4 * 1024**3, "pids_limit": 2048})[0])
+
+    def test_app_container_start_applies_capacity_first(self):
+        runner = host.Runner()
+        value = {"Id": "a" * 64, "Name": "/" + host.TARGETS[1], "HostConfig": {"NanoCpus": 4 * 10**9, "Memory": 1}}
+        runner.command = unittest.mock.Mock(return_value="")
+        with patch.object(runner, "inspect_recovery", return_value=value):
+            runner.start(host.TARGETS[1])
+        update, start = runner.command.call_args_list
+        self.assertEqual(["docker", "update"], update.args[0][:2])
+        self.assertIn("--cpu-quota", update.args[0])
+        self.assertEqual(["docker", "start", host.TARGETS[1]], start.args[0])
+        # Restoration starts by ID; the role still comes from the container's own name.
+        runner.command = unittest.mock.Mock(side_effect=[json.dumps([value]), "", ""])
+        runner.start("a" * 64)
+        self.assertEqual(["docker", "update"], runner.command.call_args_list[1].args[0][:2])
+        # Other containers and retained-image reconfiguration are left alone.
+        runner.command = unittest.mock.Mock(side_effect=[json.dumps([{**value, "Name": "/other"}]), ""])
+        runner.start("b" * 64)
+        self.assertEqual(2, runner.command.call_count)
+        runner.command = unittest.mock.Mock(return_value="")
+        runner.capacity_on_start = False
+        runner.start(host.TARGETS[0])
+        self.assertEqual([(["docker", "start", host.TARGETS[0]],)], [c.args for c in runner.command.call_args_list])
+        # An update failure never blocks the start.
+        runner = host.Runner()
+        runner.command = unittest.mock.Mock(return_value="")
+        with patch.object(runner, "inspect_recovery", side_effect=RuntimeError("docker unavailable")):
+            runner.start(host.TARGETS[0])
+        self.assertEqual(["docker", "start", host.TARGETS[0]], runner.command.call_args.args[0])
+
+    def test_configured_loops_reads_the_app_setting(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(host, "SOURCE", Path(folder)):
             self.assertEqual(1, host.configured_loops())
             config = Path(folder) / "config/engine"

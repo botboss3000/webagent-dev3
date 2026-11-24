@@ -57,6 +57,7 @@ class Control:
         memory=host_memory();reserve=max(policy.get("reserve_bytes",768*1024**2),memory["MemTotal"]*max(15,policy.get("reserve_percent",10))//100)
         if required is not None and(type(required)is not int or required<=0 or required>memory["MemTotal"]):raise ValueError("Invalid aggregate reservation")
         subprocess.run(["systemctl","start",self.slice],check=True,timeout=5,stdout=subprocess.DEVNULL)
+        self.weigh_build_slices(policy)
         pool=self.pool();current=int((pool/"memory.current").read_text())if(pool/"memory.current").exists()else 0
         budget=min(memory["MemTotal"]-reserve,current+max(0,memory["MemAvailable"]-reserve))
         if required is not None and required>budget:return {"admitted":False,"memory_budget":budget,"reserve":reserve}
@@ -70,6 +71,18 @@ class Control:
             "TasksAccounting=yes"],check=True,timeout=5,stdout=subprocess.DEVNULL)
         return {"admitted":True,"slice":self.slice,"cpu_budget":cpus,"memory_budget":budget,"reserve":reserve,"swap_budget":swap}
 
+    def weigh_build_slices(self,policy):
+        """Give build jobs the lowest processor weight (container_capacity.builds, docs/capacity.md) so
+        they use what the app leaves idle. Weights compete only between siblings, so it is set on the
+        build slice and each ancestor (webagent.slice competes with system.slice, where the app runs)."""
+        # The installed config is validated and carries the reviewed defaults; 20 is that default.
+        weight=((policy.get("container_capacity")or{}).get("builds")or{}).get("cpu_weight",20)
+        if type(weight)is not int or not 1<=weight<=10000:raise ValueError("Invalid build processor weight")
+        if getattr(self,"build_weight",None)==weight:return
+        parts=self.slice[:-len(".slice")].split("-")
+        for count in range(1,len(parts)+1):
+            subprocess.run(["systemctl","set-property","--runtime","-".join(parts[:count])+".slice","CPUWeight="+str(weight)],check=True,timeout=5,stdout=subprocess.DEVNULL)
+        self.build_weight=weight
     def seal(self,args,group,phase,identity):
         """Seal only an already enforced zero-swap cap into its exact transient unit."""
         if phase not in {"compile_test","compile_release","compile_linked","plugin_compile","plugin_test","package"}:

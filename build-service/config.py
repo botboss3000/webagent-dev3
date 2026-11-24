@@ -1,5 +1,5 @@
 """Installation-owned paths and identities, never model arguments."""
-import json,os,pwd,re,stat
+import json,math,os,pwd,re,stat
 from pathlib import Path
 # Reviewed scheduler defaults merged with protected installation JSON. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds and resource thresholds.
 MEMORY_KEYS={"compiler_memory_default_bytes","compiler_memory_min_bytes","compiler_memory_max_bytes","allow_live_memory_increase"}
@@ -24,6 +24,56 @@ def validate_tuning(policy):
  weights=policy.get("cpu_phase_weights")
  if not isinstance(weights,dict)or any(not isinstance(k,str)or type(v)is not int or not 1<=v<=10 for k,v in weights.items()):raise ValueError("Invalid build tuning: cpu_phase_weights")
 RESOURCE_KEYS=MEMORY_KEYS|CPU_KEYS
+# Processor weight, optional processor cap, memory and task limit of each app container, and the
+# build jobs' processor weight (docs/capacity.md). Config: build-service/scheduler-defaults.json ->
+# container_capacity; the installed build-service.json may override any key of any role.
+CAPACITY_ROLES=("api","loop","browser")
+# The least memory each role starts with; caps start at one processor.
+CAPACITY_MEMORY_FLOOR={"api":512*1024**2,"loop":1024**3,"browser":1024**3}
+def host_memory_bytes():
+ """MemTotal of this host; a generous bound when /proc is unreadable."""
+ try:
+  for line in Path("/proc/meminfo").read_text().splitlines():
+   if line.startswith("MemTotal:"):return int(line.split()[1])*1024
+ except (OSError,ValueError,IndexError):pass
+ return 1024**4
+def container_capacity(policy):
+ """Each app role's settings, merged key by key over the reviewed defaults, plus `builds`.
+ Refuses unknown roles or keys and values outside their ranges."""
+ defaults=scheduler_defaults()["container_capacity"]
+ given=policy.get("container_capacity",{})
+ if not isinstance(given,dict)or set(given)-{*CAPACITY_ROLES,"builds"}or any(not isinstance(v,dict)for v in given.values()):raise ValueError("Invalid container capacity")
+ cores=os.cpu_count()or 1;memory=host_memory_bytes();result={}
+ for role in CAPACITY_ROLES:
+  value={**defaults[role],**given.get(role,{})}
+  # A reviewed default larger than a small host shrinks to its memory; an operator value is checked.
+  if "memory_bytes"not in given.get(role,{})and type(value["memory_bytes"])is int:value["memory_bytes"]=min(value["memory_bytes"],max(memory,CAPACITY_MEMORY_FLOOR[role]))
+  if set(value)!={"cpu_weight","cpu_cap","memory_bytes","pids_limit"}:raise ValueError("Invalid container capacity: "+role)
+  if type(value["cpu_weight"])is not int or not 1<=value["cpu_weight"]<=10000:raise ValueError("Invalid container capacity: "+role+".cpu_weight")
+  cap=value["cpu_cap"]
+  if cap is not None and(type(cap)not in (int,float)or not 1<=cap<=cores):raise ValueError("Invalid container capacity: "+role+".cpu_cap")
+  if type(value["memory_bytes"])is not int or not CAPACITY_MEMORY_FLOOR[role]<=value["memory_bytes"]<=memory:raise ValueError("Invalid container capacity: "+role+".memory_bytes")
+  pids=value["pids_limit"]
+  if pids is not None and(type(pids)is not int or not 256<=pids<=65536):raise ValueError("Invalid container capacity: "+role+".pids_limit")
+  result[role]=value
+ builds={**defaults["builds"],**given.get("builds",{})}
+ if set(builds)!={"cpu_weight"}or type(builds["cpu_weight"])is not int or not 1<=builds["cpu_weight"]<=10000:raise ValueError("Invalid container capacity: builds")
+ result["builds"]=builds
+ return result
+def runc_cpu_weight(shares):
+ """The cgroup cpu.weight runc 1.3 and later gives Docker CPU shares (1024 shares = weight 100)."""
+ if shares<=2:return 1
+ if shares>=262144:return 10000
+ level=math.log2(shares)
+ return math.ceil(10**((level*level+125*level)/612-7/34))
+def cpu_shares(weight):
+ """The fewest Docker CPU shares that runc turns into at least cgroup weight `weight` (1-10000)."""
+ low,high=2,262144
+ while low<high:
+  middle=(low+high)//2
+  if runc_cpu_weight(middle)>=weight:high=middle
+  else:low=middle+1
+ return low
 def cpu_policy(policy):
  return {"cpu_budget_millis":policy.get("cpu_budget_millis",0),"cpu_priority":policy.get("cpu_priority","balanced")}
 def resource_policy(policy):
@@ -45,13 +95,14 @@ def validate(value):
  # Retired Code Index keys (code_index_ledger_max_bytes, post_deployment_indexing,
  # documentation_review_order) stay accepted so existing installed configs still load.
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","rollback_keep_releases","rollback_keep_archives","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","failed_scratch_retention_seconds","cargo_download_retention_seconds","orphan_release_seconds","note_ttl_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators","secret_env_names","remote_tests","sidekick","production"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","rollback_keep_releases","rollback_keep_archives","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","failed_scratch_retention_seconds","cargo_download_retention_seconds","orphan_release_seconds","note_ttl_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators","secret_env_names","remote_tests","sidekick","production","container_capacity"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  cpu=cpu_policy(policy)
  if type(cpu["cpu_budget_millis"])is not int or cpu["cpu_budget_millis"]!=0 and not 1000<=cpu["cpu_budget_millis"]<=max(1,(os.cpu_count()or 1)-1)*1000:raise ValueError("CPU budget must retain host headroom")
  if type(cpu["cpu_priority"])is not str or cpu["cpu_priority"]not in {"balanced","broker"}:raise ValueError("Invalid CPU priority")
  policy.update(cpu)
  validate_tuning(policy)
+ container_capacity(policy)
  # The local operator's broker identity; switch only while no local task is open (task keys hash it).
  if policy.get("local_operator","codex-local")not in {"codex-local","t480"}:raise ValueError("Invalid local operator identity")
  # Per-key operator identities a restricted SSH key may name (operator_shell.py); the local operator is always one.

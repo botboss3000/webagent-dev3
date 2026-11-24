@@ -241,6 +241,20 @@ class ControlTests(unittest.TestCase):
         c=control.Control({"instance":"development"})
         for name in ["webagent","webagent-dev-v2","webagent-dev-v3","../../system.slice"]:
             with self.assertRaises(PermissionError):c.resolve(name)
+    def test_build_slices_get_the_low_processor_weight_on_every_ancestor(self):
+        from unittest.mock import patch
+        c=control.Control({"instance":"development"})
+        with patch.object(control.subprocess,"run")as run:
+            c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":20}}})
+            c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":20}}})
+        self.assertEqual([["systemctl","set-property","--runtime",name,"CPUWeight=20"]for name in
+                          ("webagent.slice","webagent-build.slice","webagent-build-development.slice")],[call.args[0]for call in run.call_args_list])
+        with patch.object(control.subprocess,"run")as run:
+            c.weigh_build_slices({})
+            self.assertEqual(0,run.call_count)
+            c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":50}}})
+            self.assertEqual(3,run.call_count)
+            with self.assertRaises(ValueError):c.weigh_build_slices({"container_capacity":{"builds":{"cpu_weight":0}}})
 
 
 class DeadlineCPUAdmissionTests(unittest.TestCase):
