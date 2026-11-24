@@ -40,6 +40,8 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("manager_pending:")
         || key.starts_with("followup_queue:")
         || key.starts_with("messaging_route:")
+        // Saved tool approvals, one document per agent in the chat owner's store.
+        || key.starts_with("saved_approvals:")
         || key.starts_with("background_notice:")
         || key.starts_with("receipt:background_notice:")
         || key.starts_with("receipt:agent_message:")

@@ -115,6 +115,10 @@ export function activityRows(events) {
       if (kind==='response') {row.category='responses';row.label='Response';}
     } else if (kind === 'mode_change' || kind === 'execution_mode') {
       rows.push({id:event.event_id,category:'modes',label:'Mode change',events:[event]});
+    } else if (kind === 'saved_approval') {
+      // A call that ran on a saved approval instead of asking; grouped with mode and permission rows.
+      const scope=(p.match==='any'?'any values':'these values')+', '+(p.reach==='agent'?'this agent in all chats':'this chat');
+      rows.push({id:event.event_id,category:'modes',label:'Approved by saved approval ('+(p.tool||'tool')+')',text:scope,events:[event]});
     } else if (kind === 'retry_scheduled') {
       // A provider failure the run will retry, fail over, or resume later; not an agent tool call.
       const wait=p.wait_seconds>=120?Math.round(p.wait_seconds/60)+' min':(p.wait_seconds??0)+' s';

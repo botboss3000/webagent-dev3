@@ -396,6 +396,8 @@ impl<
                     &run["loaded_abilities"],
                 )
                 .for_execution_mode(&execution_mode);
+            // Whether the policy itself asks: only then may a saved approval answer for the user.
+            let policy_asks = effective.permission == access::Permission::Ask;
             let mut result = if args.get("invalid_arguments").is_some()
                 || effective.permission == access::Permission::Deny
             {
@@ -486,13 +488,29 @@ impl<
                     effective.permission = access::Permission::Ask;
                 }
             }
-            let state = if result.is_some() {
+            let mut state = if result.is_some() {
                 "done"
             } else if effective.permission == access::Permission::Ask {
                 "waiting"
             } else {
                 "requested"
             };
+            if state == "waiting" && policy_asks {
+                if let Some(entry) = app
+                    .saved_approval(
+                        access,
+                        &run,
+                        &mut pending,
+                        &execution_mode,
+                        &visibility,
+                        &ability_state,
+                    )
+                    .await?
+                {
+                    super::policy::approve_by_saved(&mut run, &mut pending, &entry);
+                    state = "requested";
+                }
+            }
             run["batch"][idx] = json!({"state":state,"pending":pending,"result":result,
             "pre_tool_receipt":receipt});
         }

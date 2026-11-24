@@ -769,6 +769,7 @@ pub mod credential_authorization;
 pub mod policy_file;
 pub mod repository;
 pub mod run_limits;
+pub mod saved_approvals;
 pub mod storage;
 pub fn require_administrator(account: &serde_json::Value) -> anyhow::Result<()> {
     if !Principal::from_account(account)?.administrator() {

@@ -55,7 +55,11 @@
     "plus_reserved_runs": 0,
     "reserved_admin_runs": 1
   },
-  "revision": 66,
+  "revision": 67,
+  "saved_approvals": {
+    "agent_wide": true,
+    "enabled": true
+  },
   "storage": {
     "compress_idle_days": 7,
     "compression": {

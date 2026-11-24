@@ -846,6 +846,45 @@
       "max": 256,
       "nullable": true,
       "bounds": "validator"
+    },
+    {
+      "id": "access.saved_approvals.enabled",
+      "description": "Tool approval cards offer 'Remember this approval', and saved approvals let later matching calls run without asking. Off: no Remember choice; saved approvals are kept but ignored.",
+      "type": "boolean",
+      "pointer": "/saved_approvals/enabled",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "stop remembering tool approvals",
+        "turn off saved approvals",
+        "let users remember approvals"
+      ],
+      "areas": [
+        "approvals",
+        "tools",
+        "permissions"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "access.saved_approvals.agent_wide",
+      "description": "Saved approvals may cover an agent in all of a user's chats, not just one chat. Off: only this-chat approvals can be saved or used.",
+      "type": "boolean",
+      "pointer": "/saved_approvals/agent_wide",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "approvals should only be remembered per chat",
+        "allow remembering approvals for all chats with an agent"
+      ],
+      "areas": [
+        "approvals",
+        "tools",
+        "permissions"
+      ],
+      "bounds": "validator"
     }
   ],
   "excluded": {

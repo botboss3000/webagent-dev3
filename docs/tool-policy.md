@@ -37,6 +37,19 @@ that would ask, Plan keeps changes back and requires the agreed plan to leave it
 calls and invalid arguments return a result to the model without running. Arguments are
 checked against the tool's `parameters` (`crates/modules/engine/src/tools/arguments.rs`).
 
+**Saved approvals** (`crates/modules/access/src/saved_approvals.rs`): when the policy asks
+about a call in Ask or a custom mode, the engine (`Runtime::saved_approval`, single calls and
+parallel batches) looks in the chat owner's `saved_approvals:{agent_id}` document. A current
+entry for the tool (same owner; this chat or, when the access policy's
+`saved_approvals.agent_wide` allows, any chat with the agent; same short argument values or
+any values; unchanged permission fingerprint) marks the call approved and adds an
+`approval:` activity row. Otherwise the waiting call carries a `remember` offer and its card
+shows "Remember this approval"; Approve with `remember` (chat module `tool_approval.rs`)
+writes the entry with the decision. Never offered or used in Plan mode, for critical tools,
+`set_execution_mode`, agent messaging (remembered routes), another user's credential or
+another participant's run; repeat, separate-action and guard confirmations still ask.
+`saved_approvals.enabled` off ignores every entry.
+
 ## 4. The task gate
 
 Before a tool call the gate covers runs, the session task list accounts for every user

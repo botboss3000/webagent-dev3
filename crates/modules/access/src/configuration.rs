@@ -51,6 +51,7 @@ pub fn validate_configuration(value: &Value) -> Result<()> {
     webagent_accounts::LoginProtection::from_policy(value)?;
     webagent_accounts::RequestLimits::from_policy(value)?;
     crate::run_limits::RunLimits::from_policy(value)?;
+    crate::saved_approvals::Settings::from_policy(value)?;
     if value
         .get("revision")
         .is_some_and(|v| v.as_u64().is_none_or(|n| n == 0))

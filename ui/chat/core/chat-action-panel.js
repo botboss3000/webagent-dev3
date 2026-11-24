@@ -319,6 +319,8 @@ export function mountChatActionPanel({root,guard,request,note}) {
     // A request to enter Auto offers Auto or Ask with approvals kept on; leaving Plan carries the
     // agreed plan, shown here, and denying it keeps planning.
     const toAuto=approval.name==='set_execution_mode'&&approval.arguments?.mode==='auto'&&!approval.repeat_of;
+    // The engine offers "Remember this approval" only where a saved approval may apply.
+    const saved=!toAuto&&approval.remember&&typeof approval.remember==='object'?rememberPicker(approval.id,approval.remember):null;
     const plan=toAuto&&approval.arguments?.plan&&typeof approval.arguments.plan==='object'?approval.arguments.plan:null;
     const actions=toAuto?[
       {label:'Authorize Auto and continue',kind:'approve',run:()=>decide('approve')},
@@ -326,7 +328,9 @@ export function mountChatActionPanel({root,guard,request,note}) {
       {label:plan?'Keep planning':'Deny',kind:'deny',run:()=>decide('deny')}
     ]:[
       // Decision callbacks are supplied by the panel and perform the authenticated API action.
-      {label:approval.repeat_of ? 'Approve repeat' : approval.new_intent_confirmation ? 'Approve additional action' : 'Approve',kind:'approve',run:()=>decide('approve',approval.messaging_can_remember?{remember_messaging_route:remembered.checked}:{})},
+      {label:approval.repeat_of ? 'Approve repeat' : approval.new_intent_confirmation ? 'Approve additional action' : 'Approve',kind:'approve',run:()=>decide('approve',{
+        ...(approval.messaging_can_remember?{remember_messaging_route:remembered.checked}:{}),
+        ...(saved?.choice()?{remember:saved.choice()}:{})})},
       {label:'Deny',kind:'deny',run:()=>decide('deny')}
     ];
     if(active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
@@ -337,8 +341,30 @@ export function mountChatActionPanel({root,guard,request,note}) {
     if(typeof approval.guard?.line==='string'){const text=document.createElement('p');text.textContent=approval.guard.line;node.insertBefore(text,node.lastChild);}
     if(approval.messaging_binding){const text=document.createElement('p');const b=approval.messaging_binding;text.textContent='From '+(b.source_title||b.source_session_id)+' to '+(b.target_title||b.target_session_id)+' · '+b.target_agent_id+' · '+b.delivery;node.insertBefore(text,node.lastChild);}
     if(approval.messaging_can_remember)node.insertBefore(rememberLabel,node.lastChild);
+    if(saved)node.insertBefore(saved.node,node.lastChild);
     if(plan)node.insertBefore(planSummary(plan),node.lastChild);
     return node;
+  }
+  // "Remember this approval": a checkbox, closed by default, that opens two pickers: Match (these
+  // values or any values) and Where (this chat, or this agent in all the owner's chats when the
+  // policy allows it). choice() is null while unticked.
+  function rememberPicker(id,offer){
+    const node=document.createElement('div');node.className='chat-action-remember';
+    const check=document.createElement('input');check.type='checkbox';
+    const label=document.createElement('label');label.className='chat-action-remember-toggle';label.append(check,document.createTextNode(' Remember this approval'));
+    const pickers=document.createElement('div');pickers.className='chat-action-remember-pickers';pickers.hidden=true;
+    const group=(title,name,options)=>{
+      const set=document.createElement('fieldset');const legend=document.createElement('legend');legend.textContent=title;set.append(legend);
+      options.forEach(([value,text],index)=>{const input=document.createElement('input');input.type='radio';input.name=name+'-'+id;input.value=value;input.checked=index===0;
+        const option=document.createElement('label');option.append(input,document.createTextNode(' '+text));set.append(option);});
+      return set;
+    };
+    const match=group('Match','remember-match',[['values','these values'],['any','any values']]);
+    const reach=group('Where','remember-reach',offer.agent_wide===true?[['chat','this chat'],['agent','this agent, all my chats']]:[['chat','this chat']]);
+    pickers.append(match,reach);node.append(label,pickers);
+    check.onchange=()=>{pickers.hidden=!check.checked;};
+    const picked=set=>set.querySelector('input:checked')?.value;
+    return {node,choice:()=>check.checked?{match:picked(match),reach:picked(reach)}:null};
   }
   // The plan an agent hands over when leaving Plan mode: its title, goal and numbered steps, as text.
   function planSummary(plan){

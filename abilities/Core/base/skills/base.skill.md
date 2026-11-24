@@ -24,7 +24,9 @@ Rules for every tool call. Each tool's own skill states how it runs.
   compaction and restart, and always supply their current text. `context_assets`
   lists or unloads them; unloading changes exposure, not permissions.
 - Tools that require approval ask the user first; Auto mode runs them without
-  asking.
+  asking. The user may have saved an approval for a tool ("Remember this approval"),
+  so a matching call can run in Ask mode without a card; it never covers Plan mode,
+  critical tools or a denied tool.
 - Never retry an uncertain external write; inspect its result first. When a
   write's result is uncertain (for example edit_own_prompt, save_own_skill or
   remove_own_skill after a restart), read the item's current state to see whether it

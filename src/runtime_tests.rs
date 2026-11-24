@@ -1604,6 +1604,113 @@ async fn vision_capable_candidates_receive_sent_images_and_others_keep_text() {
     server.abort();
 }
 
+/// "Remember this approval": approving a call with `remember` saves it, and later calls of the
+/// tool with the same short arguments run without asking, alone or in a parallel batch, each
+/// with an activity row. A Deny or an ineligible call cannot save one.
+#[tokio::test]
+async fn saved_approval_lets_matching_calls_run_without_asking() {
+    use axum::routing::post;
+    let (_root, mut app) = fixture().await;
+    settings(State(app.clone()), Json(json!({"model":"pinned-model"})))
+        .await
+        .unwrap();
+    fixture_model(&app, "pinned-model").await;
+    set_tool_permission(&app, "get_time", access::Permission::Ask).await;
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route("/responses", post(|AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+        let mut requests = requests.lock().await;
+        requests.push(body);
+        let call = |id: &str| json!({"type":"function_call","call_id":id,"name":"get_time","arguments":"{}"});
+        let output = match requests.len() {
+            1 => json!([call("first")]),
+            2 => json!([call("pair-a"), call("pair-b")]),
+            3 => json!([call("single")]),
+            _ => json!([{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}]),
+        };
+        let event = json!({"type":"response.completed","response":{"status":"completed","output":output}});
+        ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
+    })).with_state(captured);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid = conversation(&app).await;
+    assert_eq!(
+        session_mode(&app, &sid).await.unwrap()["execution_mode"],
+        "ask"
+    );
+    let id = queued(&app, &sid).await;
+    running(&app, &id, "first").await;
+    execute_run(
+        app.clone(),
+        id.clone(),
+        "first".into(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let waiting = app.run(&id).await.unwrap();
+    assert_eq!(waiting["status"], "waiting_approval");
+    assert_eq!(waiting["pending"]["name"], "get_time");
+    assert_eq!(waiting["pending"]["remember"]["agent_wide"], true);
+    let approval_id = waiting["pending"]["id"].as_str().unwrap().to_owned();
+    let remember = json!({"match":"values","reach":"chat"});
+    for refused in [
+        json!({"client_request_id":"deny","decision":"deny","remember":remember}),
+        json!({"client_request_id":"shape","decision":"approve","remember":{"match":"values"}}),
+    ] {
+        assert!(
+            approval(State(app.clone()), Path(approval_id.clone()), Json(refused))
+                .await
+                .is_err()
+        );
+    }
+    approval(
+        State(app.clone()),
+        Path(approval_id),
+        Json(json!({"client_request_id":"save","decision":"approve","remember":remember})),
+    )
+    .await
+    .unwrap();
+    let saved = app
+        .store
+        .get(&access::saved_approvals::key("shared_default"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(saved["entries"][0]["tool"], "get_time");
+    assert_eq!(saved["entries"][0]["reach"], "chat");
+    assert_eq!(saved["entries"][0]["fixed"], json!({}));
+    running(&app, &id, "second").await;
+    execute_run(
+        app.clone(),
+        id.clone(),
+        "second".into(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let done = app.run(&id).await.unwrap();
+    assert_eq!(done["status"], "completed", "{done}");
+    assert_eq!(requests.lock().await.len(), 4);
+    let activity = app
+        .store
+        .private_run_activity(&sid, &id, 0)
+        .await
+        .unwrap()
+        .to_string();
+    assert_eq!(activity.matches("\"saved_approval\"").count(), 3);
+    // Activity-only rows never reach the model.
+    assert!(!json!(app.store.context(&sid).await.unwrap())
+        .to_string()
+        .contains("saved_approval"));
+    server.abort();
+}
+
 /// Leaving Plan needs the agreed plan: without one the call is refused before any approval
 /// card, even inside a multi-call step. With one, "Continue in Ask mode" approves the call
 /// with Ask as the target, and the plan is saved as a session artifact.

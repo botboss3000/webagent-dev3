@@ -119,6 +119,8 @@ pub struct LiveAccess {
     pub capability_level: crate::capabilities::CapabilityLevel,
     /// The policy's run-sharing limits, read with the tier from the same policy document.
     pub run_limits: crate::run_limits::RunLimits,
+    /// The policy's saved-approval switches, read with the tier from the same policy document.
+    pub saved_approvals: crate::saved_approvals::Settings,
     /// The agent's limits on people and runs for this caller.
     pub agent_limits: AgentLimits,
     tool_permissions: Value,
@@ -212,6 +214,28 @@ impl LiveAccess {
         self.principal
             .test_account
             .then(|| webagent_accounts::TestAccountLimits::live().max_active_runs)
+    }
+
+    /// Every permission input behind one tool's decision for this caller: tier, agent, level
+    /// and each providing ability. A saved approval stores it and lapses when it differs.
+    pub fn tool_permission_fingerprint(&self, name: &str, ability_ids: &[String]) -> String {
+        let abilities: Vec<String> = ability_ids
+            .iter()
+            .map(|id| {
+                format!(
+                    "{id}={:?}/{:?}",
+                    self.ability_permission(id),
+                    self.tier_ability_permission(id)
+                )
+            })
+            .collect();
+        format!(
+            "{:?}|{:?}|{:?}|{}",
+            self.tier_tool_permission(name),
+            self.agent_tool_permission(name),
+            self.capability_level.tool_permission(name),
+            abilities.join(",")
+        )
     }
 
     fn agent_tool_permission(&self, name: &str) -> Permission {
@@ -486,6 +510,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let tier = crate::account_ladder::effective(&policy, &principal.tier_id)?;
         tier.validate()?;
         let run_limits = crate::run_limits::RunLimits::from_policy(&policy)?;
+        let saved_approvals = crate::saved_approvals::Settings::from_policy(&policy)?;
         if tier.id != principal.tier_id {
             return Err(anyhow!("Tier identity conflict"));
         }
@@ -688,6 +713,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             revision,
             capability_level,
             run_limits,
+            saved_approvals,
             agent_limits,
             tool_permissions,
             ability_permissions,

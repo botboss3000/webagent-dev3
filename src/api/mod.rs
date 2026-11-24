@@ -111,6 +111,8 @@ pub(crate) mod supply_chain;
 mod system;
 #[path = "../../crates/modules/chat/host/api/task_list.rs"]
 pub(crate) mod task_list;
+#[path = "../../crates/modules/chat/host/api/tool_approval.rs"]
+pub(crate) mod tool_approval;
 #[path = "../../crates/modules/files/host/api/uploads.rs"]
 pub(crate) mod uploads;
 #[path = "../../crates/modules/media/host/voice.rs"]
@@ -122,6 +124,7 @@ pub(crate) use chat::*;
 pub(crate) use chat_controls::*;
 pub(crate) use chat_sessions::*;
 pub(crate) use sessions::*;
+pub(crate) use tool_approval::approval;
 pub(crate) use uploads::{attachment_get, upload, upload_content, upload_delete, upload_describe};
 pub(crate) use voice::*;
 // CONTEXT-CONFIG AUTHORITY: one validated live file (`live-files.json`); saves go

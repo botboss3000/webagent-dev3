@@ -218,6 +218,62 @@ impl<
             && (decision.permission != access::Permission::Ask
                 || pending["human_approved"] == true))
     }
+    /// Saved approvals for a call the policy would ask about (`webagent_access::saved_approvals`).
+    /// Records the "Remember this approval" offer on `pending` for the approval card and returns
+    /// the saved approval that lets the call run without asking, if any. Only the chat owner's
+    /// own runs offer or use them; never in Plan mode, for critical tools, the switch to Auto,
+    /// agent messaging (it keeps its own remembered routes) or another user's credential. A
+    /// repeat, separate-action or guard confirmation still asks, but may offer Remember.
+    pub async fn saved_approval(
+        &self,
+        access: &LiveAccess,
+        run: &Value,
+        pending: &mut Value,
+        mode: &Value,
+        visibility: &Value,
+        state: &Value,
+    ) -> Result<Option<Value>> {
+        use access::saved_approvals as saved;
+        let name = pending["name"].as_str().unwrap_or("").to_owned();
+        let settings = access.saved_approvals;
+        let owner = self.store.current_user_id();
+        let critical =
+            webagent_abilities::tool_definitions::get(&name).is_some_and(|tool| tool.critical);
+        if !settings.enabled
+            || mode["execution_mode"] == "plan"
+            || !saved::rememberable_tool(&name, critical)
+            || H::messaging_owns(&name)
+            || run["requester_user_id"]
+                .as_str()
+                .is_some_and(|requester| requester != owner)
+            || pending["authorization"]["owner_user_id"]
+                .as_str()
+                .is_some_and(|credential_owner| credential_owner != owner)
+        {
+            return Ok(None);
+        }
+        let abilities =
+            self.abilities
+                .tool_abilities(&name, visibility, state, &run["loaded_abilities"]);
+        let fingerprint = access.tool_permission_fingerprint(&name, &abilities);
+        pending["remember"] = json!({"agent_wide":settings.agent_wide,"fingerprint":fingerprint});
+        if crate::tools::retry_guard::needs_specific_approval(pending) {
+            return Ok(None);
+        }
+        let agent = run["agent_id"].as_str().unwrap_or("shared_default");
+        let Some(doc) = self.store.get(&saved::key(agent)).await? else {
+            return Ok(None);
+        };
+        let call = saved::Call {
+            tool: &name,
+            args: &pending["arguments"],
+            session_id: run["session_id"].as_str().unwrap_or(""),
+            owner,
+            fingerprint: &fingerprint,
+            settings,
+        };
+        Ok(saved::find(&doc, &call).cloned())
+    }
     pub fn live_tool_decision(
         &self,
         access: &LiveAccess,
@@ -388,4 +444,18 @@ pub fn default_session_mode() -> Value {
 }
 pub fn default_session_abilities() -> Value {
     json!({"revision":0,"active":[],"suppressed":[]})
+}
+
+/// Mark `pending` approved by `entry` (a saved approval) and queue its activity row, an
+/// `approval:` step that session context assembly skips.
+pub fn approve_by_saved(run: &mut Value, pending: &mut Value, entry: &Value) {
+    pending["decision"] = json!("approve");
+    pending["saved_approval"] = entry["id"].clone();
+    let row = json!({"step":format!("approval:{}", pending["id"].as_str().unwrap_or("")),
+        "item":{"type":"saved_approval","tool":pending["name"],"reach":entry["reach"],
+            "match":entry["match"]}});
+    match run["_activity_items"].as_array_mut() {
+        Some(items) => items.push(row),
+        None => run["_activity_items"] = json!([row]),
+    }
 }

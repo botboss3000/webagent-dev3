@@ -1506,6 +1506,9 @@ impl<
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
         }
+        // Whether the policy itself asks, before the guards below may add a confirmation:
+        // only then can a saved approval stand in for the user's decision.
+        let policy_asks = effective.permission == access::Permission::Ask;
         // The critical tool guard: a critical call that no user message clearly asks for
         // waits for the user's approval (see docs/tool-policy.md). Its record also goes to the
         // action ledger. An approved call comes back here and is not checked again.
@@ -1604,6 +1607,27 @@ impl<
             if tools::retry_guard::needs_specific_approval(&run["pending"]) {
                 effective.permission = access::Permission::Ask;
             }
+        }
+        if policy_asks
+            && effective.permission == access::Permission::Ask
+            && run["pending"]["decision"] != "approve"
+        {
+            let mut pending = run["pending"].take();
+            let saved = app
+                .saved_approval(
+                    access,
+                    &run,
+                    &mut pending,
+                    &authorization_mode,
+                    &visibility,
+                    &ability_state,
+                )
+                .await;
+            if let Ok(Some(entry)) = &saved {
+                super::policy::approve_by_saved(&mut run, &mut pending, entry);
+            }
+            run["pending"] = pending;
+            saved?;
         }
         if effective.permission == access::Permission::Ask
             && run["pending"]["decision"] != "approve"

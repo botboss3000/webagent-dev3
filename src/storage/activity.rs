@@ -268,6 +268,11 @@ fn event(
                 "error":item["error"],"backup":item["backup"],"auto_resume":item["auto_resume"],
                 "from_model":item["from_model"],"to_model":item["to_model"],"reason":item["reason"]}),
         ),
+        // A tool call a saved approval let through without asking (engine `approve_by_saved`).
+        "saved_approval" => (
+            "saved_approval",
+            json!({"tool":item["tool"],"reach":item["reach"],"match":item["match"]}),
+        ),
         "model_unreachable" => (
             "model_unreachable",
             json!({"model":item["model"],"provider":item["provider"],"detail":item["detail"]}),
