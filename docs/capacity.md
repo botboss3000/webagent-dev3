@@ -33,6 +33,13 @@ side in `system.slice` (with other system services at the normal weight 100); bu
 `webagent.slice/webagent-build.slice/webagent-build-<instance>.slice`, and the build weight is set
 on all three of those, so builds compete with `system.slice` as a whole at a low weight.
 
+Measured on the tester copy of the app, 2026-11-24 (one loop process; each command touched 200 MB
+and kept one thread busy for 15 s): commands from different chats run one at a time per loop
+process (8 at once took 8 × 16 s); with the worker in the API container the API's memory rose by
+about 210 MiB per command and never by more than one command; with the worker container switched
+on, the same command raised the worker container from 4 to 211 MiB while the API stayed at
+119–157 MiB.
+
 Measured on the development server, 2026-11-24 (12 threads; one loop process; the probe was
 `/health/ready`, which runs four database queries in the API, timed 40 times 0.2 s apart; the load
 was 12 shell loops spinning inside the loop container for 15 s; other build work was running on the
@@ -113,6 +120,11 @@ weight to the shares that produce it. Check the result in
    release (Docker keeps a live-removed cap removed across restarts; the log says so).
 5. The build priority (`builds.cpu_weight`) is set when the broker next admits a build. Check it
    in `/sys/fs/cgroup/webagent.slice/cpu.idle` (1 for `"idle"`) or `cpu.weight` (a number).
+6. **A broker install writes the defaults it knows into the installed file.** So a default that a
+   later release changes does not apply on a server that was installed before it: the installed
+   file then holds the old value explicitly. Change the value in the installed file instead. On
+   the development server this is the case for `builds.cpu_weight` (2026-11-24: the installed file
+   says `20`, the default is now `"idle"`).
 
 ### 2.2 Agent loops and runs
 
