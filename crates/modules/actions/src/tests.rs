@@ -230,6 +230,28 @@ fn outcomes_settle_only_explicit_success_or_denial() {
     ] {
         assert_eq!(outcome::outcome(&Ok(unsettled)).state, "uncertain");
     }
+    // A tool's refusal that started nothing settles as failed and shows the tool's reason;
+    // the marker never overrides an uncertainty flag or turns a success into a failure.
+    let refusal = json!({"status":"error","error_kind":"preview_tunnel_rejected","no_effect":true,"output":"r"});
+    let refused = outcome::outcome(&Ok(refusal.clone()));
+    assert_eq!(
+        (refused.state, refused.retry_safe),
+        ("confirmed_failed", true)
+    );
+    let shown = outcome::finished(true, &json!({"id":"a","state":"confirmed_failed"}), refused);
+    assert_eq!(
+        (shown["output"].clone(), shown["status"].clone()),
+        (json!("r"), json!("error"))
+    );
+    for unsettled in [
+        json!({"status":"error","error_kind":"preview_tunnel_rejected"}),
+        json!({"status":"error","no_effect":true,"uncertain":true}),
+        json!({"status":"error","no_effect":"true"}),
+    ] {
+        assert_eq!(outcome::outcome(&Ok(unsettled)).state, "uncertain");
+    }
+    let success = outcome::outcome(&Ok(json!({"status":"success","no_effect":true})));
+    assert_eq!(success.state, "completed");
     let failed = outcome::outcome(&Err(anyhow!("timeout")));
     assert_eq!((failed.state, failed.value), ("uncertain", Value::Null));
     assert!(outcome::uses_agent_receipt(

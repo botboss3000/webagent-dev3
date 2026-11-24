@@ -100,7 +100,8 @@ pub struct Outcome {
 }
 
 /// Classify a tool result: only explicit success (or an optional package's answered result,
-/// which carries no status) or denial without an uncertainty flag is settled; errors and
+/// which carries no status), denial, or an error the tool marks `no_effect` (a refusal that
+/// started nothing), each without an uncertainty flag, is settled; other errors and
 /// everything else are uncertain.
 #[must_use]
 pub fn outcome(result: &Result<Value>) -> Outcome {
@@ -108,7 +109,11 @@ pub fn outcome(result: &Result<Value>) -> Outcome {
         Ok(v) if (v["status"] == "success" || package_result(v)) && v["uncertain"] != true => {
             ("completed", v.clone(), false)
         }
-        Ok(v) if v["status"] == "denied" && v["uncertain"] != true => {
+        Ok(v)
+            if (v["status"] == "denied" || v["no_effect"] == true)
+                && v["status"] != "success"
+                && v["uncertain"] != true =>
+        {
             ("confirmed_failed", v.clone(), true)
         }
         _ => (

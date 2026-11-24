@@ -567,9 +567,10 @@ impl Tunnels {
         let _held = lock.lock().await;
         match self.run(name, args, base).await {
             Ok(output) => json!({"status":"success","output":output}),
-            Err(_) => {
-                json!({"status":"error","error_kind":"preview_tunnel_rejected","output":REJECTED})
-            }
+            // Every refusal leaves nothing running (a failed start closes its half-started
+            // lease first), so the action ledger may settle it as failed, not uncertain.
+            Err(_) => json!({"status":"error","error_kind":"preview_tunnel_rejected",
+                "no_effect":true,"output":REJECTED}),
         }
     }
 
@@ -633,7 +634,7 @@ impl Tunnels {
         if !lease.allowed().await {
             return Err(invalid("Port is not owned by this workspace terminal"));
         }
-        // Closes the half-started lease if this call fails or its caller hangs up.
+        // Closes the half-started lease if the caller hangs up while it starts.
         struct Guard(Option<Arc<Lease>>);
         impl Drop for Guard {
             fn drop(&mut self) {
@@ -643,8 +644,18 @@ impl Tunnels {
             }
         }
         let mut guard = Guard(Some(Arc::clone(&lease)));
-        let result = self.start(&lease).await?;
+        let started = self.start(&lease).await;
         guard.0 = None;
+        let result = match started {
+            Ok(result) => result,
+            Err(error) => {
+                // Close before replying, so the refusal means no connector is left running; a
+                // task of its own finishes the close even if this caller hangs up meanwhile.
+                let closing = Arc::clone(&lease);
+                let _ = tokio::spawn(async move { closing.close().await }).await;
+                return Err(error);
+            }
+        };
         locked(&self.leases).insert(base.to_owned(), lease);
         Ok(result)
     }
@@ -850,5 +861,52 @@ mod tests {
         assert_eq!(response_status("HTTP/1.0 404"), Some(404));
         assert_eq!(response_status("HTTP/1.1 600 X"), None);
         assert_eq!(response_status("HTTP/2 200"), None);
+    }
+
+    fn tunnels(executable: &str, owned: bool) -> Tunnels {
+        let validator: Validator = Arc::new(move |_, _| Box::pin(async move { owned }));
+        Tunnels::new(executable.into(), validator)
+    }
+
+    // A refusal must say it started nothing, or the action ledger records the preview start
+    // as "uncertain" and the agent is told to reconcile instead of seeing the refusal.
+    #[tokio::test]
+    async fn refusals_are_marked_as_having_no_effect() {
+        let base = tempfile::tempdir().expect("workspace");
+        let refused = tunnels("/usr/bin/true", false)
+            .execute("start_tunnel", &json!({"port":20000}), base.path())
+            .await;
+        assert_eq!(
+            refused["error_kind"], "preview_tunnel_rejected",
+            "{refused}"
+        );
+        assert_eq!(refused["no_effect"], true, "{refused}");
+        let status = tunnels("/usr/bin/true", true)
+            .execute("get_tunnel_url", &json!({}), base.path())
+            .await;
+        assert_eq!(status["status"], "success", "{status}");
+        assert!(status.get("no_effect").is_none(), "{status}");
+    }
+
+    // A connector that exits before printing a URL fails the start after it was spawned; the
+    // lease is closed before the refusal is returned, so no preview is left behind.
+    #[tokio::test]
+    async fn a_failed_start_leaves_no_lease() {
+        let base = tempfile::tempdir().expect("workspace");
+        let tunnels = tunnels("/usr/bin/true", true);
+        let failed = tunnels
+            .execute(
+                "start_tunnel",
+                &json!({"port":20000,"duration_seconds":30}),
+                base.path(),
+            )
+            .await;
+        assert_eq!(failed["no_effect"], true, "{failed}");
+        assert!(tunnels.lease(base.path()).is_none());
+        assert_eq!(tunnels.count(base.path()), 0);
+        let status = tunnels
+            .execute("get_tunnel_url", &json!({}), base.path())
+            .await;
+        assert_eq!(status["output"]["status"], "absent", "{status}");
     }
 }
