@@ -475,6 +475,16 @@ and retains endpoint, credential, transport and publication authority.
 | Other installed compatible chat endpoints | Their existing chat-completions prefix profile, without foreign reasoning fields |
 | Typesafe | Decision profile; ordinary chat projection is rejected |
 
+DeepSeek's thinking mode requires `reasoning_content` on every assistant message when
+the request carries tools: a call after an assistant turn that carries none is rejected
+with provider HTTP 400. Materialization therefore always sets the field for DeepSeek,
+replaying the original reasoning where a turn has one and an empty string where it has
+none (server-added `task_list_read`/`main_notes_read`/`set_execution_mode` rows and
+history imported from other providers). Thinking disabled
+(`thinking: {"type":"disabled"}`, effort `none`) or a request without tools imposes no
+requirement, and an empty string is accepted in both modes. The live DeepSeek tool-loop
+journey in docs/ui-journeys.md exercises this.
+
 These are installed protocol profiles in crates/provider-contracts, not
 model-selectable formatting or permission overrides. No new endpoint is enabled
 by a component result.
