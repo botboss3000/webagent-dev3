@@ -570,21 +570,28 @@ impl Store {
         Ok((vec![(id, snapshot)], lines.into_iter().collect(), updates))
     }
 
-    /// Settle session `sid`'s requests when a turn of run `rid` ends: those still unfiled
-    /// were answered in the reply without tool work, so they are set aside. This revision
-    /// does not reach the agent; nothing is written when every request is filed.
-    pub(crate) async fn task_list_settle(&self, sid: &str, rid: &str) -> Result<()> {
+    /// Settle session `sid`'s list when a turn of run `rid` ends (see
+    /// [`webagent_chat::task_list::settle`]): unfiled requests are set aside and, given the
+    /// final `reply`, finished open sections close with it as summary. This revision does
+    /// not reach the agent; nothing is written when nothing changes.
+    pub(crate) async fn task_list_settle(
+        &self,
+        sid: &str,
+        rid: &str,
+        reply: Option<&str>,
+    ) -> Result<()> {
         let _guard = self.context_gate.write().await;
         // Read-then-write: take the write lock first, so a concurrent writer makes this wait
         // (busy_timeout) instead of failing with 'database is locked'.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let (_, list) = list_in(self, &mut tx, sid).await?;
         let requests = requests_in(self, &mut tx, sid).await?;
-        let Some(write) = webagent_chat::task_list::settle(&list, &requests) else {
+        let Some((next, changes)) =
+            webagent_chat::task_list::settle(&list, &requests, reply, crate::now())?
+        else {
             tx.commit().await?;
             return Ok(());
         };
-        let (next, changes) = webagent_chat::task_list::apply(&list, write, crate::now())?;
         let marks = webagent_chat::task_list::marks(&list, &next);
         self.task_list_commit(
             &mut tx,
@@ -688,8 +695,8 @@ mod tests {
 
         // A thanks answered without tools is set aside at the turn end, silently.
         record("user:c", "Thanks").await;
-        store.task_list_settle("s", "r").await.unwrap();
-        store.task_list_settle("s", "r").await.unwrap();
+        store.task_list_settle("s", "r", None).await.unwrap();
+        store.task_list_settle("s", "r", None).await.unwrap();
         let document = store.task_list_current("s").await.unwrap().unwrap();
         assert_eq!(document["revision"], 3);
         assert_eq!(document["list"]["set_aside"][0]["request"], "u3");
@@ -977,7 +984,7 @@ mod tests {
         assert_eq!(history[0]["by"], "user");
         assert_eq!(history.last().unwrap()["revision"], 1);
         // Nothing is unfiled, so the turn end writes no revision.
-        store.task_list_settle("owned", "r").await.unwrap();
+        store.task_list_settle("owned", "r", None).await.unwrap();
         assert_eq!(
             store.task_list_current("owned").await.unwrap().unwrap()["revision"],
             4

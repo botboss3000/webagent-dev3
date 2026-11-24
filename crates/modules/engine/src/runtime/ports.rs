@@ -221,13 +221,15 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         batch_writes: &'a [Value],
         every_tool: bool,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
-    /// Settle session `sid`'s requests when run `rid` publishes its final reply: those still
-    /// unfiled were answered without tool work and are set aside.
+    /// Settle session `sid`'s task list when run `rid` publishes its final reply: requests
+    /// still unfiled were answered without tool work and are set aside, and given `reply`
+    /// (`None` while the run's own background work continues) finished open sections close.
     fn session_tasks_end<'a>(
         &'a self,
         store: &'a S,
         sid: &'a str,
         rid: &'a str,
+        reply: Option<&'a str>,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
     /// The user's newest `count` requests in session `sid` for the critical tool guard, oldest
     /// first, as `(label, text)`; for an automated run `rid` (a scheduled task) its stored

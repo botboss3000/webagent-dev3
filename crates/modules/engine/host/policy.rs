@@ -173,8 +173,9 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
         store: &'a Store,
         sid: &'a str,
         rid: &'a str,
+        reply: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        store.task_list_settle(sid, rid)
+        store.task_list_settle(sid, rid, reply)
     }
     fn guard_messages<'a>(
         &'a self,

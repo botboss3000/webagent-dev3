@@ -18,7 +18,7 @@ other tool calls.
   `"status":"in_progress"` and finish it with `done`, `blocked` or `cancelled` and a
   one-line outcome saying what the calls showed, in the same step as the next calls.
   A quick lookup needs no steps.
-- Before your final reply, close a finished section with `done` and a summary, in the
-  same step as your last tool calls; otherwise leave it open and say in the reply what is
-  left.
+- Never spend a step closing a section: when you reply, the app closes every open section
+  whose steps are all finished (or that has none), with your reply as its summary. Leave a
+  step open or blocked when work remains, and say in the reply what is left.
 - Statuses are your claims: report what checks proved.

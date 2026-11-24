@@ -44,7 +44,7 @@
           "summary": {
             "type": "string",
             "minLength": 20,
-            "maxLength": 1200
+            "maxLength": 4000
           },
           "requests": {
             "type": "array",
@@ -86,7 +86,7 @@
             },
             "outcome": {
               "type": "string",
-              "maxLength": 240
+              "maxLength": 2000
             },
             "evidence": {
               "type": "array",

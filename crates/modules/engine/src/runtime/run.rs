@@ -4487,17 +4487,30 @@ impl<
                                 return Ok(());
                             }
                             // SESSION TASKS: user requests the run answered without tool work
-                            // are set aside, so the list never asks about them; it costs no
-                            // model call.
+                            // are set aside and finished sections close with the reply as
+                            // summary, so keeping the list costs no model call. A run that ends
+                            // waiting on its own background work (a broker check or release)
+                            // keeps its sections open: the result arrives as a notice that
+                            // starts the next run.
                             {
                                 let (task_sid, _, _) = webagent_context::assets::identity(
                                     &run,
                                     app.store.current_user_id(),
                                 )?;
+                                let waiting = app
+                                    .store
+                                    .background_scan(Some(&task_sid))
+                                    .await?
+                                    .iter()
+                                    .any(|task| {
+                                        task["run_id"] == json!(id)
+                                            && !super::background::finished(task)
+                                    });
                                 Box::pin(app.native.session_tasks_end(
                                     app.store.records(),
                                     &task_sid,
                                     &id,
+                                    (!waiting).then_some(text.as_str()),
                                 ))
                                 .await?;
                             }

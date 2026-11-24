@@ -3716,6 +3716,8 @@ async fn task_gate_files_the_request_before_the_first_change_without_an_extra_ca
     assert_eq!(section["requests"], json!(["u1"]));
     assert_eq!(section["title"], "hello");
     assert_eq!(section["steps"], json!([]));
+    // The reply closed it: it had no unfinished step.
+    assert_eq!(section["status"], "done");
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 2);
     // The second call carries the filing as a delivered list change.

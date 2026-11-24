@@ -191,6 +191,20 @@ fn text(value: &str, min: usize, max: usize, what: &str) -> Result<String> {
     Ok(value.to_owned())
 }
 
+/// `value` trimmed and cut to at most `max` bytes at a character boundary, with `…` when
+/// cut, so an over-long outcome or summary is kept instead of costing a retry.
+fn cut(value: &str, max: usize) -> String {
+    let value = value.trim();
+    if value.len() <= max {
+        return value.to_owned();
+    }
+    let mut end = max.saturating_sub('…'.len_utf8());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", value[..end].trim_end())
+}
+
 /// A user request label: `u` and its number (`u7`).
 fn request_label(label: &str) -> Result<String> {
     let digits = label.strip_prefix('u').unwrap_or("");
@@ -350,7 +364,7 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
         }
     }
     if let Some(summary) = write.section.summary.as_deref() {
-        section.summary = text(summary, 20, 1200, "A section summary")?;
+        section.summary = text(&cut(summary, 1200), 20, 1200, "A section summary")?;
     }
     // A section is open, done or cancelled; `in_progress` on a section means open.
     if let Some(status) = write
@@ -412,13 +426,18 @@ fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<(usiz
             section.status.word()
         );
     }
-    let index = match write.id.as_deref() {
-        Some(id) => section
-            .steps
-            .iter()
-            .position(|step| step.id == id)
-            .ok_or_else(|| anyhow!("No step {id} in {}", section.id))?,
-        None => {
+    // An id the section does not know, given with a label, is a new step: the server
+    // picks its id, so a guessed id costs no retry.
+    let found = write
+        .id
+        .as_deref()
+        .and_then(|id| section.steps.iter().position(|step| step.id == id));
+    let index = match (found, write.id.as_deref()) {
+        (Some(index), _) => index,
+        (None, Some(id)) if write.label.is_none() => {
+            bail!("No step {id} in {}", section.id)
+        }
+        (None, _) => {
             if section.steps.len() >= MAX_STEPS {
                 bail!("{} already keeps {MAX_STEPS} steps", section.id);
             }
@@ -440,7 +459,7 @@ fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<(usiz
             section.steps.len() - 1
         }
     };
-    let new = write.id.is_none();
+    let new = found.is_none();
     let step = &mut section.steps[index];
     if !new {
         if let Some(label) = write.label.as_deref() {
@@ -448,7 +467,7 @@ fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<(usiz
         }
     }
     if let Some(outcome) = write.outcome.as_deref() {
-        step.outcome = text(outcome, 0, 240, "A step outcome")?;
+        step.outcome = text(&cut(outcome, 240), 0, 240, "A step outcome")?;
     }
     if let Some(ids) = write.evidence {
         step.evidence = evidence(ids)?;
@@ -775,21 +794,72 @@ pub fn gate(list: &List, requests: &Requests, every_tool: bool) -> Gate {
     })
 }
 
-/// The write that settles session requests when a turn ends: every request still unfiled
-/// was answered in the reply without tool work, so it is set aside; `None` when none is.
-#[must_use]
-pub fn settle(list: &List, requests: &Requests) -> Option<Write> {
+/// Bytes of the final reply a closed section keeps as its summary.
+const SETTLE_SUMMARY: usize = 300;
+
+/// The list after a turn ends at time `now`, and its change lines, or `None` when nothing
+/// changes. Requests still unfiled were answered without tool work, so they are set aside.
+/// With the final reply `reply` (`None` while the run's own background work continues),
+/// open sections with no unfinished step (none, or all done, blocked or cancelled) are
+/// closed as done with the reply's start as their summary, so the agent never spends a
+/// step closing them and a later request opens a fresh section.
+pub fn settle(
+    list: &List,
+    requests: &Requests,
+    reply: Option<&str>,
+    now: u64,
+) -> Result<Option<(List, Vec<String>)>> {
+    let mut writes = Vec::new();
     let unfiled = unfiled(list, requests);
-    (!unfiled.is_empty()).then(|| Write {
-        set_aside: unfiled
-            .iter()
-            .map(|item| SetAside {
-                request: item.id.clone(),
-                reason: "answered in the reply".to_owned(),
-            })
-            .collect(),
-        ..Write::default()
-    })
+    if !unfiled.is_empty() {
+        writes.push(Write {
+            set_aside: unfiled
+                .iter()
+                .map(|item| SetAside {
+                    request: item.id.clone(),
+                    reason: "answered in the reply".to_owned(),
+                })
+                .collect(),
+            ..Write::default()
+        });
+    }
+    let flat = reply.map(|reply| reply.split_whitespace().collect::<Vec<_>>().join(" "));
+    let summary = cut(
+        &format!("Answered in the reply: {}", flat.as_deref().unwrap_or("")),
+        SETTLE_SUMMARY,
+    );
+    for section in &list.sections {
+        if flat.is_some()
+            && section.status == Status::Open
+            && !section.steps.iter().any(|step| step.status.unfinished())
+        {
+            writes.push(Write {
+                section: SectionWrite {
+                    id: Some(section.id.clone()),
+                    status: Some(Status::Done),
+                    summary: section.summary.is_empty().then(|| summary.clone()),
+                    ..SectionWrite::default()
+                },
+                ..Write::default()
+            });
+        }
+    }
+    if writes.is_empty() {
+        return Ok(None);
+    }
+    let mut next = list.clone();
+    let mut changes = Vec::new();
+    for write in writes {
+        let (after, lines) = apply(&next, write, now)?;
+        next = after;
+        changes.extend(lines);
+    }
+    // One settling is one revision, however many writes it took.
+    next.revision = list
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("Task list revision exhausted"))?;
+    Ok(Some((next, changes)))
 }
 
 fn text_field(texts: &Value, key: &str) -> String {
@@ -1263,10 +1333,11 @@ mod tests {
 
         // A message answered without tools is set aside when the turn ends.
         requests.add("user:d", "Thanks!", 30);
-        let settling = settle(&followed, &requests).unwrap();
-        let (settled, changes) = apply(&followed, settling, 31).unwrap();
+        // (No reply: the run's background work continues, so its section stays open.)
+        let (settled, changes) = settle(&followed, &requests, None, 31).unwrap().unwrap();
         assert_eq!(changes, vec!["u4 set aside: answered in the reply"]);
-        assert!(settle(&settled, &requests).is_none());
+        assert_eq!(settled.revision, followed.revision + 1);
+        assert!(settle(&settled, &requests, None, 32).unwrap().is_none());
         assert!(matches!(gate(&settled, &requests, false), Gate::Pass));
         // When the gate covers every tool, a set-aside newest request getting tool calls is
         // cited instead, which takes it off the set-aside list.
@@ -1359,5 +1430,68 @@ mod tests {
         .unwrap();
         assert_eq!(same.sections[0].status, Status::Open);
         assert_eq!(changes, vec!["s1 notes updated"]);
+    }
+
+    /// The turn end closes open sections with no unfinished step, the reply as summary, in
+    /// one revision; a section with an open step stays open.
+    #[test]
+    fn the_turn_end_closes_finished_sections() {
+        let (list, _) = apply(
+            &List::default(),
+            write(serde_json::json!({"section":{"title":"Quick lookup"}})),
+            1,
+        )
+        .unwrap();
+        let (list, _) = apply(
+            &list,
+            write(serde_json::json!({"section":{"title":"Longer work"},
+                "steps":[{"label":"First","status":"done"},{"label":"Second"}]})),
+            2,
+        )
+        .unwrap();
+        let (settled, changes) = settle(&list, &Requests::default(), Some("The answer is  42."), 3)
+            .unwrap()
+            .unwrap();
+        assert_eq!(changes, vec!["s1 done"]);
+        assert_eq!(settled.revision, list.revision + 1);
+        assert_eq!(settled.sections[0].status, Status::Done);
+        assert_eq!(
+            settled.sections[0].summary,
+            "Answered in the reply: The answer is 42."
+        );
+        assert_eq!(settled.sections[1].status, Status::Open);
+        assert!(settle(&settled, &Requests::default(), Some("again"), 4)
+            .unwrap()
+            .is_none());
+        // A long reply is cut, not refused.
+        let long = "word ".repeat(200);
+        let (cut_list, _) = settle(&list, &Requests::default(), Some(&long), 5)
+            .unwrap()
+            .unwrap();
+        assert!(cut_list.sections[0].summary.len() <= SETTLE_SUMMARY);
+        assert!(cut_list.sections[0].summary.ends_with('…'));
+    }
+
+    /// A guessed step id with a label adds a step, and an over-long outcome is cut.
+    #[test]
+    fn guessed_step_ids_and_long_outcomes_are_accepted() {
+        let (list, _) = apply(
+            &List::default(),
+            write(serde_json::json!({"section":{"title":"List files"},
+                "steps":[{"id":"st1","label":"Run ls","status":"done",
+                    "outcome":"x".repeat(500)}]})),
+            1,
+        )
+        .unwrap();
+        assert_eq!(list.sections[0].steps[0].id, "s1.1");
+        assert!(list.sections[0].steps[0].outcome.len() <= 240);
+        assert!(apply(
+            &list,
+            write(
+                serde_json::json!({"section":{"id":"s1"},"steps":[{"id":"s1.9","status":"done"}]})
+            ),
+            2
+        )
+        .is_err());
     }
 }

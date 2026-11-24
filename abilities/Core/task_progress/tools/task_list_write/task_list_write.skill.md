@@ -10,7 +10,8 @@ list, so `expected_revision` is optional and never refused.
   "steps":[{"label":"Reproduce on phone","status":"in_progress"},{"label":"Patch cookie path"}]}`.
   Leave out `id`: the result gives the section and step ids (`s3`, `s3.1`) and the revision.
 - Update: give the section's `id`, and each step to change by its `id`; steps left out
-  are untouched, and steps without an `id` are added. Start a step with
+  are untouched, and steps without an `id` (or with an id the section does not have) are
+  added. Start a step with
   `"status":"in_progress"` and finish it with `done`, `blocked` or `cancelled` (to drop
   it); add a one-line `outcome` when it finishes. Tool calls made while a step is in
   progress count as its evidence; `evidence` may narrow that to the result ids that matter.
@@ -28,8 +29,10 @@ list, so `expected_revision` is optional and never refused.
   questions). Folded messages stay recallable with `recall_compacted`. Leave it out to keep
   everything; automatic compaction still folds old work when the conversation grows. The
   result's `fold` says whether a fold was requested or why not; never retry it.
-- Close a finished section with `"status":"done"` and a `summary` of what was done,
-  decisions and where results live; every step must be done, blocked or cancelled first.
+- You rarely close a section yourself: when you reply, the app closes every open section
+  whose steps are all finished, with your reply as its summary. To close one earlier, give
+  `"status":"done"` and a `summary` of what was done, decisions and where results live;
+  every step must be done, blocked or cancelled first.
   `cancelled` drops the whole section. A section's status is only `open`, `done` or
   `cancelled` (steps take `in_progress`). Reopen a closed section with `"status":"open"`
   when a follow-up needs it.

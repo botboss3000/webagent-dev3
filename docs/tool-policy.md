@@ -70,7 +70,9 @@ model call of its own.
   so a new message never makes the agent's list write stale.
 - A request is accounted for when a section or step cites it (`requests`) or it is set
   aside with a reason (`set_aside`). When a run publishes its final reply, requests still
-  unfiled were answered without tool work and are set aside (`settle`), silently.
+  unfiled were answered without tool work and are set aside (`settle`), silently, and
+  open sections with no unfinished step close as done with the reply's start as summary
+  (not while the run's own background work continues).
 - The gate cites unfiled requests on the newest open section, or opens a section titled
   from the first one when none is open; no step needs to be in progress. The call runs and
   the agent receives the filing as a `task_list_read` row on its next call, and may move a
