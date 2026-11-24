@@ -4,6 +4,8 @@ const node=(tag,text='',cls='')=>{const el=document.createElement(tag);if(text)e
 const number=value=>Number(value||0).toLocaleString();
 const time=seconds=>new Date(seconds*1000).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
 const day=seconds=>new Date(seconds*1000).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+// Monthly totals turn over on the UTC calendar month.
+const utcDay=seconds=>new Date(seconds*1000).toLocaleDateString(undefined,{month:'short',day:'numeric',timeZone:'UTC'})+' (UTC)';
 const minutes=seconds=>seconds>=7200?(seconds/3600).toFixed(1).replace(/\.0$/,'')+' h':Math.round(seconds/60)+' min';
 const megabytes=bytes=>number(Math.ceil(Number(bytes||0)/1048576))+' MB';
 const dollars=micros=>'$'+(Number(micros)/1e6).toFixed(Number(micros)<1e5?4:2);
@@ -89,7 +91,7 @@ export async function renderDashboard(host,request,{agentId}){
   usage(section(body,'This agent today'),data.usage.today||[],'No model use yet today.');
   const month=section(body,'This agent this month');
   usage(month,data.usage.month||[],'No model use yet this month.');
-  row(month,'Resets','',day(data.resets.month));
+  row(month,'Resets','',utcDay(data.resets.month));
 
   const people=section(body,'People using this agent');
   const [recent,recentShare]=against(data.users.last_30_days);

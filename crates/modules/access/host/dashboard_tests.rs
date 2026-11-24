@@ -49,6 +49,29 @@ async fn the_dashboard_is_for_the_agents_owner_and_administrators_only() {
             .unwrap();
     }
 
+    // The owner's own storage state, in their own database (the Dashboard must not read
+    // the server's base store or anyone else's).
+    app.store
+        .for_user(&owner)
+        .await
+        .unwrap()
+        .put(
+            crate::store::storage_limits::STATE_KEY,
+            &json!({"used_bytes":12_345,"checked_at":7}),
+        )
+        .await
+        .unwrap();
+
+    // The administrator's own database (the router state's store) holds a different value:
+    // nobody else's Dashboard may show it.
+    app.store
+        .put(
+            crate::store::storage_limits::STATE_KEY,
+            &json!({"used_bytes":999,"checked_at":7}),
+        )
+        .await
+        .unwrap();
+
     // Allowed: the owner.
     let (status, page) = call(&app, "GET", &uri, &mine, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{page}");
@@ -57,7 +80,7 @@ async fn the_dashboard_is_for_the_agents_owner_and_administrators_only() {
     assert_eq!(page["plan"]["until"], Value::Null);
     assert_eq!(page["shared"]["agents_owned"]["used"], 1);
     assert_eq!(page["shared"]["runs_at_once"]["used"], 0);
-    assert!(page["shared"]["storage_bytes"].is_object());
+    assert_eq!(page["shared"]["storage_bytes"]["used"], 12_345);
     let today = page["usage"]["today"].as_array().unwrap();
     assert_eq!(today.len(), 1);
     assert_eq!(
@@ -86,6 +109,40 @@ async fn the_dashboard_is_for_the_agents_owner_and_administrators_only() {
         .iter()
         .any(|text| text.starts_with("Your agent “Plus test agent” has had 80%")));
     assert!(notices.iter().all(|text| !text.contains("guaranteed")));
+
+    // A second owner sees only their own storage (none recorded), never the first owner's or
+    // the administrator's; their billing summary is read from their own database too.
+    let second = owned_agent(&app, &other).await;
+    let (status, page) = call(
+        &app,
+        "GET",
+        &format!("/api/v3/agents/{second}/dashboard"),
+        &theirs,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["shared"]["storage_bytes"]["used"], Value::Null);
+    #[cfg(all(unix, feature = "server-bins"))]
+    {
+        let (status, billing) = call(&app, "GET", "/api/v3/billing", &theirs, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{billing}");
+        assert_eq!(billing["summary"], Value::Null);
+    }
+
+    // The roster marks the owner's own agent, so the shell shows its Dashboard tab.
+    let (_, roster) = call(&app, "GET", "/api/v3/models/agents", &mine, Value::Null).await;
+    let listed = |roster: &Value| {
+        roster["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == agent.as_str())
+            .map(|entry| entry["is_owner"].clone())
+    };
+    assert_eq!(listed(&roster), Some(json!(true)));
+    let (_, roster) = call(&app, "GET", "/api/v3/models/agents", &admin, Value::Null).await;
+    assert_ne!(listed(&roster), Some(json!(true)));
 
     // Refused: another person (not the owner, not an administrator), and the owner's agent
     // browser (agent browsers read neither route).

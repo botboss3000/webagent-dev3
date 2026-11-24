@@ -8,13 +8,10 @@
 //! Who may call: `GET /agents/{id}/dashboard` the agent's owner and administrators;
 //! `GET /plan` any signed-in person for their own account. Guests, widgets and agent
 //! browsers are refused (the credential table refuses the last two before this code runs).
+//! Both take the request's `App` extension, whose store the authentication middleware scoped
+//! to the caller's own database (the router state's store is not the caller's).
 use crate::{Api, ApiError, App};
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Extension, Json, Router,
-};
+use axum::{extract::Path, http::StatusCode, routing::get, Extension, Json, Router};
 use serde_json::{json, Value};
 use webagent_engine::usage_ledger as ledger;
 
@@ -70,7 +67,7 @@ async fn plan_of(app: &App, user: &str, tier: &str) -> anyhow::Result<Value> {
 }
 
 /// The signed-in person's own tier for the Profile page's Plan panel.
-async fn plan(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
+async fn plan(Extension(app): Extension<App>, Extension(identity): Extension<Value>) -> Api {
     let user = person(&identity)?;
     let tier = identity["_tier_id"].as_str().unwrap_or("").to_owned();
     Ok(Json(plan_of(&app, &user, &tier).await?))
@@ -95,7 +92,7 @@ fn next_month_start(day: i64) -> i64 {
 /// usage per model today and this month, its people against its limits, today's limit
 /// notices and the owner's plan.
 async fn dashboard(
-    State(app): State<App>,
+    Extension(app): Extension<App>,
     Extension(identity): Extension<Value>,
     Path(agent): Path<String>,
 ) -> Api {

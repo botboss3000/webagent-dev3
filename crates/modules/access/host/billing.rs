@@ -567,7 +567,10 @@ async fn read_usage(app: &App, message: &Value) -> Result<Value> {
 
 /// What the Plan panel may show: whether billing is set up and reachable, the purchase offers
 /// and the account's last plan summary. People only: no guests, widgets or agent browsers.
-async fn summary(State(app): State<App>, Extension(identity): Extension<Value>) -> crate::Api {
+async fn summary(
+    Extension(app): Extension<App>,
+    Extension(identity): Extension<Value>,
+) -> crate::Api {
     let user = person(&identity)?;
     let configured = config().socket_path.is_some();
     let session = current();

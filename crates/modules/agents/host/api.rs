@@ -118,6 +118,8 @@ async fn agents(
             continue;
         }
         value["can_manage"] = rights["can_manage"].clone();
+        // The owner's own pages (Dashboard) show only to the owner and administrators.
+        value["is_owner"] = json!(rights["owner_id"] == caller.user_id.as_str());
         values.push(value);
     }
     // Even a caller with no memberships can create their first owned agent.
