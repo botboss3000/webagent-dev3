@@ -109,9 +109,11 @@ weight to the shares that produce it. Check the result in
 
 **How to change it, and what restarts:**
 
-1. Edit the installed file with sudo (only that section).
-2. Restart the broker while it is idle (`sudo systemctl restart webagent-build-<instance>.service`;
-   `buildctl status` shows `busy`).
+1. Change the installed file through Host Admin (`buildctl host request file_write` with the
+   whole file, only that section changed; never a hand edit with sudo). `host_revert` of that
+   request is its undo.
+2. Restart the broker while it is idle (Host Admin `unit_restart` of
+   `webagent-build-<instance>.service`; `buildctl status` shows `busy`).
 3. At start the broker updates the running app containers live with `docker update`: no container
    restart, no rebuild, nobody is signed out. Its log prints `Container capacity <role>: updated`.
    Every later start of an app container by the broker (release, browser sync, rollback, restore)
@@ -123,8 +125,10 @@ weight to the shares that produce it. Check the result in
 6. **A broker install writes the defaults it knows into the installed file.** So a default that a
    later release changes does not apply on a server that was installed before it: the installed
    file then holds the old value explicitly. Change the value in the installed file instead. On
-   the development server this is the case for `builds.cpu_weight` (2026-11-24: the installed file
-   says `20`, the default is now `"idle"`).
+   the development server `builds.cpu_weight` was such a case: the installed file said `20` until
+   2026-11-24, when it was set to `"idle"` (Host Admin request `41ee9b0b`; measured afterwards:
+   `cpu.idle` 1, the next build in its normal time, API `/health/ready` 1.3–1.8 ms median during
+   it against 1.6 ms idle).
 
 ### 2.2 Agent loops and runs
 
@@ -138,7 +142,7 @@ weight to the shares that produce it. Check the result in
 | Per-agent cap | same file, `run_limits.max_active_runs_per_agent` | `null` = half the run ceiling, at least 2 | Active runs one agent may have at once for non-administrators. | Read live. |
 | Command budgets | same file, `run_limits.concurrent_commands_per_run` (2), `concurrent_commands_per_user` (4), `command_cpu_seconds_per_run` (3600), `command_cpu_seconds_per_user_day` (14400) | as shown | How many shell commands run at once and how much processor time they may use. | Read live. |
 | Open account databases | `config/storage/storage-settings.json`, `user_database_pools.max_connected` | 64 | Account databases holding open connections at once in each process (each connection is a thread, so this counts against the task limit). At least 8. | Read at process start: the next release. |
-| Browser limits | `config/browser/browser-limits.json`: `max_running_per_app` (10), `max_running_per_user` (4), `idle_seconds` (180), `queued_idle_seconds` (30), `max_wait_seconds` (600) | as shown | Private browsers running at once, per server and per user, and how fast idle ones close while others wait. | Read live for each new browser. |
+| Browser limits | `config/browser/browser-limits.json`: `max_running_per_app` (5), `max_running_per_user` (4), `idle_seconds` (180), `queued_idle_seconds` (30), `max_wait_seconds` (600); also `min_extension_version` (0.2.0), the oldest Browser Extension that may take actions | as shown | Private browsers running at once, per server and per user, and how fast idle ones close while others wait. | Read live for each new browser. |
 
 The JSON files under `config/` are the app's single live settings files. Change them in the
 administrator's All Settings pages or through a broker task; each has a settings descriptor that
@@ -173,9 +177,18 @@ states its range.
 | Weights API / loop / browser / builds | 400 / 100 / 100 / idle | Defaults. |
 | Caps | none | Use idle threads. |
 | Memory API / loop / browser | 2 / 8 / 3 GiB | Defaults; about 18 GB stays for builds (the compiler takes up to 12 GiB) and the system. |
-| Loops | 1 today; 2–4 once measured | The broker also builds here (`cargo_build_jobs` 10). |
+| Loops | 1 (2 approved by the user 2026-11-24, held: see below) | The broker also builds here (`cargo_build_jobs` 10). |
+| Worker container | off (approved 2026-11-24, held: see below) | Needs the worker network and its firewall on the host first. |
+| Browsers at once | 5 per app, 4 per user | User decision 2026-11-24. |
 | Run ceiling, reserve | 10, 1 | Defaults; raise with more loops after measuring. |
 | Open databases | 64 | Default. |
+
+In force on development since 2026-11-24: builds `"idle"`, browsers 5 per app, loops 1, worker
+container off. Two loops were switched on and taken back the same morning: both loops served and
+an interrupted run recovered once, but runs of ordinary (non-administrator) accounts stayed
+queued and were never claimed, at one loop as well as at two, so nothing served by loop 1 could
+be checked. The worker container waits for the host's worker network and firewall unit, which no
+Host Admin action can install yet.
 
 ### Worked example: a small cloud server (2 processor threads, 4 GB, no builds)
 
