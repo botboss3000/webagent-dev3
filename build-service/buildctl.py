@@ -44,36 +44,53 @@ def nightly_tests(request=None,now=time.time,sleep=time.sleep,root=None,groups=N
     """Run every listed opt-in group once on the published source and write root/latest.json.
 
     The broker admits each run only while no release build runs; a run still queued after
-    queue_limit seconds is cancelled and recorded as skipped (no alert). The summary holds only
-    states, ids, counts and test names; the failure output stays in the job receipt."""
+    queue_limit seconds is cancelled and recorded as skipped (no alert). A broker that cannot be
+    reached (a broker install restarts it) is retried each minute; one that stays unreachable
+    gives skipped, never a test failure. The summary holds only states, ids, counts and test
+    names; the failure output stays in the job receipt."""
     request=call if request is None else request
     root=Path(CONFIG["checkout_root"]).parent/"opt-in-tests"if root is None else Path(root)
     day=time.strftime("%Y%m%d",time.localtime(now()))
+    started=now()
+    def ask(name,arguments):
+        # Retry while the broker restarts; give up (None) at the run limit.
+        while True:
+            try:return request(name,arguments)
+            except (OSError,TimeoutError) as error:
+                if now()-started>run_limit:return None
+                print("broker unreachable ("+str(error)[:120]+"); retrying in 60 s",file=sys.stderr)
+                sleep(60)
     rows=[]
     for group in (opt_in_groups()if groups is None else groups):
         row={"group":group,"status":"error","job_id":None,"inputs_sha256":None,"tests":0,"failed_tests":[]}
         try:
-            queued=request("build_work",{"action":"test_group","group":group,"request_id":"nightly-"+day+"-"+group})
+            queued=ask("build_work",{"action":"test_group","group":group,"request_id":"nightly-"+day+"-"+group})
+            if queued is None:
+                row["status"]="skipped";rows.append(row);continue
             row.update(job_id=queued["job_id"],inputs_sha256=queued.get("inputs_sha256"))
-            started=now();job={}
+            since=now();job={}
             while True:
-                job=request("v3_worker_job",{"job_id":row["job_id"]}).get("job")or{}
+                reply=ask("v3_worker_job",{"job_id":row["job_id"]})
+                if reply is None:
+                    row["status"]="skipped";break
+                # v3_worker_job answers with the job view itself.
+                job=reply["job"]if isinstance(reply.get("job"),dict)else reply
                 if job.get("status")in TERMINAL:break
-                waited=now()-started
+                waited=now()-since
                 if job.get("status")=="queued"and waited>queue_limit or waited>run_limit:
-                    request("v3_build_cancel",{"job_id":row["job_id"],"request_id":"cancel-"+row["job_id"],"expected_job_ids":[row["job_id"]]})
+                    ask("v3_build_cancel",{"job_id":row["job_id"],"request_id":"cancel-"+row["job_id"],"expected_job_ids":[row["job_id"]]})
                     if job.get("status")=="queued":row["status"]="skipped"
                     break
                 sleep(60)
-            result=job.get("test_group_result")or{}
-            names=set();failed=set()
-            for run in result.get("runs",[]):
-                names.update(run.get("tests",{}))
-                failed.update(n for n,v in run.get("tests",{}).items()if v=="failed")
-                if run.get("status")=="timed_out":failed.add("timed_out")
-            row["tests"]=len(names);row["failed_tests"]=sorted(failed)[:50]
-            if job.get("status")=="completed":row["status"]="passed"
-            elif row["status"]!="skipped":row["status"]="failed"
+            if row["status"]!="skipped":
+                result=job.get("test_group_result")or{}
+                names=set();failed=set()
+                for run in result.get("runs",[]):
+                    names.update(run.get("tests",{}))
+                    failed.update(n for n,v in run.get("tests",{}).items()if v=="failed")
+                    if run.get("status")=="timed_out":failed.add("timed_out")
+                row["tests"]=len(names);row["failed_tests"]=sorted(failed)[:50]
+                row["status"]="passed"if job.get("status")=="completed"else"failed"
         except Exception as error:
             print("opt-in group "+group+": "+str(error)[:300],file=sys.stderr)
         rows.append(row)

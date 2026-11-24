@@ -230,23 +230,29 @@ class SummaryReadTests(unittest.TestCase):
 
 
 class NightlyTests(unittest.TestCase):
-    def run_nightly(self, job, queue_limit=3 * 3600):
+    def run_nightly(self, job, queue_limit=3 * 3600, refusals=0, run_limit=8 * 3600):
         calls = []
         clock = [1795500000.0]
+        refused = [refusals]
 
         def request(name, args):
             calls.append((name, args))
             if name == "build_work":
                 return {"job_id": "11111111-2222-3333-4444-555555555555", "inputs_sha256": "c" * 64}
             if name == "v3_worker_job":
-                return {"job": job}
+                if refused[0]:
+                    # A broker install restarts the broker: the socket refuses for a while.
+                    refused[0] -= 1
+                    raise ConnectionRefusedError(111, "Connection refused")
+                # The broker answers with the job view itself (host.py v3_worker_job).
+                return dict(job, job_id="11111111-2222-3333-4444-555555555555")
             return {"job": {}}
 
         def sleep(seconds):
             clock[0] += seconds
         with tempfile.TemporaryDirectory() as folder:
             summary = buildctl.nightly_tests(request, now=lambda: clock[0], sleep=sleep, root=folder, groups=["multi_loop"],
-                                             queue_limit=queue_limit)
+                                             queue_limit=queue_limit, run_limit=run_limit)
             written = json.loads((Path(folder) / "latest.json").read_text())
             self.assertTrue(host.opt_in_tests_summary(Path(folder), os.getuid())["available"])
         self.assertEqual(summary, written)
@@ -265,6 +271,16 @@ class NightlyTests(unittest.TestCase):
         job = {"status": "completed", "test_group_result": {"runs": [{"status": "passed", "tests": {"multi_loop_tests::a": "passed"}}]}}
         summary, _ = self.run_nightly(job)
         self.assertEqual((summary["status"], summary["groups"][0]["tests"]), ("passed", 1))
+
+    def test_a_broker_restart_while_polling_is_retried_not_a_failure(self):
+        job = {"status": "completed", "test_group_result": {"runs": [{"status": "passed", "tests": {"multi_loop_tests::a": "passed"}}]}}
+        summary, calls = self.run_nightly(job, refusals=3)
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual([name for name, _ in calls].count("v3_worker_job"), 4)
+
+    def test_a_broker_that_stays_unreachable_gives_skipped(self):
+        summary, _ = self.run_nightly({"status": "completed"}, refusals=10_000, run_limit=600)
+        self.assertEqual((summary["status"], summary["groups"][0]["status"]), ("skipped", "skipped"))
 
     def test_a_run_still_queued_behind_builds_is_cancelled_and_skipped(self):
         summary, calls = self.run_nightly({"status": "queued"}, queue_limit=120)
