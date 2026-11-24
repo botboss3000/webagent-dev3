@@ -39,6 +39,8 @@ authoritative; loading guidance never grants a tool or deployment.
   and their tests, `host/` for root adapters), not root `src/`. Domain tests
   stay with their module; root tests cover wiring only. When a change touches
   root code that clearly belongs to a module, ask whether to move it now.
+  New root runtime tests go in the owning group's file under `src/runtime_tests/`
+  (shared helpers in `fixtures_tests.rs`), never appended to `src/runtime_tests.rs`.
 - Preserve other writers' changes and all runtime data.
 - Any change to access, identity, background work, storage, run limits or
   dependencies also follows `docs/build-protocol.md` (the unified plan's rules).
