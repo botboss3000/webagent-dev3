@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 /// A tier above Free (inserted just above it, as the Tiers page does), with every catalog
 /// model and the Plus run limit.
-async fn add_tier(app: &App, id: &str) {
+pub(crate) async fn add_tier(app: &App, id: &str) {
     app.store
         .save_entitlement_tier(
             Tier {
@@ -30,7 +30,7 @@ async fn add_tier(app: &App, id: &str) {
 }
 
 /// An active account on `tier`.
-async fn member(app: &App, name: &str, tier: &str) -> String {
+pub(crate) async fn member(app: &App, name: &str, tier: &str) -> String {
     let account = app
         .store
         .create_user_account(name, "fixture-long-password-hash")
@@ -47,7 +47,7 @@ async fn member(app: &App, name: &str, tier: &str) -> String {
 /// An agent `owner` creates. Levels allow every ability unless one is switched off; its
 /// Operator level saves one setting for the Plus-only `github` (always loaded), which a
 /// downgrade must keep.
-async fn owned_agent(app: &App, owner: &str) -> String {
+pub(crate) async fn owned_agent(app: &App, owner: &str) -> String {
     let Json(created) = crate::agents_api::create_agent(
         State(app.clone()),
         Extension(json!({"_user_id":owner})),
@@ -81,7 +81,7 @@ async fn account(app: &App, id: &str) -> Value {
 }
 
 /// A sign-in record for `user` at its current generation; returns the cookie value.
-async fn sign_in_as(app: &App, user: &str) -> String {
+pub(crate) async fn sign_in_as(app: &App, user: &str) -> String {
     let token = crate::uuid();
     let record = account(app, user).await;
     app.store
@@ -96,7 +96,13 @@ async fn sign_in_as(app: &App, user: &str) -> String {
 }
 
 /// One request with a sign-in cookie; returns the status and the JSON body.
-async fn call(app: &App, method: &str, uri: &str, token: &str, body: Value) -> (StatusCode, Value) {
+pub(crate) async fn call(
+    app: &App,
+    method: &str,
+    uri: &str,
+    token: &str,
+    body: Value,
+) -> (StatusCode, Value) {
     let response = crate::router(app.clone())
         .oneshot(
             Request::builder()
@@ -121,7 +127,13 @@ async fn call(app: &App, method: &str, uri: &str, token: &str, body: Value) -> (
 }
 
 /// The administrator's tier change for `id` through `PUT /admin/access/accounts/{id}`.
-async fn put_tier(app: &App, admin: &str, id: &str, tier: &str, until: Option<u64>) -> StatusCode {
+pub(crate) async fn put_tier(
+    app: &App,
+    admin: &str,
+    id: &str,
+    tier: &str,
+    until: Option<u64>,
+) -> StatusCode {
     let current = account(app, id).await;
     call(
         app,

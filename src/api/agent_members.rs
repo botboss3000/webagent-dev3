@@ -439,11 +439,13 @@ fn limit_windows(
 }
 
 /// Refuses a new user message once the user's level cap for this agent is
-/// reached over the last 24 hours or 30 days. Operators are never limited.
+/// reached over the last 24 hours or 30 days, and alerts the agent's `owner` (once a day,
+/// no names). Operators are never limited.
 pub(crate) async fn enforce_turn_limits(
     app: &App,
     user: &str,
     agent: &str,
+    owner: &str,
     level: &crate::capabilities::CapabilityLevel,
 ) -> Result<(), ApiError> {
     let windows = limit_windows(level);
@@ -455,6 +457,19 @@ pub(crate) async fn enforce_turn_limits(
         let Some(limit) = limit else { continue };
         let used = turns_since(&view, agent, unix_now() - span).await?;
         if used >= i64::from(limit) {
+            use webagent_engine::usage_ledger as ledger;
+            if let Err(error) = ledger::raise_owner_alert(
+                &app.store.app_pool,
+                owner,
+                &ledger::agent_alert(ledger::ALERT_LEVEL_LIMITS, agent),
+                ledger::day(unix_now() as u64),
+                100,
+                0,
+            )
+            .await
+            {
+                tracing::warn!("Owner alert not raised: {error}");
+            }
             return Err(ApiError(
                 StatusCode::FORBIDDEN,
                 format!(
@@ -693,24 +708,43 @@ mod reassignment_tests {
         }
         let mut level = app.store.capability_levels(agent).await.unwrap().levels["member"].clone();
         level.monthly_turns = Some(3);
-        assert!(enforce_turn_limits(&app, &user, agent, &level)
+        assert!(enforce_turn_limits(&app, &user, agent, "admin", &level)
             .await
             .is_ok());
         level.daily_turns = Some(2);
-        let error = enforce_turn_limits(&app, &user, agent, &level)
+        let error = enforce_turn_limits(&app, &user, agent, "admin", &level)
             .await
             .unwrap_err();
         assert_eq!(error.0, StatusCode::FORBIDDEN);
         assert!(error.1.contains("2 messages per 24 hours"));
         level.daily_turns = Some(1);
-        let error = enforce_turn_limits(&app, &user, agent, &level)
+        let error = enforce_turn_limits(&app, &user, agent, "admin", &level)
             .await
             .unwrap_err();
         assert!(error.1.contains("allows 1 message per 24 hours"));
         level.id = "operator".into();
-        assert!(enforce_turn_limits(&app, &user, agent, &level)
+        assert!(enforce_turn_limits(&app, &user, agent, "admin", &level)
             .await
             .is_ok());
+        // The refusals alerted the agent's owner once today (no names).
+        let alerts = webagent_engine::usage_ledger::current_owner_alerts(
+            &app.store.app_pool,
+            "admin",
+            webagent_engine::usage_ledger::day(unix_now() as u64),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            alerts,
+            vec![(
+                webagent_engine::usage_ledger::agent_alert(
+                    webagent_engine::usage_ledger::ALERT_LEVEL_LIMITS,
+                    agent
+                ),
+                100,
+                0
+            )]
+        );
         // A replayed message id is logged once for the acting user.
         record_turn(&app, agent, "replayed").await.unwrap();
         record_turn(&app, agent, "replayed").await.unwrap();

@@ -1,0 +1,21 @@
+/* The agent Dashboard page: shared option-list rows with a value on the right and, under a
+   limit, a meter across the row. Headings and the Refresh button stack on phones. */
+.dash-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.dash-head h2 { margin: 0; flex: 1 1 auto; }
+.dash-stamp { margin: 0; }
+.dash-status:empty { display: none; }
+.dash-heading { font-size: 14px; font-weight: 600; color: var(--fg-1); margin: 20px 0 8px; max-width: 750px; }
+.dash-list { max-width: 750px; }
+.dash-row { flex-wrap: wrap; row-gap: 6px; }
+.dash-row .ac-ability-label { min-width: 0; }
+.dash-row .ac-ability-name { overflow-wrap: anywhere; }
+.dash-value { margin-left: auto; color: var(--fg-1); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.dash-meter { flex: 0 0 100%; order: 2; height: 4px; border-radius: 2px; background: var(--bg-tint); overflow: hidden; }
+.dash-meter-fill { display: block; height: 100%; background: var(--accent); }
+.dash-meter[data-level="high"] .dash-meter-fill { background: var(--warning); }
+.dash-meter[data-level="full"] .dash-meter-fill { background: var(--danger); }
+.dash-row[data-severity="warning"] .dash-value { color: var(--danger); }
+.dash-row[data-severity="info"] .dash-value { color: var(--warning); }
+@media (max-width: 480px) {
+  .dash-value { white-space: normal; flex: 0 0 100%; text-align: left; margin-left: 0; order: 1; }
+}

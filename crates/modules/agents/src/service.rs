@@ -114,6 +114,8 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
                 continue;
             }
             identity["can_manage"] = rights["can_manage"].clone();
+            // The owner's own pages (Dashboard) show only to the owner and administrators.
+            identity["is_owner"] = json!(rights["owner_id"] == caller.user_id.as_str());
             agents.push(identity);
         }
         Ok(

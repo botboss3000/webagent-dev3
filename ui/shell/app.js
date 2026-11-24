@@ -31,6 +31,8 @@ import { showLeftOverlay } from '../chat/controls/login-hook.js';
 import { renderIdentity } from '../main-panel/agents/pages/identity/page.js';
 import {renderMembers} from '../main-panel/agents/pages/members/page.js';
 import {renderArtifacts} from '../main-panel/agents/pages/artifacts/page.js';
+import {renderDashboard} from '../main-panel/agents/pages/dashboard/page.js';
+import {loadOwnPlan,renderPlanPanel} from '../shared/plan-panel/plan-panel.js';
 import {offerAccessRequest,showAccessNotices} from '../main-panel/agents/request-access.js';
 import {renderCreateAgent} from '../main-panel/agents/pages/create/page.js';
 import {createAgentArchive} from '../main-panel/agents/agent-archive.js';
@@ -80,7 +82,7 @@ async function mountAgents(){
       <div class="ac-ability-row ac-model-cfg-row ac-row-static"><span class="ac-ability-label"><span class="ac-ability-name">Connection</span></span><span class="ac-model-cfg-control"><span id="connection" class="ac-hint"></span><button id="connect" type="button" class="ac-btn ac-btn-primary ac-btn-sm">Click to Issue verification code</button><button id="disconnect" type="button" class="ac-btn ac-btn-sm">Disconnect</button><span id="device" class="ac-subscription-auth"></span></span></div>
       <form id="model-form" class="ac-ability-row ac-model-cfg-row"><label for="model" class="ac-ability-label"><span class="ac-ability-name">Model</span><span class="ac-ability-desc">Model ID used for new chat turns.</span></label><span class="ac-model-cfg-control"><input id="model" class="ac-input ac-input-sm" placeholder="gpt-6-luna" required pattern="[A-Za-z0-9._-]+"><button class="ac-btn ac-btn-primary ac-btn-sm">Save model</button></span></form>
     </div>
-    </div><div id="identity-page" class="agent-detail-body" hidden></div><div id="abilities-page" hidden></div><div id="members-page" class="agent-detail-body" hidden></div><div id="artifacts-page" class="agent-detail-body" hidden></div><div id="config-page" class="agent-detail-body" hidden></div></div></div>`;
+    </div><div id="identity-page" class="agent-detail-body" hidden></div><div id="abilities-page" hidden></div><div id="members-page" class="agent-detail-body" hidden></div><div id="artifacts-page" class="agent-detail-body" hidden></div><div id="dashboard-page" class="agent-detail-body" hidden></div><div id="config-page" class="agent-detail-body" hidden></div></div></div>`;
   const pages=await loadAgentPages();
   configPage=pages.find(page=>page.type==='directory');
   sessionsDescriptor=pages.find(page=>page.type==='sessions');
@@ -453,10 +455,15 @@ async function showAgentView(view,routeMode='push'){
 }
 async function renderAgentView(view,routeMode,restoreScroll){
   const pages=[configPage,...agentPages];
-  const canManage=agentRoster.find(agent=>agent.id===agentId)?.can_manage===true;
-  // Operator pages (catalog "operator": true) stay hidden from members and visitors.
-  const allowed=page=>canManage||!page.operator;
-  const selected=!canManage&&!pages.some(page=>page.id===view&&allowed(page)&&page.type!=='directory')?'artifacts':pages.some(page=>page.id===view)?view:'config';
+  const agent=agentRoster.find(agent=>agent.id===agentId);
+  const canManage=agent?.can_manage===true;
+  // Operator pages (catalog "operator": true) stay hidden from members and visitors; owner
+  // pages ("owner": true) show only to the agent's owner and administrators (the server
+  // refuses everyone else).
+  const owns=agent?.is_owner===true||accountMe?.is_admin===true;
+  const allowed=page=>page.owner?owns:(canManage||!page.operator);
+  const shown=page=>page.id===view&&allowed(page);
+  const selected=canManage?(pages.some(shown)?view:'config'):(pages.some(page=>shown(page)&&page.type!=='directory')?view:'artifacts');
   for(const page of pages){
     $(page.panelId).hidden=page.id!==selected;
     const tab=$('agent-tab-'+page.id);
@@ -474,6 +481,7 @@ async function renderAgentView(view,routeMode,restoreScroll){
   if(selected==='abilities')await renderAbilities($('abilities-page'),api,{agentId});
   if(selected==='members')await renderMembers($('members-page'),api,{agentId});
   if(selected==='artifacts')await renderArtifacts($('artifacts-page'),api,{agentId});
+  if(selected==='dashboard')await renderDashboard($('dashboard-page'),api,{agentId});
 }
 async function selectAgent(id){
   if(!sessionsScope&&!createScope&&id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}
@@ -826,6 +834,13 @@ function renderAccount(me){
   const topUser=$('top-user-id');if(topUser)topUser.title=me.user||'Manage account';
 }
 function showAccountPanel(routeMode='push'){showMainPage('account',routeMode);}
+// The Profile page's Plan panel: read on each open of the page; guests have no plan.
+async function loadPlanPanel(){
+  const section=$('account-plan-section');if(!section)return;
+  section.hidden=!accountMe||accountMe.role==='guest';if(section.hidden)return;
+  try{const {plan,billing}=await loadOwnPlan(api);renderPlanPanel($('account-plan'),{plan,billing,request:api,actions:true});}
+  catch(error){$('account-plan').textContent='Plan unavailable: '+error.message;}
+}
 function showMainPage(id,routeMode='push'){
   if(!mainPages.some(page=>page.id===id))return;
   closeMobileNav();
@@ -868,6 +883,7 @@ $('account-profile-form').onsubmit=async event=>{
 loadAccountControls=async function(){
   availableModelsDispose?.();
   availableModelsDispose=mountAvailableModels($('account-available-models'),api);
+  void loadPlanPanel();
   try{
     const [policy,listing]=await Promise.all([api('/auth/session-policy'),api('/auth/sessions')]);
     $('account-session-days').value=String(policy.days);

@@ -916,6 +916,7 @@ fn billing_routes(router: Router<App>) -> Router<App> {
 }
 pub(crate) fn router() -> Router<App> {
     billing_routes(Router::new())
+        .merge(crate::owner_dashboard::router())
         .route(
             "/models/agents/{id}/main-chat",
             get(crate::main_chat::agent_read).put(crate::main_chat::agent_configure),

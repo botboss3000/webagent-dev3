@@ -135,6 +135,9 @@ pub(crate) const ROUTES: &[Route] = &[
     none("/api/v3/admin/access/accounts/{id}/catalog-models"),
     none("/api/v3/billing"),
     none("/api/v3/billing/link"),
+    // The agent owner's Dashboard and the Plan panel's tier: people only.
+    none("/api/v3/agents/{id}/dashboard"),
+    none("/api/v3/plan"),
     none("/api/v3/admin/access/accounts/{id}/sessions"),
     none("/api/v3/admin/access/accounts/{id}/sessions/{session_id}"),
     none("/api/v3/admin/access/agents/{id}/ability-permissions"),

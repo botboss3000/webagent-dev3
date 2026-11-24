@@ -1,0 +1,10 @@
+/* The Plan panel (Profile page and agent Dashboard): shared option-list rows; the purchase
+   and billing-details buttons wrap under the list on phones. */
+.plan-panel { max-width: 750px; }
+.plan-row { flex-wrap: wrap; row-gap: 4px; }
+.plan-value { margin-left: auto; color: var(--fg-1); font-variant-numeric: tabular-nums; text-align: right; }
+.plan-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.plan-status:empty { display: none; }
+@media (max-width: 480px) {
+  .plan-value { flex: 0 0 100%; text-align: left; margin-left: 0; }
+}

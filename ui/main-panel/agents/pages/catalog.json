@@ -15,6 +15,16 @@
       "type": "directory"
     },
     {
+      "id": "dashboard",
+      "owner": true,
+      "title": "Dashboard",
+      "description": "This agent's usage, your plan's limits across your agents, and your plan.",
+      "order": 3,
+      "panelId": "dashboard-page",
+      "icon": "gauge",
+      "type": "agent_configuration"
+    },
+    {
       "id": "identity",
       "operator": true,
       "title": "Identity",

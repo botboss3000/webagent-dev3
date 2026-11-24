@@ -522,7 +522,8 @@ pub(crate) async fn end_due_tiers(app: &App, now: u64) -> anyhow::Result<usize> 
     Ok(ended)
 }
 /// Turn each due owner's waiting limit alerts (80 and 100 percent of their plan's runs at
-/// once and daily command time) into notices on their Notifications page.
+/// once and daily command time, their agents' people limits, people reaching their level's
+/// limits) into notices on their Notifications page, naming the agent when there is one.
 pub(crate) async fn deliver_owner_alerts(app: &App, now: u64) -> anyhow::Result<usize> {
     let pool = &app.store.app_pool;
     let mut delivered = 0;
@@ -530,10 +531,14 @@ pub(crate) async fn deliver_owner_alerts(app: &App, now: u64) -> anyhow::Result<
         let notices = webagent_engine::usage_ledger::take_owner_alerts(pool, &owner).await?;
         if let Ok(store) = app.store.for_user(&owner).await {
             for (kind, level, limit) in notices {
-                if let Some(text) = webagent_engine::usage_ledger::alert_text(&kind, level, limit) {
+                let (base, agent) = kind.split_once('@').unwrap_or((kind.as_str(), ""));
+                let name = agent_name(app, agent).await;
+                if let Some(text) =
+                    webagent_engine::usage_ledger::alert_text(&kind, level, limit, name.as_deref())
+                {
                     let severity = if level >= 100 { "warning" } else { "info" };
                     store
-                        .add_notice(&format!("plan_{kind}_{level}"), severity, &text)
+                        .add_notice(&format!("plan_{base}_{level}"), severity, &text)
                         .await?;
                     delivered += 1;
                 }
@@ -542,6 +547,19 @@ pub(crate) async fn deliver_owner_alerts(app: &App, now: u64) -> anyhow::Result<
         webagent_engine::due::set(pool, &owner, webagent_engine::due::OWNER_ALERT, None).await?;
     }
     Ok(delivered)
+}
+/// An agent's name for a notice (its plain column), or none when it is gone.
+async fn agent_name(app: &App, agent: &str) -> Option<String> {
+    if agent.is_empty() {
+        return None;
+    }
+    let view = app.store.for_agent(agent).await.ok()?;
+    sqlx::query_scalar("SELECT name FROM agents WHERE id=?")
+        .bind(agent)
+        .fetch_optional(&view.agent_pool)
+        .await
+        .ok()
+        .flatten()
 }
 /// Resume each due account's runs that paused at a daily limit, now that the day has turned,
 /// through the normal resume control (it checks the limits again). Only paused runs are read
@@ -990,7 +1008,7 @@ pub fn router() -> Router<App> {
 }
 #[cfg(test)]
 #[path = "plus_tier_tests.rs"]
-mod plus_tier_tests;
+pub(crate) mod plus_tier_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

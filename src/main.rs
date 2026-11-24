@@ -79,6 +79,9 @@ mod optimization_settings;
 mod parallel_batch;
 #[path = "../crates/modules/access/host/api.rs"]
 mod phase3_api;
+// The agent owner's Dashboard and the Plan panel's tier.
+#[path = "../crates/modules/access/host/dashboard.rs"]
+mod owner_dashboard;
 // The outgoing billing connection: Unix server builds only (absent from Core, Windows, Android).
 #[cfg(all(unix, feature = "server-bins"))]
 #[path = "../crates/modules/access/host/billing.rs"]

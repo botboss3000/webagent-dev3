@@ -422,6 +422,7 @@ async fn prepare_message_inner(
         app,
         crate::shared_chat::actor(app),
         &agent_id,
+        &access.agent_owner_id,
         &access.capability_level,
     )
     .await?;

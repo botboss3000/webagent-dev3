@@ -110,6 +110,12 @@ const MOUNTS: &[(&str, &str, Option<&str>, bool)] = &[
         true,
     ),
     (
+        "crates/modules/access/host/dashboard.rs",
+        "pub(crate) fn router()",
+        Some("/api/v3"),
+        true,
+    ),
+    (
         "crates/modules/administration/host/api/supply_chain.rs",
         "fn router(",
         Some("/api/v3"),

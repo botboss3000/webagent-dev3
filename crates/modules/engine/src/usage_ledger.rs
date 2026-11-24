@@ -8,9 +8,10 @@
 //! Beside it, the usage feed (plus tier spec 8.6): `usage_turns`, one append-only row per run
 //! flush with the tokens, compute time and cost the run added since its last flush, named by
 //! agent owner, agent, requester and model; and `usage_owner`, the agent owner's day and month
-//! totals. A run flushes during a model call at most once a minute (inside that call's ledger
-//! transaction) and once when it finishes, stops, pauses or parks; nothing else is written per
-//! model or tool call. `usage_marks` holds what each run has flushed, so a repeated or
+//! totals, and `usage_agent`, each agent's day and month totals per model (its owner's
+//! Dashboard page reads them). A run flushes during a model call at most once a minute (inside
+//! that call's ledger transaction) and once when it finishes, stops, pauses or parks; nothing
+//! else is written per model or tool call. `usage_marks` holds what each run has flushed, so a repeated or
 //! recovered flush adds only the difference.
 use anyhow::Result;
 use serde_json::Value;
@@ -78,7 +79,23 @@ pub async fn schema(pool: &SqlitePool) -> Result<()> {
     sqlx::query("CREATE TABLE IF NOT EXISTS usage_owner(owner_id TEXT NOT NULL,period TEXT NOT NULL,number INTEGER NOT NULL,input_tokens INTEGER NOT NULL DEFAULT 0,cached_input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,compute_ms INTEGER NOT NULL DEFAULT 0,cost_micros INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(owner_id,period,number)) WITHOUT ROWID")
         .execute(pool)
         .await?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS usage_marks(run_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,agent_id TEXT NOT NULL,requester_id TEXT NOT NULL,model TEXT NOT NULL,catalog INTEGER NOT NULL,input_tokens INTEGER NOT NULL,cached_input_tokens INTEGER NOT NULL,output_tokens INTEGER NOT NULL,compute_ms INTEGER NOT NULL,cost_micros INTEGER NOT NULL,flushed_at INTEGER NOT NULL) WITHOUT ROWID")
+    sqlx::query("CREATE TABLE IF NOT EXISTS usage_marks(run_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,agent_id TEXT NOT NULL,requester_id TEXT NOT NULL,model TEXT NOT NULL,catalog INTEGER NOT NULL,input_tokens INTEGER NOT NULL,cached_input_tokens INTEGER NOT NULL,output_tokens INTEGER NOT NULL,compute_ms INTEGER NOT NULL,cost_micros INTEGER NOT NULL,flushed_at INTEGER NOT NULL,calls INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID")
+        .execute(pool)
+        .await?;
+    // Marks made before model calls were counted.
+    let has: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pragma_table_info('usage_marks') WHERE name='calls'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has == 0 {
+        sqlx::query("ALTER TABLE usage_marks ADD COLUMN calls INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await?;
+    }
+    // Each agent's model calls and usage per model, per UTC day and month (`cost_micros` null
+    // while no flush of that model reported a cost).
+    sqlx::query("CREATE TABLE IF NOT EXISTS usage_agent(agent_id TEXT NOT NULL,period TEXT NOT NULL,number INTEGER NOT NULL,model TEXT NOT NULL,calls INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,cached_input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,compute_ms INTEGER NOT NULL DEFAULT 0,cost_micros INTEGER,PRIMARY KEY(agent_id,period,number,model)) WITHOUT ROWID")
         .execute(pool)
         .await?;
     // `usage_cursor`: the highest `usage_turns.seq` the billing service has acknowledged.
@@ -258,6 +275,18 @@ pub async fn record_command(
     compute_alerts(pool, access, day, cpu_ms).await
 }
 
+/// Command processor milliseconds on all of `owner`'s agents on UTC day `day`.
+pub async fn owner_compute_ms(pool: &SqlitePool, owner: &str, day: i64) -> Result<u64> {
+    let used: Option<i64> =
+        sqlx::query_scalar("SELECT cpu_ms FROM usage_daily WHERE scope=? AND id=? AND day=?")
+            .bind(OWNER)
+            .bind(owner)
+            .bind(day)
+            .fetch_optional(pool)
+            .await?;
+    Ok(u64::try_from(used.unwrap_or(0)).unwrap_or(0))
+}
+
 /// Why `access`'s requester may not start another command in `run` on `day`: the run's or the
 /// account's command processor time is used up. Administrators are never limited.
 pub async fn command_refusal_on(
@@ -323,9 +352,21 @@ pub async fn command_refusal_on(
 const ALERTS_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS owner_alerts(owner_id TEXT NOT NULL,kind TEXT NOT NULL,period INTEGER NOT NULL,level INTEGER NOT NULL,limit_value INTEGER NOT NULL,delivered INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(owner_id,kind,period,level)) WITHOUT ROWID";
 /// Days delivered owner alerts are kept (they stop a repeat on the same day).
 pub const ALERTS_KEPT_DAYS: i64 = 2;
-/// Owner alert kinds.
+/// Owner alert kinds. The agent kinds are stored as `<kind>@<agent id>` ([`agent_alert`]).
 pub const ALERT_COMPUTE: &str = "compute";
 pub const ALERT_RUNS: &str = "runs_at_once";
+/// An agent's people of the last 30 days.
+pub const ALERT_AGENT_USERS: &str = "agent_users";
+/// An agent's people with a run going at once.
+pub const ALERT_AGENT_AT_ONCE: &str = "agent_users_at_once";
+/// People on an agent reached their level's limits (messages or runs at once); level 100 only.
+pub const ALERT_LEVEL_LIMITS: &str = "level_limits";
+
+/// The stored kind of an alert about one agent.
+#[must_use]
+pub fn agent_alert(kind: &str, agent: &str) -> String {
+    format!("{kind}@{agent}")
+}
 
 /// Raise `owner`'s alert for `kind` at `level` percent of `limit` on UTC day `period` (once),
 /// and bring their `owner_alert` due row to now so the API turns it into a notice.
@@ -438,9 +479,51 @@ async fn compute_alerts(
     Ok(())
 }
 
+/// `owner`'s alerts raised on UTC day `day` (kind, level, limit), delivered or not: the
+/// limit notices their Dashboard shows.
+pub async fn current_owner_alerts(
+    pool: &SqlitePool,
+    owner: &str,
+    day: i64,
+) -> Result<Vec<(String, u32, u32)>> {
+    sqlx::query(ALERTS_SCHEMA).execute(pool).await?;
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT kind,level,limit_value FROM owner_alerts WHERE owner_id=? AND period=? ORDER BY kind,level",
+    )
+    .bind(owner)
+    .bind(day)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(kind, level, limit)| {
+            (
+                kind,
+                u32::try_from(level).unwrap_or(0),
+                u32::try_from(limit).unwrap_or(0),
+            )
+        })
+        .collect())
+}
+
 /// The owner's notice for an alert (counts only; no names of the people who used it).
+/// `kind` may name an agent (`<kind>@<agent>`); `agent_name` is that agent's name.
 #[must_use]
-pub fn alert_text(kind: &str, level: u32, limit: u32) -> Option<String> {
+pub fn alert_text(kind: &str, level: u32, limit: u32, agent_name: Option<&str>) -> Option<String> {
+    let (kind, agent) = kind
+        .split_once('@')
+        .map_or((kind, None), |(kind, agent)| (kind, Some(agent)));
+    // The agent as a sentence's subject, and in the middle of one.
+    let (name, named) = match (agent, agent_name) {
+        (Some(_), Some(agent)) => (
+            format!("Your agent “{agent}”"),
+            format!("your agent “{agent}”"),
+        ),
+        _ => (
+            "One of your agents".to_owned(),
+            "one of your agents".to_owned(),
+        ),
+    };
     Some(match (kind, level) {
         (ALERT_COMPUTE, 80) => format!(
             "Your agents have used 80% of your plan's {} of commands today. It resets at 00:00 UTC.",
@@ -455,6 +538,21 @@ pub fn alert_text(kind: &str, level: u32, limit: u32) -> Option<String> {
         ),
         (ALERT_RUNS, 100) => format!(
             "Your agents reached your plan's {limit} runs at once; new messages wait until a run finishes."
+        ),
+        (ALERT_AGENT_USERS, 80) => format!(
+            "{name} has had 80% of its {limit} people in the last 30 days."
+        ),
+        (ALERT_AGENT_USERS, 100) => format!(
+            "{name} has had its {limit} people in the last 30 days; new people can't start until someone has been away 30 days."
+        ),
+        (ALERT_AGENT_AT_ONCE, 80) => format!(
+            "{name} is serving 80% of the {limit} people it can serve at once."
+        ),
+        (ALERT_AGENT_AT_ONCE, 100) => format!(
+            "{name} is serving the {limit} people it can serve at once; others are asked to try again in a few minutes."
+        ),
+        (ALERT_LEVEL_LIMITS, 100) => format!(
+            "People using {named} reached their level's limits today (messages or runs at once). You can raise a level's limits on the agent's Identity page."
         ),
         _ => return None,
     })
@@ -585,6 +683,8 @@ pub struct RunTotals {
     pub cost_micros: u64,
     /// Whether any of the run's calls reported a cost (otherwise its rows carry no cost).
     pub cost_reported: bool,
+    /// Model calls the run has made.
+    pub calls: u64,
 }
 
 impl RunTotals {
@@ -603,6 +703,7 @@ impl RunTotals {
             output_tokens: count("output_tokens"),
             cost_micros: cost.map_or(0, |cost| (cost * 1_000_000.0).round() as u64),
             cost_reported: calls > count("unknown_cost_calls"),
+            calls,
         }
     }
 }
@@ -705,6 +806,57 @@ pub async fn flush_saved(pool: &SqlitePool, run: &Value) -> Result<()> {
     Ok(())
 }
 
+/// One model's numbers on one agent in one period, as the owner's Dashboard page shows them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ModelUsage {
+    pub model: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub compute_ms: i64,
+    /// Provider-reported cost in millionths of a US dollar; `None` when none was reported.
+    pub cost_micros: Option<i64>,
+}
+
+/// `agent`'s usage per model on UTC day `day` and in that day's month (one indexed read).
+pub async fn agent_usage(
+    pool: &SqlitePool,
+    agent: &str,
+    day: i64,
+) -> Result<(Vec<ModelUsage>, Vec<ModelUsage>)> {
+    let rows: Vec<(String, ModelUsage)> = sqlx::query_as::<_, (String, String, i64, i64, i64, i64, i64, Option<i64>)>(
+        "SELECT period,model,calls,input_tokens,cached_input_tokens,output_tokens,compute_ms,cost_micros FROM usage_agent WHERE agent_id=? AND ((period='day' AND number=?) OR (period='month' AND number=?)) ORDER BY period,model",
+    )
+    .bind(agent)
+    .bind(day)
+    .bind(month_of_day(day))
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.0,
+            ModelUsage {
+                model: row.1,
+                calls: row.2,
+                input_tokens: row.3,
+                cached_input_tokens: row.4,
+                output_tokens: row.5,
+                compute_ms: row.6,
+                cost_micros: row.7,
+            },
+        )
+    })
+    .collect();
+    let (today, month): (Vec<_>, Vec<_>) =
+        rows.into_iter().partition(|(period, _)| period == "day");
+    Ok((
+        today.into_iter().map(|(_, usage)| usage).collect(),
+        month.into_iter().map(|(_, usage)| usage).collect(),
+    ))
+}
+
 /// The UTC month number (year × 12 + month − 1) of a UTC day number.
 #[must_use]
 pub fn month_of_day(day: i64) -> i64 {
@@ -737,8 +889,8 @@ async fn flush_in(
     totals: RunTotals,
     now: i64,
 ) -> Result<bool> {
-    let mark = sqlx::query_as::<_, (String, String, String, String, bool, i64, i64, i64, i64, i64)>(
-        "SELECT owner_id,agent_id,requester_id,model,catalog,input_tokens,cached_input_tokens,output_tokens,cost_micros,compute_ms FROM usage_marks WHERE run_id=?",
+    let mark = sqlx::query_as::<_, (String, String, String, String, bool, i64, i64, i64, i64, i64, i64)>(
+        "SELECT owner_id,agent_id,requester_id,model,catalog,input_tokens,cached_input_tokens,output_tokens,cost_micros,compute_ms,calls FROM usage_marks WHERE run_id=?",
     )
     .bind(run)
     .fetch_optional(&mut **tx)
@@ -754,9 +906,9 @@ async fn flush_in(
         },
         (None, None) => return Ok(false),
     };
-    let before = mark
-        .as_ref()
-        .map_or([0; 5], |mark| [mark.5, mark.6, mark.7, mark.8, mark.9]);
+    let before = mark.as_ref().map_or([0; 6], |mark| {
+        [mark.5, mark.6, mark.7, mark.8, mark.9, mark.10]
+    });
     let compute: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(cpu_ms),0) FROM usage_daily WHERE scope=? AND id=?",
     )
@@ -770,6 +922,7 @@ async fn flush_in(
         signed(totals.output_tokens),
         signed(totals.cost_micros),
         compute,
+        signed(totals.calls),
     ];
     // Never negative: totals only grow, and a lower reading (a stale copy) adds nothing.
     let added: Vec<i64> = after
@@ -806,10 +959,23 @@ async fn flush_in(
                 .bind(added[3])
                 .execute(&mut **tx)
                 .await?;
+            sqlx::query("INSERT INTO usage_agent(agent_id,period,number,model,calls,input_tokens,cached_input_tokens,output_tokens,compute_ms,cost_micros) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(agent_id,period,number,model) DO UPDATE SET calls=calls+excluded.calls,input_tokens=input_tokens+excluded.input_tokens,cached_input_tokens=cached_input_tokens+excluded.cached_input_tokens,output_tokens=output_tokens+excluded.output_tokens,compute_ms=compute_ms+excluded.compute_ms,cost_micros=CASE WHEN excluded.cost_micros IS NULL THEN cost_micros ELSE COALESCE(cost_micros,0)+excluded.cost_micros END")
+                .bind(&party.agent)
+                .bind(period)
+                .bind(number)
+                .bind(&party.model)
+                .bind(added[5])
+                .bind(added[0])
+                .bind(added[1])
+                .bind(added[2])
+                .bind(added[4])
+                .bind(totals.cost_reported.then_some(added[3]))
+                .execute(&mut **tx)
+                .await?;
         }
     }
     let kept = |index: usize| after[index].max(before[index]);
-    sqlx::query("INSERT INTO usage_marks(run_id,owner_id,agent_id,requester_id,model,catalog,input_tokens,cached_input_tokens,output_tokens,cost_micros,compute_ms,flushed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner_id=excluded.owner_id,agent_id=excluded.agent_id,requester_id=excluded.requester_id,model=excluded.model,catalog=excluded.catalog,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,output_tokens=excluded.output_tokens,cost_micros=excluded.cost_micros,compute_ms=excluded.compute_ms,flushed_at=excluded.flushed_at")
+    sqlx::query("INSERT INTO usage_marks(run_id,owner_id,agent_id,requester_id,model,catalog,input_tokens,cached_input_tokens,output_tokens,cost_micros,compute_ms,flushed_at,calls) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner_id=excluded.owner_id,agent_id=excluded.agent_id,requester_id=excluded.requester_id,model=excluded.model,catalog=excluded.catalog,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,output_tokens=excluded.output_tokens,cost_micros=excluded.cost_micros,compute_ms=excluded.compute_ms,flushed_at=excluded.flushed_at,calls=excluded.calls")
         .bind(run)
         .bind(&party.owner)
         .bind(&party.agent)
@@ -822,6 +988,7 @@ async fn flush_in(
         .bind(kept(3))
         .bind(kept(4))
         .bind(now)
+        .bind(kept(5))
         .execute(&mut **tx)
         .await?;
     let today = day(u64::try_from(now).unwrap_or(0));
@@ -833,7 +1000,8 @@ async fn flush_in(
 
 /// Retention (spec 8.6): a feed row goes once the billing cursor has passed it and it is older
 /// than 7 days, and after 35 days in any case (also with no billing service); owner totals
-/// after 400 days; a run's flush mark 35 days after its last flush.
+/// and agents' month totals after 400 days, agents' day totals after 35 days; a run's flush
+/// mark 35 days after its last flush.
 async fn prune_feed(tx: &mut Transaction<'_, Sqlite>, now: i64) -> Result<()> {
     sqlx::query("DELETE FROM usage_turns WHERE finished_at<? OR (finished_at<? AND seq<=COALESCE((SELECT value FROM billing_state WHERE key='usage_cursor'),0))")
         .bind(now - ROWS_KEPT)
@@ -843,6 +1011,11 @@ async fn prune_feed(tx: &mut Transaction<'_, Sqlite>, now: i64) -> Result<()> {
     let oldest_day = day(u64::try_from(now).unwrap_or(0)) - OWNER_TOTAL_DAYS;
     sqlx::query("DELETE FROM usage_owner WHERE (period='day' AND number<?) OR (period='month' AND number<?)")
         .bind(oldest_day)
+        .bind(month_of_day(oldest_day))
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM usage_agent WHERE (period='day' AND number<?) OR (period='month' AND number<?)")
+        .bind(day(u64::try_from(now).unwrap_or(0)) - RETENTION_DAYS)
         .bind(month_of_day(oldest_day))
         .execute(&mut **tx)
         .await?;
@@ -987,6 +1160,7 @@ mod tests {
             output_tokens: output,
             cost_micros,
             cost_reported: true,
+            calls: input / 10,
         }
     }
 
@@ -1109,7 +1283,8 @@ mod tests {
                 cached_input_tokens: 4,
                 output_tokens: 2,
                 cost_micros: 12_500,
-                cost_reported: true
+                cost_reported: true,
+                calls: 2
             }
         );
         assert!(
@@ -1223,5 +1398,118 @@ mod tests {
         assert!(!flushes_when_saved(
             &serde_json::json!({"status":"running"})
         ));
+    }
+
+    #[tokio::test]
+    async fn an_agents_day_and_month_totals_per_model_follow_its_runs() {
+        let pool = pool().await;
+        let day = 20_000;
+        let now = day * 86_400 + 100;
+        assert!(
+            flush(
+                &pool,
+                "r1",
+                Some(&party("m1", true)),
+                totals(100, 10, 400),
+                now
+            )
+            .await
+        );
+        assert!(flush(&pool, "r1", None, totals(160, 30, 900), now + 70).await);
+        // A second model that reports no cost keeps a null cost, never a made-up zero.
+        let mut unreported = totals(20, 2, 0);
+        unreported.cost_reported = false;
+        assert!(flush(&pool, "r2", Some(&party("m2", false)), unreported, now).await);
+        // Another agent's run is not counted here.
+        let mut elsewhere = party("m1", true);
+        elsewhere.agent = "other".into();
+        assert!(flush(&pool, "r3", Some(&elsewhere), totals(50, 5, 5), now).await);
+        let (today, month) = agent_usage(&pool, "agent", day).await.unwrap();
+        let m1 = ModelUsage {
+            model: "m1".into(),
+            calls: 16,
+            input_tokens: 160,
+            cached_input_tokens: 80,
+            output_tokens: 30,
+            compute_ms: 0,
+            cost_micros: Some(900),
+        };
+        let m2 = ModelUsage {
+            model: "m2".into(),
+            calls: 2,
+            input_tokens: 20,
+            cached_input_tokens: 10,
+            output_tokens: 2,
+            compute_ms: 0,
+            cost_micros: None,
+        };
+        assert_eq!(today, vec![m1.clone(), m2.clone()]);
+        assert_eq!(month, vec![m1, m2]);
+        // The next day has no day rows yet; the month still holds them.
+        let (tomorrow, month) = agent_usage(&pool, "agent", day + 1).await.unwrap();
+        assert!(tomorrow.is_empty());
+        assert_eq!(
+            month.len(),
+            usize::from(month_of_day(day + 1) == month_of_day(day)) * 2
+        );
+        // Day rows go after 35 days, month rows stay.
+        let mut tx = pool.begin().await.unwrap();
+        prune_feed(&mut tx, now + 36 * 86_400).await.unwrap();
+        tx.commit().await.unwrap();
+        let periods: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT period FROM usage_agent WHERE agent_id='agent'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(periods, vec!["month".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn agent_alerts_name_the_agent_and_show_on_the_day_they_were_raised() {
+        let pool = pool().await;
+        crate::due::schema(&pool).await.unwrap();
+        let kind = agent_alert(ALERT_AGENT_USERS, "agent-1");
+        let day = today();
+        raise_owner_alert(&pool, "o1", &kind, day, 80, 20)
+            .await
+            .unwrap();
+        raise_owner_alert(&pool, "o1", ALERT_COMPUTE, day - 1, 100, 900)
+            .await
+            .unwrap();
+        assert_eq!(
+            current_owner_alerts(&pool, "o1", day).await.unwrap(),
+            vec![(kind.clone(), 80, 20)]
+        );
+        assert!(current_owner_alerts(&pool, "o2", day)
+            .await
+            .unwrap()
+            .is_empty());
+        // Taking alerts for notices does not hide them from the Dashboard that day.
+        take_owner_alerts(&pool, "o1").await.unwrap();
+        assert_eq!(
+            current_owner_alerts(&pool, "o1", day).await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            alert_text(&kind, 80, 20, Some("Helper")).unwrap(),
+            "Your agent “Helper” has had 80% of its 20 people in the last 30 days."
+        );
+        assert!(alert_text(&kind, 100, 20, None)
+            .unwrap()
+            .starts_with("One of your agents has had its 20 people"));
+        assert!(alert_text(
+            &agent_alert(ALERT_LEVEL_LIMITS, "a"),
+            100,
+            0,
+            Some("Helper")
+        )
+        .unwrap()
+        .starts_with("People using your agent “Helper” reached"));
+        assert!(alert_text(&agent_alert(ALERT_AGENT_AT_ONCE, "a"), 80, 3, None).is_some());
+        assert!(alert_text(ALERT_LEVEL_LIMITS, 80, 0, None).is_none());
+        // Owner-wide kinds read as before.
+        assert!(alert_text(ALERT_RUNS, 100, 2, None)
+            .unwrap()
+            .contains("2 runs at once"));
     }
 }

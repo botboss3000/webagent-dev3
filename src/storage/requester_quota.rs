@@ -87,11 +87,32 @@ impl Store {
         sqlx::query("CREATE INDEX IF NOT EXISTS requester_run_slots_owner ON requester_run_slots(agent_owner,released,admin)")
             .execute(&self.app_pool)
             .await?;
-        // An agent's users of the last 30 days (plain ids and a time only), written by the
-        // admission that counts them; rows past the window are deleted there, per agent.
-        sqlx::query("CREATE TABLE IF NOT EXISTS agent_users(agent_id TEXT NOT NULL,user_id TEXT NOT NULL,last_active INTEGER NOT NULL,PRIMARY KEY(agent_id,user_id)) WITHOUT ROWID")
+        // An agent's users of the last 30 days (plain ids, a time and the level they last used),
+        // written by the admission that counts them; rows past the window are deleted there,
+        // per agent. The owner's Dashboard counts people per level from `level_id`.
+        sqlx::query("CREATE TABLE IF NOT EXISTS agent_users(agent_id TEXT NOT NULL,user_id TEXT NOT NULL,last_active INTEGER NOT NULL,level_id TEXT,PRIMARY KEY(agent_id,user_id)) WITHOUT ROWID")
             .execute(&self.app_pool)
             .await?;
+        let has: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pragma_table_info('agent_users') WHERE name='level_id'",
+        )
+        .fetch_one(&self.app_pool)
+        .await?;
+        if has == 0 {
+            if let Err(error) = sqlx::query("ALTER TABLE agent_users ADD COLUMN level_id TEXT")
+                .execute(&self.app_pool)
+                .await
+            {
+                let has: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM pragma_table_info('agent_users') WHERE name='level_id'",
+                )
+                .fetch_one(&self.app_pool)
+                .await?;
+                if has == 0 {
+                    return Err(error.into());
+                }
+            }
+        }
         Ok(())
     }
     /// The first reconcile of a process reads every account (nothing is marked applied yet);
@@ -411,6 +432,7 @@ impl Store {
             now + i64::from(access.run_limits.free_max_wait_seconds)
         };
         let mut owner_alert = None;
+        let mut agent_alerts = Vec::new();
         let mut tx = self.app_pool.begin().await?;
         // Force app writer ownership before reading count; two canonical owners must
         // never both observe the same spare account capacity.
@@ -461,7 +483,16 @@ impl Store {
                     return Err(anyhow!("Account run limit reached"));
                 }
             }
-            agent_admission(&mut tx, &access, actor).await?;
+            agent_alerts = match agent_admission(&mut tx, &access, actor).await {
+                Ok(alerts) => alerts,
+                Err(error) => {
+                    drop(tx);
+                    if let Some((kind, limit)) = refused_alert(&access, &error) {
+                        self.owner_alert(&access, &kind, 100, limit).await;
+                    }
+                    return Err(error);
+                }
+            };
             if let Some(runs) = access.owner_totals().runs_at_once {
                 let going: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM requester_run_slots WHERE agent_owner=? AND released=0 AND admin=0")
                     .bind(&access.agent_owner_id)
@@ -469,7 +500,13 @@ impl Store {
                     .await?;
                 if going >= i64::from(runs) {
                     drop(tx);
-                    self.owner_runs_alert(&access, 100, runs).await;
+                    self.owner_alert(
+                        &access,
+                        webagent_engine::usage_ledger::ALERT_RUNS,
+                        100,
+                        runs,
+                    )
+                    .await;
                     return Err(anyhow!(OWNER_RUNS_FULL));
                 }
                 let before = u64::try_from(going).unwrap_or(0);
@@ -483,27 +520,63 @@ impl Store {
         }
         tx.commit().await?;
         if let Some((level, runs)) = owner_alert {
-            self.owner_runs_alert(&access, level, runs).await;
+            self.owner_alert(
+                &access,
+                webagent_engine::usage_ledger::ALERT_RUNS,
+                level,
+                runs,
+            )
+            .await;
+        }
+        for (kind, level, limit) in agent_alerts {
+            self.owner_alert(&access, &kind, level, limit).await;
         }
         Ok(access)
     }
 
-    /// Raise the owner's runs-at-once alert (a notice for them, once a day per level). A failed
-    /// write is logged: the alert is a courtesy, the limit itself already held.
-    async fn owner_runs_alert(
+    /// What the owner's Dashboard shows from the slot table and `agent_users` (plain columns):
+    /// runs going now on all `owner`'s agents, people with a run going on `agent` now (as its
+    /// at-once limit counts them), and its people of the last 30 days per level.
+    pub(crate) async fn dashboard_counts(
+        &self,
+        agent: &str,
+        owner: &str,
+    ) -> Result<(i64, i64, Vec<(Option<String>, i64)>)> {
+        self.requester_slots_schema().await?;
+        let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM requester_run_slots WHERE agent_owner=? AND released=0 AND admin=0")
+            .bind(owner)
+            .fetch_one(&self.app_pool)
+            .await?;
+        let people: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT requester_id) FROM requester_run_slots WHERE agent_id=? AND released=0 AND admin=0 AND requester_id<>?")
+            .bind(agent)
+            .bind(owner)
+            .fetch_one(&self.app_pool)
+            .await?;
+        let levels: Vec<(Option<String>, i64)> = sqlx::query_as("SELECT level_id,COUNT(*) FROM agent_users WHERE agent_id=? AND last_active>=? GROUP BY level_id")
+            .bind(agent)
+            .bind(crate::now() as i64 - AGENT_USER_WINDOW)
+            .fetch_all(&self.app_pool)
+            .await?;
+        Ok((runs, people, levels))
+    }
+
+    /// Raise one of the owner's limit alerts (a notice for them, once a day per level). A
+    /// failed write is logged: the alert is a courtesy, the limit itself already held.
+    async fn owner_alert(
         &self,
         access: &access::authority::LiveAccess,
+        kind: &str,
         level: u32,
-        runs: u32,
+        limit: u32,
     ) {
         let day = webagent_engine::usage_ledger::day(crate::now());
         if let Err(error) = webagent_engine::usage_ledger::raise_owner_alert(
             &self.app_pool,
             &access.agent_owner_id,
-            webagent_engine::usage_ledger::ALERT_RUNS,
+            kind,
             day,
             level,
-            runs,
+            limit,
         )
         .await
         {
@@ -620,15 +693,18 @@ impl Store {
 /// The agent's limits for a new run of `actor`, inside the slot reservation's transaction:
 /// their level's runs at once there, then (for a person with no run going there) its people
 /// at once, then (for a person not seen there in 30 days) its people of the last 30 days,
-/// whom this run then counts. Operators and administrators have no such limits.
+/// whom this run then counts with the level they use. Operators and administrators have no
+/// such limits. Returns the owner alerts (kind, percent, limit) this run's place crossed,
+/// raised once the transaction commits.
 async fn agent_admission(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     access: &access::authority::LiveAccess,
     actor: &str,
-) -> Result<()> {
+) -> Result<Vec<(String, u32, u32)>> {
     let limits = access.agent_limits;
+    let mut alerts = Vec::new();
     if limits == access::authority::AgentLimits::default() {
-        return Ok(());
+        return Ok(alerts);
     }
     let agent = access.agent_id.as_str();
     let mine: i64 = sqlx::query_scalar(
@@ -654,6 +730,12 @@ async fn agent_admission(
         if others >= i64::from(at_once) {
             return Err(anyhow!(AGENT_USERS_BUSY));
         }
+        alerts.extend(crossed_alerts(
+            webagent_engine::usage_ledger::ALERT_AGENT_AT_ONCE,
+            agent,
+            others,
+            at_once,
+        ));
     }
     let now = crate::now() as i64;
     sqlx::query("DELETE FROM agent_users WHERE agent_id=? AND last_active<?")
@@ -677,15 +759,54 @@ async fn agent_admission(
             if count >= i64::from(users) {
                 return Err(anyhow!(AGENT_USERS_FULL));
             }
+            alerts.extend(crossed_alerts(
+                webagent_engine::usage_ledger::ALERT_AGENT_USERS,
+                agent,
+                count,
+                users,
+            ));
         }
     }
-    sqlx::query("INSERT INTO agent_users(agent_id,user_id,last_active) VALUES(?,?,?) ON CONFLICT(agent_id,user_id) DO UPDATE SET last_active=excluded.last_active")
+    sqlx::query("INSERT INTO agent_users(agent_id,user_id,last_active,level_id) VALUES(?,?,?,?) ON CONFLICT(agent_id,user_id) DO UPDATE SET last_active=excluded.last_active,level_id=excluded.level_id")
         .bind(agent)
         .bind(actor)
         .bind(now)
+        .bind(&access.capability_level.id)
         .execute(&mut **tx)
         .await?;
-    Ok(())
+    Ok(alerts)
+}
+
+/// The owner alerts one more person on `agent` crosses: `before` of `limit` were counted.
+fn crossed_alerts(kind: &str, agent: &str, before: i64, limit: u32) -> Vec<(String, u32, u32)> {
+    let before = u64::try_from(before).unwrap_or(0);
+    webagent_engine::usage_ledger::crossed(before, before + 1, u64::from(limit))
+        .into_iter()
+        .map(|level| {
+            (
+                webagent_engine::usage_ledger::agent_alert(kind, agent),
+                level,
+                limit,
+            )
+        })
+        .collect()
+}
+
+/// The owner alert (kind, limit) for an agent limit that refused a new run: the agent's people
+/// (30 days or at once), or a level's runs at once there.
+fn refused_alert(
+    access: &access::authority::LiveAccess,
+    error: &anyhow::Error,
+) -> Option<(String, u32)> {
+    use webagent_engine::usage_ledger as ledger;
+    let limits = access.agent_limits;
+    let (kind, limit) = match error.to_string().as_str() {
+        AGENT_USERS_FULL => (ledger::ALERT_AGENT_USERS, limits.users?),
+        AGENT_USERS_BUSY => (ledger::ALERT_AGENT_AT_ONCE, limits.users_at_once?),
+        "Account run limit reached" => (ledger::ALERT_LEVEL_LIMITS, 0),
+        _ => return None,
+    };
+    Some((ledger::agent_alert(kind, &access.agent_id), limit))
 }
 
 /// What a reconcile does to one slot row.
@@ -1122,6 +1243,35 @@ mod tests {
             .reserve_requester_run(&run_on("p4-b", &id(4), &agent))
             .await
             .unwrap();
+        // The owner's Dashboard and notices: each person carries the level they used, and the
+        // owner was alerted at 80 and 100 percent of both limits (counts only, once a day).
+        let unlevelled: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_users WHERE agent_id=? AND (level_id IS NULL OR level_id='')",
+        )
+        .bind(&agent)
+        .fetch_one(&store.app_pool)
+        .await
+        .unwrap();
+        assert_eq!(unlevelled, 0);
+        let alerts = webagent_engine::usage_ledger::current_owner_alerts(
+            &store.app_pool,
+            &id(0),
+            webagent_engine::usage_ledger::day(crate::now()),
+        )
+        .await
+        .unwrap();
+        let kind = |kind| webagent_engine::usage_ledger::agent_alert(kind, &agent);
+        let users = kind(webagent_engine::usage_ledger::ALERT_AGENT_USERS);
+        let at_once = kind(webagent_engine::usage_ledger::ALERT_AGENT_AT_ONCE);
+        assert_eq!(
+            alerts,
+            vec![
+                (users.clone(), 80, 3),
+                (users, 100, 3),
+                (at_once.clone(), 80, 2),
+                (at_once, 100, 2)
+            ]
+        );
     }
 
     #[tokio::test]
