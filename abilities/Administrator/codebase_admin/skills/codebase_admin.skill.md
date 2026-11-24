@@ -47,6 +47,9 @@ authoritative; loading guidance never grants a tool or deployment.
 - Capacity (how processors, memory and run limits are shared, every capacity
   setting, sizing a server, measuring the most active users) is in
   `docs/capacity.md`; a change to any of those settings or limits updates it.
+- `docs/index.md` indexes every document with its status and last-updated.
+  When a change edits any indexed doc, update that doc's row in `docs/index.md`
+  in the same patch (and the doc's footer points back at the index).
 
 ## Smallest complete change
 

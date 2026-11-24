@@ -50,7 +50,7 @@ broker = profile["broker"]
 assert os.geteuid() == 0
 assert str(root) == broker["checkout_root"]
 protected = Path("/etc/webagent") / broker["instance"] / "build-service.json"
-targets = [root / "data", protected]
+targets = [protected]
 targets += [root / value.get("install", "plugins/" + name) for name, value in profile["plugins"].items()]
 for target in targets:
     if target.exists() or target.is_symlink():
@@ -75,13 +75,10 @@ def write(path, value, uid, gid):
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
-for name, value in profile["application"].items():
-    assert name in {"chat.json", "prompts.json", "app-settings.json",
-                    "loop-runtime.json", "engine-components.json",
-                    "context-compaction.json", "tool-output-retention.json",
-                    "access-policy.json", "gates/message_visibility_v1.json",
-                    "gates/closing_status_v1.json"}
-    write(root / "data/config" / name, value, broker["app_uid"], broker["app_gid"])
+# App-owned live configuration is owned by broker releases (a frozen read-only
+# mount), not by files written into the checkout. The tracked config/ tree holds
+# general defaults; the 2026-10-17 profile capture predates that layout, so a
+# fresh restore must re-capture profile["application"] against the current tree.
 write(protected, broker, 0, 0)
 print("Configuration seeded; no service started")
 ```
@@ -154,3 +151,5 @@ against the current configuration contracts, and publish/commit the reviewed
 profile. Publishing this profile does not overwrite existing runtime settings.
 Preserve secrets in a separate secure backup and report when the Git remote
 does not yet contain the restore commit.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

@@ -22,3 +22,5 @@ one tested development release. Run the installed protected bootstrap for
 fixed-allowlist manual build snapshots. Keep runtime and workspace paths out
 of source snapshots. Existing historical receipt paths are rebased during the
 move; candidate archive bytes and input digests are preserved.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

@@ -571,3 +571,5 @@ Implementation tasks stay closed with no claims. This separately user-authorized
 context-session-maintenance-20261019 work owns documentation/feature-map/index and
 scoped reviews; its completion requires its own receipts. Earlier immutable
 handoffs preserve their then-pending status and are not retroactively rewritten.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

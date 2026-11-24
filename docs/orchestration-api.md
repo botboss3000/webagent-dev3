@@ -38,6 +38,10 @@ needed to use the browser-session routes.
 | `GET /api/v3/sessions/{session_id}/runs/{run_id}/logs?after={seq}` | One run's private interaction log, at most 100 events per page | Administrator who owns the session and retains agent access |
 | `POST /api/v3/runs/{run_id}/{action}` | Existing run control such as cancellation or continuation | Session owner with agent access; CSRF |
 | `POST /api/v3/approvals/{approval_id}/decision` | Existing approval decision | Session owner with agent access; CSRF |
+| `GET /api/v3/sessions/{session_id}/tasks` / `POST` | Session-scoped task records (list/create) | Session owner with agent access |
+| `GET /api/v3/sessions/{session_id}/actions` and `GET /api/v3/actions` | Action records for the session / installation | Session owner with agent access |
+| `GET /api/v3/sessions/{session_id}/visit` | Record/refresh a session visit | Session owner with agent access |
+| `GET /api/v3/sessions/{session_id}/messaging-routes` | Allowed native cross-session messaging routes | Session owner with agent access |
 | `GET /api/v3/admin/builds` | Recent build dashboard and container status | Administrator |
 | `GET /api/v3/admin/builds/{job_id}/result` | One durable build job, including bounded log and structured Rust test result | Administrator |
 
@@ -74,19 +78,15 @@ to its most recent 20 jobs; the single-job route can retrieve an older known ID.
 
 ## Development setup
 
-1. Apply the reviewed source patch in `/home/ar/webagent-dev3/code` and run the
-   locked Rust tests plus `python3 -B -m unittest discover -s tests -p
-   test_admin_build.py`.
-2. Build and release the v3 API and loop images with the project's
-   `v3_build` workflow. Replacing the v3 containers interrupts the public app.
-3. Install the reviewed build broker code with
-   `sudo -n python3 -B /home/ar/webagent-dev3/code/build-service/install.py --install`.
-   Stop its existing supervisor cleanly, then run
-   `sudo -n python3 -B /home/ar/webagent-dev3/code/host-build-service/bootstrap.py --start`.
-4. Verify both v3 containers are healthy, `/health/ready` responds, and an
-   authenticated administrator can read a scoped run log and a known build
-   result. Existing account login and permissions supply access; no new
-   credential or database access is required.
+The API routes above are deployed through the protected broker release
+workflow, not by hand. To change or verify them: open an isolated broker task,
+apply the reviewed patch, run the locked tests, finish (preflight selects the
+appropriate lane; a full `build_deploy` replaces the v3 containers and briefly
+interrupts the public app), then verify both containers are healthy,
+`/health/ready` responds, and an authenticated administrator can read a scoped
+run log and a known build result. See `build-service/README.md` ("Agent guide:
+releasing and monitoring"). Existing account login and permissions supply
+access; no new credential or database access is required.
 
 For an unattended client that only needs to converse, an operator may later
 set `V3_MESSAGE_API_TOKEN` to an independently supplied, random 32–256
@@ -99,3 +99,5 @@ The v3 source lives in `/home/ar/webagent-dev3/code` on the development server.
 A source change is not active until an authorized, tested release updates the
 API and protected broker. This document does not enable the optional bearer
 API.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

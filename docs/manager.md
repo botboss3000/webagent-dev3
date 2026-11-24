@@ -60,3 +60,5 @@ No new database file or runtime-data source snapshot is introduced.
 
 Future publication and tool gates should get separate modules under
 src/manager/gates with explicit event, evidence and effect contracts.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

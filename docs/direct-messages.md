@@ -31,3 +31,5 @@ Tests cover retries and concurrent duplicate admission, immutable replay, manage
 review, atomic rollback, admission failures, attachment provenance, route auth/CSRF
 and two-step regression. Release uses the protected development broker's locked
 suite and build, then live authenticated session/run/outbox acceptance.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

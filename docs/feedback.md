@@ -264,3 +264,5 @@ Not covered by automated tests:
 - The menu item is also shown to app guests, who get the 403 message when they send.
   Hiding it for them would need the role in the UI configuration; the server check is
   what enforces the rule.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

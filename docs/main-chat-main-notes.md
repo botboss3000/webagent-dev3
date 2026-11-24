@@ -211,3 +211,5 @@ Release-bound maintenance receipts and remaining-work records live under
 review. Final maintenance status must come from the current source/index bindings
 and named review records, not this prose. The maintained execution tour is the
 control project's local docs/code-tour.md; do not update the historical server copy.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

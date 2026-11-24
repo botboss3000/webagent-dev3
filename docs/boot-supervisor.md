@@ -74,3 +74,5 @@ recorded zero CPU ticks across daemon, launcher, planner and console. The real
 tty was entirely blank with black backgrounds. Ordinary user wake and recovery
 permissions remain in the host; no process/resource claim implies whole-server
 CPU reduction. Full receipts and sampling limits are in engine-modularization.md.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

@@ -142,3 +142,5 @@ migration does not deploy or activate new functionality.
 - `web_access`: ability; pending. Adapt independently in a later functional wave.
 - `web_scraper`: ability; pending. Adapt independently in a later functional wave.
 
+
+Index: docs/index.md — update this doc's row there whenever you change it.

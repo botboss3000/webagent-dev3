@@ -282,3 +282,5 @@ repository yet; until it is, any script that uses the app API as above works.
 
 Worker machines (a second machine taking browser work, commands, voice or local models, and
 possibly loops) are planned and not built. Today everything above runs on one machine.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

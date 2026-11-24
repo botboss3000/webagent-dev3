@@ -73,7 +73,9 @@ revocation. Polling preserves the explicit checkbox choice; now,
 new-session and onward requests cannot grant a reusable route.
 
 Config: the Agent Management ability (abilities/Core/agent_management) holds the tool folders and settings.
-Tool schemas live in session_messaging::schemas; discovery is filtered by live
+Tool schemas are the ability `tools/*.tool.json` folders; the message adapter in
+`crates/modules/chat/host/session_messaging.rs` defines the argument types
+(`ARGUMENT_TYPES`). Discovery is filtered by live
 ability access and policy. Agent policy rules and runtime access assignments are
 revisioned host state, not a new source JSON switch. policy_defaults fills absent
 rules without replacing explicit denials. These existing policy defaults are not
@@ -195,3 +197,5 @@ release-commit.json, live-acceptance.json, acceptance-harness-corrections.json,
 stack-baseline-measurement.json, stack-repair-measurement.json and the immutable
 failed-job lineage. Original implementation remains closed; later documentation
 and Code Index review uses separate activity identities. No push is implied.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

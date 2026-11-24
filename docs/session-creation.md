@@ -65,3 +65,5 @@ fixture and other conversations remain. A cleanup helper initially selected an
 Identity GET record as a session ID and stopped before modifying that record.
 cleanup-correction.json records filtering by operation; accepted-before-cleanup.json
 separates acceptance from cleanup. That correction changed no application source.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

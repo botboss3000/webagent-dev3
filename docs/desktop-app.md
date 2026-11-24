@@ -67,3 +67,5 @@ Tauri CLI, MinGW and NSIS, Java and the Android SDK and NDK), then sign the APK 
 server with the broker-only release key and add everything to the GitHub release.
 `installer/release-macos.yml` becomes the production repository's macOS workflow, which
 adds the `.dmg` to the same release when the release tag is pushed.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

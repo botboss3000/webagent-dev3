@@ -148,3 +148,5 @@ invalidates eligibility. The pinned `4f605f3b-4444-4447-a511-3a9d4b9677df` job i
 excluded. Job JSON receipts and task metadata remain, including original uncertain
 status; clearance is not a build replay or outcome rewrite. Reminder review alone
 does not authorize deletion. No live database or session workspace is eligible.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

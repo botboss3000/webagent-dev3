@@ -86,7 +86,9 @@ visibility, session mode, cancellation, and shutoff. An approval is bound to
 the relevant revisions; a changed restriction invalidates it. Recovery may
 resume a safe read, but an interrupted write remains uncertain until resolved.
 
-The installed module set is empty. Module configuration names only fixed
+The installed module set is `message_visibility_v1` (model dispatch) and
+`closing_status` (publication), from `config/engine/loop-runtime.json`
+`workflow.modules`. Module configuration names only fixed
 checkpoints; unknown checkpoints and uninstalled modules fail validation.
 A later module adapter must accept a versioned checkpoint input and return
 a bounded typed contribution or decision. It cannot skip or reorder checkpoints,
@@ -280,7 +282,7 @@ The installed package (`plugins/diagnostics/`) holds diagnostics.json and the ex
 ## Session naming configuration
 
 The live prompt files own session naming: `prompts/session_naming/prompt.md` and
-`prompts/session_naming.json` (under crates/modules/configuration) hold prompt,
+`session_naming.json` under `config/configuration/prompts/` hold prompt,
 model_role (system or standard), attempts_per_job (1–10),
 retry_delay_ms (0–60000), request_timeout_seconds (1–300),
 recovery_retry_delay_seconds (1–86400), and max_job_attempts (1–20).
@@ -494,3 +496,5 @@ never authorizes duplicate admission. Consuming transactions recheck access, mod
 lifecycle and route. Agent-origin input does not supply fresh human intent. See
 [Native session messaging](session-messaging.md) for contracts, function boundaries,
 retention/deletion behavior and the exact verified release.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

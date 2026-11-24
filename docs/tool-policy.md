@@ -225,3 +225,5 @@ asked for this action and which of their messages did
   the agent's ability settings.
 - **Settings:** the `guard` section of `config/access/policy.json` (defaults: 0.85, 12
   messages, 300 characters each, 120 characters per argument, 5 s per model, 10 s in total).
+
+Index: docs/index.md — update this doc's row there whenever you change it.

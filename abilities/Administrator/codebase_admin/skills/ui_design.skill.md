@@ -201,7 +201,8 @@ Every new UI feature in `ui/` **must be tested and visually correct in both dark
 2. **Each hue has an `-rgb` triple**; build opacity as `rgba(var(--brand-rgb), 0.2)` — a hue is authored **once** per theme.
 3. **Derived/semantic tokens (wiring — don't edit to re-theme)** — `--accent`, `--accent-soft`, etc. are `var(--brand)` / `rgba(var(--brand-rgb), a)` formulas, re-declared in **both** blocks (so they pick up each block's palette).
 
-Dark and light are **independent palettes** (factory default: **Ocean** light, **Amber** dark; **Mono** is the neutral preset).
+Dark and light are **independent palettes** (v3 ships a monochrome black/white
+pair; there are no preset themes such as Ocean/Amber).
 
 **Rules:**
 
@@ -210,25 +211,36 @@ Dark and light are **independent palettes** (factory default: **Ocean** light, *
 3. **A new theme-sensitive colour goes in the PALETTE block of BOTH theme blocks** (+ `-rgb` triple if alpha needed) — never sprinkled through feature code.
 4. **Verify before pushing:** toggle `body.light-mode` and confirm legibility in both modes.
 
-#### The animated background reads the palette too
+#### Backgrounds are boot-only
 
-Backgrounds are plugins: a drop-in folder `ui/background/<id>/` (`<id>.json` + `<id>.js` + `<id>.css`); the engine in `ui/background/_engine/` loads the admin's **per-theme** pick (App Settings → **Appearance**). Built-in **None** = plain themed background. A plugin's tokens live in its own `<id>.css` but **reference the central palette**; renderers re-read tokens on theme flip. Deleting the folder removes the background everywhere (fallback: Stargaze). Cursor glow / card spotlights are **not** part of a background — `ui/shared/js/cursor-effects.js`.
+Backgrounds live under `ui/boot/background/` (`_engine/` plus `aurora`,
+`bullet-grid`, `particles`, `stargaze`) and play during boot only; see
+`ui/boot/README.md`. There is no persistent background, no per-theme background
+picker, and no admin Appearance panel in v3. Light/dark/system is chosen by the
+account-menu / mobile-footer theme switch and saved per browser
+(`applyAccountTheme()` in `ui/shell/app.js`); the boot curtain fades into it.
 
 #### Global border control (one knob for colour · thickness · on-off)
 
-Write every **neutral container / table / divider border** as `var(--border-width) solid var(--border)` (or `-soft` / `-strong`). Then: **recolour** = `--border`/`-soft`/`-strong` in CSS, or `border_color_dark`/`border_color_light` in `data/config/app-settings.json`; **thickness** = `--border-width` or `border_width` (default `1px`); **all off** = width `0`. Edit surfaces: App Settings → **Appearance**; the JSON (served via `/api/v1/auth/ui-config`, injected at boot by `ui/shared/js/appearance.js`); or the PALETTE defaults.
+Write every **neutral container / table / divider border** as `var(--border-width) solid var(--border)` (or `-soft` / `-strong`). Then: **recolour** = `--border`/`-soft`/`-strong` in CSS; **thickness** = `--border-width` (default `1px`); **all off** = width `0`. Edit surface: the PALETTE blocks in `design-system.css`. (The v2 Appearance editor and its border JSON settings no longer exist in v3.)
 
 Rules: (1) a neutral border's width is `var(--border-width)`, never a literal px — a hard-coded `1px` opts out of the thickness/off control. (2) Accent/semantic borders (focus rings, hover/active highlights, error/drag outlines, status borders, spinner rings) are deliberately **not** wired to this — leave them. (3) Colour-only exceptions: the floating-glass surfaces in `ui/boot/loading-shell.css` (`#main-panel`, chat pill family, bubbles, `#chat-header`) keep a translucent `color-mix(currentColor)` border *colour* but **do** read `var(--border-width)`.
 
 #### Known self-contained palette exceptions
 
-Not driven by the global scheme — edit these too in a full re-skin: the **agent-loop visualizer** (`ui/main-panel/agents/agent-loop/loop-visual.css` + its JS) owns a complete dark **and** light palette; the **terminal ANSI palette** (`ui/shared/js/terminal.js`) is terminal-standard; **animated backgrounds** own bespoke values in their plugin CSS.
+Not driven by the global scheme — edit these too in a full re-skin: **boot
+backgrounds** own bespoke values in their CSS under `ui/boot/background/`;
+terminal ANSI colours follow the terminal component, not the palette.
 
-#### Appearance panel, per-user themes, token pipeline (summary)
+#### Theming summary
 
-App Settings → **Appearance** is **one** group: a two-row expandable table (**Light** and **Dark** rows) + a shared theme-independent card (border thickness, fonts). Each theme row: preset chips (Mono / Amber / Ocean / Forest / Grape / Rose — a preset click is a **complete reset** of that mode), the background select, and the full palette as swatches; all auto-saving. **Per-user themes:** the admin switch `allow_user_appearance` (off by default) gives each user a "My appearance" editor; their overrides (`user_profiles.appearance`) layer **over** the global theme inside `/api/v1/auth/ui-config` — unset tokens keep the global value.
-
-A token reaches the screen as `app-settings.json` keys `<base>_dark`/`<base>_light` → `/api/v1/auth/ui-config` → `appearance.js` injection (derives `-rgb` triples; honours alpha). The **graduated neutrals are derived, not editable** — `--bg-1`, `--border-soft`, `--fg-2`, etc. are `color-mix` functions of the **6 raw neutral knobs** (`--bg-0`, `--bg-elev`, `--bg-tint`, `--border`, `--fg-1`, `--fg-3`); derive any new neutral step the same way, never hard-code a neutral hex. **Adding a token to the editor = three mirrored places:** `TOKENS` in `appearance.js`; `_DEFAULT_APPEARANCE` + `AppSettings` field in `app/admin/settings.py`; `TOKEN_META` in `ui/shared/js/appearance-editor.js`. A brand-new key needs a **server restart**. Full wiring: **`docs/claude/ui-theming-reference.md`**.
+The v2 Appearance panel, per-user themes, preset chips and the
+`/api/v1/auth/ui-config` → `appearance.js` pipeline no longer exist in v3;
+theming is the per-browser light/dark/system switch above. The **graduated
+neutrals remain derived, not editable** — `--bg-1`, `--border-soft`, `--fg-2`,
+etc. are `color-mix` functions of the **6 raw neutral knobs** (`--bg-0`,
+`--bg-elev`, `--bg-tint`, `--border`, `--fg-1`, `--fg-3`); derive any new
+neutral step the same way, never hard-code a neutral hex.
 
 ### Edge fades over a dynamic/themed background — mask, never a colour
 
@@ -244,7 +256,8 @@ For rounded corners that **stay put while content scrolls**, use **`.rounded-scr
 
 On mobile-width viewports, when the visual viewport is meaningfully shorter than the layout viewport **and** an editable field holds focus, `index.html`'s viewport tracker sets **`body.kb-open`** (never on desktop). Use it to hide bottom-docked clutter while the keyboard is up — The shell's own `body.kb-open` rules are in `ui/shell/app.css`. Scope any new reaction to the page's own selectors.
 
-Design history and provenance: docs/ui-theming-design-history.md — not needed for operative work.
+Design history: the former v2 theming design-history docs were deleted 2026-11-24;
+no v2 appearance guidance applies.
 
 ## Option lists and config pages
 
@@ -290,7 +303,8 @@ The compact table is the right home for **any "category → list of options" sur
 
 **When NOT to use it:** a genuine **form** (free text/number fields, no per-option category structure) stays a form; **one complex configurator** (many interdependent fields, live status, action buttons) is not a list of options. Rule of thumb: "a list of things, each turned on / chosen / reordered" → compact table; "a single thing with many fields" → not. A hybrid is fine (rows expanding to hold a configurator).
 
-The full per-area conformance audit (status legend, exact files per surface) lives in **`docs/claude/ui-toggle-list-conformance.md`** — read it whenever this design changes.
+The per-area conformance audit is verified against the shared classes in
+`option-list.css`; re-check those before changing this design.
 
 #### The standard config-page layout (App Settings is the reference)
 
@@ -300,6 +314,7 @@ The full per-area conformance audit (status legend, exact files per surface) liv
 4. **JS-built sections ship a build gate.** `.ac-section.is-building` + one `.ac-section-loader` child hide every real child behind a spinner until reveal. Reveal **only after structure AND the first data load**; `init()` owns the whole reveal (never gate it on `load()`); clear the class directly — **no `requestAnimationFrame`**.
 5. **Sticky section navigator (shared, opt-in).** Add class `ac-stickynav` to the page's `<section class="ac-section">` and call `initStickyNav(...)`. Rules: `.ac-stickynav .ac-category-group { display: contents }`; headings are **SQUARE** (`border-radius: 0`); collapsible groups are `<div class="ac-category-group ac-collapsible">` toggled by `.ac-open` — **never `<details>`**.
 
-**Related shared controls.** The on/off switch (`.conn-toggle`) lives in `ui/shared/controls/controls.css`, loaded for every page. The per-agent Abilities row uses **one** 3-position visibility tri (`.ac-tri.ac-tri-vis`: Off · Discoverable · Visible) instead of a switch + eye pair — **agent-only** (the admin table keeps its plain switch + delete button), plus an **"Available to"** dropdown (`.ac-access-select`: Everyone · Registered · Admins), a server-enforced boundary. Destructive actions use the shared two-click delete control (`advanceDeleteBtn` / `resetDeleteBtn` in `ui/shared/models/delete-control.js`, styled by `delete-control.css` beside it) — never native `confirm()`.
+**Related shared controls.** The on/off switch (`.conn-toggle`) lives in `ui/shared/controls/controls.css`, loaded for every page. The per-agent Abilities row uses **one** 3-position visibility tri (`.ac-tri.ac-tri-vis`: Off · Discoverable · Visible) instead of a switch + eye pair — **agent-only** (the admin table keeps its plain switch + delete button). Destructive actions use the shared two-click delete control (`advanceDeleteBtn` / `resetDeleteBtn` in `ui/shared/models/delete-control.js`, styled by `delete-control.css` beside it) — never native `confirm()`.
 
-Design history and provenance: docs/ui-toggle-list-design-history.md — not needed for operative work.
+Design history: the former v2 toggle-list design-history doc was deleted 2026-11-24;
+the shared rules above are the operative guidance.

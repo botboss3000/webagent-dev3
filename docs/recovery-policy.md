@@ -244,3 +244,5 @@ ends each stream after an hour and the page reconnects. Retry and switch activit
 described in section 1, grouped under "retry" or "recovering". A run whose tool outcome is in doubt
 shows the recovery panel (section 4) with its diagnostics collapsed. Code: `ui/chat/core/client.js`,
 `ui/chat/core/activity.js`, `ui/chat/core/recovery-details.js`.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

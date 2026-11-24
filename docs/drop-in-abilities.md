@@ -256,3 +256,5 @@ registration. Subsequent compatible package publications use plugin_deploy
 without replacing API/loop/gate. External event adapters, clone runners and
 device execution remain unavailable. This section documents the candidate
 contract; release receipts and live acceptance establish installation status.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

@@ -197,7 +197,7 @@ Each requirement has an ID for reference in commits and reviews.
 | HOST-7 | The operator account has no blanket passwordless root and is not in the `docker` group; routine release operations use a narrow account (`webagent-ops`) or specific sudo rules. | Target | `ar` has `NOPASSWD: ALL` and `docker`; Fable item Review 11-21: the broker service itself runs as `ar`. Plan `trust-boundary` step 7. |
 | HOST-8 | Config files under `/etc/webagent/` are readable only by root and the accounts that need them. | Target | `build-service*.json` 644 (no secrets); `webagent-ops` runs `buildctl`, which reads it, so a plain chmod could break releases. With HOST-7 in the Fable plan Plan `trust-boundary` step 7. |
 | HOST-9 | Unattended security upgrades stay on. | In force | `unattended-upgrades` active |
-| HOST-10 | Containers have CPU and memory limits so one runaway workload cannot starve the host. | In force | `docker update --cpus 4` on API and loop (memory 2 GiB / 768 MiB already set); replacements copy the running HostConfig (`host.py` `container_config`) (Loop memory is 8 GiB since the 11-21 capacity work.) |
+| HOST-10 | Containers have CPU and memory limits so one runaway workload cannot starve the host. | In force | Since 2026-11-24 the API/loop run on weight shares (400/100/100, `builds.cpu_weight`), not hard caps; memory stays 2 GiB / 8 GiB (`docker update --memory`). See `docs/capacity.md` for the current values. |
 | HOST-11 | App containers cannot open connections to the host's own addresses or to Tailscale peers; they reach host services only through the mounted Unix sockets. | In force | 2026-11-21 (trust-boundary step 2): `ufw allow in on docker0` removed (undo: `ufw allow in on docker0 comment containers`), so new docker0 connections to the host fall to ufw's default deny; Tailscale peers closed as in TOOL-15. A 32-minute log of new docker0-to-host connections (two app deploys included) found none before the switch. Checked after: both origins ready, a chat turn with a browser call, new SSH session. |
 
 ### 3.10 Abuse and capacity (ABUSE)
@@ -333,3 +333,5 @@ step 1 (the approval floor), embed-and-capacity step 1, sharing step 1, then the
   addresses and to Tailscale peers (HOST-11, TOOL-15); the plan's DOCKER-USER rule alone did not
   close Tailscale, so a mangle-table rule was added. File Manager terminals lost the docker group
   (FILES-3). The read-only `.git` half of step 2 was deferred to step 5 (BUILD-10 gap accepted).
+
+Index: docs/index.md — update this doc's row there whenever you change it.

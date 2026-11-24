@@ -46,3 +46,5 @@ queues, write-error isolation, retention/reload tests and authenticated API chec
 Browser capture requires browser journeys for stop/reload/lease expiry and gaps.
 All releases use isolated tasks and the protected build broker; health alone does
 not establish recorder parity or correctness of generated reports.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

@@ -53,3 +53,5 @@ An uncertain click, terminal input, Git write, promotion or deployment must be r
 Focused Rust/worker tests and authenticated V3 API calls cover ownership, policy, stale revisions, credential rotation, revocation, receipts, Git push/conflict handling, private browser artifacts, tunnels and real coding work. The isolated V3 source passed both `cargo check --locked` and `cargo test --locked` through V3 Workspace with stable input digests and one persisted assistant reply per run. Image inputs were unchanged through build; the deployed V3 pair and readiness endpoint were healthy. Git conflict resolution removes markers without staging the file; Git retains an unmerged index until a separate explicit add.
 
 The Abilities UI can be checked through frontend syntax and detached-DOM tests. API-only validation does not claim rendered browser, theme or journey evidence. The isolated Code Index adapter does not refresh the shared checkout's UI index; report that unavailable shared-index coverage check explicitly.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

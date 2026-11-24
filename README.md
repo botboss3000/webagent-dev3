@@ -2,7 +2,7 @@
 
 The abilities work is in progress. Tenant-scoped administration, account-tier
 ability grants and agent capability levels are deployed. Manifest presence
-is not execution support. See [the port ledger](docs/ability-port-ledger.md);
+is not execution support. See [the ability migration inventory](docs/ability-migration.md);
 readiness is promoted only after authenticated API acceptance. The eight
 Administrator coding abilities are ready; Base remains partial, while other
 groups retain their individual readiness decisions. The policy migration
@@ -21,13 +21,14 @@ exercised in a live model run. Entering Auto mode needs a fresh revision and, un
 the agent waives it, the user's confirmation.
 
 
-Independent Rust agent runtime, subscription provider adapter, and isolated Python tool worker.
+Independent Rust agent runtime, subscription provider adapter, and Rust tool worker.
 Source lives independently at `/home/ar/webagent-dev3/code`; app data is beside it in
-`state/` (mounted at `/state`), with `workspaces/`, `runtime/` and the broker's `build-jobs/`; v2 remains at `/home/ar/webagent-dev2`.
+`state/` (mounted at `/state`), with `workspaces/`, `runtime/` and the broker's `build-jobs/`.
 Build archives retain virtual `v3/` paths for existing release receipts. See [the root migration](docs/root-migration.md).
 
 New to this codebase? Start with the
-[plain-language code tour](docs/code-tour.md), then use the sections below
+[plain-language code tour](docs/code-tour.md); [docs/index.md](docs/index.md)
+indexes every document with its status. Then use the sections below
 for deployment and API details.
 
 ## Run
@@ -39,24 +40,24 @@ sh /home/ar/webagent-dev3/code/deploy.sh build
 sh /home/ar/webagent-dev3/code/deploy.sh build-loop
 sh /home/ar/webagent-dev3/code/deploy.sh start
 sh /home/ar/webagent-dev3/code/deploy.sh start-loop
-curl -fsS http://100.112.23.15:8081/health/ready
+curl -fsS http://100.87.9.65:8081/health/ready
 ```
 
 The development server needs Docker Buildx. Both image targets use the same
-tested Rust builder in `v3/Dockerfile`; BuildKit caches Cargo downloads and
+tested Rust builder in `Dockerfile`; BuildKit caches Cargo downloads and
 artifacts across source edits. Register each source task with the protected
 broker before editing. Each worker edits a separate snapshot; finishing freezes
 that task and queues its own serial integration, locked tests, image builds, and
 development deployment. The two containers receive the same candidate digest
 and mount versioned code assets from that release.
 
-The existing named tunnels serve https://webagent.live/app from dev2 on host port 8080
-and https://dev.webagent.live/app from v3 on host port 8081. The previous
+The existing host tunnel unit (`webagent-development-tunnel.service`) serves
+`https://dev.webagent.live/app` from v3 on host port 8081. The previous
 production app container is stopped and kept as a rollback snapshot.
 
 On first start, open `/setup.html` to choose the v3 admin username and password.
 The retired test bootstrap credential is removed on the first launch of this setup flow.
-Open `/app?tab=agents&agent=shared_default` to use the v2 Agents layout and configure the default agent's Model page. Connect a fresh ChatGPT subscription there; v2 tokens are never imported.
+Open `/app?tab=agents&agent=shared_default` to configure the default agent's Model page. Connect a fresh ChatGPT subscription there; v2 tokens are never imported.
 The default agent uses `gpt-6-luna` until you save another model. Choose a model supported by your account; a catalog name alone does not establish entitlement.
 Agent model settings store an explicit provider ID. The supported IDs are
 `openai_subscription` and `deepseek`; unsupported IDs are rejected. DeepSeek requires
@@ -70,16 +71,15 @@ provider and model so changing the agent setting affects only later runs. Compos
 
 Development UI files in `v3/ui` and selected shared assets are served from a
 broker-owned versioned snapshot through a stable read-only mount. An isolated
-task changing only `v3/ui/` can switch that snapshot without Cargo, Buildx or
+task changing only UI assets can switch that snapshot without Cargo, Buildx or
 container replacement; refresh the browser to load the new assets. UI releases
 may finish while a Rust image build runs. Compatible queued full builds from
 one caller may share one tested image build, while each keeps its own receipt.
-The shared assets also serve v2, so keep v3-specific UI changes in `v3/ui`.
 Changing the container mount list still requires a full release. The chat
 baseline lives in
-`v3/ui/chat/chat.html` and
-`v3/ui/chat/chat.css`; `v3/ui/app.js` supplies authentication and selected-agent context to
-`v3/ui/chat/core/panel.js`, which mounts the partial and owns chat rendering,
+`ui/chat/chat.html` and
+`ui/chat/chat.css`; `ui/app.js` supplies authentication and selected-agent context to
+`ui/chat/core/panel.js`, which mounts the partial and owns chat rendering,
 controls, and teardown. `chat/core/client.js` owns the existing v3 chat requests
 and sequence-based SSE connection; it uses the shell request helper for cookie
 authentication and CSRF. Remounting the panel disconnects its previous stream
@@ -1002,3 +1002,5 @@ Activated abilities remain session state. Exact tool and skill selectors remain 
 ## Gradual engine modularization
 
 Consult [the engine modularization ledger](docs/engine-modularization.md) before substantial engine changes. Assess extraction around real contracts and lifecycle boundaries; do not split every edited section automatically. Record boundaries, dependencies, rationale, progress, measurements and verified publication in that ledger. Live builds use --no-default-features --features live-context; stable builds use linked-context. Shared contract changes rebuild consumers; compatible service implementation edits publish independently. Removal pauses affected work without fallback.
+
+Index: docs/index.md — update the README row there whenever you change it.

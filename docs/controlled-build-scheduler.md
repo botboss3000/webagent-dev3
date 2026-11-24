@@ -37,3 +37,5 @@ Operators use buildctl schedule --input request.json for structured actions with
 Publication retains synchronization checks, dependency-aware rebasing, live authority, frozen input attestations, immutable source receipts, healthy adoption and rollback; no Code Index or review is required. Privileged host edits are outside agent locks; checkout drift is detected before promotion/completion. Logical reservations cannot prevent a privileged SSH operator from changing files.
 
 Acceptance must cover concurrent unrelated compilation, same-component serialization, corrections before completion, fresh queued baselines, duplicate requests, handoff fencing, orphan/restart recovery, resource controls, source-write confinement and authenticated Builds journeys. Retained test and release receipts provide evidence; this document alone is not deployment evidence.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

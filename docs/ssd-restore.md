@@ -102,3 +102,5 @@ Future agents should read both restore documents before the SSD swap and verify
 that the GitHub main commit contains the backup commit. The saved source commit
 inside the snapshot identifies the source at capture time; the later Git commit
 adds the snapshot itself. No full clean-host restoration has yet been performed.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

@@ -44,3 +44,5 @@ a 30 minute bound. A timeout or disconnect is still pending and is resumed
 from the same task or job ID. Polling does not wake an idle agent. Automatic
 development deployment requires the caller's authorized finish action;
 production is outside this workflow.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

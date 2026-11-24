@@ -36,3 +36,5 @@ List each stylesheet in `css`. Scope selectors under a page-specific prefix (for
 ## Releasing
 
 Add or edit the page folder inside an isolated v3_build task; changes under `ui/` release as a UI release. Afterwards verify the page appears in `GET /api/v3/pages/catalog`.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

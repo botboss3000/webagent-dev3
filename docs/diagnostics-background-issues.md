@@ -5,7 +5,7 @@ Implementation: release `9c003595-0cf5-48e4-ab89-1fecaf829b1f`, commit `4be90db6
 ## Configuration and package lifecycle
 
 The installed package owns `plugins/diagnostics/diagnostics.json`; `logs.db` lives in `/state/diagnostics/` (`bridge::data_folder()`, stream D5).
-Source templates are `config/diagnostics.json` and `src/plugin_packages/diagnostics/diagnostics.json`.
+Source templates are `src/plugin_packages/diagnostics/diagnostics.json` (the former `config/diagnostics.json` was removed in `cccd353a`).
 `bridge::folder()` normally resolves `/code/plugins/diagnostics`; `V3_PLUGIN_TEST_ROOT` is an isolated-test override.
 The loop reads settings through the UID-checked socket. Both Rust schemas must agree.
 
@@ -14,8 +14,9 @@ The loop reads settings through the UID-checked socket. Both Rust schemas must a
 ```
 
 `/enabled` is the master capture switch; `/background_issues/enabled` selects browser observations.
-`/background_issues/show_toasts` changes presentation independently. Both nested defaults are true;
-the checked-in master capture default remains false. `/background_issues/cleared_toast_seconds`
+`/background_issues/show_toasts` changes presentation independently. Both nested defaults are true,
+and the shipped template has the master capture default `true` (the Rust-side
+default for cleared-toast seconds is 3). `/background_issues/cleared_toast_seconds`
 (0–3600, default 3) is how long a recovered issue stays as "(Cleared N)"; 0 removes it at once. Hidden mode retains logging when its separate
 authorization/configuration gates permit capture. Visibility never grants capture permission.
 `V3_DIAGNOSTICS_ENABLED=false` disables host capture. No new settings editor is added.
@@ -502,3 +503,5 @@ Test helpers are deterministic fixtures, not proof of live runtime behavior.
 Configuration assessments distinguish actual JSON consumers from protocol, identity,
 accessibility and deterministic-fixture invariants; missing settings are opportunities,
 not an assertion that diagnostics configuration controls every function in a touched file.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

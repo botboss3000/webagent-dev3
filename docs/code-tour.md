@@ -12,7 +12,7 @@ Startup-resume installation configuration lives in `src/services.rs`, with its
 revisioned administrator API in `src/api/service_admin.rs`; startup recovery
 checks it before requeuing safe interrupted work. Uncertain writes still require
 reconciliation regardless of that setting.
-See [ability port ledger](ability-port-ledger.md) for explicit remaining gaps.
+See [ability migration inventory](ability-migration.md) for explicit remaining gaps.
 
 ## Jev tool selection
 
@@ -565,3 +565,5 @@ cancellation, durable recovery and publication checks remain authoritative.
 Recovery reconstructs ephemeral calls and does not persist credential-bearing
 typestate values. Typestate does not prevent concurrent database writes or
 guarantee exactly-once remote effects.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

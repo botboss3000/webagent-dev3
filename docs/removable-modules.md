@@ -55,3 +55,5 @@ Delivery claims commit before transport and are separate from agent execution.
 Unported source/channel/scheduler/clone/device implementations are reported
 unavailable. Their versioned adapter contracts do not establish live support.
 The ability remains partial until the applicable authenticated acceptance passes.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

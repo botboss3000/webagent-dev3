@@ -37,8 +37,8 @@ Details: **Compaction layout and cache reuse** below.
 
 ## Execution route and ownership
 
-The normal loop in src/agent_loop/run.rs hydrates native selection identities
-through src/context/assets.rs::hydrate, resolves current catalog and live policy,
+The normal loop in src/engine/loop/run.rs hydrates native selection identities
+through src/engine/context/assets.rs::hydrate, resolves current catalog and live policy,
 and assembles the permitted schema set. prepare_capability reads current prompt
 defaults and saved agent slots, then calls the capability-context planner.
 project obtains safe placements and schema order from context-assets.
@@ -681,3 +681,5 @@ restoration marker. Acceptance is complete; the unexplained historical anomaly
 is not a currently reproduced defect. Do not resume it or reopen implementation
 ownership for maintenance. [Session creation recovery](session-creation.md) is a
 separately verified host fix and does not establish this pause's cause.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

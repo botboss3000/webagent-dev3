@@ -127,3 +127,5 @@ until Phase 2 has subscriptions and delivery. Do not mark the whole Automation
 ability ready because this read/emission foundation exists. Event Runtime's
 outbound foundation is partial; inbound event sources and triggering agents
 remain outside Phase 1.
+
+Index: docs/index.md — update this doc's row there whenever you change it.

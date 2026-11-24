@@ -97,3 +97,5 @@ replaces nothing in them. Sections A and B state the access and background-work 
 
 Under 80 statements and 30 decrypts per model call; over 100 test runs a minute; idle loop and API
 each under 1 % of a core and under 50 statements a second.
+
+Index: docs/index.md — update this doc's row there whenever you change it.
