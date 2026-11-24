@@ -8,10 +8,11 @@
 .dash-list { max-width: 750px; }
 .dash-row { flex-wrap: wrap; row-gap: 6px; }
 /* Read-only rows never expand: no chevron slot, so titles line up with their hints. */
-.dash-row::before { display: none; }
+.ac-list .ac-ability-row.dash-row:not(.ac-saved-row)::before { display: none; }
 .dash-row .ac-ability-label { min-width: 0; }
 /* Titles (model names) and hints wrap instead of being cut off on phones. */
-.dash-row .ac-ability-name, .dash-row .ac-ability-desc { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.dash-row .ac-ability-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.dash-row .ac-ability-desc { display: block; -webkit-line-clamp: unset; overflow: visible; white-space: normal; margin-left: 0; }
 .dash-value { margin-left: auto; color: var(--fg-1); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .dash-meter { flex: 0 0 100%; order: 2; height: 4px; border-radius: 2px; background: var(--bg-tint); overflow: hidden; }
 .dash-meter-fill { display: block; height: 100%; background: var(--accent); }

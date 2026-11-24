@@ -3,8 +3,9 @@
 .plan-panel { max-width: 750px; }
 .plan-row { flex-wrap: wrap; row-gap: 4px; }
 /* Read-only rows never expand: no chevron slot, so titles line up with their hints. */
-.plan-row::before { display: none; }
-.plan-row .ac-ability-name, .plan-row .ac-ability-desc { white-space: normal; overflow: visible; text-overflow: clip; }
+.ac-list .ac-ability-row.plan-row:not(.ac-saved-row)::before { display: none; }
+.plan-row .ac-ability-name { white-space: normal; overflow: visible; text-overflow: clip; }
+.plan-row .ac-ability-desc { display: block; -webkit-line-clamp: unset; overflow: visible; white-space: normal; margin-left: 0; }
 .plan-value { margin-left: auto; color: var(--fg-1); font-variant-numeric: tabular-nums; text-align: right; }
 .plan-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .plan-status:empty { display: none; }
