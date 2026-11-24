@@ -134,7 +134,7 @@ weight to the shares that produce it. Check the result in
 
 | Setting | File and key | Default | What it does | Restart |
 | --- | --- | --- | --- | --- |
-| Number of loops | `config/engine/loop-runtime.json`, `scheduler.loops` (absent = 1) | 1 | Loop processes in the loop container; each uses up to about one processor thread. 1–16. | Read when the loop container starts: the next release. |
+| Number of loops | `config/engine/loop-runtime.json`, `scheduler.loops` (absent = 1) | 1 | Loop processes in the loop container; each uses up to about one processor thread. 1–16. | Read when the loop container starts: `docker restart webagent-dev-v3-loop` or the next release. For more than 3 loops run a release, which also raises the loop container's processor and task limits. |
 | Run ceiling | same file, `scheduler.max_active_runs` | 10 | Agent runs executing at once on the whole server, across all loops. 1–64. | Read when the loop process starts. |
 | Background workers | same file, `scheduler.max_background_workers` | 4 | Background tasks (detached tool calls, follow-ups) at once, per loop process. | Loop start. |
 | Media requests | same file, `scheduler.max_media_requests` | 8 | Media (voice, images) requests at once. | Loop start. |
@@ -177,17 +177,30 @@ states its range.
 | Weights API / loop / browser / builds | 400 / 100 / 100 / idle | Defaults. |
 | Caps | none | Use idle threads. |
 | Memory API / loop / browser | 2 / 8 / 3 GiB | Defaults; about 18 GB stays for builds (the compiler takes up to 12 GiB) and the system. |
-| Loops | 1 (2 approved by the user 2026-11-24, held: see below) | The broker also builds here (`cargo_build_jobs` 10). |
+| Loops | 2 since 2026-11-24 | User decision; the broker also builds here (`cargo_build_jobs` 10). The loop container's 1,024 tasks fit two loops (start-up peak 285 tasks). |
 | Worker container | on since 2026-11-24: 2 GiB, weight 50, 1024 tasks | The host has the worker network `webagent-worker` and its firewall unit (installed by the user); users' commands, terminals and previews no longer use the API's memory. |
 | Browsers at once | 5 per app, 4 per user | User decision 2026-11-24. |
 | Run ceiling, reserve | 10, 1 | Defaults; raise with more loops after measuring. |
 | Open databases | 64 | Default. |
 
-In force on development since 2026-11-24: builds `"idle"`, browsers 5 per app, loops 1, worker
-container on (`scheduler.worker_container: true`, release `82a6f9a0`). Two loops were switched on
-and taken back the same morning: both loops served and an interrupted run recovered once, but runs
-of ordinary (non-administrator) accounts stayed queued (leaked run slots of deleted chats, fixed
-in `4419760`), so nothing served by loop 1 could be checked; two loops wait for that recheck.
+In force on development since 2026-11-24: builds `"idle"`, browsers 5 per app, **two agent loops**
+(`scheduler.loops: 2`, switched on 09:25 by a live configuration save and a loop-container restart),
+run ceiling 10 with 1 place kept for administrators, worker container on (`scheduler.worker_container:
+true`, release `82a6f9a0`). Checked at two loops: the `multi_loop` test group passed; both loops serve
+(`loop_members` rows 0 and 1, readiness 200); runs of the administrator (loop 0) and of ordinary
+accounts on loop 0 and loop 1 start as fast as at one loop (claimed in 0.4–1.2 s); five ordinary
+accounts at once ran 2 on loop 0 and 3 on loop 1 and all completed; a loop-1 run cut off by a
+loop-container restart recovered with exactly one reply; a 60 s reminder fired exactly once for an
+account on each loop; a loop-1 account's sandbox command ran in the worker container; with six long
+runs on one agent five ran across both loops and the sixth waited while an administrator's run
+started; with 12 runs asked for, exactly 10 ran at once. Idle cost: the two loops together used
+about the same processor time as one loop (4.1 % against 3.9 % of a core over 10 minutes while
+other work ran). Session naming could not be checked at either loop count: its "system" model
+role had no answering model that day. The Dashboard and Builds pages show no loop count or
+per-loop state (the Dashboard's run counts cover only the signed-in account's runs on the current
+agent). To go back to one loop: remove `loops` from `scheduler` (administrator configuration
+save of `loop_runtime`) and restart the loop container; remove it as well before rolling back to
+a release older than `a79e8f1`.
 Checked with the worker container on: from its network the host, Tailscale peers,
 100.100.100.100, the LAN gateway and the app containers are unreachable and the internet works;
 commands of the administrator and of an ordinary account run as the worker user (1103, group
