@@ -34,6 +34,104 @@ pub(crate) async fn prepare<'a>(
 mod lifecycle_tests {
     use super::*;
     #[tokio::test]
+    /// A short component cooldown is waited out: the run continues to its model call and is
+    /// never paused, so no administrator action is needed for one lost component call.
+    async fn a_run_that_starts_during_a_cooldown_waits_instead_of_pausing() {
+        use axum::routing::post;
+        let _fence = crate::runtime_tests::COMPONENT_FAILURE_FENCE.lock().await;
+        let (_root, mut app) = crate::runtime_tests::fixture().await;
+        let mock = Router::new().route(
+            "/responses",
+            post(|| async {
+                let event = json!({"type":"response.completed","response":{"status":"completed",
+                    "output":[{"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":"done"}]}]}});
+                (
+                    [("content-type", "text/event-stream")],
+                    format!("data: {event}\n\n"),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, mock).await.unwrap();
+        });
+        app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let id = crate::runtime_tests::queued(&app, &sid).await;
+        crate::runtime_tests::running(&app, &id, "cooldown").await;
+        webagent_engine::components::fixture_pure_failure_for(
+            &app.store.root,
+            PROJECTION,
+            std::time::Duration::from_millis(600),
+        );
+        assert!(!component_available(&app.store.root, PROJECTION));
+        let started = std::time::Instant::now();
+        let task = tokio::spawn({
+            let app = app.clone();
+            let id = id.clone();
+            async move {
+                crate::agent_loop::execute_run(app, id, "cooldown".into(), CancellationToken::new())
+                    .await
+            }
+        });
+        // The whole cooldown: a run waiting for it must not become a paused run.
+        while started.elapsed() < std::time::Duration::from_millis(400) {
+            let run = app.run(&id).await.unwrap();
+            assert_ne!(
+                run["status"], "paused",
+                "a component cooldown paused the run: {}",
+                run["error"]
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        tokio::time::timeout(Duration::from_secs(30), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let done = app.run(&id).await.unwrap();
+        assert_eq!(done["status"], "completed", "{}", done["error"]);
+        assert!(done["component_pause"].is_null());
+        server.abort();
+    }
+    #[tokio::test]
+    /// A component that is gone (here: disabled) still pauses a starting run at once; only a
+    /// cooldown is waited out.
+    async fn a_disabled_component_still_pauses_a_starting_run() {
+        let _fence = crate::runtime_tests::COMPONENT_FAILURE_FENCE.lock().await;
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let id = crate::runtime_tests::queued(&app, &sid).await;
+        save_controls(
+            &app.store.root,
+            &Controls {
+                revision: 1,
+                disabled: vec![PROJECTION.into()],
+            },
+        )
+        .unwrap();
+        crate::runtime_tests::running(&app, &id, "disabled").await;
+        let started = std::time::Instant::now();
+        crate::agent_loop::execute_run(
+            app.clone(),
+            id.clone(),
+            "disabled".into(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "an unusable component must pause at once, not wait out a cooldown"
+        );
+        let paused = app.run(&id).await.unwrap();
+        assert_eq!(paused["status"], "paused");
+        assert_eq!(paused["component_pause"]["component"], PROJECTION);
+        assert!(retained_pause(&paused));
+    }
+    #[tokio::test]
     /// Restore retained component pauses only after checking current dispatch authority.
     async fn restoration_preserves_manual_pauses_and_rechecks_access() {
         let (_root, app) = crate::runtime_tests::fixture().await;

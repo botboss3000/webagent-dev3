@@ -560,7 +560,7 @@ impl<
                                 if state != "queued" {
                                     continue;
                                 }
-                                if !crate::components::available(crate::ports::AgentMetadata::root(
+                                if !crate::components::usable(crate::ports::AgentMetadata::root(
                                     user_app.store.records(),
                                 )) {
                                     complete = false;

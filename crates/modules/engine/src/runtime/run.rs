@@ -2502,9 +2502,12 @@ impl<
                     );
                     app.save(&mut run).await?;
                 }
-                if !crate::components::available(crate::ports::AgentMetadata::root(
-                    app.store.records(),
-                )) {
+                if !crate::components::ready_all(
+                    crate::ports::AgentMetadata::root(app.store.records()),
+                    &cancel,
+                )
+                .await
+                {
                     app.component_pause(&mut run).await?;
                     return Ok(());
                 }
@@ -3340,9 +3343,12 @@ impl<
                     max_bytes: model_ceiling,
                     compaction: &assembly_compaction,
                 };
-                if !crate::components::available(crate::ports::AgentMetadata::root(
-                    app.store.records(),
-                )) {
+                if !crate::components::ready_all(
+                    crate::ports::AgentMetadata::root(app.store.records()),
+                    &cancel,
+                )
+                .await
+                {
                     app.component_pause(&mut run).await?;
                     return Ok(());
                 }
@@ -3621,7 +3627,7 @@ impl<
                         let _ = drain.await;
                         return Ok(());
                     }
-                    if !crate::components::available(crate::ports::AgentMetadata::root(
+                    if !crate::components::usable(crate::ports::AgentMetadata::root(
                         app.store.records(),
                     )) {
                         app.component_pause(&mut current).await?;
@@ -4317,7 +4323,7 @@ impl<
                     let _ = collector.await;
                     return Ok(());
                 }
-                if !crate::components::available(crate::ports::AgentMetadata::root(
+                if !crate::components::usable(crate::ports::AgentMetadata::root(
                     app.store.records(),
                 )) {
                     app.component_pause(&mut current).await?;

@@ -644,6 +644,27 @@ fn record_pure_failure(root: &std::path::Path, id: &str) {
     }
     failures.insert((root.to_owned(), id.into()), now + Duration::from_secs(5));
 }
+/// How one component reads now, beside the live controls and its catalogue entry.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Availability {
+    /// Installed, enabled, every requirement usable.
+    Usable,
+    /// One call just failed; the retry may still succeed, so a run waits it out.
+    Cooling,
+    /// Missing, disabled or a requirement is: only an administrator can restore it.
+    Unusable,
+}
+/// Cool the context component after one failed call. A cancelled call is not a component
+/// failure: its run is stopping, restarting or losing its lease, and unrelated runs must not
+/// pause for it.
+fn record_context_failure(error: &anyhow::Error) {
+    note_failure(CONTEXT, error);
+    *FAILURE_UNTIL
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) =
+        Some(std::time::Instant::now() + Duration::from_secs(5));
+}
 /// Read state-root pure-engine cooldowns alongside process-wide context/background fences.
 fn component_cooling(root: &std::path::Path, id: &str) -> bool {
     let now = std::time::Instant::now();
@@ -666,17 +687,45 @@ fn component_cooling(root: &std::path::Path, id: &str) -> bool {
     failures.retain(|_, deadline| *deadline > now);
     failures.contains_key(&(root.to_owned(), id.into()))
 }
+/// Classify one component inside its validated dependency closure. A cooldown is one failed
+/// call, not an outage: [`Availability::Usable`] and [`Availability::Cooling`] both mean the
+/// component can still answer, so only `Unusable` pauses a run.
+fn availability(
+    c: &Catalog,
+    controls: &Controls,
+    root: &std::path::Path,
+    id: &str,
+) -> Availability {
+    let Some(descriptor) = c.entries.get(id) else {
+        return Availability::Unusable;
+    };
+    if controls.disabled.iter().any(|disabled| disabled == id) {
+        return Availability::Unusable;
+    }
+    let mut state = if component_cooling(root, id) {
+        Availability::Cooling
+    } else {
+        Availability::Usable
+    };
+    for dependency in &descriptor.runtime_requirements {
+        match availability(c, controls, root, dependency) {
+            Availability::Unusable => return Availability::Unusable,
+            Availability::Cooling => state = Availability::Cooling,
+            Availability::Usable => {}
+        }
+    }
+    state
+}
+/// Classify one component against the live controls and catalogue.
+fn availability_of(root: &std::path::Path, id: &str) -> Availability {
+    match (controls(root), catalog()) {
+        (Ok(controls), Ok(catalog)) => availability(&catalog, &controls, root, id),
+        _ => Availability::Unusable,
+    }
+}
 /// Include transient failures throughout the validated runtime dependency closure.
 fn runtime_available(c: &Catalog, controls: &Controls, root: &std::path::Path, id: &str) -> bool {
-    let Some(descriptor) = c.entries.get(id) else {
-        return false;
-    };
-    !component_cooling(root, id)
-        && !controls.disabled.iter().any(|disabled| disabled == id)
-        && descriptor
-            .runtime_requirements
-            .iter()
-            .all(|dependency| runtime_available(c, controls, root, dependency))
+    availability(c, controls, root, id) == Availability::Usable
 }
 /// Require every model-loop component, with no fallback on removal or cooldown.
 pub fn available(root: &std::path::Path) -> bool {
@@ -686,9 +735,67 @@ pub fn available(root: &std::path::Path) -> bool {
 }
 /// Resolve one installed component, its live controls and transient dependency failures.
 pub fn component_available(root: &std::path::Path, id: &str) -> bool {
-    match (controls(root), catalog()) {
-        (Ok(controls), Ok(catalog)) => runtime_available(&catalog, &controls, root, id),
-        _ => false,
+    availability_of(root, id) == Availability::Usable
+}
+/// Whether a component can answer at all once its cooldown ends; a disabled or withdrawn
+/// component is never usable, and a run pauses at once for it.
+pub fn component_usable(root: &std::path::Path, id: &str) -> bool {
+    availability_of(root, id) != Availability::Unusable
+}
+/// Every model-loop component usable, ignoring the short failure cooldown.
+pub fn usable(root: &std::path::Path) -> bool {
+    WORKING_COMPONENTS
+        .iter()
+        .all(|id| component_usable(root, id))
+}
+/// One failed call cools a component for 5 s ([`record_pure_failure`]); a run waits that
+/// out, with a second of margin, before it treats the component as down. That bound is not
+/// live-tunable: the cooldown it covers is not either (component descriptors carry limits).
+const READY_WAIT: Duration = Duration::from_millis(6000);
+const READY_POLL: Duration = Duration::from_millis(50);
+/// Wait until one component may be called. False means the caller pauses its run: the
+/// component is unusable, or it stayed cooling past the wait (it is really down).
+pub async fn ready(root: &std::path::Path, id: &str, cancel: &CancellationToken) -> bool {
+    wait_ready(root, Some(id), cancel).await
+}
+/// The same wait for every model-loop component, as a run's start gate needs.
+pub async fn ready_all(root: &std::path::Path, cancel: &CancellationToken) -> bool {
+    wait_ready(root, None, cancel).await
+}
+async fn wait_ready(root: &std::path::Path, id: Option<&str>, cancel: &CancellationToken) -> bool {
+    let deadline = std::time::Instant::now() + READY_WAIT;
+    loop {
+        let state = match id {
+            Some(id) => availability_of(root, id),
+            None => {
+                let mut state = Availability::Usable;
+                for working in WORKING_COMPONENTS {
+                    match availability_of(root, working) {
+                        Availability::Unusable => return false,
+                        Availability::Cooling => state = Availability::Cooling,
+                        Availability::Usable => {}
+                    }
+                }
+                state
+            }
+        };
+        match state {
+            Availability::Usable => return true,
+            Availability::Unusable => return false,
+            Availability::Cooling => {}
+        }
+        // A cancelled run is not a component fault: the caller's cancellation path decides
+        // (restart recovery keeps it running), so proceed and let the call report it.
+        if cancel.is_cancelled() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::select! {
+            _ = cancel.cancelled() => return true,
+            _ = tokio::time::sleep(READY_POLL) => {}
+        }
     }
 }
 /// Pure preparation is valid only while its pinned catalog and live controls survive.
@@ -814,6 +921,7 @@ async fn background_smoke() -> Result<Vec<Value>> {
     #[cfg(feature = "live-context")]
     let process = Service {
         runtime: StdMutex::new(None),
+        suspect: std::sync::atomic::AtomicBool::new(false),
         connection: tokio::sync::Mutex::new(None),
         admission: Arc::new(tokio::sync::Semaphore::new(1)),
         executable: StdMutex::new(
@@ -914,6 +1022,7 @@ async fn boot_smoke() -> Result<Vec<Value>> {
     #[cfg(feature = "live-context")]
     let process = Service {
         runtime: StdMutex::new(None),
+        suspect: std::sync::atomic::AtomicBool::new(false),
         connection: tokio::sync::Mutex::new(None),
         admission: Arc::new(tokio::sync::Semaphore::new(1)),
         executable: StdMutex::new(std::env::current_exe()?.with_file_name("webagent-boot-service")),
@@ -1023,6 +1132,7 @@ fn smoke_service(package: &str) -> Result<Service> {
     }
     Ok(Service {
         runtime: StdMutex::new(None),
+        suspect: std::sync::atomic::AtomicBool::new(false),
         connection: tokio::sync::Mutex::new(None),
         admission: Arc::new(tokio::sync::Semaphore::new(1)),
         executable: StdMutex::new(executable),
@@ -1376,6 +1486,7 @@ pub async fn context_smoke() -> Result<Value> {
         }
         Service {
             runtime: StdMutex::new(None),
+            suspect: std::sync::atomic::AtomicBool::new(false),
             connection: tokio::sync::Mutex::new(None),
             admission: Arc::new(tokio::sync::Semaphore::new(1)),
             executable: StdMutex::new(executable),
@@ -1560,6 +1671,24 @@ struct Service {
     /// The process keeps one runtime, so this matters when separate runtimes share a service
     /// (each test has its own); a connection from a runtime that has shut down is replaced.
     runtime: StdMutex<Option<(std::sync::Weak<()>, tokio::sync::oneshot::Sender<()>)>>,
+    /// Set when a call future was dropped mid-request (run cancelled, lease lost, loop
+    /// stopping): its reply stays in the pipe, so the next call replaces the service instead
+    /// of reading an answer that belongs to the dropped call.
+    suspect: std::sync::atomic::AtomicBool,
+}
+/// Marks the pipe suspect when a request was written but its call future was dropped before
+/// the reply was read.
+struct SuspectGuard<'a> {
+    flag: &'a std::sync::atomic::AtomicBool,
+    wrote: &'a std::sync::atomic::AtomicBool,
+    clean: bool,
+}
+impl Drop for SuspectGuard<'_> {
+    fn drop(&mut self) {
+        if !self.clean && self.wrote.load(std::sync::atomic::Ordering::Acquire) {
+            self.flag.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
 }
 type Services = BTreeMap<String, Arc<Service>>;
 static SERVICES: OnceLock<StdMutex<Services>> = OnceLock::new();
@@ -1594,6 +1723,7 @@ fn service(c: &Catalog, d: &Descriptor) -> Result<Arc<Service>> {
         executable: StdMutex::new(executable),
         limits: d.limits.clone(),
         runtime: StdMutex::new(None),
+        suspect: std::sync::atomic::AtomicBool::new(false),
     });
     map.insert(key, value.clone());
     Ok(value)
@@ -1606,6 +1736,13 @@ impl Service {
         let mut guard = tokio::time::timeout_at(deadline, self.connection.lock())
             .await
             .map_err(|_| anyhow!("Engine cleanup queue timeout"))?;
+        if self
+            .suspect
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            *guard = None;
+            return Ok(());
+        }
         let Some((_, writer, reader)) = guard.as_mut() else {
             return Ok(());
         };
@@ -1640,6 +1777,11 @@ impl Service {
         result
     }
     /// Private inherited pipes authenticate the peer; requests cannot select sockets or executables.
+    /// One failed call is retried once on a fresh connection before it counts as a component
+    /// failure: a stale reply (the call whose future was dropped), a queue that timed out under
+    /// load or a closed pipe clears the same way, and no other run should pause for it. A call
+    /// future dropped from outside marks the pipe suspect, so the next call never reads the
+    /// reply that outlived it.
     async fn call<T: serde::Serialize>(
         &self,
         run_key: &str,
@@ -1648,96 +1790,152 @@ impl Service {
     ) -> Result<Value> {
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
         let deadline = tokio::time::Instant::now() + Duration::from_millis(self.limits.timeout_ms);
-        let _permit = self
-            .admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| anyhow!("Engine service saturated"))?;
-        let id = uuid();
-        let payload =
-            serde_json::to_vec(&json!({"version":1,"id":id,"run_key":run_key,"input":input}))?;
-        if payload.len() + 1 > self.limits.max_request_bytes {
-            anyhow::bail!("Engine request limit");
-        }
-        let mut connection = tokio::select! {_=cancel.cancelled()=>return Err(anyhow!("Engine call cancelled")),guard=tokio::time::timeout_at(deadline,self.connection.lock())=>guard.map_err(|_|anyhow!("Engine queue timeout"))?};
-        let runtime_alive = self
-            .runtime
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .is_some_and(|(alive, _)| alive.upgrade().is_some());
-        if !runtime_alive {
-            *connection = None;
-        }
-        let action = async {
-            if connection.is_none() {
-                let executable = self
-                    .executable
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
-                let sandbox = crate::sandbox::prepare(&executable)?;
-                let mut command = tokio::process::Command::new(&executable);
-                #[cfg(unix)]
-                unsafe {
-                    command.pre_exec(move || sandbox.apply());
-                }
-                #[cfg(not(unix))]
-                let _ = sandbox;
-                let mut child = command
-                    .env_clear()
-                    .current_dir("/")
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::null())
-                    .kill_on_drop(true)
-                    .spawn()?;
-                let input = child
-                    .stdin
-                    .take()
-                    .ok_or_else(|| anyhow!("Engine pipe unavailable"))?;
-                let output = child
-                    .stdout
-                    .take()
-                    .ok_or_else(|| anyhow!("Engine pipe unavailable"))?;
-                *connection = Some((child, input, tokio::io::BufReader::new(output)));
-                // A task on this runtime holds the token; it ends with the runtime or when a
-                // later connection replaces this one and drops the sender.
-                let token = Arc::new(());
-                let (replaced, stopped) = tokio::sync::oneshot::channel::<()>();
-                let alive = Arc::downgrade(&token);
-                tokio::spawn(async move {
-                    let _token = token;
-                    let _ = stopped.await;
-                });
-                *self.runtime.lock().unwrap_or_else(|e| e.into_inner()) = Some((alive, replaced));
+        let _permit = tokio::select! {
+            _ = cancel.cancelled() => return Err(anyhow!("Engine call cancelled")),
+            permit = tokio::time::timeout_at(deadline, self.admission.clone().acquire_owned()) => {
+                permit
+                    .map_err(|_| anyhow!("Engine queue timeout"))?
+                    .map_err(|_| anyhow!("Engine service closed"))?
             }
-            let (_, writer, reader) = connection
-                .as_mut()
-                .ok_or_else(|| anyhow!("Engine connection unavailable"))?;
-            writer.write_all(&payload).await?;
-            writer.write_all(b"\n").await?;
-            writer.flush().await?;
-            let mut bytes = Vec::new();
-            reader
-                .take((self.limits.max_response_bytes + 1) as u64)
-                .read_until(b'\n', &mut bytes)
-                .await?;
-            if bytes.len() > self.limits.max_response_bytes || bytes.last() != Some(&b'\n') {
-                anyhow::bail!("Engine response limit");
-            }
-            let response: Value = serde_json::from_slice(&bytes)?;
-            if response["version"] != 1 || response["id"] != id {
-                anyhow::bail!("Engine response identity");
-            }
-            Ok::<_, anyhow::Error>(response["result"].clone())
         };
-        let result = tokio::select! {_=cancel.cancelled()=>Err(anyhow!("Engine call cancelled")),result=tokio::time::timeout_at(deadline,action)=>result.unwrap_or_else(|_|Err(anyhow!("Engine call timeout")))};
-        if result.is_err() {
-            *connection = None;
+        let wrote = std::sync::atomic::AtomicBool::new(false);
+        let mut pipe = SuspectGuard {
+            flag: &self.suspect,
+            wrote: &wrote,
+            clean: false,
+        };
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let id = uuid();
+            let payload =
+                serde_json::to_vec(&json!({"version":1,"id":id,"run_key":run_key,"input":input}))?;
+            if payload.len() + 1 > self.limits.max_request_bytes {
+                anyhow::bail!("Engine request limit");
+            }
+            let mut connection = tokio::select! {_=cancel.cancelled()=>return Err(anyhow!("Engine call cancelled")),guard=tokio::time::timeout_at(deadline,self.connection.lock())=>guard.map_err(|_|anyhow!("Engine queue timeout"))?};
+            let runtime_alive = self
+                .runtime
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_some_and(|(alive, _)| alive.upgrade().is_some());
+            // A dropped call's reply and a dead runtime both mean this pipe cannot be trusted.
+            if !runtime_alive
+                || self
+                    .suspect
+                    .swap(false, std::sync::atomic::Ordering::AcqRel)
+            {
+                *connection = None;
+            }
+            let action = async {
+                if connection.is_none() {
+                    let executable = self
+                        .executable
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    let sandbox = crate::sandbox::prepare(&executable)?;
+                    let mut command = tokio::process::Command::new(&executable);
+                    #[cfg(unix)]
+                    unsafe {
+                        command.pre_exec(move || sandbox.apply());
+                    }
+                    #[cfg(not(unix))]
+                    let _ = sandbox;
+                    let mut child = command
+                        .env_clear()
+                        .current_dir("/")
+                        .stdin(std::process::Stdio::piped())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::null())
+                        .kill_on_drop(true)
+                        .spawn()?;
+                    let input = child
+                        .stdin
+                        .take()
+                        .ok_or_else(|| anyhow!("Engine pipe unavailable"))?;
+                    let output = child
+                        .stdout
+                        .take()
+                        .ok_or_else(|| anyhow!("Engine pipe unavailable"))?;
+                    *connection = Some((child, input, tokio::io::BufReader::new(output)));
+                    // A task on this runtime holds the token; it ends with the runtime or when a
+                    // later connection replaces this one and drops the sender.
+                    let token = Arc::new(());
+                    let (replaced, stopped) = tokio::sync::oneshot::channel::<()>();
+                    let alive = Arc::downgrade(&token);
+                    tokio::spawn(async move {
+                        let _token = token;
+                        let _ = stopped.await;
+                    });
+                    *self.runtime.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some((alive, replaced));
+                }
+                let (_, writer, reader) = connection
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("Engine connection unavailable"))?;
+                // From here a reply may exist even if this future is dropped.
+                wrote.store(true, std::sync::atomic::Ordering::Release);
+                writer.write_all(&payload).await?;
+                writer.write_all(b"\n").await?;
+                writer.flush().await?;
+                let mut bytes = Vec::new();
+                reader
+                    .take((self.limits.max_response_bytes + 1) as u64)
+                    .read_until(b'\n', &mut bytes)
+                    .await?;
+                if bytes.len() > self.limits.max_response_bytes || bytes.last() != Some(&b'\n') {
+                    anyhow::bail!("Engine response limit");
+                }
+                let response: Value = serde_json::from_slice(&bytes)?;
+                if response["version"] != 1 || response["id"] != id {
+                    anyhow::bail!("Engine response identity");
+                }
+                Ok::<_, anyhow::Error>(response["result"].clone())
+            };
+            let result = tokio::select! {_=cancel.cancelled()=>Err(anyhow!("Engine call cancelled")),result=tokio::time::timeout_at(deadline,action)=>result.unwrap_or_else(|_|Err(anyhow!("Engine call timeout")))};
+            if result.is_err() {
+                *connection = None;
+            }
+            match result {
+                Ok(value) => {
+                    pipe.clean = true;
+                    return Ok(value);
+                }
+                Err(error) => {
+                    drop(connection);
+                    let retry = attempt < 2
+                        && transient_call_error(&error)
+                        && !cancel.is_cancelled()
+                        && tokio::time::Instant::now() < deadline;
+                    if !retry {
+                        pipe.clean = true;
+                        return Err(error);
+                    }
+                    // Let the old process exit before the fresh one takes the pipe.
+                    tokio::select! {
+                        _ = cancel.cancelled() => {
+                            pipe.clean = true;
+                            return Err(anyhow!("Engine call cancelled"));
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                    }
+                }
+            }
         }
-        result
     }
+}
+/// Failures that a fresh connection and one retry can clear. Fixed host limits and an explicit
+/// cancellation repeat, so they are not retried.
+fn transient_call_error(error: &anyhow::Error) -> bool {
+    const FIXED: [&str; 3] = [
+        "Engine request limit",
+        "Engine response limit",
+        "Engine call cancelled",
+    ];
+    let text = format!("{error:#}");
+    !FIXED.iter().any(|fixed| text.starts_with(fixed))
 }
 /// Decode a closed response envelope before any typed contract result is accepted.
 fn decode_pure_response<R: serde::de::DeserializeOwned>(
@@ -1780,7 +1978,7 @@ async fn pure_call<T: serde::Serialize, R: serde::de::DeserializeOwned>(
     field: &str,
     validate: impl Fn(&T, &R) -> Result<()>,
 ) -> Result<R> {
-    if !component_available(root, id) {
+    if !ready(root, id, cancel).await {
         anyhow::bail!("Required context component unavailable");
     }
     let catalog = catalog()?;
@@ -1821,7 +2019,7 @@ pub async fn assets_plan(
     cancel: &CancellationToken,
 ) -> Result<webagent_assets_contracts::Plan> {
     webagent_assets_contracts::validate_request(input)?;
-    if !component_available(root, ASSETS) {
+    if !component_usable(root, ASSETS) {
         anyhow::bail!("Context assets component unavailable");
     }
     let revision = catalog()?.revision.clone();
@@ -1851,7 +2049,7 @@ pub async fn capability_prepare(
     cancel: &CancellationToken,
 ) -> Result<webagent_capability_contracts::PreparedCapability> {
     webagent_capability_contracts::validate_request(input)?;
-    if !component_available(root, CAPABILITY) {
+    if !component_usable(root, CAPABILITY) {
         anyhow::bail!("Capability component unavailable");
     }
     let revision = catalog()?.revision.clone();
@@ -1881,7 +2079,7 @@ pub async fn provider_project(
     cancel: &CancellationToken,
 ) -> Result<webagent_provider_contracts::ResultV1> {
     webagent_provider_contracts::validate_request(input)?;
-    if !component_available(root, PROJECTION) {
+    if !component_usable(root, PROJECTION) {
         anyhow::bail!("Provider projection component unavailable");
     }
     let revision = catalog()?.revision.clone();
@@ -1941,12 +2139,15 @@ pub async fn background_plan(
         match result {
             Ok(plan) => plan,
             Err(error) => {
-                note_failure(BACKGROUND, &error);
                 *service.connection.lock().await = None;
-                background_failures().insert(
-                    root.to_owned(),
-                    std::time::Instant::now() + Duration::from_secs(5),
-                );
+                // A stop is not a background-component failure; other accounts must not cool.
+                if !stop.is_cancelled() {
+                    note_failure(BACKGROUND, &error);
+                    background_failures().insert(
+                        root.to_owned(),
+                        std::time::Instant::now() + Duration::from_secs(5),
+                    );
+                }
                 return Err(error);
             }
         }
@@ -2071,7 +2272,7 @@ pub async fn tool_results_plan(
     input: &webagent_context_contracts::tool_results::Request,
     cancel: &CancellationToken,
 ) -> Result<webagent_context_contracts::tool_results::Plan> {
-    if !available(root) {
+    if !ready_all(root, cancel).await {
         anyhow::bail!("Context component unavailable for result projection");
     }
     let catalog = catalog()?;
@@ -2106,13 +2307,10 @@ pub async fn tool_results_plan(
         match result {
             Ok(plan) => plan,
             Err(error) => {
-                note_failure(CONTEXT, &error);
                 *service.connection.lock().await = None;
-                *FAILURE_UNTIL
-                    .get_or_init(|| StdMutex::new(None))
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) =
-                    Some(std::time::Instant::now() + Duration::from_secs(5));
+                if !cancel.is_cancelled() {
+                    record_context_failure(&error);
+                }
                 return Err(error);
             }
         }
@@ -2134,7 +2332,7 @@ pub async fn prepare<'a>(
     state: &mut context_accounting::ContextAccounting,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<context_assembly::Prepared<'a>> {
-    if !available(root) {
+    if !ready_all(root, cancel).await {
         anyhow::bail!("Engine component unavailable");
     }
     #[cfg(feature = "linked-context")]
@@ -2172,12 +2370,9 @@ pub async fn prepare<'a>(
         let response = match service.call(&run_key, &input, cancel).await {
             Ok(response) => response,
             Err(error) => {
-                note_failure(CONTEXT, &error);
-                *FAILURE_UNTIL
-                    .get_or_init(|| StdMutex::new(None))
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) =
-                    Some(std::time::Instant::now() + Duration::from_secs(5));
+                if !cancel.is_cancelled() {
+                    record_context_failure(&error);
+                }
                 return Err(error);
             }
         };
@@ -2600,6 +2795,62 @@ mod tests {
             assert!(!component_cooling(first.path(), id));
         }
     }
+    /// A cooldown means "wait for the retry", not "the component is gone": only removal or
+    /// disabling is `Unusable`, and only that may pause a run.
+    #[test]
+    fn availability_separates_a_cooldown_from_removal() {
+        let root = tempfile::tempdir().unwrap();
+        let mut projection = descriptor();
+        projection.id = PROJECTION.into();
+        projection.runtime_requirements = Vec::new();
+        let catalog = Catalog {
+            revision: "fixture".into(),
+            root: None,
+            entries: BTreeMap::from([(PROJECTION.to_owned(), projection)]),
+            withdrawn: Default::default(),
+        };
+        let controls = Controls::default();
+        assert_eq!(
+            availability(&catalog, &controls, root.path(), PROJECTION),
+            Availability::Usable
+        );
+        fixture_pure_failure_for(root.path(), PROJECTION, Duration::from_millis(200));
+        assert_eq!(
+            availability(&catalog, &controls, root.path(), PROJECTION),
+            Availability::Cooling
+        );
+        let disabled = Controls {
+            revision: 1,
+            disabled: vec![PROJECTION.into()],
+        };
+        assert_eq!(
+            availability(&catalog, &disabled, root.path(), PROJECTION),
+            Availability::Unusable
+        );
+        assert_eq!(
+            availability(&catalog, &controls, root.path(), ASSETS),
+            Availability::Unusable
+        );
+    }
+    /// One lost call is retried; a host limit or an explicit cancellation repeats.
+    #[test]
+    fn transient_component_errors_retry_but_fixed_limits_do_not() {
+        for retried in [
+            "Engine response identity",
+            "Engine queue timeout",
+            "Engine call timeout",
+            "Engine connection unavailable",
+        ] {
+            assert!(transient_call_error(&anyhow!("{retried}")), "{retried}");
+        }
+        for fixed in [
+            "Engine call cancelled",
+            "Engine request limit",
+            "Engine response limit",
+        ] {
+            assert!(!transient_call_error(&anyhow!("{fixed}")), "{fixed}");
+        }
+    }
     /// A retained explicit component identity survives another component's disable.
 
     /// Closed envelopes reject forged status/version/fields for every new operation.
@@ -2804,4 +3055,17 @@ fn offline_smoke_uses_frozen_descriptor_versions() {
 #[cfg(any(test, feature = "test-support"))]
 pub fn fixture_background_failure_for(root: &std::path::Path, duration: Duration) {
     background_failures().insert(root.to_owned(), std::time::Instant::now() + duration);
+}
+/// Existing root integration fixture: a pure component's short failure cooldown, at a length a
+/// test can wait out. Unavailable in ordinary linked/live production builds.
+#[cfg(any(test, feature = "test-support"))]
+pub fn fixture_pure_failure_for(root: &std::path::Path, id: &str, duration: Duration) {
+    PURE_FAILURE_UNTIL
+        .get_or_init(|| StdMutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(
+            (root.to_owned(), id.into()),
+            std::time::Instant::now() + duration,
+        );
 }
