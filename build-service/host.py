@@ -1087,6 +1087,28 @@ class DockerHTTP(http.client.HTTPConnection):
         self.sock.connect("/var/run/docker.sock")
 
 
+def configured_loops():
+    """The app's `scheduler.loops` (agent-loop processes in the loop container) from the live
+    checkout's `config/engine/loop-runtime.json`; 1 when absent or unreadable."""
+    try:
+        value = json.loads((SOURCE / "config/engine/loop-runtime.json").read_text())["scheduler"].get("loops", 1)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return 1
+    return value if type(value) is int and 1 <= value <= 16 else 1
+
+
+def loop_limits(previous, loops):
+    """The loop container's CPU and task limits for `loops` loop processes: at least one CPU
+    per loop and one for its helpers (a container without a CPU limit keeps none), and at
+    least 512 tasks per loop for their start-up bursts. One loop keeps the values it has."""
+    host = dict(previous)
+    if loops > 1:
+        if host.get("NanoCpus"):
+            host["NanoCpus"] = max(host["NanoCpus"], (loops + 1) * 10**9)
+        host["PidsLimit"] = max(host.get("PidsLimit") or 0, 512 * loops)
+    return host
+
+
 def loop_plugin_mounts(previous):
     """Expose live removable packages without granting checkout write access."""
     host = dict(previous)
@@ -2638,6 +2660,9 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                     "webagent.release.role":"api"if name==TARGETS[0]else"loop","webagent.release.instance":CONFIG["instance"]}
         if name == TARGETS[1]:
             host = loop_plugin_mounts(host)
+            if release_root is not None:
+                # Several agent-loop processes run in this one container (multi-loop).
+                host = loop_limits(host, configured_loops())
         # Container-id-derived values must not be reused. Preserve configured
         # mounts, network, limits, ports, restart policy and security options.
         host.pop("ContainerIDFile", None)

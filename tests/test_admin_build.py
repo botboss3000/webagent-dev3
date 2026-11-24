@@ -894,6 +894,27 @@ class BuildTests(unittest.TestCase):
                          mounted["Mounts"][-1])
         self.assertFalse(any(m["Target"] == "/code" for m in mounted["Mounts"]))
 
+    def test_loop_container_limits_grow_with_the_loop_count_only(self):
+        previous = {"NanoCpus": 4 * 10**9, "PidsLimit": 1024, "Memory": 8 * 1024**3}
+        self.assertEqual(previous, host.loop_limits(previous, 1))
+        self.assertEqual(previous, host.loop_limits(previous, 2))
+        four = host.loop_limits(previous, 4)
+        self.assertEqual(5 * 10**9, four["NanoCpus"])
+        self.assertEqual(2048, four["PidsLimit"])
+        self.assertEqual(previous["Memory"], four["Memory"])
+        self.assertEqual(4 * 10**9, previous["NanoCpus"])
+        # No CPU limit stays none; a missing task limit gets one.
+        self.assertEqual(0, host.loop_limits({"NanoCpus": 0}, 3)["NanoCpus"])
+        self.assertEqual(1536, host.loop_limits({}, 3)["PidsLimit"])
+        with tempfile.TemporaryDirectory() as folder, patch.object(host, "SOURCE", Path(folder)):
+            self.assertEqual(1, host.configured_loops())
+            config = Path(folder) / "config/engine"
+            config.mkdir(parents=True)
+            (config / "loop-runtime.json").write_text('{"scheduler":{"loops":3}}')
+            self.assertEqual(3, host.configured_loops())
+            (config / "loop-runtime.json").write_text('{"scheduler":{"loops":99}}')
+            self.assertEqual(1, host.configured_loops())
+
     def test_loop_live_plugin_mount_replaces_both_inherited_forms(self):
         previous = {"Mounts": [{"Type": "bind", "Source": "/wrong",
                                "Target": "/code/plugins", "ReadOnly": False}],
