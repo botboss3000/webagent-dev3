@@ -90,6 +90,8 @@ replaces nothing in them. Sections A and B state the access and background-work 
    what is left. A session's last reply starts with its `FINAL:` line.
 5. The usual release rules of this checkout's `AGENTS.md` and the `codebase_admin` skill: broker task, healthy release, exact commit, claims
    released, no push without the user.
+6. A queued apply is kept and applied at your turn when it still fits current source (receipt
+   `rebased: true`); do not abandon and begin a new task because a release moved your files.
 
 ## Current targets
 
