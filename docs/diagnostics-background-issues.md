@@ -4,7 +4,7 @@ Implementation: release `9c003595-0cf5-48e4-ab89-1fecaf829b1f`, commit `4be90db6
 
 ## Configuration and package lifecycle
 
-The installed package owns `plugins/diagnostics/diagnostics.json` and `logs.db`.
+The installed package owns `plugins/diagnostics/diagnostics.json`; `logs.db` lives in `/state/diagnostics/` (`bridge::data_folder()`, stream D5).
 Source templates are `config/diagnostics.json` and `src/plugin_packages/diagnostics/diagnostics.json`.
 `bridge::folder()` normally resolves `/code/plugins/diagnostics`; `V3_PLUGIN_TEST_ROOT` is an isolated-test override.
 The loop reads settings through the UID-checked socket. Both Rust schemas must agree.

@@ -155,7 +155,13 @@ async fn installation_id(root: &Path) -> anyhow::Result<String> {
     tokio::fs::write(&temporary, &fresh).await?;
     tokio::fs::File::open(&temporary).await?.sync_all().await?;
     let published = if tokio::fs::try_exists(&path).await? {
-        // An existing file that is not a valid ID (for example emptied by a power loss) is replaced.
+        // A concurrent first use may have published a valid ID since the read above (the ID
+        // appears complete: hard link or rename); keep it. Only an existing file that is not a
+        // valid ID (for example emptied by a power loss) is replaced.
+        if let Some(id) = read().await {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Ok(id);
+        }
         tokio::fs::rename(&temporary, &path).await
     } else {
         match tokio::fs::hard_link(&temporary, &path).await {

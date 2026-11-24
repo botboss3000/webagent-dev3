@@ -102,15 +102,15 @@ impl Store {
     }
     /// Bytes of the given sessions' (`session:<id>` keys) folders, from the worker's files.
     async fn folder_bytes_of(ids: Vec<String>) -> Result<std::collections::HashMap<String, u64>> {
+        // The worker writes these beside its socket: `runtime/worker` for a worker inside the API
+        // container, the worker container's folder (`V3_TOOL_SOCKET`, stream D4) otherwise.
+        let worker_folder = std::env::var_os("V3_TOOL_SOCKET")
+            .map(std::path::PathBuf::from)
+            .and_then(|socket| socket.parent().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(|| webagent_configuration::paths::runtime().join("worker"));
         let published = |variable: &str, file: &str| {
-            std::env::var_os(variable).map_or_else(
-                || {
-                    webagent_configuration::paths::runtime()
-                        .join("worker")
-                        .join(file)
-                },
-                std::path::PathBuf::from,
-            )
+            std::env::var_os(variable)
+                .map_or_else(|| worker_folder.join(file), std::path::PathBuf::from)
         };
         let files = [
             published("V3_BROWSER_USAGE", "browser-usage.json"),

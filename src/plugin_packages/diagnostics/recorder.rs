@@ -147,7 +147,7 @@ pub async fn init<S: SnapshotStore>(cell: &'static OnceLock<Recorder<S>>, root: 
     }
     bridge::init(root, role).await;
     // Package absence disables capture; never recreate a removed package.
-    let folder = bridge::folder();
+    let folder = bridge::data_folder();
     let path = std::path::PathBuf::from(Config::LIVE);
     let loop_role = role == "loop";
     let pool = match reader(&folder) {
@@ -833,8 +833,8 @@ pub async fn read<S: SnapshotStore>(
     {
         return Err(Error::bad("Invalid diagnostic filter"));
     }
-    let folder = bridge::folder();
-    if !folder.join("logs.db").is_file() {
+    let folder = bridge::data_folder();
+    if bridge::database().is_none() {
         return Ok(json!({"enabled":false,"records":[]}));
     }
     let pool = reader(&folder)?;
@@ -851,8 +851,8 @@ pub async fn status<S: SnapshotStore>(recorder: Option<&Recorder<S>>) -> Result<
     let Some(r) = recorder else {
         return Ok(json!({"available":false,"enabled":false}));
     };
-    let folder = bridge::folder();
-    if !folder.join("logs.db").is_file() {
+    let folder = bridge::data_folder();
+    if bridge::database().is_none() {
         return Ok(json!({"available":false,"current_process":status_value(r)}));
     }
     let pool = reader(&folder)?;
@@ -896,8 +896,8 @@ pub async fn context<S: SnapshotStore>(
             "Snapshot unavailable".into(),
         ));
     };
-    let folder = bridge::folder();
-    if !folder.join("logs.db").is_file() {
+    let folder = bridge::data_folder();
+    if bridge::database().is_none() {
         return Err(Error(
             axum::http::StatusCode::NOT_FOUND,
             "Snapshot unavailable".into(),

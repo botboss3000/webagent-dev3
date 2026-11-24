@@ -44,7 +44,7 @@ all allocator overhead. Serialization/encryption/writes occur in the background,
 except bounded input measurement and making the owned selected-session copy.
 Oversized snapshots are skipped whole. Capture errors never pause chat.
 
-The archive is `plugins/diagnostics/logs.db`; this is operational evidence, not a
+The archive is `/state/diagnostics/logs.db` (before stream D5: `plugins/diagnostics/logs.db`); this is operational evidence, not a
 session database. Five-second reload/status heartbeats and 120-second bounded
 retention pruning continue while capture is disabled. Disabling discards queued
 unwritten evidence; it does not delete retained evidence. Retention byte limits
@@ -94,4 +94,4 @@ Measurements cover fixture capture cost and retained bytes, not complete service
 latency or allocator counts. Use the pinned remote Rust environment and capture
 source inputs before and after each run.
 
-The installed package owns diagnostics.json and logs.db (including SQLite WAL sidecars). Removing the folder removes archive access and capture; moving it preserves its settings and evidence. The host does not recreate it. Ephemeral socket/PID/ready files remain under /state/diagnostics. Snapshot ciphertext still requires the originating installation key to decrypt; a package alone does not carry that key.
+The installed package (`plugins/diagnostics/`) holds diagnostics.json and the executable. Since stream D5 (the API mounts the checkout read-only) the archive `logs.db` and its SQLite WAL sidecars live in `/state/diagnostics/` beside the plugin's socket, PID and ready files (`bridge::data_folder()`); the first start after the move copied the old package database there once. Removing the package folder still removes archive access and capture (the database is kept and comes back with the package). The host does not recreate the package. Snapshot ciphertext still requires the originating installation key to decrypt.

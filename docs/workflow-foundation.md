@@ -267,15 +267,15 @@ transaction. No deployment or end-to-end acceptance is implied by these modules.
 
 ## Live diagnostic plugin archive
 
-`plugins/diagnostics/logs.db` owns fixed-admin operational evidence and sealed
+`/state/diagnostics/logs.db` owns fixed-admin operational evidence and sealed
 context snapshots. The standalone diagnostics process writes and prunes it; the
 trusted core bridge provides authenticated read-only projections without creating
 archive files. Existing seven-day metadata and 24-hour snapshot defaults remain.
 No plugin reads session databases through the protocol, and credentials/keys are
 never transmitted. Installed executables run as administrator-trusted application
-code, not as untrusted tool workers. The archive and operational config travel with the installed package.
+code, not as untrusted tool workers. The operational config travels with the installed package.
 
-The installed package owns diagnostics.json and logs.db (including SQLite WAL sidecars). Removing the folder removes archive access and capture; moving it preserves its settings and evidence. The host does not recreate it. Ephemeral socket/PID/ready files remain under /state/diagnostics. Snapshot ciphertext still requires the originating installation key to decrypt; a package alone does not carry that key.
+The installed package (`plugins/diagnostics/`) holds diagnostics.json and the executable. Since stream D5 (the API mounts the checkout read-only) the archive `logs.db` and its SQLite WAL sidecars live in `/state/diagnostics/` beside the plugin's socket, PID and ready files (`bridge::data_folder()`); the first start after the move copied the old package database there once. Removing the package folder still removes archive access and capture (the database is kept and comes back with the package). The host does not recreate the package. Snapshot ciphertext still requires the originating installation key to decrypt.
 
 ## Session naming configuration
 

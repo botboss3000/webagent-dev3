@@ -1,5 +1,5 @@
 """Portable configuration and persistent build admission contract."""
-import importlib.util,tempfile,time,types,unittest,uuid,json
+import importlib.util,os,stat,tempfile,time,types,unittest,uuid,json
 from pathlib import Path
 from unittest.mock import patch
 import test_admin_build as fixtures
@@ -2986,6 +2986,90 @@ class CheckoutGitTests(unittest.TestCase):
 
 
 
+class SocketMountTests(unittest.TestCase):
+    """Stream D5: with the worker container the API and loop mount only their socket folders and the
+    API runs without its launcher, capabilities or checkout writes; switched off, as before."""
+    FOLDERS=("build","host","files","board","control","worker-c","ability-live","promote","worker","browser","worker-legacy")
+    def host(self,runtime,api=True):
+        mounts=[{"Type":"bind","Source":str(runtime),"Target":"/runtime","ReadOnly":False},
+                {"Type":"bind","Source":"/srv/c","Target":"/code","ReadOnly":not api},
+                {"Type":"bind","Source":"/srv/s","Target":"/state","ReadOnly":False}]
+        if not api:mounts.append({"Type":"bind","Source":"/srv/gate","Target":"/runtime/gate","ReadOnly":False})
+        return {"Mounts":mounts,"CapAdd":list(fixtures.host.LAUNCHER_CAPS),"CapDrop":["ALL"],"GroupAdd":[] if api else ["1105"]}
+    def runtime(self,folder):
+        for name in self.FOLDERS:(Path(folder)/name).mkdir()
+        (Path(folder)/"local-models-link").symlink_to(Path(folder)/"host")
+        return Path(folder)
+    def test_external_api_mounts_only_its_socket_folders_and_runs_without_capabilities(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime=self.runtime(folder)
+            config,host=fixtures.host.runtime_layout({"Cmd":["/usr/local/bin/webagent-v3","--launch"],"User":""},self.host(runtime),"api",True,runtime)
+        mounts={m["Target"]:m for m in host["Mounts"]}
+        # local-models is absent here (optional service folder); promote, the old worker, browser and
+        # worker-legacy are never mounted.
+        self.assertEqual(set(mounts),{"/code","/state","/runtime/build","/runtime/host","/runtime/files","/runtime/board",
+                                      "/runtime/worker-c","/runtime/control","/runtime/ability-live"})
+        for name in ("build","host","files","board","worker-c"):self.assertTrue(mounts["/runtime/"+name]["ReadOnly"],name)
+        for name in ("control","ability-live"):self.assertFalse(mounts["/runtime/"+name]["ReadOnly"],name)
+        self.assertEqual(mounts["/runtime/build"]["Source"],str(runtime/"build"))
+        self.assertTrue(mounts["/code"]["ReadOnly"])
+        self.assertEqual(host["CapAdd"],[]);self.assertEqual(host["CapDrop"],["ALL"]);self.assertEqual(host["GroupAdd"],["1105"])
+        self.assertEqual(config["User"],str(fixtures.host.CONFIG["app_uid"])+":"+str(fixtures.host.CONFIG["app_gid"]))
+        self.assertEqual(config["Cmd"],["/usr/local/bin/webagent-v3"])
+    def test_external_loop_keeps_its_gate_and_has_no_file_service(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime=self.runtime(folder);(runtime/"local-models").mkdir()
+            config,host=fixtures.host.runtime_layout({"Cmd":["/usr/local/bin/webagent-v3"],"User":"1100:1100"},self.host(runtime,api=False),"loop",True,runtime)
+        mounts={m["Target"]:m for m in host["Mounts"]}
+        self.assertEqual(set(mounts),{"/code","/state","/runtime/gate","/runtime/build","/runtime/host","/runtime/board",
+                                      "/runtime/local-models","/runtime/worker-c","/runtime/control","/runtime/ability-live"})
+        self.assertEqual(mounts["/runtime/gate"]["Source"],"/srv/gate");self.assertTrue(mounts["/code"]["ReadOnly"])
+        self.assertEqual((config,host["GroupAdd"],host["CapAdd"]),({"Cmd":["/usr/local/bin/webagent-v3"],"User":"1100:1100"},["1105"],list(fixtures.host.LAUNCHER_CAPS)))
+    def test_switched_off_restores_the_whole_runtime_and_the_launcher(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime=self.runtime(folder)
+            config,host=fixtures.host.runtime_layout({"Cmd":["/usr/local/bin/webagent-v3"],"User":"1100:1100"},self.host(runtime),"api",True,runtime)
+            host["Binds"]=[str(runtime/"board")+":/runtime/board:ro","/srv/x:/opt/x"]
+            config,host=fixtures.host.runtime_layout(config,host,"api",False,runtime)
+        mounts={m["Target"]:m for m in host["Mounts"]}
+        self.assertEqual(set(mounts),{"/code","/state","/runtime"})
+        self.assertEqual((mounts["/runtime"]["Source"],mounts["/runtime"]["ReadOnly"],mounts["/code"]["ReadOnly"]),(str(runtime),False,False))
+        self.assertEqual(host["Binds"],["/srv/x:/opt/x"])
+        self.assertEqual((config["User"],config["Cmd"],host["CapAdd"],host["GroupAdd"]),
+                         ("",["/usr/local/bin/webagent-v3","--launch"],fixtures.host.LAUNCHER_CAPS,[]))
+        fixtures.host.validate_container_mounts(host)
+    def test_prepare_app_runtime_sets_the_launcher_owners_and_never_follows_links(self):
+        owners={}
+        def fchown(fd,uid,gid):owners[os.readlink("/proc/self/fd/"+str(fd))]=(uid,gid)
+        app,work,worker=fixtures.host.CONFIG["app_uid"],fixtures.host.WORK_GID,fixtures.host.CONFIG["worker_uid"]
+        with tempfile.TemporaryDirectory() as folder,patch.object(fixtures.host.os,"fchown",fchown):
+            runtime,state,workspaces=(str(Path(folder)/name) for name in ("runtime","state","workspaces"))
+            for path in (runtime,state,workspaces):os.mkdir(path)
+            fixtures.host.prepare_app_runtime(runtime,state,workspaces)
+            control=Path(runtime,"control")
+            self.assertEqual((control/"shutoff").read_bytes(),b"1")
+            (control/"shutoff").write_bytes(b"0");fixtures.host.prepare_app_runtime(runtime,state,workspaces)
+            self.assertEqual((control/"shutoff").read_bytes(),b"0")
+            fixtures.host.prepare_app_runtime(runtime,state,workspaces,reset_shutoff=True)
+            self.assertEqual((control/"shutoff").read_bytes(),b"1")
+            modes={name:stat.S_IMODE(os.stat(Path(runtime,name)).st_mode) for name in ("control","worker-c","ability-live")}
+            self.assertEqual(modes,{"control":0o710,"worker-c":0o750,"ability-live":0o755})
+            self.assertEqual(stat.S_IMODE(os.stat(control/"dispatch.lock").st_mode),0o640)
+            self.assertEqual(owners[str(control)],(app,work));self.assertEqual(owners[str(control/"shutoff")],(app,work))
+            self.assertEqual(owners[str(Path(runtime,"worker-c"))],(worker,work));self.assertEqual(owners[workspaces],(1101,work))
+            self.assertEqual(owners[state],(app,fixtures.host.CONFIG["app_gid"]))
+            (control/"shutoff").unlink();(control/"shutoff").symlink_to(Path(folder)/"elsewhere")
+            with self.assertRaises(OSError):fixtures.host.prepare_app_runtime(runtime,state,workspaces)
+            self.assertFalse((Path(folder)/"elsewhere").exists())
+    def test_worker_body_takes_the_runtime_from_the_layout_when_the_api_has_only_socket_folders(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api={"Image":"sha256:"+"2"*64,"Config":{"Env":["V3_EXTERNAL_WORKER=1"]},
+                 "Mounts":[{"Destination":"/runtime/worker-c","Source":folder+"/worker-c"},{"Destination":"/workspaces","Source":"/srv/w"},
+                           {"Destination":"/code","Source":"/srv/c"}]}
+            with patch.object(fixtures.host,"app_runtime",lambda:Path(folder)):
+                body=fixtures.host.worker_container_body(api,"sha256:"+"2"*64)
+        mounts={m["Target"]:m for m in body["HostConfig"]["Mounts"]}
+        self.assertEqual((mounts["/runtime/worker"]["Source"],mounts["/runtime/control"]["Source"]),(folder+"/worker-c",folder+"/control"))
 class WorkerContainerTests(unittest.TestCase):
     """Stream D4: the worker container follows the API, off by default, never fails a release."""
     def api(self,runtime,external=True):

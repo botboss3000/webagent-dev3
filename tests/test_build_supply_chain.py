@@ -165,7 +165,7 @@ class HeartbeatTests(unittest.TestCase):
                 return str(release / "abilities") if "Mounts" in " ".join(argv) else "sha256:image"
             with patch.object(scan, "ROOT", root), patch.object(scan, "run", run), \
                     patch.object(scan, "trivy", side_effect=AssertionError("no scan expected")), \
-                    patch.object(scan.sys, "argv", ["scan"]):
+                    patch.object(scan, "optional_images", dict), patch.object(scan.sys, "argv", ["scan"]):
                 images = {role: "sha256:image" for role in scan.CONTAINERS}
                 lock = scan.hashlib.sha256(b"# lock\n").hexdigest()
                 key = scan.hashlib.sha256(json.dumps([images, lock], sort_keys=True).encode()).hexdigest()[:16]
@@ -198,8 +198,8 @@ class ScanTests(unittest.TestCase):
             def trivy(args, out, _mounts):
                 api = "/in/api.tar" in args and "json" in args
                 Path(out).write_text(json.dumps({"Results": [{"Vulnerabilities": vulnerabilities}]} if api else {}))
-            with patch.object(scan, "ROOT", root), patch.object(scan, "run", run), \
-                    patch.object(scan, "trivy", trivy), patch.object(scan.sys, "argv", ["scan"]):
+            with patch.object(scan, "ROOT", root), patch.object(scan, "run", run), patch.object(scan, "trivy", trivy), \
+                    patch.object(scan, "optional_images", dict), patch.object(scan.sys, "argv", ["scan"]):
                 self.assertEqual(scan.main(), 0)
             latest = json.loads((root / "latest.json").read_text())
             api = latest["targets"]["api"]

@@ -18,6 +18,69 @@ pub fn folder() -> PathBuf {
         )
         .join("diagnostics")
 }
+/// The folder of the plugin's database (`logs.db` and its WAL files). Since stream D5 it is the
+/// plugin's own folder in the app's state (beside its socket), not the package folder in the
+/// checkout, which the API mounts read-only; an isolated test root keeps both in one folder.
+pub fn data_folder() -> PathBuf {
+    if std::env::var_os("V3_PLUGIN_TEST_ROOT").is_some() {
+        return folder();
+    }
+    ROOT.get()
+        .cloned()
+        .unwrap_or_else(webagent_configuration::paths::state)
+        .join("diagnostics")
+}
+
+/// The plugin's database while its package is installed: removing the package still removes
+/// archive access (the database is kept, and comes back with the package).
+pub fn database() -> Option<PathBuf> {
+    let path = data_folder().join("logs.db");
+    (folder().is_dir() && path.is_file()).then_some(path)
+}
+
+/// Stream D5, once: copies the database the plugin kept in its package folder into
+/// `data` when `data` has none. The plugin is not running then (its parent API was just
+/// replaced), so the database and its WAL file are a consistent pair. Both are copied under
+/// temporary names first; a failed copy leaves neither behind and is tried again at the next
+/// start, and the WAL file is put in place before the database so a `logs.db` never appears
+/// without its WAL.
+fn adopt_package_database(package: &Path, data: &Path) -> std::io::Result<()> {
+    use webagent_platform::fs::PermissionsExt;
+    let regular = |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file());
+    if package == data
+        || data.join("logs.db").exists()
+        || !regular(package.join("logs.db").as_path())
+    {
+        return Ok(());
+    }
+    std::fs::create_dir_all(data)?;
+    std::fs::set_permissions(data, std::fs::Permissions::from_mode(0o700))?;
+    let names: Vec<&str> = ["logs.db-wal", "logs.db"]
+        .into_iter()
+        .filter(|name| regular(package.join(name).as_path()))
+        .collect();
+    let temporary = |name: &str| data.join(format!("{name}.adopting"));
+    let copied = names.iter().copied().try_for_each(|name| {
+        std::fs::copy(package.join(name), temporary(name))?;
+        std::fs::set_permissions(temporary(name), std::fs::Permissions::from_mode(0o600))
+    });
+    let placed = copied.and_then(|()| {
+        names
+            .iter()
+            .copied()
+            .try_for_each(|name| std::fs::rename(temporary(name), data.join(name)))
+    });
+    if placed.is_err() {
+        for name in names.iter().copied() {
+            let _ = std::fs::remove_file(temporary(name));
+        }
+        if !data.join("logs.db").exists() {
+            let _ = std::fs::remove_file(data.join("logs.db-wal"));
+        }
+    }
+    placed
+}
+
 pub fn available() -> bool {
     ROOT.get().is_some_and(|root| {
         std::fs::read_to_string(root.join("diagnostics/plugin.ready"))
@@ -147,6 +210,12 @@ pub async fn init(root: &Path, role: &str) {
     });
     tokio::spawn(async move {
         let folder = PathBuf::from(plugins).join("diagnostics");
+        let data = data_folder();
+        {
+            let (package, data) = (folder.clone(), data.clone());
+            let _ =
+                tokio::task::spawn_blocking(move || adopt_package_database(&package, &data)).await;
+        }
         let mut child: Option<Child> = None;
         let mut digest = None;
         let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -173,7 +242,9 @@ pub async fn init(root: &Path, role: &str) {
                     command
                         .env_clear()
                         .env("V3_PLUGIN_STATE", &root)
-                        .env("V3_PLUGIN_PACKAGE", &folder)
+                        // The plugin keeps its database in this folder (`V3_PLUGIN_PACKAGE`
+                        // is the one folder it opens `logs.db` in).
+                        .env("V3_PLUGIN_PACKAGE", &data)
                         .env("PATH", "/usr/bin:/bin")
                         .env("LANG", "C.UTF-8")
                         .stdin(std::process::Stdio::null())
@@ -193,6 +264,38 @@ pub async fn init(root: &Path, role: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn package_database_is_copied_once_and_never_through_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let (package, data) = (
+            root.path().join("package"),
+            root.path().join("state/diagnostics"),
+        );
+        std::fs::create_dir_all(&package).unwrap();
+        // Nothing to adopt: no folder is made.
+        adopt_package_database(&package, &data).unwrap();
+        assert!(!data.exists());
+        std::fs::write(package.join("logs.db"), b"db").unwrap();
+        std::fs::write(package.join("logs.db-wal"), b"wal").unwrap();
+        adopt_package_database(&package, &data).unwrap();
+        assert_eq!(std::fs::read(data.join("logs.db")).unwrap(), b"db");
+        assert_eq!(std::fs::read(data.join("logs.db-wal")).unwrap(), b"wal");
+        assert!(!data.join("logs.db.adopting").exists());
+        // A database already in the data folder is never replaced.
+        std::fs::write(package.join("logs.db"), b"newer").unwrap();
+        adopt_package_database(&package, &data).unwrap();
+        assert_eq!(std::fs::read(data.join("logs.db")).unwrap(), b"db");
+        // A linked package database is not followed.
+        let (linked, other) = (root.path().join("linked"), root.path().join("other"));
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(root.path().join("secret"), b"secret").unwrap();
+        webagent_platform::fs::symlink(root.path().join("secret"), linked.join("logs.db")).unwrap();
+        adopt_package_database(&linked, &other).unwrap();
+        assert!(!other.join("logs.db").exists());
+        // The same folder (isolated test root) is left alone.
+        adopt_package_database(&package, &package).unwrap();
+        assert_eq!(std::fs::read(package.join("logs.db")).unwrap(), b"newer");
+    }
     #[test]
     fn manifests_and_executable_permissions_are_strict() {
         use webagent_platform::fs::PermissionsExt;
