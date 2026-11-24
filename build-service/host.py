@@ -985,7 +985,8 @@ def blob_files(blob, paths):
 
 
 def file_digests(files):
-    """Comparable identity of each file: its mode and the SHA-256 of its bytes."""
+    """Identity of each file: [mode, SHA-256 of its bytes]. Only the bytes are compared; task trees
+    and release archives do not keep modes consistently (0o700 in one, 0o775 in the other)."""
     return {p: [mode, hashlib.sha256(body).hexdigest()] for p, (mode, body) in files.items()}
 
 
@@ -997,7 +998,9 @@ def queued_patch_fit(source, patch, paths, before, after):
     (no 3-way merge, no fuzz), and a changed file's hunks must carry context lines, because a
     zero-context hunk on a moved base would land at a stale line number unchecked.
     """
-    changed = sorted(p for p in paths if before.get(p) != after.get(p))
+    def body(files, path):
+        return (files.get(path) or [None, None])[1]
+    changed = sorted(p for p in paths if body(before, p) != body(after, p))
     build = [p for p in paths if p.startswith("build-service/")]
     if changed and build and len(build) != len(paths):
         return changed, {p: "build-service/ mixed with other files; a broker patch carries build-service files alone"
@@ -1009,8 +1012,8 @@ def queued_patch_fit(source, patch, paths, before, after):
             reasons[path] = "deleted or renamed upstream"
         elif old is None:
             reasons[path] = "added upstream, and the patch creates it"
-        elif (old[0] ^ new[0]) & 0o111 or re.search(r"^(old|new) mode ", text, re.M):
-            reasons[path] = "file mode changed"
+        elif re.search(r"^(old|new) mode ", text, re.M):
+            reasons[path] = "the patch changes the file mode"
         else:
             try:
                 source_git(source, ["apply", "--check", "--whitespace=error", "-"], text.encode())

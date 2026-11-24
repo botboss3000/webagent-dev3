@@ -122,7 +122,7 @@ class QueueRebaseTests(unittest.TestCase):
             "exists":(lambda f:self.write(f,"docs/new.md","theirs\n"),
                       lambda:diff("docs/new.md","","mine\n",new=True),"added upstream"),
             "mode":(lambda f:self.write(f,"docs/shared.md",edited(SHARED,2,"first")),
-                    lambda:diff("docs/shared.md",SHARED,edited(SHARED,30,"waiter"),mode="100755"),"file mode changed"),
+                    lambda:diff("docs/shared.md",SHARED,edited(SHARED,30,"waiter"),mode="100755"),"the patch changes the file mode"),
             "mixed":(lambda f:self.write(f,"docs/shared.md",edited(SHARED,2,"first")),
                      lambda:diff("build-service/fixture_tool.py","","x = 1\n",new=True)+diff("docs/shared.md",SHARED,edited(SHARED,30,"waiter")),
                      "build-service/ mixed with other files"),
@@ -137,6 +137,15 @@ class QueueRebaseTests(unittest.TestCase):
                     self.apply(waiter,make(),"rb-wait-"+name,expected)
                 self.assertTrue(self.claims(waiter))
                 waiter["status"]="abandoned";self.broker.scheduler.store.retire(waiter["key"],"Fixture done",abandon=True)
+
+    def test_a_mode_only_difference_is_not_a_base_change(self):
+        """Archives and trees keep modes inconsistently (0o700 vs 0o775): only bytes decide."""
+        source=Path(self.root/"fit");(source/"docs").mkdir(parents=True);(source/"docs/shared.md").write_text(SHARED)
+        text=diff("docs/shared.md",SHARED,edited(SHARED,30,"waiter"))
+        digest=fixtures.host.hashlib.sha256(SHARED.encode()).hexdigest()
+        changed,reasons=fixtures.host.queued_patch_fit(source,text,["docs/shared.md"],
+            {"docs/shared.md":[0o775,digest]},{"docs/shared.md":[0o700,digest]})
+        self.assertEqual((changed,reasons),([],{}))
 
     def test_prepared_path_is_rebased_too(self):
         self.prepare();first=self.begin("rb-first-p");waiter=self.begin("rb-waiter-p")
