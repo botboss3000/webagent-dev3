@@ -379,7 +379,7 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
         })
         .filter(|status| *status != section.status)
     {
-        set_section_status(section, status)?;
+        set_section_status(section, status, now)?;
         changes.push(format!("{} {}", section.id, status.word()));
     } else if section.status == Status::Done && write.section.summary.is_some() {
         changes.push(format!("{} summary updated", section.id));
@@ -393,9 +393,16 @@ pub fn apply(list: &List, write: Write, now: u64) -> Result<(List, Vec<String>)>
     Ok((next, changes))
 }
 
-fn set_section_status(section: &mut Section, status: Status) -> Result<()> {
+fn set_section_status(section: &mut Section, status: Status, now: u64) -> Result<()> {
     match status {
         Status::Done => {
+            // Closing a section says its running steps are done; only unstarted steps refuse.
+            for step in &mut section.steps {
+                if step.status == Status::InProgress {
+                    step.status = Status::Done;
+                    step.finished_at = Some(now);
+                }
+            }
             if let Some(step) = section.steps.iter().find(|step| step.status.unfinished()) {
                 bail!(
                     "{} is still {}: finish, block or cancel it before closing {}",
@@ -426,12 +433,20 @@ fn write_step(section: &mut Section, write: StepWrite, now: u64) -> Result<(usiz
             section.status.word()
         );
     }
-    // An id the section does not know, given with a label, is a new step: the server
-    // picks its id, so a guessed id costs no retry.
+    // An id the section does not know, given with a label, names the step with that label,
+    // or else a new step: the server picks its id, so a guessed id costs no retry and the
+    // same guess used again reaches the same step.
     let found = write
         .id
         .as_deref()
-        .and_then(|id| section.steps.iter().position(|step| step.id == id));
+        .and_then(|id| section.steps.iter().position(|step| step.id == id))
+        .or_else(|| {
+            let label = write.label.as_deref()?.trim();
+            section
+                .steps
+                .iter()
+                .position(|step| step.label.eq_ignore_ascii_case(label))
+        });
     let index = match (found, write.id.as_deref()) {
         (Some(index), _) => index,
         (None, Some(id)) if write.label.is_none() => {
@@ -1485,6 +1500,26 @@ mod tests {
         .unwrap();
         assert_eq!(list.sections[0].steps[0].id, "s1.1");
         assert!(list.sections[0].steps[0].outcome.len() <= 240);
+        // The same guess again reaches the same step, and closing the section finishes
+        // its running step instead of refusing.
+        let (list, _) = apply(
+            &list,
+            write(serde_json::json!({"section":{"title":"Check files"},
+                "steps":[{"id":"st1","label":"Run ls","status":"in_progress"}]})),
+            2,
+        )
+        .unwrap();
+        let (list, _) = apply(
+            &list,
+            write(serde_json::json!({"section":{"id":"s2","status":"done",
+                "summary":"Listed the workspace files and checked them."},
+                "steps":[{"id":"st1","label":"Run ls","outcome":"three files"}]})),
+            3,
+        )
+        .unwrap();
+        assert_eq!(list.sections[1].steps.len(), 1);
+        assert_eq!(list.sections[1].steps[0].status, Status::Done);
+        assert_eq!(list.sections[1].status, Status::Done);
         assert!(apply(
             &list,
             write(

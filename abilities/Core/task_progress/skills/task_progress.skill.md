@@ -20,5 +20,6 @@ other tool calls.
   A quick lookup needs no steps.
 - Never spend a step closing a section: when you reply, the app closes every open section
   whose steps are all finished (or that has none), with your reply as its summary. Leave a
-  step open or blocked when work remains, and say in the reply what is left.
+  step open or blocked when work remains, and say in the reply what is left. If you do close
+  one, its running steps are marked done with it.
 - Statuses are your claims: report what checks proved.
