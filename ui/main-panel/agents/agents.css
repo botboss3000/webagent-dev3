@@ -4837,3 +4837,9 @@ body.light-mode .agent-card-mock .agent-card-name {
 .artifacts-args { margin: 4px 0 0; padding: 6px 8px; border-radius: 6px; background: var(--bg-2); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 .artifacts-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .artifacts-actions .members-btn { -webkit-tap-highlight-color: transparent; }
+/* Permissions & Actions: each saved approval's Match and Where pickers stack under their labels. */
+.permissions-picker { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; max-width: 360px; }
+.permissions-picker-label { font-size: 12px; color: var(--fg-3); }
+.permissions-tool-use { list-style: none; margin: 0; padding: 0; }
+.permissions-tool-use li { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.permissions-tool-use .artifacts-meta { margin: 0; }

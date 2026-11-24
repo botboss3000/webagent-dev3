@@ -236,6 +236,10 @@ async fn set_up_schema(pool: SqlitePool, events: bool, runs: bool) -> Result<Sql
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS background_task_index(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,revision INTEGER NOT NULL,status TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS background_task_delivery(id TEXT PRIMARY KEY,run_id TEXT NOT NULL);")
             .execute(&pool).await?;
+        // Tool-use counters per agent and tool (Permissions & Actions page): plain numbers,
+        // one row per agent and tool, added to once when a run ends.
+        sqlx::query("CREATE TABLE IF NOT EXISTS tool_use(agent_id TEXT NOT NULL,tool TEXT NOT NULL,calls INTEGER NOT NULL,asked INTEGER NOT NULL,saved INTEGER NOT NULL,last_used_at INTEGER NOT NULL,PRIMARY KEY(agent_id,tool))")
+            .execute(&pool).await?;
         // Per-account app notifications (storage warnings, automatic cleanups).
         sqlx::query("CREATE TABLE IF NOT EXISTS user_notices(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,severity TEXT NOT NULL,body BLOB NOT NULL,created_at INTEGER NOT NULL,read_at INTEGER)")
             .execute(&pool).await?;

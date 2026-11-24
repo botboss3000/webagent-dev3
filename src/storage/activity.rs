@@ -353,6 +353,25 @@ impl Store {
         }
         Ok(None)
     }
+    /// This user's tool-use counters for one agent (`tool_use`, added to as runs end), most
+    /// used first.
+    pub async fn tool_use(&self, agent_id: &str) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            "SELECT tool,calls,asked,saved,last_used_at FROM tool_use WHERE agent_id=? ORDER BY calls DESC,tool",
+        )
+        .bind(agent_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                json!({"tool":row.get::<String, _>("tool"),"calls":row.get::<i64, _>("calls"),
+                    "asked":row.get::<i64, _>("asked"),"saved":row.get::<i64, _>("saved"),
+                    "last_used_at":row.get::<i64, _>("last_used_at")})
+            })
+            .collect())
+    }
+
     /// Count model-issued tool calls in this user's sessions for one agent.
     /// Session ownership stays with the user store; the catalog receives counts,
     /// never encrypted interaction content or another user's activity.

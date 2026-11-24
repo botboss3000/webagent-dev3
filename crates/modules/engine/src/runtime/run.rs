@@ -1837,6 +1837,8 @@ impl<
             run["pending"]["state"] = json!("waiting");
             if run["pending"]["waiting_since"].is_null() {
                 run["pending"]["waiting_since"] = json!(now());
+                let tool = run["pending"]["name"].as_str().unwrap_or("").to_owned();
+                super::policy::count_tool_use(&mut run, &tool, "asked");
             }
             let mut payload = run["pending"].clone();
             payload["run_id"] = json!(id);

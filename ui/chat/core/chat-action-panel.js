@@ -295,7 +295,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
     const node=upsert(toolSlot,toolCards,'tools',approval.id,sig,()=>buildTool(options));
     pendingApprovals=true;updateRoutesVisibility();return node;
   }
-  function buildTool({approval,run,active,expanded,decide,cancel}) {
+  function buildTool({approval,run,active,agentId,expanded,decide,cancel}) {
     // The raw arguments use the shared capped code surface with its top-right Copy control.
     const details=createCodeBlock(JSON.stringify(approval.messaging_binding||approval.arguments,null,2)).wrap;
     details.id='approval-details-'+approval.id;
@@ -318,7 +318,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
     // agreed plan, shown here, and denying it keeps planning.
     const toAuto=approval.name==='set_execution_mode'&&approval.arguments?.mode==='auto'&&!approval.repeat_of;
     // The engine offers "Remember this approval" only where a saved approval may apply.
-    const saved=!toAuto&&approval.remember&&typeof approval.remember==='object'?rememberPicker(approval.id,approval.remember):null;
+    const saved=!toAuto&&approval.remember&&typeof approval.remember==='object'?rememberPicker(approval.id,approval.remember,agentId):null;
     const plan=toAuto&&approval.arguments?.plan&&typeof approval.arguments.plan==='object'?approval.arguments.plan:null;
     const actions=toAuto?[
       {label:'Authorize Auto and continue',kind:'approve',run:()=>decide('approve')},
@@ -343,7 +343,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
   // "Remember this approval": a checkbox, closed by default, that opens two pickers: Match (these
   // values or any values) and Where (this chat, or this agent in all the owner's chats when the
   // policy allows it). choice() is null while unticked.
-  function rememberPicker(id,offer){
+  function rememberPicker(id,offer,agentId){
     const node=document.createElement('div');node.className='chat-action-remember';
     const check=document.createElement('input');check.type='checkbox';
     const label=document.createElement('label');label.className='chat-action-remember-toggle';label.append(check,document.createTextNode(' Remember this approval'));
@@ -356,7 +356,11 @@ export function mountChatActionPanel({root,guard,request,note}) {
     };
     const match=group('Match','remember-match',[['values','these values'],['any','any values']]);
     const reach=group('Where','remember-reach',offer.agent_wide===true?[['chat','this chat'],['agent','this agent, all my chats']]:[['chat','this chat']]);
-    pickers.append(match,reach);node.append(label,pickers);
+    pickers.append(match,reach);
+    // The agent's Permissions & Actions page lists, changes and revokes saved approvals.
+    if(typeof agentId==='string'&&agentId){const manage=document.createElement('a');manage.className='chat-action-remember-manage';manage.textContent='Manage saved approvals →';
+      manage.href='/app?tab=agents&agent='+encodeURIComponent(agentId)+'&agentView=permissions-actions';pickers.append(manage);}
+    node.append(label,pickers);
     check.onchange=()=>{pickers.hidden=!check.checked;};
     const picked=set=>set.querySelector('input:checked')?.value;
     return {node,choice:()=>check.checked?{match:picked(match),reach:picked(reach)}:null};

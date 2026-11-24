@@ -96,6 +96,8 @@ pub(crate) mod notifications;
 #[path = "../../crates/modules/chat/host/api/panel_answer.rs"]
 pub(crate) mod panel_answer;
 pub(crate) mod repository;
+#[path = "../../crates/modules/chat/host/api/saved_approvals_page.rs"]
+pub(crate) mod saved_approvals_page;
 mod service_admin;
 #[cfg(test)]
 #[path = "../../crates/modules/chat/host/api/session_deletion_tests.rs"]
@@ -503,6 +505,15 @@ pub(super) fn router(app: App) -> Router {
             "/agents/{id}/saved-scripts/scripts/{name}",
             axum::routing::delete(tools::core_scripts::page_delete),
         )
+        .route(
+            "/agents/{id}/saved-approvals",
+            get(saved_approvals_page::read),
+        )
+        .route(
+            "/agents/{id}/saved-approvals/{entry}",
+            post(saved_approvals_page::change),
+        )
+        .route("/agents/{id}/tool-use", get(saved_approvals_page::tool_use))
         .route(
             "/core/vault/{sid}/{name}",
             post(tools::core_vault::save)

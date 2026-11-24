@@ -34,6 +34,7 @@ dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px))
 .chat-action-remember-pickers{display:flex;flex-wrap:wrap;gap:4px 24px;padding:2px 0 0 26px}
 .chat-action-remember fieldset{display:flex;flex-direction:column;margin:0;padding:0;border:0;min-width:0}
 .chat-action-remember legend{padding:0;color:var(--fg-3);font-size:.9em}
+.chat-action-remember-manage{flex-basis:100%;font-size:.9em;color:var(--accent,inherit);-webkit-tap-highlight-color:transparent}
 .chat-action-plan{margin:8px 0 0;padding:10px 12px;border:var(--border-width) solid var(--border-soft,var(--border));border-radius:10px;color:var(--fg-1)}
 .chat-action-plan summary{font-weight:600;cursor:pointer;min-height:32px;display:flex;align-items:center;-webkit-tap-highlight-color:transparent}
 .chat-action-plan summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}

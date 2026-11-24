@@ -31,6 +31,7 @@ import { showLeftOverlay } from '../chat/controls/login-hook.js';
 import { renderIdentity } from '../main-panel/agents/pages/identity/page.js';
 import {renderMembers} from '../main-panel/agents/pages/members/page.js';
 import {renderArtifacts} from '../main-panel/agents/pages/artifacts/page.js';
+import {renderPermissionsActions} from '../main-panel/agents/pages/permissions-actions/page.js';
 import {renderDashboard} from '../main-panel/agents/pages/dashboard/page.js';
 import {loadOwnPlan,renderPlanPanel} from '../shared/plan-panel/plan-panel.js';
 import {offerAccessRequest,showAccessNotices} from '../main-panel/agents/request-access.js';
@@ -82,7 +83,7 @@ async function mountAgents(){
       <div class="ac-ability-row ac-model-cfg-row ac-row-static"><span class="ac-ability-label"><span class="ac-ability-name">Connection</span></span><span class="ac-model-cfg-control"><span id="connection" class="ac-hint"></span><button id="connect" type="button" class="ac-btn ac-btn-primary ac-btn-sm">Click to Issue verification code</button><button id="disconnect" type="button" class="ac-btn ac-btn-sm">Disconnect</button><span id="device" class="ac-subscription-auth"></span></span></div>
       <form id="model-form" class="ac-ability-row ac-model-cfg-row"><label for="model" class="ac-ability-label"><span class="ac-ability-name">Model</span><span class="ac-ability-desc">Model ID used for new chat turns.</span></label><span class="ac-model-cfg-control"><input id="model" class="ac-input ac-input-sm" placeholder="gpt-6-luna" required pattern="[A-Za-z0-9._-]+"><button class="ac-btn ac-btn-primary ac-btn-sm">Save model</button></span></form>
     </div>
-    </div><div id="identity-page" class="agent-detail-body" hidden></div><div id="abilities-page" hidden></div><div id="members-page" class="agent-detail-body" hidden></div><div id="artifacts-page" class="agent-detail-body" hidden></div><div id="dashboard-page" class="agent-detail-body" hidden></div><div id="config-page" class="agent-detail-body" hidden></div></div></div>`;
+    </div><div id="identity-page" class="agent-detail-body" hidden></div><div id="abilities-page" hidden></div><div id="members-page" class="agent-detail-body" hidden></div><div id="artifacts-page" class="agent-detail-body" hidden></div><div id="permissions-actions-page" class="agent-detail-body" hidden></div><div id="dashboard-page" class="agent-detail-body" hidden></div><div id="config-page" class="agent-detail-body" hidden></div></div></div>`;
   const pages=await loadAgentPages();
   configPage=pages.find(page=>page.type==='directory');
   sessionsDescriptor=pages.find(page=>page.type==='sessions');
@@ -481,6 +482,7 @@ async function renderAgentView(view,routeMode,restoreScroll){
   if(selected==='abilities')await renderAbilities($('abilities-page'),api,{agentId});
   if(selected==='members')await renderMembers($('members-page'),api,{agentId});
   if(selected==='artifacts')await renderArtifacts($('artifacts-page'),api,{agentId});
+  if(selected==='permissions-actions')await renderPermissionsActions($('permissions-actions-page'),api,{agentId});
   if(selected==='dashboard')await renderDashboard($('dashboard-page'),api,{agentId});
 }
 async function selectAgent(id){

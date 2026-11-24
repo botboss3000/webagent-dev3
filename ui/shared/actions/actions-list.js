@@ -1,7 +1,7 @@
 // Actions list: the action ledger's recorded tool calls, as expand-list rows, (protected or critical tools such as
 // publishing or pushing) with their state. An uncertain action may or may not have taken
 // effect; whoever may settle it checks the real outcome and marks it done or failed. Shared
-// by the chat's Actions chip, the agent's Artifacts and Members pages and App → Actions.
+// by the chat's Actions chip, the agent's Permissions & Actions and Members pages and App → Actions.
 // Text-only DOM: tool arguments are untrusted.
 import {requestTouchVibration} from '../vibrate/vibrate.js';
 import {createExpandList} from '../../components/expand-list/expand-list.js';

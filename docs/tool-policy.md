@@ -37,19 +37,53 @@ that would ask, Plan keeps changes back and requires the agreed plan to leave it
 calls and invalid arguments return a result to the model without running. Arguments are
 checked against the tool's `parameters` (`crates/modules/engine/src/tools/arguments.rs`).
 
-**Saved approvals** (`crates/modules/access/src/saved_approvals.rs`): when the policy asks
-about a call in Ask or a custom mode, the engine (`Runtime::saved_approval`, single calls and
-parallel batches) looks in the chat owner's `saved_approvals:{agent_id}` document. A current
-entry for the tool (same owner; this chat or, when the access policy's
-`saved_approvals.agent_wide` allows, any chat with the agent; same short argument values or
-any values; unchanged permission fingerprint) marks the call approved and adds an
-`approval:` activity row. Otherwise the waiting call carries a `remember` offer and its card
-shows "Remember this approval"; Approve with `remember` (chat module `tool_approval.rs`)
-writes the entry with the decision. Never offered or used in Plan mode, for critical tools,
-`set_execution_mode`, agent messaging in a run an agent message started, another user's
-credential or another participant's run; repeat, separate-action and guard confirmations
-still ask. A messaging approval leaves `text` and `title` free (`MESSAGE_ARGS`).
-`saved_approvals.enabled` off ignores every entry.
+**Saved approvals** ("Remember this approval"; rules in
+`crates/modules/access/src/saved_approvals.rs`, which are pure and tested on both sides).
+
+- *Offer.* When the policy asks about a call in Ask or a custom mode, the engine
+  (`Runtime::saved_approval`, for single calls in `run.rs` and parallel batches in
+  `batch.rs`) puts a `remember` offer on the waiting call, and its card shows a "Remember this
+  approval" checkbox with two pickers: Match (these values / any values) and Where (this
+  chat / this agent, all my chats). Approve with `remember` (chat module `tool_approval.rs`)
+  writes the entry in the same commit as the decision.
+- *Use.* Before asking, the engine looks in the chat owner's `saved_approvals:{agent_id}`
+  document (user plane, one per agent, at most 64 entries, integer revision). A current
+  entry marks the call approved and adds an `approval:` activity row ("Approved by saved
+  approval"), which context assembly skips. An entry is current when it has the same owner
+  and tool; the same chat, or any chat with the agent when `saved_approvals.agent_wide`
+  allows; and an unchanged permission fingerprint (`LiveAccess::tool_permission_fingerprint`
+  over the tool's tier, agent, capability-level and owning-ability permissions). For "these
+  values", every short argument (up to 1000 characters) must also be equal, and only
+  arguments left free when it was saved may differ. A messaging approval leaves `text` and
+  `title` free (`MESSAGE_ARGS`), so it fixes the destination and delivery, not the words.
+- *Never.* Saved approvals are never offered or used in Plan mode, for critical tools,
+  `set_execution_mode`, agent messaging in a run an agent message started, another user's
+  credential, or another participant's run (only the chat owner, for their own runs). Repeat,
+  separate-action and guard confirmations still ask, but may offer Remember. A Deny is never
+  changed.
+- *Lapse.* When the tool's permission inputs change, the fingerprint differs: the entry is
+  ignored (fail closed) and kept, shown as lapsed.
+- *Review.* The agent's Permissions & Actions page
+  (`/app?tab=agents&agent=<id>&agentView=permissions-actions`; handlers in the chat module's
+  `saved_approvals_page.rs`) shows only the caller's own entries, administrators included.
+  `GET /agents/{id}/saved-approvals` lists them with `lapsed`. `POST
+  /agents/{id}/saved-approvals/{entry}` with `expected_revision` and `action` `revoke`,
+  `change` (`match`, `reach`) or `reapprove` (records the fingerprint now) changes one entry.
+  "These values" cannot be restored on an entry saved with any values. The page also holds
+  the action ledger list.
+- *Switches.* `config/access/policy.json` `saved_approvals.enabled` (off: no offer, every
+  entry ignored but kept) and `saved_approvals.agent_wide` (off: no "this agent" choice, and
+  agent-wide entries are ignored).
+- *Old routes.* `remember_messaging_route` is still accepted but no longer offered. Existing
+  messaging routes stay delivery checks for queued messages and are not converted.
+
+**Tool-use counters** (`tool_use` table in each user's store: agent, tool, calls, asked,
+saved, last used). A run counts in its own record (`_tool_use`): its model-issued calls, once
+per model turn (`count_model_calls` in `repository.rs`); approvals it asked for; and calls a
+saved approval let through (`runtime::policy::count_tool_use`). The save that first ends the
+run adds them in one statement. There is no statement per call or per model call, and a
+crashed run's counts are lost. `GET /agents/{id}/tool-use` returns the caller's own rows for
+the page's Tool use section.
 
 ## 4. The task gate
 

@@ -463,4 +463,16 @@ pub fn approve_by_saved(run: &mut Value, pending: &mut Value, entry: &Value) {
         Some(items) => items.push(row),
         None => run["_activity_items"] = json!([row]),
     }
+    count_tool_use(run, pending["name"].as_str().unwrap_or(""), "saved");
+}
+
+/// Count an approval the run asked for (`asked`) or a saved approval it used (`saved`) for
+/// `tool`. The run's first terminal save adds these, with its tool calls, to the owner's
+/// tool-use counters (`Repository::save_run`).
+pub fn count_tool_use(run: &mut Value, tool: &str, field: &str) {
+    if tool.is_empty() {
+        return;
+    }
+    let slot = &mut run["_tool_use"][tool][field];
+    *slot = json!(slot.as_u64().unwrap_or(0) + 1);
 }

@@ -249,6 +249,75 @@ pub fn find<'a>(doc: &'a Value, call: &Call<'_>) -> Option<&'a Value> {
         .find(|entry| matches(entry, call))
 }
 
+/// The owner's entries for the agent's Permissions & Actions page. `current(tool)` is the
+/// tool's permission fingerprint now, or `None` when it can no longer be remembered (critical,
+/// removed); an entry whose fingerprint differs is marked `lapsed` (ignored until approved
+/// again).
+pub fn view(doc: &Value, owner: &str, current: &dyn Fn(&str) -> Option<String>) -> Vec<Value> {
+    doc["entries"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry["owner"] == owner)
+                .map(|entry| {
+                    let tool = entry["tool"].as_str().unwrap_or("");
+                    let lapsed = current(tool)
+                        .is_none_or(|fingerprint| entry["permission_fingerprint"] != fingerprint);
+                    let mut shown = entry.clone();
+                    shown["lapsed"] = json!(lapsed);
+                    shown
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A change the owner makes on the page.
+pub enum Edit {
+    Revoke,
+    /// New match and reach. "These values" needs the values the entry already fixes.
+    Change(Choice),
+    /// Approve a lapsed entry again under the tool's permission now (its fingerprint).
+    Reapprove(String),
+}
+
+/// The document after applying `edit` to the owner's entry `id`, with the revision raised.
+pub fn edit(doc: &Value, owner: &str, id: &str, edit: Edit, settings: Settings) -> Result<Value> {
+    let mut entries: Vec<Value> = doc["entries"].as_array().cloned().unwrap_or_default();
+    let Some(index) = entries
+        .iter()
+        .position(|entry| entry["id"] == id && entry["owner"] == owner)
+    else {
+        bail!("Saved approval not found");
+    };
+    match edit {
+        Edit::Revoke => {
+            entries.remove(index);
+        }
+        Edit::Change(choice) => {
+            let entry = &mut entries[index];
+            if choice.agent_wide && !settings.agent_wide {
+                bail!("Agent-wide saved approvals are switched off");
+            }
+            if choice.values && !entry["fixed"].is_object() {
+                bail!("This approval recorded no values; approve a call with the values to keep");
+            }
+            if !choice.values {
+                entry["fixed"] = Value::Null;
+                entry["free"] = Value::Null;
+            }
+            entry["match"] = json!(if choice.values { "values" } else { "any" });
+            entry["reach"] = json!(if choice.agent_wide { "agent" } else { "chat" });
+        }
+        Edit::Reapprove(fingerprint) => {
+            entries[index]["permission_fingerprint"] = json!(fingerprint);
+            entries[index]["via"] = json!("page");
+        }
+    }
+    Ok(json!({"revision":doc["revision"].as_u64().unwrap_or(0) + 1,"entries":entries}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,5 +513,54 @@ mod tests {
         assert!(rememberable_tool("file_write", false));
         assert!(!rememberable_tool("checkout", true));
         assert!(!rememberable_tool("set_execution_mode", false));
+    }
+
+    #[test]
+    fn the_page_lists_own_entries_marks_lapsed_and_edits_them() {
+        let args = json!({"path":"a.md","content":"x"});
+        let saved = entry(true, false, &args);
+        let doc = add(&json!(null), saved);
+        let fresh = |_: &str| Some("fp".to_owned());
+        let moved = |_: &str| Some("f2".to_owned());
+        let gone = |_: &str| None;
+        assert_eq!(view(&doc, "admin", &fresh)[0]["lapsed"], false);
+        assert_eq!(view(&doc, "admin", &moved)[0]["lapsed"], true);
+        assert_eq!(view(&doc, "admin", &gone)[0]["lapsed"], true);
+        assert!(view(&doc, "u2", &fresh).is_empty());
+
+        let on = Settings::default();
+        let off = Settings {
+            enabled: true,
+            agent_wide: false,
+        };
+        let wide = Choice {
+            values: true,
+            agent_wide: true,
+        };
+        let any = Choice {
+            values: false,
+            agent_wide: false,
+        };
+        // Another user's id, an unknown entry and agent-wide while it is switched off fail.
+        assert!(edit(&doc, "u2", "e1", Edit::Revoke, on).is_err());
+        assert!(edit(&doc, "admin", "nope", Edit::Revoke, on).is_err());
+        assert!(edit(&doc, "admin", "e1", Edit::Change(wide), off).is_err());
+        let changed = edit(&doc, "admin", "e1", Edit::Change(wide), on).unwrap();
+        assert_eq!(changed["revision"], 2);
+        assert_eq!(changed["entries"][0]["reach"], "agent");
+        let opened = edit(&changed, "admin", "e1", Edit::Change(any), on).unwrap();
+        assert_eq!(opened["entries"][0]["match"], "any");
+        assert!(opened["entries"][0]["fixed"].is_null());
+        // "Any values" cannot go back to values it never recorded.
+        let back = Choice {
+            values: true,
+            agent_wide: false,
+        };
+        assert!(edit(&opened, "admin", "e1", Edit::Change(back), on).is_err());
+        let again = edit(&doc, "admin", "e1", Edit::Reapprove("f2".into()), on).unwrap();
+        assert_eq!(again["entries"][0]["permission_fingerprint"], "f2");
+        assert_eq!(again["entries"][0]["via"], "page");
+        let revoked = edit(&doc, "admin", "e1", Edit::Revoke, on).unwrap();
+        assert_eq!(revoked["entries"], json!([]));
     }
 }

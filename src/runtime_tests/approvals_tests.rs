@@ -137,6 +137,15 @@ async fn saved_approval_lets_matching_calls_run_without_asking() {
     assert!(!json!(app.store.context(&sid).await.unwrap())
         .to_string()
         .contains("saved_approval"));
+    // The ended run added its tool use once: four calls, one approval asked, three saved.
+    let agent = done["agent_id"].as_str().unwrap_or("shared_default");
+    let counted = app.store.tool_use(agent).await.unwrap();
+    assert_eq!(
+        counted,
+        vec![json!({"tool":"get_time","calls":4,"asked":1,"saved":3,
+            "last_used_at":counted[0]["last_used_at"]})]
+    );
+    assert!(counted[0]["last_used_at"].as_i64().unwrap() > 0);
     server.abort();
 }
 

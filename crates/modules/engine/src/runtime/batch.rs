@@ -511,6 +511,9 @@ impl<
                     state = "requested";
                 }
             }
+            if state == "waiting" {
+                super::policy::count_tool_use(&mut run, &name, "asked");
+            }
             run["batch"][idx] = json!({"state":state,"pending":pending,"result":result,
             "pre_tool_receipt":receipt});
         }

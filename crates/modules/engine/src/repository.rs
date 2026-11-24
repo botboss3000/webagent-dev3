@@ -509,6 +509,9 @@ impl<
                 .as_str()
                 .ok_or_else(|| anyhow!("Run has no id"))?
                 .to_owned();
+            if kind == "model_output" {
+                count_model_calls(run, payload);
+            }
             let _context_guard = if reshapes_context(kind) {
                 Some(crate::send_future(self.records.context_gate().write()).await)
             } else {
@@ -538,6 +541,11 @@ impl<
             }
             let expected = run["run_revision"].as_u64().unwrap_or(0);
             let mut diagnostic_only = false;
+            // The first save that ends the run adds its tool use to the owner's counters.
+            let mut ending = matches!(
+                run["status"].as_str(),
+                Some("completed" | "cancelled" | "failed")
+            );
             if let Some(raw) =
                 sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
                     .bind(format!("run:{rid}"))
@@ -564,6 +572,12 @@ impl<
                 // A late tool error may add validated evidence only. The worker that reports it
                 // may still hold the input the finished run no longer stores, so that copy is
                 // set aside when comparing; such a save never adds to the history below.
+                if matches!(
+                    previous["status"].as_str(),
+                    Some("completed" | "cancelled" | "failed")
+                ) {
+                    ending = false;
+                }
                 diagnostic_only = kind == "run_status"
                     && crate::tools::failure::diagnostic_only_update(
                         &finished_record(&previous),
@@ -841,6 +855,9 @@ impl<
                     }
                 }
             }
+            if ending {
+                crate::send_future(self.count_tool_use(&mut tx, run)).await?;
+            }
             // Activity-only rows (compaction call/result, scheduled retries, retired preloads, closing
             // reminders, model-call usage, saved approvals); context assembly skips their steps.
             for entry in run["_activity_items"].as_array().into_iter().flatten() {
@@ -1106,6 +1123,53 @@ impl<
     }
 
     /// Save the run's newest input item when it is a tool result, with its metadata.
+    /// Add one ended run's tool use (`_tool_use`: its model-issued calls, the approvals it asked
+    /// for and the saved approvals it used) to the owner's `tool_use` counters in one statement.
+    /// No statement per call or per model call.
+    fn count_tool_use<'s, 'tx>(
+        &'s self,
+        tx: &'s mut sqlx::Transaction<'tx, sqlx::Sqlite>,
+        run: &'s Value,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 's + use<'s, 'tx, R, H, Q, N, U>
+    where
+        'tx: 's,
+    {
+        async move {
+            let mut counts: std::collections::BTreeMap<String, [i64; 3]> = Default::default();
+            for (name, used) in run["_tool_use"].as_object().into_iter().flatten() {
+                let entry = counts.entry(name.clone()).or_default();
+                entry[0] += used["calls"].as_i64().unwrap_or(0);
+                entry[1] += used["asked"].as_i64().unwrap_or(0);
+                entry[2] += used["saved"].as_i64().unwrap_or(0);
+            }
+            if counts.is_empty() {
+                return Ok(());
+            }
+            let agent = run["agent_id"].as_str().unwrap_or("shared_default");
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs() as i64;
+            let sql = format!(
+                "INSERT INTO tool_use(agent_id,tool,calls,asked,saved,last_used_at) VALUES {} \
+                 ON CONFLICT(agent_id,tool) DO UPDATE SET calls=calls+excluded.calls,\
+                 asked=asked+excluded.asked,saved=saved+excluded.saved,\
+                 last_used_at=excluded.last_used_at",
+                vec!["(?,?,?,?,?,?)"; counts.len()].join(",")
+            );
+            let mut query = sqlx::query(&sql);
+            for (name, [calls, asked, saved]) in &counts {
+                query = query
+                    .bind(agent)
+                    .bind(name)
+                    .bind(calls)
+                    .bind(asked)
+                    .bind(saved)
+                    .bind(now);
+            }
+            query.execute(&mut **tx).await?;
+            Ok(())
+        }
+    }
     fn insert_tool_output<'s, 'tx>(
         &'s self,
         tx: &'s mut sqlx::Transaction<'tx, sqlx::Sqlite>,
@@ -1533,6 +1597,26 @@ fn reshapes_context(kind: &str) -> bool {
 /// same input. Runs that are not finished are returned unchanged. Identical to
 /// `webagent_storage::recovery::finished_run`, which the engine cannot depend on; a root
 /// test keeps the two in step.
+/// Count a model step's tool calls into the run's `_tool_use`, once per model turn: a step saved
+/// again (its interaction rows are then ignored) is not counted twice.
+fn count_model_calls(run: &mut Value, payload: &Value) {
+    let names: Vec<String> = payload["output"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["type"] == "function_call")
+        .filter_map(|item| item["name"].as_str().map(str::to_owned))
+        .collect();
+    let turn = json!(crate::runtime::run::model_turn(run));
+    if names.is_empty() || run["_tool_use_turn"] == turn {
+        return;
+    }
+    run["_tool_use_turn"] = turn;
+    for name in names {
+        crate::runtime::policy::count_tool_use(run, &name, "calls");
+    }
+}
+
 pub fn finished_record(run: &Value) -> Value {
     let mut record = run.clone();
     if matches!(

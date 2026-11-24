@@ -430,7 +430,7 @@ $('chat-continue-btn').disabled=sharedAccess?.can_send===false||sharing.state?.p
 for(const run of relevant){
   if(run.pending&&run.status==='waiting_approval'&&run.pending.id&&run.pending.can_decide!==false&&!sharedAccess?.observer){
     const p=run.pending;
-    chatActions.showTool({approval:p,run,active,expanded:expandedApprovals,decide:async(decision,extra={})=>{
+    chatActions.showTool({approval:p,run,active,agentId:sessionItems.find(item=>item.id===session)?.agent_id,expanded:expandedApprovals,decide:async(decision,extra={})=>{
       await client.decide(p.id,{decision,...extra,client_request_id:keyId('approval:'+p.id+':'+decision+':'+JSON.stringify(extra))});
       if(p.messaging_binding)void messagingRoutes.refresh().catch(error=>note(error.message));await refresh();
     },cancel:()=>cancel(run.id)});

@@ -74,6 +74,15 @@
       "type": "agent_configuration"
     },
     {
+      "id": "permissions-actions",
+      "title": "Permissions & Actions",
+      "description": "Your saved approvals and recorded actions with this agent.",
+      "order": 28,
+      "panelId": "permissions-actions-page",
+      "icon": "shield-check",
+      "type": "agent_configuration"
+    },
+    {
       "id": "sessions",
       "title": "Sessions",
       "description": "Browse your conversations across agents.",

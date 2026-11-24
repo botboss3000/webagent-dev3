@@ -1,6 +1,5 @@
 import {requestTouchVibration} from '../../../../shared/vibrate/vibrate.js';
 import {createMainNotes} from '../../../../chat/elements/main-notes/index.js';
-import {mountActions} from '../../../../shared/actions/actions-list.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 /** Artifacts: what an agent keeps across conversations for this user — Main Notes, saved scripts and UI elements. Text-only DOM; script and element content is untrusted. */
 export async function renderArtifacts(host,request,{agentId}) {
@@ -11,10 +10,6 @@ export async function renderArtifacts(host,request,{agentId}) {
   const controller=createMainNotes({request,agentId});controller.element.open=true;notes.box.append(controller.element);host._artifactsNotes=controller;
   const elements=section('UI elements');host.append(elements.box);
   void renderElements(elements,request,agentId,()=>host._artifactsGeneration===generation,()=>renderArtifacts(host,request,{agentId}));
-  const actions=section('Actions');host.append(actions.box);
-  actions.box.append(node('p','Your recorded actions with this agent: publishing, pushing and other tool calls that must not happen twice. Mark an uncertain one done or failed after checking what really happened.','ac-hint'));
-  const actionsBox=node('div');actions.box.append(actionsBox);
-  void mountActions(actionsBox,request,'/actions?agent='+encodeURIComponent(agentId),{showSession:true,resolvePath:id=>'/actions/'+encodeURIComponent(id)+'/resolve'}).then(list=>{if(host._artifactsGeneration===generation)actions.count.textContent=String(list.length);});
   const scripts=section('Saved scripts');host.append(scripts.box);
   const status=node('p','Loading…','ac-hint');status.setAttribute('role','status');scripts.box.append(status);
   const path='/agents/'+encodeURIComponent(agentId)+'/saved-scripts';
