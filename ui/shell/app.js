@@ -42,7 +42,7 @@ import { renderAgentDirectory } from '../main-panel/agents/pages/config/page.js'
 import { mountSelectionTable } from '../main-panel/agents/pages/model/page.js';
 import { mountSessionsPage } from '../main-panel/agents/pages/sessions/page.js';
 import { mountAvailableModels } from '../main-panel/account/available-models.js';
-let availableModelsDispose;
+let availableModelsDispose,linkedBrowsersDispose;
 let selectionTable;
 let agentSelectionQueue=Promise.resolve();
 let sessionsPage=null,sessionsGeneration=0;
@@ -587,7 +587,7 @@ function abilityDriftFor(me){
 function out(){if(document.body.classList.contains('app-restricted'))return;
   // Signing out drops administrator pages from the shell, not only from view.
   catalogUser=null;if(mainPages.some(page=>page.admin))void loadMainPages().catch(()=>{});
-  void clearConversations();abilityDriftFor(null);issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);clearInterval(accessNoticePoll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+  void clearConversations();abilityDriftFor(null);issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;linkedBrowsersDispose?.();linkedBrowsersDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);clearInterval(accessNoticePoll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;
 // The agent settings widgets belong to the agents page, which loads on first navigation.
 if($('connection')){$('shutoff').querySelector('span').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}}chat.runs(state.runs||[]);}
@@ -883,6 +883,12 @@ $('account-profile-form').onsubmit=async event=>{
 loadAccountControls=async function(){
   availableModelsDispose?.();
   availableModelsDispose=mountAvailableModels($('account-available-models'),api);
+  // Loaded when the account page opens, so it stays out of the start-up module graph.
+  linkedBrowsersDispose?.();linkedBrowsersDispose=null;
+  void import('../main-panel/account/linked-browsers.js').then(({mountLinkedBrowsers})=>{
+    if(!accountMe||!$('account-linked-browsers'))return;
+    linkedBrowsersDispose?.();linkedBrowsersDispose=mountLinkedBrowsers($('account-linked-browsers'),api);
+  }).catch(()=>{});
   void loadPlanPanel();
   try{
     const [policy,listing]=await Promise.all([api('/auth/session-policy'),api('/auth/sessions')]);

@@ -10,6 +10,7 @@ export const COMMANDS = new Set([
   'Runtime.enable', 'Runtime.addBinding', 'Runtime.evaluate', 'Runtime.callFunctionOn',
   'Accessibility.enable', 'Accessibility.getFullAXTree',
   'DOM.getDocument', 'DOM.scrollIntoViewIfNeeded', 'DOM.getBoxModel', 'DOM.focus', 'DOM.resolveNode',
+  'DOM.getNodeForLocation', 'DOM.describeNode',
   'Input.dispatchMouseEvent', 'Input.dispatchKeyEvent', 'Input.insertText',
 ]);
 
@@ -46,11 +47,35 @@ export function siteAllowed(url, sites, blocked) {
   return sites.some(site => related(host, site));
 }
 
+// D3: a member of someone else's agent agrees to each listed site first. The server then sends
+// `consent`, the entries they agreed to; null means the person owns or operates the agent.
+export function consentRefusal(url, sites, consent) {
+  if (!Array.isArray(consent)) return null;
+  const host = hostOf(url);
+  const entry = sites.find(site => related(host, site));
+  if (entry && consent.includes(entry)) return null;
+  return `The user has not agreed to let this agent use ${entry || host} in their browser; they allow it under Manage account → Linked browsers`;
+}
+
+// D6: a click lands where it is aimed, so one aimed into a frame from another site than the tab's
+// own would act on that site. Same site: the same host, or both under one entry of the site
+// list. A frame without a web address (about:blank, srcdoc, data:) belongs to its page; a blob:
+// address is judged by the origin inside it.
+export function frameRefusal(frameUrl, tabUrl, sites) {
+  const url = String(frameUrl || '').replace(/^blob:/i, '');
+  if (!/^https?:/i.test(url)) return null;
+  const frame = hostOf(url), tab = hostOf(tabUrl);
+  if (frame === tab) return null;
+  const entry = host => sites.find(site => related(host, site));
+  if (entry(tab) && entry(frame) === entry(tab)) return null;
+  return `The click would land in a frame from ${frame}, another site than this tab's ${tab}; the agent does not click inside other sites' frames`;
+}
+
 // The refusal for `action` on `tab` as it is now, or null. A tab on a forbidden host may only
 // be closed; a tab off the list may also be navigated (to a checked address); a tab outside
-// the agent's own group is not the agent's. `pendingUrl` counts too: a page that is leaving
-// is judged by where it goes.
-export function tabRefusal(action, tab, {sites, blocked, group}) {
+// the agent's own group is not the agent's; a site the user has not agreed to (D3) is refused like
+// one off the list. `pendingUrl` counts too: a page that is leaving is judged by where it goes.
+export function tabRefusal(action, tab, {sites, blocked, group, consent = null}) {
   if (group == null || tab.groupId !== group) {
     return 'This tab is not in the WebAgent tab group, so the agent does not act on it; open a new tab';
   }
@@ -64,6 +89,8 @@ export function tabRefusal(action, tab, {sites, blocked, group}) {
     if (action !== 'navigate' && !siteAllowed(url, sites, blocked)) {
       return `The agent tab is on ${host || url}, which is not on this agent's site list`;
     }
+    const unagreed = action !== 'navigate' && consentRefusal(url, sites, consent);
+    if (unagreed) return unagreed;
   }
   return null;
 }

@@ -3,7 +3,9 @@ async function render() {
   const state = await chrome.runtime.sendMessage({type: 'link-state'});
   $('status').textContent = !state?.user_id
     ? 'Not linked. Open WebAgent in this browser and sign in; it links automatically.'
-    : `Linked to ${state.user_id} on ${new URL(state.origin).host}.` + (state.paused ? ' You have control; the agent is waiting.' : '');
+    : `Linked to ${state.username || state.user_id} on ${new URL(state.origin).host}.` + (state.paused ? ' You have control; the agent is waiting.' : '');
+  $('outdated').textContent = state?.outdated || '';
+  $('outdated').hidden = !state?.outdated;
   $('unlink').hidden = !state?.user_id;
   $('hand-back').hidden = !state?.paused;
 }

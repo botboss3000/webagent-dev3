@@ -267,6 +267,8 @@ pub(crate) const ROUTES: &[Route] = &[
     public("/api/v3/auth/setup-status"),
     read("/api/v3/auth/ui-config"),
     public("/api/v3/browser/ack"),
+    none("/api/v3/browser/consents"),
+    none("/api/v3/browser/consents/{id}"),
     none("/api/v3/browser/devices"),
     none("/api/v3/browser/devices/{id}"),
     none("/api/v3/browser/link-code"),

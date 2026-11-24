@@ -311,6 +311,12 @@ pub(super) fn router(app: App) -> Router {
             "/browser/devices/{id}",
             axum::routing::delete(crate::browser::revoke),
         )
+        // Browser Extension: a member's per-site agreements for shared agents (Manage account).
+        .route("/browser/consents", get(crate::browser::consents))
+        .route(
+            "/browser/consents/{id}",
+            post(crate::browser::allow_consent).delete(crate::browser::remove_consent),
+        )
         // Browser Control: the caller's saved site sign-ins, listed and removed on the abilities page.
         .route("/browser/sites", get(crate::browser::sites))
         .route(

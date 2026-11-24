@@ -1,14 +1,19 @@
 // WebAgent Browser Extension service worker.
 //
 // Linking: the content script on WebAgent's pages passes a one-time code; it is traded for
-// this device's secret. Work: long-poll the server for the linked account's actions, run
+// this device's secret. Linking to another account than the last one asks the user first.
+// The extension sends its version with every request; the server refuses outdated ones. Work: long-poll the server for the linked account's actions, run
 // each one with the debugger in the agent's own window, and post the result. The agent
 // never touches tabs outside its own tab group, never acts on a site outside the agent's
 // list, and never on this app's own address or a private one (guard.js, checked at every
 // action and again before each input).
-import {COMMANDS, describeTab, hostOf, siteAllowed, tabRefusal} from './guard.js';
+import {COMMANDS, consentRefusal, describeTab, frameRefusal, hostOf, siteAllowed, tabRefusal} from './guard.js';
 
 const API = '/api/v3/browser';
+const VERSION = chrome.runtime.getManifest().version;
+const HEADERS = {'content-type': 'application/json', 'x-webagent-extension': VERSION};
+// How long a declined link to another account is not asked about again.
+const DECLINE_MS = 10 * 60 * 1000;
 // The overlay and its take-over signal live in a separate script world, out of the page's reach.
 const WORLD = 'webagent-overlay';
 const READ_LIMIT = 12000;
@@ -33,22 +38,75 @@ const session = {
 async function api(link, path, body) {
   return fetch(link.origin + API + path, {
     method: 'POST',
-    headers: {'content-type': 'application/json', authorization: 'Bearer ' + link.secret},
+    headers: {...HEADERS, authorization: 'Bearer ' + link.secret},
     body: JSON.stringify(body || {}),
   });
 }
 
 async function linkWith(code, origin) {
+  // Look at the code first: which account would this browser be linked to?
+  const look = await fetch(origin + API + '/link', {method: 'POST', headers: HEADERS,
+    body: JSON.stringify({code, preview: true})});
+  if (!look.ok) throw new Error('Link failed: ' + look.status);
+  const target = await look.json();
   const previous = await local.get('link');
+  // The account linked last stays remembered after an unlink, so a later link to another
+  // account is still noticed. Installs from before 0.3.0 only kept `link`.
+  const last = await local.get('last_account') || (previous && {user_id: previous.user_id, origin: previous.origin});
+  if (last && (last.user_id !== target.user_id || last.origin !== origin)) {
+    const key = origin + ' ' + target.user_id;
+    const declined = await session.get('declined') || {};
+    if (declined[key] > Date.now()) return {linked: false};
+    const yes = await confirmLink({account: target.username || target.user_id, host: hostOf(origin),
+      previous: last.username || 'another account', previous_host: hostOf(last.origin)});
+    if (!yes) {
+      await session.set('declined', {...declined, [key]: Date.now() + DECLINE_MS});
+      return {linked: false};
+    }
+  }
   if (previous) await api(previous, '/unlink').catch(() => {});
   const response = await fetch(origin + API + '/link', {
-    method: 'POST', headers: {'content-type': 'application/json'},
+    method: 'POST', headers: HEADERS,
     body: JSON.stringify({code, name: 'Chrome on ' + (navigator.userAgentData?.platform || 'this computer')}),
   });
   if (!response.ok) throw new Error('Link failed: ' + response.status);
   const linked = await response.json();
-  await local.set('link', {origin, secret: linked.secret, user_id: linked.user_id, device_id: linked.device_id});
+  await local.set('link', {origin, secret: linked.secret, user_id: linked.user_id, username: target.username,
+    device_id: linked.device_id});
+  await local.set('last_account', {user_id: linked.user_id, username: target.username, origin});
   poll();
+  return {linked: true};
+}
+
+// Ask in a small extension window whether to link to `details.account`. Closing the window,
+// or no answer before the link code runs out, means no.
+let asking = null;
+function confirmLink(details) {
+  if (asking) return Promise.resolve(false);
+  const id = crypto.randomUUID();
+  return new Promise(resolve => {
+    let windowId = null;
+    // Keep the worker running while the user decides.
+    const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
+    const closed = removed => { if (removed === windowId) done(false); };
+    const timer = setTimeout(() => done(false), 100000);
+    function done(answer) {
+      if (asking?.id !== id) return;
+      asking = null;
+      clearTimeout(timer);
+      clearInterval(keepAlive);
+      chrome.windows.onRemoved.removeListener(closed);
+      session.set('confirm', null);
+      if (windowId != null) chrome.windows.remove(windowId).catch(() => {});
+      resolve(answer);
+    }
+    asking = {id, done};
+    chrome.windows.onRemoved.addListener(closed);
+    session.set('confirm', {id, ...details})
+      .then(() => chrome.windows.create({url: chrome.runtime.getURL('confirm.html'), type: 'popup',
+        width: 440, height: 300, focused: true}))
+      .then(window => { windowId = window.id; }, () => done(false));
+  });
 }
 
 async function unlink() {
@@ -66,13 +124,19 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   (async () => {
     if (sender.id !== chrome.runtime.id) return null;
     const fromPopup = !sender.tab;
+    const fromConfirm = sender.url === chrome.runtime.getURL('confirm.html');
     if (message.type === 'link-state') {
       const link = await local.get('link');
-      return {user_id: link?.user_id || null, origin: link?.origin || null, online: polling, paused: await session.get('paused') || false};
+      return {user_id: link?.user_id || null, username: link?.username || null, origin: link?.origin || null,
+        online: polling, paused: await session.get('paused') || false, outdated: await local.get('outdated') || null};
     }
     if (message.type === 'link' && !fromPopup && allowedOrigin(sender) && sender.origin === message.origin) {
-      await linkWith(message.code, message.origin);
-      return {linked: true};
+      return linkWith(message.code, message.origin);
+    }
+    if (message.type === 'confirm-state' && fromConfirm) return session.get('confirm');
+    if (message.type === 'confirm-answer' && fromConfirm && asking?.id === message.id) {
+      asking.done(message.link === true);
+      return {answered: true};
     }
     if (message.type === 'unlink' && fromPopup) { await unlink(); return {unlinked: true}; }
     if (message.type === 'hand-back' && fromPopup) { await setPaused(false); return {paused: false}; }
@@ -98,7 +162,15 @@ async function poll() {
       try {
         const response = await api(link, '/next');
         if (response.status === 401) { await chrome.storage.local.remove('link'); return; }
+        if (response.status === 426) {
+          // Too old for this server: say so in the popup and ask again now and then.
+          const {error} = await response.json().catch(() => ({}));
+          await local.set('outdated', error || 'This extension is out of date; download it again from WebAgent.');
+          await sleep(60000);
+          continue;
+        }
         if (!response.ok) throw new Error('poll ' + response.status);
+        if (await local.get('outdated')) await chrome.storage.local.remove('outdated');
         ({call} = await response.json());
       } catch {
         await sleep(5000);
@@ -119,7 +191,7 @@ async function run(link, call) {
   try {
     // The app's own hosts: those the server names, plus the one this browser is linked to.
     const blocked = [...new Set([...(call.blocked_hosts || []), hostOf(link.origin)].filter(Boolean))];
-    body = {id: call.id, output: await act(call.args, {sites: call.sites || [], blocked})};
+    body = {id: call.id, output: await act(call.args, {sites: call.sites || [], blocked, consent: call.consent ?? null})};
   } catch (error) {
     body = {id: call.id, error: String(error.message || error), started: error.started === true};
   }
@@ -312,6 +384,39 @@ async function center(tabId, ref) {
   return {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, rect};
 }
 
+// The web address of the frame a click at (x, y) would land in: the hit node's own frame, or the
+// frame a frame element (iframe, frame, object, embed) shows there. A child frame in another
+// process is not in this tab's frame tree; its element's address stands in, and a frame whose
+// address cannot be told is refused (cross-site frames run in another process).
+const attribute = (node, name) => {
+  const list = node.attributes || [];
+  for (let i = 0; i + 1 < list.length; i += 2) if (list[i] === name) return list[i + 1];
+  return null;
+};
+async function frameAt(tabId, x, y) {
+  const {frameTree} = await cdp(tabId, 'Page.getFrameTree');
+  const urls = new Map();
+  const walk = tree => { urls.set(tree.frame.id, tree.frame.url); (tree.childFrames || []).forEach(walk); };
+  walk(frameTree);
+  const top = frameTree.frame;
+  const unknown = 'The click would land in a frame whose address cannot be read; the agent does not click there';
+  const hit = await cdp(tabId, 'DOM.getNodeForLocation', {x: Math.round(x), y: Math.round(y), includeUserAgentShadowDOM: true});
+  let url = top.url;
+  if (hit.frameId && hit.frameId !== top.id) {
+    url = urls.get(hit.frameId);
+    if (!url) throw failure(unknown);
+  }
+  const {node} = await cdp(tabId, 'DOM.describeNode', {backendNodeId: hit.backendNodeId});
+  if (/^(IFRAME|FRAME|OBJECT|EMBED|FENCEDFRAME|PORTAL)$/.test(node.nodeName || '')) {
+    const source = attribute(node, 'src') ?? attribute(node, 'data');
+    let shown = node.frameId && urls.get(node.frameId);
+    if (!shown && source) { try { shown = new URL(source, url).href; } catch { /* refused below */ } }
+    if (!shown) throw failure(unknown);
+    url = shown;
+  }
+  return url;
+}
+
 async function pointAt(tabId, ref, caption) {
   const target = await center(tabId, ref);
   await overlay(tabId, `box(${JSON.stringify(target.rect)})`);
@@ -388,6 +493,8 @@ async function act(args, rules) {
   if ((action === 'open' || action === 'navigate') && !siteAllowed(args.url, rules.sites, rules.blocked)) {
     throw failure(`${args.url} is not on this agent's site list, or is an address the agent never opens`);
   }
+  const unagreed = (action === 'open' || action === 'navigate') && consentRefusal(args.url, rules.sites, rules.consent);
+  if (unagreed) throw failure(unagreed);
   if (action === 'open') {
     const tab = await openTab(args.url);
     await attach(tab.id);
@@ -428,7 +535,9 @@ async function act(args, rules) {
   if (action === 'click') {
     const {x, y} = await pointAt(tab.id, args.ref, 'Clicking ' + label);
     await overlay(tab.id, 'expect(800)');
-    await still();
+    const here = await still();
+    const intoFrame = frameRefusal(await frameAt(tab.id, x, y), here.url, rules.sites);
+    if (intoFrame) { await overlay(tab.id, 'box(null)').catch(() => {}); throw failure(intoFrame); }
     await cdp(tab.id, 'Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
     try {
       await cdp(tab.id, 'Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button: 'left', clickCount: 1});

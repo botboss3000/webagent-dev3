@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
-import {COMMANDS, describeTab, forbiddenHost, siteAllowed, tabRefusal} from './guard.js';
+import {COMMANDS, consentRefusal, describeTab, forbiddenHost, frameRefusal, siteAllowed, tabRefusal} from './guard.js';
 
 const APP = ['dev.webagent.live'];
 const rules = {sites: ['example.com'], blocked: APP, group: 7};
@@ -88,4 +88,58 @@ test('the overlay runs in its own script world, out of the page scripts reach', 
   assert.match(source, /'Runtime\.addBinding', \{name: '__webagentUser', executionContextName: WORLD\}/);
   assert.match(source, /'Page\.addScriptToEvaluateOnNewDocument', \{source: overlaySource, worldName: WORLD\}/);
   assert.doesNotMatch(source, /expression: `window\.__webagentOverlay/);
+});
+
+test('a member of a shared agent acts only on sites they agreed to', () => {
+  const member = {...rules, sites: ['example.com', 'crm.test'], consent: ['example.com']};
+  // Agreed: example.com and its subdomains; not agreed: crm.test, refused for every page action.
+  assert.equal(tabRefusal('click', tab('https://www.example.com/a'), member), null);
+  for (const action of ['read', 'click', 'type', 'press', 'scroll']) {
+    assert.match(tabRefusal(action, tab('https://crm.test/x'), member), /not agreed/, action);
+  }
+  assert.match(consentRefusal('https://crm.test/', member.sites, member.consent), /crm\.test.*Linked browsers/);
+  assert.equal(consentRefusal('https://app.example.com/', member.sites, member.consent), null);
+  // Nothing agreed yet refuses everything; owners and operators get no consent list at all.
+  assert.match(tabRefusal('read', tab('https://www.example.com/'), {...member, consent: []}), /not agreed/);
+  assert.equal(consentRefusal('https://crm.test/', member.sites, null), null);
+  assert.equal(tabRefusal('read', tab('https://crm.test/'), {...rules, sites: ['crm.test']}), null);
+  // Closing stays possible, and navigating away is judged by its target in act().
+  assert.equal(tabRefusal('close', tab('https://crm.test/x'), member), null);
+  assert.equal(tabRefusal('navigate', tab('https://crm.test/x'), member), null);
+  const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  assert.match(source, /consentRefusal\(args\.url, rules\.sites, rules\.consent\)/);
+  assert.match(source, /consent: call\.consent \?\? null/);
+});
+
+test('a click into a frame from another site is refused, the page and its own frames are not', () => {
+  const sites = ['site-a.test', 'example.com'];
+  const page = 'https://www.site-a.test/form';
+  assert.match(frameRefusal('https://ads.other.test/frame', page, sites), /frame from ads\.other\.test/);
+  // A listed site in a frame of another listed site is still another site.
+  assert.match(frameRefusal('https://example.com/embed', page, sites), /another site/);
+  assert.match(frameRefusal('blob:https://other.test/1f0e', page, sites), /other\.test/);
+  for (const same of [page, 'https://www.site-a.test/other', 'https://cdn.site-a.test/widget',
+    'about:blank', 'about:srcdoc', 'data:text/html,hi', 'blob:https://www.site-a.test/1f0e']) {
+    assert.equal(frameRefusal(same, page, sites), null, same);
+  }
+  const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  assert.match(source, /frameRefusal\(await frameAt\(tab\.id, x, y\), here\.url, rules\.sites\)/);
+  // The check runs before the mouse is pressed.
+  assert.ok(source.indexOf('frameAt(tab.id, x, y)') < source.indexOf("type: 'mousePressed'"));
+});
+
+test('the extension names its version and asks before linking to another account', () => {
+  const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.version, '0.3.0');
+  assert.match(source, /'x-webagent-extension': VERSION/);
+  assert.match(source, /response\.status === 426/);
+  // Preview first; only a different account (or app) than the last asks; the same one stays silent.
+  assert.ok(source.indexOf('preview: true') < source.indexOf("api(previous, '/unlink')"));
+  assert.match(source, /last\.user_id !== target\.user_id \|\| last\.origin !== origin/);
+  assert.match(source, /await confirmLink\(/);
+  // Only the extension's own confirmation page can answer.
+  assert.match(source, /sender\.url === chrome\.runtime\.getURL\('confirm\.html'\)/);
+  const install = readFileSync(new URL('./install.js', import.meta.url), 'utf8');
+  for (const file of ['confirm.html', 'confirm.js']) assert.ok(install.includes(`'${file}'`), file);
 });

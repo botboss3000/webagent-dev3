@@ -171,3 +171,20 @@ body.light-mode .account-btn-primary {
     color: var(--bg-0);
   }
 body.light-mode .account-status { color: var(--fg-2); }
+/* Linked browsers: rows wrap so the buttons drop below the text on phones. */
+#tab-account .account-linked .account-signin-row {
+    flex-wrap: wrap;
+  }
+.account-linked-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+.account-linked-actions .account-btn {
+    -webkit-tap-highlight-color: transparent;
+  }
+.account-linked-subtitle {
+    font-size: 14px;
+    margin: 18px 0 6px;
+    color: var(--fg-1);
+  }

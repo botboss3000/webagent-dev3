@@ -1,4 +1,5 @@
-//! Running Browser Control limits from the live `browser-limits.json`.
+//! Running Browser Control limits from the live `browser-limits.json`, and the oldest Browser
+//! Extension version the server still serves.
 use anyhow::{bail, Result};
 use serde_json::Value;
 
@@ -15,6 +16,9 @@ pub struct Limits {
     pub queued_idle_seconds: u64,
     /// How long a tool call waits in the queue before it answers that the browser is busy.
     pub max_wait_seconds: u64,
+    /// The oldest Browser Extension version that may take actions (D4); older installs are
+    /// told to update.
+    pub min_extension_version: (u32, u32, u32),
 }
 
 impl Default for Limits {
@@ -26,6 +30,7 @@ impl Default for Limits {
             idle_seconds: 180,
             queued_idle_seconds: 30,
             max_wait_seconds: 600,
+            min_extension_version: (0, 2, 0),
         }
     }
 }
@@ -47,7 +52,7 @@ impl Limits {
         let Some(object) = value.as_object() else {
             bail!("Browser limits must be an object");
         };
-        const KEYS: [&str; 7] = [
+        const KEYS: [&str; 8] = [
             "_instructions",
             "schema_version",
             "max_running_per_app",
@@ -55,6 +60,7 @@ impl Limits {
             "idle_seconds",
             "queued_idle_seconds",
             "max_wait_seconds",
+            "min_extension_version",
         ];
         if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
             bail!("Unknown browser limit");
@@ -67,12 +73,21 @@ impl Limits {
         let idle_seconds = bounded(&value, "idle_seconds", 30, 3600)?;
         let queued_idle_seconds = bounded(&value, "queued_idle_seconds", 10, idle_seconds)?;
         let max_wait_seconds = bounded(&value, "max_wait_seconds", 30, 3600)?;
+        // Optional: a file without it keeps the default minimum.
+        let min_extension_version = match value.get("min_extension_version") {
+            None => Self::default().min_extension_version,
+            Some(text) => text
+                .as_str()
+                .and_then(crate::extension_version)
+                .ok_or_else(|| anyhow::anyhow!("min_extension_version must look like 0.2.0"))?,
+        };
         Ok(Self {
             per_app: usize::try_from(per_app)?,
             per_user: usize::try_from(per_user)?,
             idle_seconds,
             queued_idle_seconds,
             max_wait_seconds,
+            min_extension_version,
         })
     }
 
@@ -86,6 +101,7 @@ impl Limits {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
@@ -105,5 +121,18 @@ mod tests {
         assert!(Limits::parse(format!("{zero}}}").as_bytes()).is_err());
         let slow = base.replace("\"queued_idle_seconds\":30", "\"queued_idle_seconds\":600");
         assert!(Limits::parse(format!("{slow}}}").as_bytes()).is_err());
+        let newer =
+            Limits::parse(format!("{base},\"min_extension_version\":\"0.3.0\"}}").as_bytes());
+        assert_eq!(newer.unwrap().min_extension_version, (0, 3, 0));
+        assert_eq!(
+            Limits::parse(format!("{base}}}").as_bytes())
+                .unwrap()
+                .min_extension_version,
+            (0, 2, 0)
+        );
+        for bad in ["\"0.3\"", "3", "\"latest\""] {
+            let text = format!("{base},\"min_extension_version\":{bad}}}");
+            assert!(Limits::parse(text.as_bytes()).is_err(), "{bad}");
+        }
     }
 }

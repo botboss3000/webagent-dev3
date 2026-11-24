@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Link this browser?</title>
+<style>
+  body{margin:0;font:14px/1.5 system-ui,sans-serif;background:#1f1d2b;color:#f2f1f7}
+  main{padding:18px 20px;display:grid;gap:12px}
+  h1{font-size:16px;margin:0}
+  p{margin:0;color:#c9c6d9;overflow-wrap:anywhere}
+  strong{color:#fff}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{font:inherit;border:1px solid #7c5cff;background:transparent;color:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  button.primary{background:#7c5cff}
+  button:hover,button:focus-visible{background:#6a4be8;outline:none}
+  button:active{transform:scale(.97)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Link this browser to another account?</h1>
+  <p id="question">Loading…</p>
+  <p>The agents of the account you link can work in this browser, in their own tab group, on the sites their operators allow.</p>
+  <div class="row">
+    <button id="link" class="primary" type="button" disabled>Link</button>
+    <button id="keep" type="button" disabled>Don’t link</button>
+  </div>
+</main>
+<script src="confirm.js"></script>
+</body>
+</html>

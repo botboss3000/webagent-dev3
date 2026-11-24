@@ -23,6 +23,15 @@ const DEVICES: &str = "browser_device:";
 const SECRETS: &str = "browser_secret:";
 /// `{user, expires, source, generation}` per unused link code, keyed by the code's digest.
 const LINKS: &str = "browser_link:";
+/// `{id, agent, host, state: "asked"|"allowed", at}` per agent and listed site, in the user's
+/// own store: a member's agreement that a shared agent may use that site in their browser (D3).
+/// Under `administrator_browser:` because storage routes that namespace to each user's own
+/// database; a new prefix would land in the shared application database.
+const CONSENTS: &str = "administrator_browser:extension_consent:";
+/// Unanswered consent requests one user keeps; asking again drops their oldest.
+const LIVE_ASKS: usize = 20;
+/// The header the extension sends its version in with every request (D4).
+const VERSION_HEADER: &str = "x-webagent-extension";
 /// Unexpired link codes one user may hold; issuing another drops their oldest.
 const LIVE_CODES: usize = 3;
 /// How often a waiting side re-reads the call document.
@@ -98,7 +107,9 @@ pub(crate) async fn link_code(
     Ok(Json(json!({"code":code})))
 }
 
-/// Trade a link code for this device's own secret, returned once.
+/// Trade a link code for this device's own secret, returned once. With `preview: true` the
+/// code is only looked at, not used: the extension learns which account it would link to and
+/// asks the user first when that is another account than its last one (D1).
 pub(crate) async fn link(
     State(app): State<App>,
     Json(input): Json<Value>,
@@ -124,6 +135,14 @@ pub(crate) async fn link(
     let key = format!("{LINKS}{}", digest(&json!(code)));
     let _guard = app.gate.lock().await;
     let pending = app.store.get(&key).await?.ok_or_else(invalid)?;
+    if input["preview"] == true {
+        if now() > pending["expires"].as_u64().unwrap_or(0) {
+            return Err(invalid());
+        }
+        let user = pending["user"].as_str().ok_or_else(invalid)?;
+        let account = app.store.account_by_id(user).await?.ok_or_else(invalid)?;
+        return Ok(Json(json!({"user_id":user,"username":account["username"]})));
+    }
     // A code works once, even when it has expired.
     app.store.delete(&key).await?;
     if now() > pending["expires"].as_u64().unwrap_or(0) {
@@ -233,12 +252,27 @@ pub(crate) async fn next(
     let device = admit(&app, &headers).await?;
     let deadline = now() + rules::POLL_SECS;
     let device_key = format!("{DEVICES}{}:{}", device.user, device.id);
+    let version: Option<String> = headers
+        .get(VERSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.chars().take(20).collect());
+    let minimum = rules::limits::Limits::live().min_extension_version;
+    let supported = rules::extension_supported(version.as_deref(), minimum);
     loop {
         {
             let _guard = app.gate.lock().await;
             if let Some(mut record) = app.store.get(&device_key).await? {
                 record["last_seen"] = json!(now());
+                record["version"] = json!(version);
                 app.store.put(&device_key, &record).await?;
+            }
+            // An outdated extension is seen (so the agent can say "update it") but gets no work.
+            if !supported {
+                let (major, minor, patch) = minimum;
+                return Err(ApiError(
+                    StatusCode::UPGRADE_REQUIRED,
+                    format!("This WebAgent browser extension is out of date; version {major}.{minor}.{patch} or newer is needed. Download it again from {} and reload it in chrome://extensions.", install_url()),
+                ));
             }
             for mut call in app.store.list(&format!("{CALLS}{}:", device.user)).await? {
                 let key = format!(
@@ -276,7 +310,7 @@ fn offer(call: &Value) -> Value {
         _ => json!(blocked_hosts()),
     };
     json!({"id":call["id"],"args":call["args"],"sites":call["sites"],
-        "blocked_hosts":blocked,"session":call["session"]})
+        "blocked_hosts":blocked,"consent":call["consent"],"session":call["session"]})
 }
 
 fn call_id(input: &Value) -> Result<&str, ApiError> {
@@ -392,15 +426,138 @@ pub(crate) async fn revoke(
 
 async fn device_list(store: &Store, user: &str) -> Result<Vec<Value>> {
     let at = now();
+    let minimum = rules::limits::Limits::live().min_extension_version;
     Ok(store
         .list(&format!("{DEVICES}{user}:"))
         .await?
         .into_iter()
         .map(|d| {
             let online = rules::recently_seen(d["last_seen"].as_u64(), at);
-            json!({"id":d["id"],"name":d["name"],"created":d["created"],"last_seen":d["last_seen"],"online":online})
+            let outdated = !rules::extension_supported(d["version"].as_str(), minimum);
+            json!({"id":d["id"],"name":d["name"],"created":d["created"],"last_seen":d["last_seen"],
+                "online":online,"version":d["version"],"outdated":outdated})
         })
         .collect())
+}
+
+fn consent_key(agent: &str, site: &str) -> String {
+    format!("{CONSENTS}{}", digest(&json!([agent, site])))
+}
+
+/// Whether `user` must agree to each site before `agent` acts in their browser (D3): yes
+/// unless they own or operate the agent. Unreadable access fails the call.
+async fn needs_consent(store: &Store, user: &str, agent: &str) -> Result<bool> {
+    let access = store.live_access(user, agent).await?;
+    Ok(access.agent_owner_id != user && !access.agent_administrator)
+}
+
+/// The entries of `sites` that `store`'s user agreed `agent` may use.
+async fn agreed_sites(store: &Store, agent: &str, sites: &[String]) -> Result<Vec<String>> {
+    let mut agreed = Vec::new();
+    for site in sites {
+        if store
+            .get(&consent_key(agent, site))
+            .await?
+            .is_some_and(|c| c["state"] == "allowed")
+        {
+            agreed.push(site.clone());
+        }
+    }
+    Ok(agreed)
+}
+
+/// Record that `agent` asked to use `site`, for the user to allow on the Linked browsers list.
+async fn ask(store: &Store, agent: &str, site: &str) -> Result<()> {
+    let key = consent_key(agent, site);
+    if store.get(&key).await?.is_some() {
+        return Ok(());
+    }
+    let mut asked: Vec<(u64, String)> = store
+        .list(CONSENTS)
+        .await?
+        .into_iter()
+        .filter(|c| c["state"] == "asked")
+        .map(|c| {
+            let id = c["id"].as_str().unwrap_or_default();
+            (c["at"].as_u64().unwrap_or(0), format!("{CONSENTS}{id}"))
+        })
+        .collect();
+    asked.sort();
+    for (_, old) in asked
+        .iter()
+        .take((asked.len() + 1).saturating_sub(LIVE_ASKS))
+    {
+        store.delete(old).await?;
+    }
+    store
+        .put(
+            &key,
+            &json!({"id":digest(&json!([agent, site])),"agent":agent,"host":site,"state":"asked","at":now()}),
+        )
+        .await
+}
+
+/// The caller's site agreements for shared agents, allowed and asked (D3).
+pub(crate) async fn consents(Extension(app): Extension<App>) -> Result<Json<Value>, ApiError> {
+    let mut rows: Vec<Value> = app
+        .store
+        .list(CONSENTS)
+        .await?
+        .into_iter()
+        .map(|c| json!({"id":c["id"],"agent_id":c["agent"],"host":c["host"],"state":c["state"],"at":c["at"]}))
+        .collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row["at"].as_u64().unwrap_or(0)));
+    Ok(Json(json!({"consents":rows})))
+}
+
+/// The caller's agreement `id`, after checking the sign-in may change settings.
+async fn own_consent(app: &App, id: &str) -> Result<(String, Value), ApiError> {
+    // The request's identity, set by the sign-in middleware; none means refused.
+    if !app
+        .identity
+        .as_deref()
+        .is_some_and(crate::access::identity::Identity::may_change_settings)
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Change site agreements from a WebAgent sign-in".into(),
+        ));
+    }
+    if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Agreement id required".into(),
+        ));
+    }
+    let key = format!("{CONSENTS}{id}");
+    let record = app
+        .store
+        .get(&key)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Site agreement not found".into()))?;
+    Ok((key, record))
+}
+
+/// Allow a site a shared agent asked for; it may then act there in the caller's browser.
+pub(crate) async fn allow_consent(
+    Extension(app): Extension<App>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let (key, mut record) = own_consent(&app, &id).await?;
+    record["state"] = json!("allowed");
+    record["at"] = json!(now());
+    app.store.put(&key, &record).await?;
+    Ok(Json(json!({"allowed":true})))
+}
+
+/// Take back an agreement, or decline a request: the agent's next action there is refused.
+pub(crate) async fn remove_consent(
+    Extension(app): Extension<App>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let (key, _) = own_consent(&app, &id).await?;
+    app.store.delete(&key).await?;
+    Ok(Json(json!({"removed":true})))
 }
 
 pub(crate) fn owns(name: &str) -> bool {
@@ -990,12 +1147,16 @@ pub(crate) async fn execute(
     let (sites, refused) = agent_sites(&host, call.sid).await?;
     let blocked = blocked_hosts();
     let devices = device_list(&app.store, &user).await?;
-    let online = devices.iter().any(|d| d["online"] == true);
+    let online = devices
+        .iter()
+        .any(|d| d["online"] == true && d["outdated"] != true);
+    let outdated = !online && devices.iter().any(|d| d["online"] == true);
     if name == "browser_extension_status" {
-        let status = match (devices.is_empty(), online) {
-            (true, _) => "not_linked",
-            (false, true) => "online",
-            (false, false) => "offline",
+        let status = match (devices.is_empty(), online, outdated) {
+            (true, _, _) => "not_linked",
+            (false, true, _) => "online",
+            (false, false, true) => "outdated",
+            (false, false, false) => "offline",
         };
         let mut output = json!({"status":status,"devices":devices,"sites":sites});
         if !refused.is_empty() {
@@ -1005,6 +1166,9 @@ pub(crate) async fn execute(
         if status == "not_linked" {
             output["install_url"] = json!(install_url());
             output["next_step"] = json!("Give the user install_url: it explains installing the WebAgent browser extension in Chrome. Once installed it links to their account by itself while they are signed in here.");
+        } else if status == "outdated" {
+            output["install_url"] = json!(install_url());
+            output["next_step"] = json!("The user's extension is too old to take actions. Ask them to download it again from install_url and reload it in chrome://extensions.");
         } else if status == "offline" {
             output["next_step"] =
                 json!("Ask the user to open Chrome with the WebAgent extension installed.");
@@ -1019,6 +1183,29 @@ pub(crate) async fn execute(
     if let Err(error) = rules::check_action(args, &sites, &blocked) {
         return Ok(json!({"status":"denied","output":error.to_string()}));
     }
+    // A member of someone else's agent agrees to each listed site first (D3); the extension
+    // checks the same agreed entries against the tab at every action.
+    let agent = host.session_agent_id(call.sid).await?;
+    let consent = if needs_consent(&app.store, &user, &agent).await? {
+        let store = app.store.for_user(&user).await?;
+        let agreed = agreed_sites(&store, &agent, &sites).await?;
+        if let Err(entry) = rules::consent_refusal(args, &sites, &agreed) {
+            let place = format!(
+                "Manage account → Linked browsers ({}/app?tab=account)",
+                webagent_webapp::pages::public_origin()
+            );
+            let output = if entry.is_empty() {
+                format!("The user has not agreed to any site for this agent in their own browser yet. Use open on a listed site first; then ask them to allow it under {place}.")
+            } else {
+                ask(&store, &agent, entry).await?;
+                format!("The user has not agreed to let this agent use {entry} in their own browser. This agent belongs to someone else, so they agree once per site: ask them to allow {entry} under {place}, then try again.")
+            };
+            return Ok(json!({"status":"denied","output":output}));
+        }
+        Some(agreed)
+    } else {
+        None
+    };
     // One document per tool call: a retried call finds its earlier action instead of
     // queuing it again.
     let id = digest(&json!([
@@ -1028,6 +1215,11 @@ pub(crate) async fn execute(
     ]));
     let key = format!("{CALLS}{user}:{id}");
     if app.store.get(&key).await?.is_none() {
+        if outdated {
+            return Ok(
+                json!({"status":"failed","output":format!("The user's browser extension is out of date and refuses actions; ask them to download it again from {} and reload it in chrome://extensions", install_url())}),
+            );
+        }
         if !online {
             return Ok(
                 json!({"status":"failed","output":"The user's browser extension is not connected; call browser_extension_status for setup steps"}),
@@ -1037,7 +1229,7 @@ pub(crate) async fn execute(
             .put(
                 &key,
                 &json!({"id":id,"session":call.sid,"args":args,"sites":sites,
-                    "blocked_hosts":blocked,"state":"pending","created":now()}),
+                    "blocked_hosts":blocked,"consent":consent,"state":"pending","created":now()}),
             )
             .await?;
     }
@@ -1138,7 +1330,213 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
+        headers.insert(VERSION_HEADER, "0.3.0".parse().unwrap());
         headers
+    }
+
+    /// One queued read for `admin`, so `next` answers at once instead of long-polling.
+    async fn queue_read(app: &App, n: u64) {
+        let id = format!("{n:064x}");
+        app.store
+            .put(
+                &format!("{CALLS}admin:{id}"),
+                &json!({"id":id,"session":"s","args":{"action":"read"},"sites":["example.com"],
+                    "state":"pending","created":now()}),
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn outdated_extensions_are_seen_but_get_no_work() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let (_, identity) = sign_in(&app).await;
+        let mut device = linked_device(&app, &identity).await;
+        queue_read(&app, 1).await;
+        // A 0.1.0 install sends no version; one below the minimum is refused the same way.
+        for old in [None, Some("0.1.0")] {
+            match old {
+                None => device.remove(VERSION_HEADER),
+                Some(v) => device.insert(VERSION_HEADER, v.parse().unwrap()),
+            };
+            let refused = next(State(app.clone()), device.clone())
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(refused.0, StatusCode::UPGRADE_REQUIRED);
+            assert!(refused.1.contains("install.html"), "{}", refused.1);
+        }
+        let listed = device_list(&app.store, "admin").await.unwrap();
+        assert_eq!(listed[0]["online"], true);
+        assert_eq!(listed[0]["outdated"], true);
+        // The call stayed queued, and an up-to-date extension gets it.
+        device.insert(VERSION_HEADER, "0.3.0".parse().unwrap());
+        let offered = next(State(app.clone()), device).await.unwrap().0;
+        assert_eq!(offered["call"]["args"]["action"], "read");
+        assert_eq!(
+            device_list(&app.store, "admin").await.unwrap()[0]["outdated"],
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn a_link_preview_names_the_account_and_leaves_the_code_usable() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let (_, identity) = sign_in(&app).await;
+        let code = link_code(State(app.clone()), Extension(identity), Json(json!({})))
+            .await
+            .unwrap()
+            .0["code"]
+            .clone();
+        let preview = link(
+            State(app.clone()),
+            Json(json!({"code":code,"preview":true})),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(preview["user_id"], "admin");
+        assert!(preview["username"].is_string());
+        assert!(preview.get("secret").is_none());
+        // Looking did not use the code: it still links once, then never again.
+        assert!(link(State(app.clone()), Json(json!({"code":code})))
+            .await
+            .is_ok());
+        let used = link(
+            State(app.clone()),
+            Json(json!({"code":code,"preview":true})),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(used.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn members_agree_to_each_site_and_only_they_can_change_it() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let account = app
+            .store
+            .create_user_account("ext_member", "fixture-only-password-hash")
+            .await
+            .unwrap();
+        let member = account["user_id"].as_str().unwrap().to_owned();
+        app.store
+            .update_account_access(&member, 1, crate::access::AccountStatus::Active, "free")
+            .await
+            .unwrap();
+        app.store
+            .set_agent_membership(
+                &member,
+                "shared_default",
+                crate::access::Relationship::Member,
+                0,
+            )
+            .await
+            .unwrap();
+        // The owner acting on their own agent needs no agreement; a member does.
+        assert!(!needs_consent(&app.store, "admin", "shared_default")
+            .await
+            .unwrap());
+        assert!(needs_consent(&app.store, &member, "shared_default")
+            .await
+            .unwrap());
+        let sites = vec!["example.com".to_owned(), "crm.test".to_owned()];
+        let store = app.store.for_user(&member).await.unwrap();
+        ask(&store, "shared_default", "example.com").await.unwrap();
+        assert!(agreed_sites(&store, "shared_default", &sites)
+            .await
+            .unwrap()
+            .is_empty());
+        let mut tokens = Vec::new();
+        for (user, csrf) in [("admin", "a"), (member.as_str(), "m")] {
+            let token = Uuid::new_v4().to_string();
+            let generation =
+                app.store.account_by_id(user).await.unwrap().unwrap()["generation"].clone();
+            app.store
+                .put(
+                    &format!("auth:{}", digest(&json!(token))),
+                    &json!({"user_id":user,"generation":generation,"csrf":csrf,"expires":now()+3600}),
+                )
+                .await
+                .unwrap();
+            tokens.push((token, csrf));
+        }
+        let call = |who: usize, method: &str, path: String, csrf: bool| {
+            let (token, token_csrf) = &tokens[who];
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("cookie", format!("v3_session={token}"));
+            if csrf {
+                request = request.header("x-csrf-token", *token_csrf);
+            }
+            let app = app.clone();
+            let request = request.body(Body::empty()).unwrap();
+            async move {
+                let response = crate::api::router(app).oneshot(request).await.unwrap();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                    .await
+                    .unwrap();
+                (
+                    status,
+                    serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+                )
+            }
+        };
+        let (status, listed) = call(1, "GET", "/api/v3/browser/consents".into(), false).await;
+        assert_eq!(status, StatusCode::OK);
+        let row = &listed["consents"][0];
+        assert_eq!(
+            (row["host"].as_str(), row["state"].as_str()),
+            (Some("example.com"), Some("asked"))
+        );
+        let id = row["id"].as_str().unwrap().to_owned();
+        // Another account sees none of it and cannot allow it.
+        let (_, theirs) = call(0, "GET", "/api/v3/browser/consents".into(), false).await;
+        assert_eq!(theirs["consents"], json!([]));
+        let path = format!("/api/v3/browser/consents/{id}");
+        assert_eq!(
+            call(0, "POST", path.clone(), true).await.0,
+            StatusCode::NOT_FOUND
+        );
+        // Without the CSRF header the member's own change is refused; with it, it counts.
+        assert_eq!(
+            call(1, "POST", path.clone(), false).await.0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(call(1, "POST", path.clone(), true).await.0, StatusCode::OK);
+        assert_eq!(
+            agreed_sites(&store, "shared_default", &sites)
+                .await
+                .unwrap(),
+            ["example.com"]
+        );
+        // Taking it back refuses the agent's next action there again.
+        assert_eq!(
+            call(1, "DELETE", path.clone(), true).await.0,
+            StatusCode::OK
+        );
+        assert!(agreed_sites(&store, "shared_default", &sites)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(call(1, "DELETE", path, true).await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn unanswered_site_requests_stay_few() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        for n in 0..LIVE_ASKS + 5 {
+            ask(&app.store, "shared_default", &format!("site{n}.test"))
+                .await
+                .unwrap();
+        }
+        let kept = app.store.list(CONSENTS).await.unwrap();
+        assert_eq!(kept.len(), LIVE_ASKS);
     }
 
     #[tokio::test]

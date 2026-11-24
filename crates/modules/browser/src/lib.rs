@@ -236,6 +236,58 @@ pub fn check_action(args: &Value, sites: &[String], blocked: &[String]) -> Resul
     Ok(())
 }
 
+/// The extension's `major.minor.patch` version, as it sends it with every poll.
+pub fn extension_version(text: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = text.trim().split('.').map(|part| {
+        (!part.is_empty() && part.len() <= 6 && part.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| part.parse::<u32>().ok())
+            .flatten()
+    });
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+/// Whether an extension that sent `sent` may take actions: at least `minimum`. A missing or
+/// unreadable version (every install older than 0.3.0 sends none) is refused.
+pub fn extension_supported(sent: Option<&str>, minimum: (u32, u32, u32)) -> bool {
+    sent.and_then(extension_version)
+        .is_some_and(|version| version >= minimum)
+}
+
+/// The entry of `sites` that covers `url`'s host: a member's consent is given per entry.
+pub fn site_entry<'a>(url: &str, sites: &'a [String]) -> Option<&'a str> {
+    let host = url::Url::parse(url)
+        .ok()?
+        .host_str()?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    sites
+        .iter()
+        .find(|site| host == **site || host.ends_with(&format!(".{site}")))
+        .map(String::as_str)
+}
+
+/// The member-consent check for one `browser_extension_action` (D3), given the entries of
+/// `sites` the user agreed to for this agent: `Err(entry)` names the listed site an open or
+/// navigate needs consent for; `Err("")` refuses any other page action while the user has
+/// agreed to no site at all. `tabs` and `close` never need consent. The extension checks the
+/// tab's site against the same `consented` entries at every action.
+pub fn consent_refusal<'a>(
+    args: &Value,
+    sites: &'a [String],
+    consented: &[String],
+) -> Result<(), &'a str> {
+    match args["action"].as_str().unwrap_or("") {
+        "tabs" | "close" => Ok(()),
+        "open" | "navigate" => match site_entry(args["url"].as_str().unwrap_or(""), sites) {
+            Some(entry) if !consented.iter().any(|c| c == entry) => Err(entry),
+            _ => Ok(()),
+        },
+        _ if consented.is_empty() => Err(""),
+        _ => Ok(()),
+    }
+}
+
 /// A queued call no device holds: never fetched, or offered and left unacknowledged.
 pub fn open(call: &Value, at: u64) -> bool {
     match call["state"].as_str() {
@@ -286,6 +338,7 @@ pub fn device_secret() -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use serde_json::json;
 
@@ -439,6 +492,67 @@ mod tests {
             let open = json!({"action":"open","url":url});
             assert!(check_action(&open, &raw, &blocked).is_err(), "{url}");
         }
+    }
+
+    #[test]
+    fn extensions_older_than_the_minimum_are_refused() {
+        let minimum = (0, 2, 0);
+        // Every 0.1.0 install sends no version at all.
+        assert!(!extension_supported(None, minimum));
+        for old in [
+            "0.1.0",
+            "0.1.9",
+            "",
+            "0.2",
+            "0.2.0.1",
+            "x.y.z",
+            "0.-1.0",
+            "0.2.0-beta",
+        ] {
+            assert!(!extension_supported(Some(old), minimum), "{old}");
+        }
+        for new in ["0.2.0", "0.3.0", "1.0.0", " 0.10.2 "] {
+            assert!(extension_supported(Some(new), minimum), "{new}");
+        }
+        assert!(!extension_supported(Some("0.3.0"), (0, 3, 1)));
+    }
+
+    #[test]
+    fn members_need_consent_per_listed_site() {
+        let list = sites("example.com, crm.test");
+        let open = |url: &str| json!({"action":"open","url":url});
+        // Nothing agreed: open names the entry, page actions are refused, tabs/close are not.
+        assert_eq!(
+            consent_refusal(&open("https://www.example.com/a"), &list, &[]),
+            Err("example.com")
+        );
+        assert_eq!(
+            consent_refusal(&json!({"action":"read"}), &list, &[]),
+            Err("")
+        );
+        assert_eq!(
+            consent_refusal(&json!({"action":"click","ref":3}), &list, &[]),
+            Err("")
+        );
+        assert!(consent_refusal(&json!({"action":"tabs"}), &list, &[]).is_ok());
+        assert!(consent_refusal(&json!({"action":"close"}), &list, &[]).is_ok());
+        // Agreed to example.com: it and its subdomains open, crm.test still needs consent.
+        let agreed = vec!["example.com".to_owned()];
+        assert!(consent_refusal(&open("https://app.example.com/"), &list, &agreed).is_ok());
+        assert!(consent_refusal(&json!({"action":"read"}), &list, &agreed).is_ok());
+        assert_eq!(
+            consent_refusal(
+                &json!({"action":"navigate","url":"https://crm.test/x"}),
+                &list,
+                &agreed
+            ),
+            Err("crm.test")
+        );
+        assert_eq!(
+            site_entry("https://APP.example.com./", &list),
+            Some("example.com")
+        );
+        assert_eq!(site_entry("https://badexample.com/", &list), None);
     }
 
     #[test]
