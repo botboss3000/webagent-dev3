@@ -7,6 +7,12 @@
 
 import { icon } from '../components/icon/icon.js';
 
+// The phone header switch shows a chat bubble on the panel and a back chevron on chat.
+const CHAT_ICON =
+  '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-8.2 8 8.6 8.6 0 0 1-3.5-.7L4 20l1.3-4a8 8 0 0 1-1.3-4.4A8 8 0 0 1 12 3.5a8 8 0 0 1 8 8z"/></svg>';
+const BACK_ICON =
+  '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>';
+
 const THEME_KEY = 'webagent.web.theme';
 const COLLAPSE_KEY = 'webagent.web.sidebar';
 
@@ -187,6 +193,7 @@ async function resolvePage(route) {
   if (route.startsWith('/agents/new')) return loadPage('../pages/new-agent/page.js', 'new-agent');
   if (route.startsWith('/agents/')) return loadPage('../pages/agent/page.js', 'agent');
   if (route.startsWith('/sessions')) return loadPage('../pages/sessions/page.js', 'sessions');
+  if (route.startsWith('/chat')) return loadPage('../pages/chat/page.js', 'chat');
   if (route.startsWith('/wiki')) return loadPage('../pages/wiki/page.js', 'wiki');
   if (route.startsWith('/account')) return loadPage('../pages/account/page.js', 'account');
   const admin = route.match(/^\/admin\/([a-z-]+)$/);
@@ -223,9 +230,20 @@ function noteLine(text) {
   return note;
 }
 
+// The phone switch points at the chat page, and back at the panel once there.
+function syncChatSwitch() {
+  const button = document.getElementById('chat-switch');
+  if (!button) return;
+  const onChat = state.route.startsWith('/chat');
+  button.setAttribute('aria-pressed', String(onChat));
+  button.setAttribute('aria-label', onChat ? 'Back to the panel' : 'Open chat');
+  button.innerHTML = onChat ? BACK_ICON : CHAT_ICON;
+}
+
 async function renderRoute() {
   state.route = currentRoute();
   markActive();
+  syncChatSwitch();
   const titleHost = document.getElementById('page-title');
   const noteHost = document.getElementById('page-note');
   const body = document.getElementById('page-body');
@@ -282,6 +300,10 @@ async function boot() {
   const account = document.getElementById('account-button');
   account?.addEventListener('click', () => {
     window.location.hash = '#/account';
+  });
+
+  document.getElementById('chat-switch')?.addEventListener('click', () => {
+    window.location.hash = currentRoute().startsWith('/chat') ? '#/sessions' : '#/chat';
   });
 
   state.me = await loadMe();

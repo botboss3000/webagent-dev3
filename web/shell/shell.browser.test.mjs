@@ -146,6 +146,9 @@ for (const viewport of VIEWPORTS) {
           // The main panel takes the whole stage once the rail is narrow.
           const main = await page.$eval('#main-panel', (node) => node.getBoundingClientRect().width);
           assert.ok(main > 1000, `main panel fills the width beside the rail (${main}px)`);
+
+          // The chat switch is a phone affordance only.
+          assert.equal(await page.locator('#chat-switch').isVisible(), false, 'no chat switch on desktop');
         } else {
           // Phone: the sidebar is a drawer over the stage.
           assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');
@@ -158,6 +161,23 @@ for (const viewport of VIEWPORTS) {
           // Click the backdrop to the right of the open drawer, not through the sidebar.
           await page.click('#sidebar-backdrop', { position: { x: viewport.width - 20, y: 300 } });
           assert.equal(await page.evaluate(() => document.body.classList.contains('menu-open')), false);
+
+          // The header's chat icon switches to the chat page and back to the panel.
+          assert.equal(await page.locator('#chat-switch').isVisible(), true, 'chat switch shows on a phone');
+          await page.click('#chat-switch');
+          await page.waitForFunction(() => window.location.hash === '#/chat');
+          await page.waitForSelector('#page-body .chat-empty');
+          await page.waitForFunction(() => document.getElementById('page-title').textContent === 'Chat');
+          assert.equal(await page.locator('#page-title').textContent(), 'Chat', 'header switches to the chat');
+          assert.equal(await page.locator('#chat-switch').getAttribute('aria-pressed'), 'true');
+          assert.equal(await page.locator('#chat-switch').getAttribute('aria-label'), 'Back to the panel');
+
+          await page.click('#chat-switch');
+          await page.waitForFunction(() => window.location.hash === '#/sessions');
+          // The route renders asynchronously, so wait for the header to catch up.
+          await page.waitForFunction(() => document.getElementById('page-title').textContent === 'All sessions');
+          assert.equal(await page.locator('#page-title').textContent(), 'All sessions', 'and back to the panel');
+          assert.equal(await page.locator('#chat-switch').getAttribute('aria-pressed'), 'false');
         }
 
         assert.deepEqual(errors, [], `no page errors: ${errors.join(' | ')}`);

@@ -328,6 +328,11 @@ body.sidebar-collapsed #sidebar-toggle {
   text-overflow: ellipsis;
 }
 
+/* The chat switch sits at the far right of the phone header. */
+#chat-switch {
+  margin-left: auto;
+}
+
 /* The body stays empty until a component is ported into it. */
 .main-body {
   flex: 1 1 auto;
@@ -360,8 +365,9 @@ body.sidebar-collapsed #sidebar-toggle {
   color: var(--fg-3);
 }
 
-/* The phone menu button exists only at drawer width. */
-#menu-open {
+/* The phone menu button and the chat switch exist only at drawer width. */
+#menu-open,
+#chat-switch {
   display: none;
 }
 
@@ -401,7 +407,8 @@ body.sidebar-collapsed #sidebar-toggle {
     display: none;
   }
 
-  #menu-open {
+  #menu-open,
+  #chat-switch {
     display: inline-flex;
   }
 
