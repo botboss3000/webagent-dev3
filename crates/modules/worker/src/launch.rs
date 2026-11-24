@@ -186,6 +186,9 @@ fn launch() -> io::Result<i32> {
     // loop get `V3_TOOL_SOCKET` for it). This launcher then only prepares that folder and
     // starts the API. A release without this mode starts its own worker on
     // `runtime/worker/tools.sock`, so a rollback never puts two workers on one socket.
+    // The broker sets the variable only while `scheduler.worker_container` is on and the host
+    // has the `webagent-worker` network and its firewall (build-service README, "Worker
+    // container"); otherwise every release keeps the worker inside the API container.
     let external = std::env::var_os("V3_EXTERNAL_WORKER").is_some_and(|value| value == "1");
     let runtime = text(&runtime);
     directory(
