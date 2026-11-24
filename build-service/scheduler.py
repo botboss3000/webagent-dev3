@@ -19,10 +19,11 @@ def operator_origin(user_id,summary):
     found=re.search(r"\borigin=([a-z-]{1,20})",str(summary or"")[:260])
     return"t480/"+found.group(1)if found and found.group(1)in HARNESSES else"t480"
 def never_started(job):
-    """Whether a job did nothing yet: no effect, no stage and no log line. A restart cancels such a job."""
+    """Whether a job did nothing yet: no effect, no stage and no log line. A restart cancels such a job.
+    Waiting phases (queued, queued_check, ...) and admitted count as not started."""
     observed=(job.get("execution_observation")or{}).get("events")
     return not(job.get("effects_started")or job.get("execution_history")or job.get("phase_history")or observed
-               or job.get("phase")not in(None,"queued","admitted"))
+               or not(job.get("phase")in(None,"admitted")or str(job.get("phase")).startswith("queued")))
 def live_effect(job):
     """Whether a job may have changed something live that nobody reconciled: effects began and it did not
     complete, unless an operator confirmed it never went live (not-installed checks the served files)."""

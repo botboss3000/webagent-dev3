@@ -2646,6 +2646,9 @@ class ObservationAuthorizationTests(MaintenanceTests):
   self.assertEqual(self.broker.jobs[old['job_id']]['status'],'interrupted')
   self.assertTrue(fixtures.host.scheduler_module.unstarted_interruption(self.broker.jobs[old['job_id']]))
   self.assertFalse(fixtures.host.scheduler_module.unstarted_interruption({**old,'execution_history':[{'phase':'build'}]}))
+  # A check interrupted while still queued for a worker (phase queued_check) never started either.
+  self.assertTrue(fixtures.host.scheduler_module.unstarted_interruption({**old,'operation':'check','phase':'queued_check'}))
+  self.assertFalse(fixtures.host.scheduler_module.unstarted_interruption({**old,'operation':'check','phase':'building_api'}))
 
  def test_concurrent_saves_of_one_job_never_fail(self):
   from concurrent.futures import ThreadPoolExecutor
