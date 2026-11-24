@@ -178,17 +178,26 @@ states its range.
 | Caps | none | Use idle threads. |
 | Memory API / loop / browser | 2 / 8 / 3 GiB | Defaults; about 18 GB stays for builds (the compiler takes up to 12 GiB) and the system. |
 | Loops | 1 (2 approved by the user 2026-11-24, held: see below) | The broker also builds here (`cargo_build_jobs` 10). |
-| Worker container | off (approved 2026-11-24, held: see below) | Needs the worker network and its firewall on the host first. |
+| Worker container | on since 2026-11-24: 2 GiB, weight 50, 1024 tasks | The host has the worker network `webagent-worker` and its firewall unit (installed by the user); users' commands, terminals and previews no longer use the API's memory. |
 | Browsers at once | 5 per app, 4 per user | User decision 2026-11-24. |
 | Run ceiling, reserve | 10, 1 | Defaults; raise with more loops after measuring. |
 | Open databases | 64 | Default. |
 
 In force on development since 2026-11-24: builds `"idle"`, browsers 5 per app, loops 1, worker
-container off. Two loops were switched on and taken back the same morning: both loops served and
-an interrupted run recovered once, but runs of ordinary (non-administrator) accounts stayed
-queued and were never claimed, at one loop as well as at two, so nothing served by loop 1 could
-be checked. The worker container waits for the host's worker network and firewall unit, which no
-Host Admin action can install yet.
+container on (`scheduler.worker_container: true`, release `82a6f9a0`). Two loops were switched on
+and taken back the same morning: both loops served and an interrupted run recovered once, but runs
+of ordinary (non-administrator) accounts stayed queued (leaked run slots of deleted chats, fixed
+in `4419760`), so nothing served by loop 1 could be checked; two loops wait for that recheck.
+Checked with the worker container on: from its network the host, Tailscale peers,
+100.100.100.100, the LAN gateway and the app containers are unreachable and the internet works;
+commands of the administrator and of an ordinary account run as the worker user (1103, group
+1105) with `/state` refused; file tools, a terminal, session Git, a private browser page and a
+preview tunnel work; a run waiting for approval survives restarts of the worker container and the
+API; one 200 MB command raised the worker container from 6 to 212 MiB while the API stayed at
+about 235 MiB. To switch off: set `worker_container` back to `false` in the installed broker file
+(Host Admin `host_revert` of that write), restart the broker while idle, then any `build_deploy`.
+Ability-only and Markdown releases (`plugin_deploy`) need broker `0ad17c1` or later, which probes the
+worker on the API's own socket.
 
 ### Worked example: a small cloud server (2 processor threads, 4 GB, no builds)
 
