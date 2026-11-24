@@ -166,7 +166,8 @@ RUN ln -s /code /live-checkout
 ENV V3_LISTEN=0.0.0.0:8080 V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces V3_SECURE_COOKIE=true
 WORKDIR /state
 EXPOSE 8080
-HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 CMD curl --fail http://127.0.0.1:8080/health/ready || exit 1
+# Every 1 s while starting (deploys see readiness at once), every 15 s after.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --start-interval=1s --retries=3 CMD curl --fail http://127.0.0.1:8080/health/ready || exit 1
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/usr/local/bin/webagent-v3","--launch"]
 
@@ -203,6 +204,9 @@ WORKDIR /state
 # /live-checkout, so it stays as a link; tool sandboxes never grant the link itself.
 RUN ln -s /code /live-checkout
 USER 1100:1100
-HEALTHCHECK --interval=5s --timeout=3s --start-period=20s --retries=3 CMD ["env","V3_PROCESS_ROLE=health","/usr/local/bin/webagent-v3"]
+# Each check starts a process in the container (about 0.5 % of a core at 5 s). Every 1 s while
+# starting, then every 10 s: a hang (heartbeat older than 10 s) shows as unhealthy within about
+# 30 s (2 failed checks; 25 s before). The loop's own watchdog exits a stalled dispatcher sooner.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --start-interval=1s --retries=2 CMD ["env","V3_PROCESS_ROLE=health","/usr/local/bin/webagent-v3"]
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/usr/local/bin/webagent-v3"]

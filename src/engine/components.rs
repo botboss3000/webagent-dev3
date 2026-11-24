@@ -65,6 +65,43 @@ mod lifecycle_tests {
         restore(&app, &id).await.unwrap();
         assert_eq!(app.run(&id).await.unwrap()["status"], "stopped");
     }
+    /// C9: after the start-up sweep, a component pause made by this loop is restored by a sweep
+    /// of the accounts it paused runs in (not of every account), as soon as the pause is seen.
+    #[tokio::test]
+    async fn a_component_pause_in_this_loop_is_restored_by_the_next_sweep() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let id = crate::runtime_tests::queued(&app, &sid).await;
+        let status = |run: &Value| run["status"].as_str().unwrap_or("").to_owned();
+        // The only run slot is held, so the restored run stays queued where the test sees it.
+        let slot = app.slots.clone().acquire_owned().await.unwrap();
+        let task = tokio::spawn(crate::agent_loop::scheduler(app.clone()));
+        for _ in 0..3 {
+            crate::wake::notify(&app).await;
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        }
+        // An earlier test's component failure leaves a short process-wide cooldown.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !available(&app.store.root) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let mut run = app.run(&id).await.unwrap();
+        pause(&app, &mut run).await.unwrap();
+        assert_eq!(status(&app.run(&id).await.unwrap()), "paused");
+        crate::wake::notify(&app).await;
+        let paused = std::time::Instant::now();
+        while status(&app.run(&id).await.unwrap()) == "paused" {
+            assert!(
+                paused.elapsed() < std::time::Duration::from_secs(10),
+                "the paused run was not restored by the scheduler's sweep"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert_eq!(status(&app.run(&id).await.unwrap()), "queued");
+        drop(slot);
+        app.stop.cancel();
+        task.await.unwrap();
+    }
     #[tokio::test]
     /// Fence ordinary and compaction dispatch when a component disappears during credential refresh.
     async fn removal_during_credentials_pauses_normal_and_system_dispatch() {

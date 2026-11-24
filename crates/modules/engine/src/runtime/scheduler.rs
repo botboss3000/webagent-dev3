@@ -188,32 +188,58 @@ impl<
         run["status"] = json!("queued");
         app.save(&mut run).await
     }
-    /// Offer every account's paused runs to `component_restore`. True when every account was
-    /// read; a failure leaves the sweep pending for the next pass.
-    async fn restore_sweep(app: &Self) -> bool {
-        let Ok(users) = crate::send_future(app.user_ids(true)).await else {
-            return false;
+    /// Offer paused runs to `component_restore`: every account's when `every` (the start-up
+    /// sweep), else only the accounts this process paused a run in since the last sweep
+    /// (C9: a component outage under load opened all accounts under the dispatch gate). An
+    /// account whose read failed or that still holds a paused run (one running in this loop
+    /// just now) is noted again for the next sweep. True when every account was read; a
+    /// failure leaves the sweep pending for the next pass.
+    async fn restore_sweep(app: &Self, every: bool) -> bool {
+        let users = if every {
+            let Ok(users) = crate::send_future(app.user_ids(true)).await else {
+                return false;
+            };
+            users
+        } else {
+            super::components::take_paused(&app.control_dir)
         };
         let mut complete = true;
         for user in users {
-            let Ok(user) = crate::send_future(app.for_user_view(&user)).await else {
-                complete = false;
-                continue;
-            };
-            let Ok(runs) = crate::send_future(user.store.scheduler_runs()).await else {
-                complete = false;
-                continue;
-            };
-            for (id, state) in runs {
-                if state != "paused" {
-                    continue;
+            let restored = crate::send_future(async {
+                let view = app.for_user_view(&user).await.ok()?;
+                let runs = view.store.scheduler_runs().await.ok()?;
+                let mut done = true;
+                let mut paused = false;
+                for (id, state) in runs {
+                    if state != "paused" {
+                        continue;
+                    }
+                    paused = true;
+                    if view.component_restore(&id).await.is_err() {
+                        tracing::warn!("Engine component restoration deferred");
+                        done = false;
+                    }
                 }
-                if crate::send_future(user.component_restore(&id))
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("Engine component restoration deferred");
+                let left = paused
+                    && view
+                        .store
+                        .scheduler_runs()
+                        .await
+                        .ok()?
+                        .iter()
+                        .any(|(_, state)| state == "paused");
+                Some((done, left))
+            })
+            .await;
+            match restored {
+                Some((true, false)) => {}
+                Some((done, _)) => {
+                    complete &= done;
+                    super::components::note_paused(&app.control_dir, &user);
+                }
+                None => {
                     complete = false;
+                    super::components::note_paused(&app.control_dir, &user);
                 }
             }
         }
@@ -308,9 +334,12 @@ impl<
             });
             let mut last_recovery = 0;
             // Component-paused runs are not work the scan returns: every account is swept once
-            // at start, after a component pause in this loop, and when components come back or
-            // shutoff ends after the loop saw them away; the account revisit is the fallback.
+            // at start; after a component pause in this loop, and when components come back or
+            // shutoff ends after the loop saw them away, the accounts this loop paused runs in
+            // are swept (C9).
             let mut restore_sweep = true;
+            // C9: only the first sweep of this process reads every account.
+            let mut full_sweep = true;
             let mut seen_pauses = super::components::COMPONENT_PAUSES.load(Ordering::Acquire);
             // The requester whose run the loop started last; the next pass starts after it.
             let mut last_served: Option<String> = None;
@@ -391,7 +420,9 @@ impl<
                     restore_sweep = true;
                 } else if restore_sweep {
                     progress.at(Stage::UserScan);
-                    restore_sweep = !crate::send_future(Self::restore_sweep(&app)).await;
+                    let complete = crate::send_future(Self::restore_sweep(&app, full_sweep)).await;
+                    full_sweep &= !complete;
+                    restore_sweep = !complete;
                 }
                 // The account scan and the passes over idle accounts no longer hold the loop's
                 // process-wide lock; each account's commands, follow-ups, approvals and claims

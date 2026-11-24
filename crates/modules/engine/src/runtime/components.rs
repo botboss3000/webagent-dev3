@@ -8,8 +8,42 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Component pauses saved by this process. Paused runs are not in the scan's "work now", so
-/// the scheduler sweeps every account once after this moves (and once components are back).
+/// the scheduler sweeps the accounts that paused one (see [`take_paused`]) after this moves
+/// (and once components are back).
 pub static COMPONENT_PAUSES: AtomicU64 = AtomicU64::new(0);
+/// C9: the accounts in which this process paused a run for a component, saved before
+/// [`COMPONENT_PAUSES`] moves. After the start-up sweep the scheduler restores only these, so a
+/// component outage no longer opens every account. Losing the list loses nothing: it lives
+/// as long as the process, and a new loop process sweeps every account once at start.
+static PAUSED_ACCOUNTS: std::sync::Mutex<std::collections::BTreeSet<(std::path::PathBuf, String)>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Remember that `user` (of the installation whose control folder is `control`) holds a
+/// component-paused run, or one to offer again.
+pub(super) fn note_paused(control: &std::path::Path, user: &str) {
+    PAUSED_ACCOUNTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert((control.to_path_buf(), user.to_owned()));
+}
+
+/// The accounts of `control` noted since the last call, taking them off the list.
+pub(super) fn take_paused(control: &std::path::Path) -> Vec<String> {
+    let mut noted = PAUSED_ACCOUNTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mine: Vec<_> = noted
+        .iter()
+        .filter(|(dir, _)| dir == control)
+        .cloned()
+        .collect();
+    mine.into_iter()
+        .map(|entry| {
+            noted.remove(&entry);
+            entry.1
+        })
+        .collect()
+}
 
 impl<
         S: ScopedStorage
@@ -65,6 +99,10 @@ impl<
   Some(cause)=>format!("Required engine component {component} unavailable ({cause}); work resumes when the component is restored"),
   None=>"Required engine component unavailable; work resumes when the component is restored".to_owned()});
         let saved = app.save(run).await;
+        note_paused(
+            &app.control_dir,
+            crate::ports::Records::current_user_id(app.store.records()),
+        );
         COMPONENT_PAUSES.fetch_add(1, Ordering::AcqRel);
         saved
     }
@@ -102,5 +140,25 @@ impl<
         )
         .await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod paused_account_tests {
+    #[test]
+    fn noted_accounts_are_taken_once_per_installation_and_can_be_noted_again() {
+        let here = std::path::Path::new("/c9-test/control-a");
+        let there = std::path::Path::new("/c9-test/control-b");
+        super::note_paused(here, "a");
+        super::note_paused(here, "b");
+        super::note_paused(here, "a");
+        super::note_paused(there, "a");
+        assert_eq!(super::take_paused(here), ["a", "b"]);
+        assert!(super::take_paused(here).is_empty(), "taken once");
+        // Another installation's accounts are its own.
+        assert_eq!(super::take_paused(there), ["a"]);
+        // An account a sweep could not finish is noted again and taken by the next sweep.
+        super::note_paused(here, "b");
+        assert_eq!(super::take_paused(here), ["b"]);
     }
 }

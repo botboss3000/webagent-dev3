@@ -14,7 +14,8 @@
 //! write changes one of the two files, a checkpoint included), and visited only if that finds
 //! work. An account found busy stays busy without being opened again until one of those
 //! changes. One result is shared by all of a process's scanners for up to a second, and
-//! recomputed after any wake hint.
+//! recomputed after any wake hint. C9: the file marks come from a change watch on each
+//! account folder ([`MARKS`]), so a scan reads no file of an account nobody wrote.
 use super::Store;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -199,6 +200,16 @@ struct Accounts {
 
 static ACCOUNTS: LazyLock<Mutex<Option<Accounts>>> = LazyLock::new(Default::default);
 
+/// C9: every account file mark this process reads. Each account folder gets one change
+/// watch (one per folder, not per file: about 10,000 for 10,000 accounts per process, within
+/// the system's per-user limit; a refused watch falls back to reading that folder's files on
+/// every call, as before), so the once-a-second scan reads only files written since it last
+/// read them. Without change notification (other platforms) every call reads the files.
+static MARKS: LazyLock<webagent_platform::watch::Marks> =
+    LazyLock::new(webagent_platform::watch::Marks::new);
+/// Whether a refused account-folder watch was logged (once per process).
+static REFUSAL_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The latest scan result of this process: its state root, the wake sequence read before it
 /// was computed, when it was computed, the accounts it found and every stored deadline.
 struct Shared {
@@ -286,16 +297,10 @@ impl Store {
         self.file_mark(user, "db-wal")
     }
 
+    /// C9: read through [`MARKS`], so an unchanged account folder costs no file-system read.
     fn file_mark(&self, user: &str, suffix: &str) -> WalMark {
-        let file = self
-            .root
-            .join("user_data")
-            .join(user)
-            .join(format!("{user}.{suffix}"));
-        std::fs::metadata(file)
-            .ok()
-            .filter(|m| m.len() > 0)
-            .and_then(|m| Some((m.len(), m.modified().ok()?)))
+        let folder = self.root.join("user_data").join(user);
+        MARKS.mark(&folder, &format!("{user}.{suffix}"))
     }
 
     /// The account's database file and log marks now (no database access).
@@ -498,6 +503,12 @@ impl Store {
             if visit {
                 visits.push(user);
             }
+        }
+        if MARKS.refusals() > 0 && !REFUSAL_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            tracing::warn!(
+                "Some account folders cannot be watched; their file times are read each scan"
+            );
         }
         let deadlines = rows.into_iter().map(|(user, _, at)| (user, at)).collect();
         Ok((visits, deadlines))
