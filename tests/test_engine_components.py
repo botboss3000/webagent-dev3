@@ -296,7 +296,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(tuned.cpu_weight_args("compile_release"),["--cpu-shares","4"])
         self.assertEqual(tuned.tuning("test_threads",8),6);self.assertEqual(worker.tuning("test_threads",8),8)
         source=(ROOT/"build-service/executor.py").read_text()
-        self.assertIn('*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]',source)
+        self.assertIn('*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase,job),image,"sleep","infinity"]',source)
     def test_only_rust_test_phases_keep_tmp_in_ram_with_exec(self):
         self.assertEqual(executor.Executor.test_tmpfs_args("test"),["--tmpfs","/tmp:rw,exec,nosuid,nodev,size=2g,mode=1777"])
         for phase in ("compile_test","compile_linked","compile_release","linked_smoke","live_smoke","dependency"):

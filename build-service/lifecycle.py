@@ -110,6 +110,26 @@ def install_board(value,service_dir,unit_root="/etc/systemd/system",run=subproce
  if changed or state!="active":
   run(["systemctl","reset-failed",name],check=False);run(["systemctl","restart",name],check=True)
  return {"board":name,"changed":changed,"restarted":changed or state!="active"}
+def install_nightly_tests(value,service_dir,owner,unit_root="/etc/systemd/system",run=subprocess.run):
+ """Install the nightly opt-in test timer: buildctl nightly-tests as the checkout owner, report-only.
+
+ It only asks the broker for listed test groups on the published source; the broker admits them
+ at the lowest CPU weight and never beside a release build. Units are rewritten only when changed."""
+ instance=value["instance"];base="webagent-"+("dev"if instance=="development"else instance)+"-opt-in-tests"
+ config=os.environ.get("WEBAGENT_BUILD_CONFIG","/etc/webagent/development/build-service.json")
+ texts={base+".service":("[Unit]\nDescription=Run the listed opt-in test groups on the published v3 source (report only)\nAfter=docker.service\n\n"
+        "[Service]\nType=oneshot\nUser="+owner+"\nEnvironment=WEBAGENT_BUILD_CONFIG="+config+"\n"
+        "ExecStart=/usr/bin/python3 -I "+str(Path(service_dir)/"buildctl.py")+" nightly-tests\nNice=19\nIOSchedulingClass=idle\nTimeoutStartSec=9h\n"),
+        base+".timer":("[Unit]\nDescription=Run the listed opt-in test groups nightly\n\n[Timer]\nOnCalendar=*-*-* 02:40:00\nRandomizedDelaySec=15min\nPersistent=true\n\n"
+        "[Install]\nWantedBy=timers.target\n")}
+ changed=False
+ for name,text in texts.items():
+  unit=Path(unit_root)/name
+  if unit.is_symlink():raise PermissionError("Opt-in test unit symlink")
+  if not unit.exists() or unit.read_text()!=text:unit.write_text(text);unit.chmod(0o644);changed=True
+ if changed:run(["systemctl","daemon-reload"],check=True)
+ run(["systemctl","enable","--now",base+".timer"],check=False)
+ return {"timer":base+".timer","changed":changed}
 def install(args):
  if os.geteuid()!=0:raise PermissionError("Installation requires root")
  source=Path(__file__).resolve().parent;checkout=Path(args.checkout_root or source.parent)
@@ -209,7 +229,8 @@ def install(args):
   if unit:subprocess.run(["systemctl","try-restart",unit],check=False)
  boot_host=repoint_boot(boot,boot_home/(BOOT_PIN+".previous")) if boot else {"drop_in":"absent","changed":False,"note":"no "+BOOT_PIN+" drop-in; boot host left unchanged"}
  board=install_board(value,value["service_dir"])
- print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name,"boot_host":boot_host,"board":board}))
+ nightly=install_nightly_tests(value,value["service_dir"],value.get("source_owner")or owner)
+ print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name,"boot_host":boot_host,"board":board,"nightly_tests":nightly}))
 def resource_policy(config_path,candidate_path,task_id,dry_run=False):
  """Atomically change only protected CPU/memory policy; reload broker/helper without a restart."""
  if os.geteuid()!=0:raise PermissionError("Memory policy installation requires root")

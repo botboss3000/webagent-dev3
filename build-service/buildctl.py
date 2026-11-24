@@ -33,6 +33,58 @@ PENDING_EXIT = 3
 DECISION_EXIT = 4
 
 
+def opt_in_groups():
+    """The listed opt-in test groups, read from the executor beside this file (the broker's own list)."""
+    spec=importlib.util.spec_from_file_location("build_client_executor",Path(__file__).with_name("executor.py"))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return sorted(module.OPT_IN_TEST_GROUPS)
+
+
+def nightly_tests(request=None,now=time.time,sleep=time.sleep,root=None,groups=None,queue_limit=3*3600,run_limit=8*3600):
+    """Run every listed opt-in group once on the published source and write root/latest.json.
+
+    The broker admits each run only while no release build runs; a run still queued after
+    queue_limit seconds is cancelled and recorded as skipped (no alert). The summary holds only
+    states, ids, counts and test names; the failure output stays in the job receipt."""
+    request=call if request is None else request
+    root=Path(CONFIG["checkout_root"]).parent/"opt-in-tests"if root is None else Path(root)
+    day=time.strftime("%Y%m%d",time.localtime(now()))
+    rows=[]
+    for group in (opt_in_groups()if groups is None else groups):
+        row={"group":group,"status":"error","job_id":None,"inputs_sha256":None,"tests":0,"failed_tests":[]}
+        try:
+            queued=request("build_work",{"action":"test_group","group":group,"request_id":"nightly-"+day+"-"+group})
+            row.update(job_id=queued["job_id"],inputs_sha256=queued.get("inputs_sha256"))
+            started=now();job={}
+            while True:
+                job=request("v3_worker_job",{"job_id":row["job_id"]}).get("job")or{}
+                if job.get("status")in TERMINAL:break
+                waited=now()-started
+                if job.get("status")=="queued"and waited>queue_limit or waited>run_limit:
+                    request("v3_build_cancel",{"job_id":row["job_id"],"request_id":"cancel-"+row["job_id"],"expected_job_ids":[row["job_id"]]})
+                    if job.get("status")=="queued":row["status"]="skipped"
+                    break
+                sleep(60)
+            result=job.get("test_group_result")or{}
+            names=set();failed=set()
+            for run in result.get("runs",[]):
+                names.update(run.get("tests",{}))
+                failed.update(n for n,v in run.get("tests",{}).items()if v=="failed")
+                if run.get("status")=="timed_out":failed.add("timed_out")
+            row["tests"]=len(names);row["failed_tests"]=sorted(failed)[:50]
+            if job.get("status")=="completed":row["status"]="passed"
+            elif row["status"]!="skipped":row["status"]="failed"
+        except Exception as error:
+            print("opt-in group "+group+": "+str(error)[:300],file=sys.stderr)
+        rows.append(row)
+    states={r["status"]for r in rows}
+    status="failed"if states&{"failed","error"}else"skipped"if "skipped"in states else"passed"
+    summary={"status":status,"checked_at":now(),"groups":rows}
+    root.mkdir(mode=0o755,exist_ok=True)
+    temporary=root/("latest.json.new");temporary.write_text(json.dumps(summary,sort_keys=True));temporary.chmod(0o644);os.replace(temporary,root/"latest.json")
+    return summary
+
+
 class BrokerUnresponsive(TimeoutError):
     """The broker accepted the request but sent no reply; distinct from a slow build stage."""
 
@@ -758,6 +810,14 @@ def main():
     apply=commands.add_parser("apply",help="checked isolated source patch with derived ownership")
     apply.add_argument("task_id");apply.add_argument("--patch",required=True,help="unified diff file, or - for stdin")
     apply.add_argument("--expected",required=True);apply.add_argument("--request-id",required=True)
+    group=commands.add_parser("test-group",help="Run a listed opt-in test group N times (no deploy, no promotion)")
+    group.add_argument("group",help="a group from executor.py OPT_IN_TEST_GROUPS, e.g. multi_loop")
+    group.add_argument("--task",help="run on this open task's tree (with --expected); default: the published source")
+    group.add_argument("--expected",help="the task's inputs_sha256, with --task")
+    group.add_argument("--repeat",type=int,default=1,help="repetitions, 1 to 30 (default 1)")
+    group.add_argument("--run-timeout",type=int,help="seconds per repetition, 60 to 3600 (default: the group's)")
+    group.add_argument("--request-id",help="stable ID to resume a request (default: a new one)")
+    commands.add_parser("nightly-tests",help="run every listed opt-in group once on the published source and write the summary (the timer runs this)")
     check=commands.add_parser("check",help="Run a durable task-scoped compile check without deployment")
     check.add_argument("task_id");check.add_argument("--expected",required=True)
     check.add_argument("--request-id",required=True)
@@ -776,6 +836,13 @@ def main():
         if not args.sync_decision or not args.sync_digest or args.reason:
             parser.error("decide takes a sync decision with --sync-digest (or --accept-ui-failure); "
                          "to cancel a paused job use: buildctl cancel <job-id>")
+    if args.command=="test-group":
+        if (args.task is None)!=(args.expected is None):parser.error("--task and --expected go together")
+        request={"action":"test_group","group":args.group,"repeat":args.repeat,"request_id":args.request_id or "tg-"+uuid.uuid4().hex[:16],
+                 **({"task_id":args.task,"expected_inputs_sha256":args.expected}if args.task else{}),**({"run_timeout_seconds":args.run_timeout}if args.run_timeout is not None else{})}
+        print(json.dumps(call("build_work",request),sort_keys=True));return 0
+    if args.command=="nightly-tests":
+        summary=nightly_tests();print(json.dumps(summary,sort_keys=True));return 0 if summary["status"]!="failed"else 1
     if args.command=="check":
         if not 1<=args.timeout<=600:parser.error("--timeout must be between 1 and 600 seconds")
         request={"action":"check","task_id":args.task_id,"check":args.check,"expected_inputs_sha256":args.expected,

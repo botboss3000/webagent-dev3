@@ -110,6 +110,49 @@ def test_filter(value):
     if not isinstance(value,str)or not re.fullmatch(r"[A-Za-z0-9_:]{1,160}",value):raise ValueError("Invalid bounded Rust test filter")
     return value
 
+# Opt-in test groups: tests too slow or load-sensitive for every release's suite, run on request
+# (buildctl test-group) and nightly (buildctl nightly-tests). Each entry fixes the whole cargo
+# command; a caller only names a group, so task source can never add cargo arguments.
+OPT_IN_TEST_GROUPS={
+ # The two-process loop tests (src/multi_loop_tests.rs) start real loop processes; ignored in the
+ # release suite since 8de753f and run one at a time.
+ "multi_loop":{"bin":"webagent-v3","filter":"multi_loop","ignored":True,"test_threads":1,"run_timeout_seconds":1800},
+}
+MAX_TEST_GROUP_REPEAT=30
+# Kept per failed repetition in the receipt: the start of libtest's failures section and its end,
+# where the panic text is (the old job log cut it off).
+FAILURE_HEAD_BYTES=4096
+FAILURE_TAIL_BYTES=28672
+def test_group_request(group,repeat=None,run_timeout=None):
+    """Validate a named opt-in group, a repeat count (1-30) and a per-run timeout (60-3600 s)."""
+    if not isinstance(group,str)or group not in OPT_IN_TEST_GROUPS:
+        raise ValueError("Unknown opt-in test group; listed groups: "+", ".join(sorted(OPT_IN_TEST_GROUPS)))
+    repeat=1 if repeat is None else repeat
+    if type(repeat)is not int or not 1<=repeat<=MAX_TEST_GROUP_REPEAT:raise ValueError("Repeat count must be 1 to "+str(MAX_TEST_GROUP_REPEAT))
+    run_timeout=OPT_IN_TEST_GROUPS[group]["run_timeout_seconds"]if run_timeout is None else run_timeout
+    if type(run_timeout)is not int or not 60<=run_timeout<=3600:raise ValueError("Per-run timeout must be 60 to 3600 seconds")
+    return group,repeat,run_timeout
+def test_group_argv(group,compile_only=False):
+    entry=OPT_IN_TEST_GROUPS[group]
+    if compile_only:return ["cargo","test","--locked","--offline","--bin",entry["bin"],"--no-run"]
+    return ["cargo","test","--locked","--offline","--bin",entry["bin"],entry["filter"],"--","--test-threads="+str(entry["test_threads"]),*(["--ignored"]if entry["ignored"]else[])]
+def test_run_report(output):
+    """Each test's outcome in one libtest run, and the failure text to keep (bounded, panic kept)."""
+    names={"ok":"passed","FAILED":"failed","ignored":"ignored"}
+    tests={m.group(1):names[m.group(2)]for m in re.finditer(r"^test (\S+) \.\.\. (ok|FAILED|ignored)",output,re.M)}
+    start=output.find("\nfailures:\n")
+    text=output[start+1:]if start>=0 else output
+    data=text.encode("utf-8","replace")
+    if len(data)>FAILURE_HEAD_BYTES+FAILURE_TAIL_BYTES:
+        text=data[:FAILURE_HEAD_BYTES].decode("utf-8","ignore")+"\n[... "+str(len(data)-FAILURE_HEAD_BYTES-FAILURE_TAIL_BYTES)+" bytes cut ...]\n"+data[-FAILURE_TAIL_BYTES:].decode("utf-8","ignore")
+    return {"tests":tests,"failure_output":text}
+def test_group_summary(result,inputs):
+    lines=["Opt-in test group "+result["group"]+": "+str(result["passed_runs"])+" of "+str(len(result["runs"]))+" repetitions passed (source "+inputs[:12]+")."]
+    for row in result["runs"]:
+        failed=[n for n,v in sorted(row["tests"].items())if v=="failed"]
+        lines.append("repetition "+str(row["repetition"])+": "+row["status"]+" in "+str(round(row["seconds"]))+" s"+(("; failed: "+", ".join(failed))if failed else""))
+    return "\n".join(lines)+"\n"
+
 # Protected registrations; source paths select fixed assertions, never shell text.
 HOST_FOCUSED_POLICY="registered-host-v2"
 HOST_FOCUSED_REGISTRY=(
@@ -186,11 +229,13 @@ class Executor:
     def tuning(self,key,default):
         """A build tuning value from the scheduler config (scheduler-defaults.json fills unset keys)."""
         return (self.config.get("scheduler")or{}).get(key,default)
-    def cpu_weight_args(self,phase):
+    def cpu_weight_args(self,phase,job=None):
         """The live release compile runs beside the full suite inside the build slice's CPU
         quota; give it the lowest weight so timing-sensitive tests get CPU first and the
-        compile uses only what they leave idle. Same work, so no added CPU-seconds."""
-        return ["--cpu-shares",str(self.tuning("release_cpu_shares",2))]if phase=="compile_release"else[]
+        compile uses only what they leave idle. Same work, so no added CPU-seconds.
+        Opt-in test groups are optional work: every phase of theirs takes the same low weight."""
+        low=phase=="compile_release"or(job is not None and job.get("check_task")=="test_group")
+        return ["--cpu-shares",str(self.tuning("release_cpu_shares",2))]if low else[]
     @staticmethod
     def suite_totals(output):
         """Sum one cargo test run's result counts; an empty run proves nothing executed."""
@@ -262,7 +307,7 @@ class Executor:
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
             "--mount","type=bind,src="+str(output)+",dst=/output",*(["--mount","type=bind,src="+str(cargo_home)+",dst=/output/cargo"]if cargo_home else[]),"-w","/build",
             "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS="+str(self.tuning("cargo_build_jobs",int(CARGO_BUILD_JOBS))),"-e","CARGO_INCREMENTAL="+self.incremental(job,profile),"--env","RUSTFLAGS="+RUSTFLAGS,
-            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]
+            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase,job),image,"sleep","infinity"]
         if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
             self.runner.command(create,timeout=30,private_raw=True)
@@ -1383,6 +1428,41 @@ class Executor:
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Check changed its captured application inputs")
         self.record_check_result(job,binding,key,log)
         return log
+
+    def test_group(self,job,blob,extract):
+        """Run one listed opt-in test group repeat times on captured source; deploys and promotes nothing.
+
+        Compiles the group's test binary once, then runs it once per repetition with the per-run
+        timeout. Every repetition runs even after a failure; the receipt lists each test of each
+        repetition and keeps the failure output. Any failed repetition fails the job."""
+        group,repeat,run_timeout=test_group_request(job.get("test_group"),job.get("test_repeat"),job.get("test_run_timeout"))
+        job["artifact_component"]="engine-check"
+        root=Path(self.config["state_root"])/"checks"/job["job_id"];source=root/"source";output=root/"output"
+        blob=self.runner.execution_application_blob(blob);root.mkdir(parents=True,exist_ok=True);extract(source,blob);output.mkdir(exist_ok=True)
+        application=source/"v3";before=self.runner.execution_source_digest(source)
+        log=self.dependencies(job,application,output,prepare=False,timeout=600)
+        log+=self.phase(job,"compile_test","engine",application,output,test_group_argv(group,compile_only=True),"engine:rust1.90:compile_test",3600)
+        result={"group":group,"repeat":repeat,"run_timeout_seconds":run_timeout,"runs":[],"passed_runs":0,"failed_runs":0}
+        job["test_group_result"]=result
+        event=getattr(getattr(self.runner,"job_context",None),"event",None)
+        for number in range(1,repeat+1):
+            if event is not None and event.is_set():raise PermissionError("Test group cancelled")
+            started=time.monotonic();status="passed"
+            try:out=self.phase(job,"test","test",application,output,test_group_argv(group),"engine:rust1.90:test",run_timeout)
+            except TimeoutError as error:status="timed_out";out=getattr(error,"log","")or""
+            except RuntimeError as error:status="failed";out=str(error).removeprefix("fixed command failed: ")
+            report=test_run_report(out)
+            # A run that reports no test, or any failed test, proves nothing passed.
+            if status=="passed"and(not report["tests"]or "failed"in report["tests"].values()):status="failed"
+            row={"repetition":number,"status":status,"seconds":round(time.monotonic()-started,3),"tests":report["tests"]}
+            if status!="passed":row["failure_output"]=report["failure_output"]
+            with self.job_lock():
+                result["runs"].append(row);result["passed_runs" if status=="passed"else"failed_runs"]+=1
+            getattr(self.runner,"resource_progress",lambda _:None)(job)
+        if self.runner.execution_source_digest(source)!=before:raise ValueError("Test group changed its captured application inputs")
+        summary=test_group_summary(result,job.get("inputs_sha256")or"")
+        if result["failed_runs"]:raise RuntimeError(summary)
+        return log+summary
 
     def lint(self,job,application,output,task,timeout):
         """Run rustfmt --check or Clippy and report only findings in the task's own changed Rust files."""

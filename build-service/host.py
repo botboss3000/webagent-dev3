@@ -261,6 +261,71 @@ def supply_chain_summary():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.read_summary(SUPPLY_CHAIN_ROOT, CONFIG["source_uid"])
+# Summary the nightly opt-in test run (buildctl nightly-tests, run by its timer as the checkout
+# owner) writes beside the checkout; read only through opt_in_tests_summary.
+OPT_IN_TESTS_ROOT = SOURCE.parent / "opt-in-tests"
+OPT_IN_TESTS_LIMIT = 64 * 1024
+
+
+def opt_in_tests_view(raw):
+    """Strict projection of the nightly summary: fixed fields, bounded values, no free text."""
+    value = json.loads(raw)
+    states = {"passed", "failed", "skipped"}
+    if not isinstance(value, dict) or set(value) != {"status", "checked_at", "groups"} or value["status"] not in states:
+        raise ValueError("summary shape")
+    if type(value["checked_at"]) not in (int, float) or not 0 < value["checked_at"] < 2**33:
+        raise ValueError("summary time")
+    groups = value["groups"]
+    if not isinstance(groups, list) or len(groups) > 16:
+        raise ValueError("summary groups")
+    view = []
+    for group in groups:
+        if not isinstance(group, dict) or set(group) != {"group", "status", "job_id", "inputs_sha256", "tests", "failed_tests"}:
+            raise ValueError("group shape")
+        if not isinstance(group["group"], str) or not re.fullmatch(r"[a-z0-9_]{1,40}", group["group"]):
+            raise ValueError("group name")
+        if group["status"] not in states | {"error"}:
+            raise ValueError("group status")
+        if group["job_id"] is not None and (not isinstance(group["job_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", group["job_id"])):
+            raise ValueError("group job")
+        if group["inputs_sha256"] is not None and (not isinstance(group["inputs_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", group["inputs_sha256"])):
+            raise ValueError("group inputs")
+        if type(group["tests"]) is not int or not 0 <= group["tests"] <= 10000:
+            raise ValueError("group tests")
+        failed = group["failed_tests"]
+        if not isinstance(failed, list) or len(failed) > 50 or any(not isinstance(n, str) or not re.fullmatch(r"[A-Za-z0-9_:]{1,160}", n) for n in failed):
+            raise ValueError("group failures")
+        view.append(dict(group, failed_tests=list(failed)))
+    return {"status": value["status"], "checked_at": value["checked_at"], "groups": view}
+
+
+def opt_in_tests_summary(root=None, owner_uid=None):
+    """The administrator projection of the newest nightly opt-in test summary (no links, bounded)."""
+    root = OPT_IN_TESTS_ROOT if root is None else root
+    owner_uid = CONFIG["source_uid"] if owner_uid is None else owner_uid
+    directory = fd = None
+    try:
+        directory = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        fd = os.open("latest.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=directory)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid or info.st_nlink != 1:
+            return {"available": False, "reason": "refused"}
+        if info.st_size > OPT_IN_TESTS_LIMIT:
+            return {"available": False, "reason": "too_large"}
+        raw = os.read(fd, OPT_IN_TESTS_LIMIT + 1)
+    except FileNotFoundError:
+        return {"available": False, "reason": "missing"}
+    except OSError:
+        return {"available": False, "reason": "refused"}
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if directory is not None:
+            os.close(directory)
+    try:
+        return {"available": True, **opt_in_tests_view(raw)}
+    except (ValueError, UnicodeDecodeError):
+        return {"available": False, "reason": "malformed"}
 # When each broker request arrived, so a caller's short authorization lease is judged at arrival,
 # not after it waited for the broker lock.
 _ARRIVAL = threading.local()
@@ -4152,6 +4217,9 @@ class Broker:
         for job in pending:
             if job["operation"]=="check"and job["status"]=="queued"and job["job_id"]in self.check_runs:
                 if not self._maintenance_allowed({"local_caller":job.get("user_id") in scheduler_module.LOCAL_OPERATORS},job):continue
+                # Opt-in test groups are optional work: admitted only while no release build runs.
+                if job.get("check_task")=="test_group"and any(other.get("operation")in {"build","build_deploy"}and other.get("status")=="running"for other in self.jobs.values()):
+                    job["waiting_reason"]="waits until no release build runs";continue
                 if controlled and not self.scheduler.execution_eligible(job,[self.jobs[key]for key in self.active_jobs]):continue
                 call=self.check_runs.pop(job["job_id"])
                 self.active_jobs.add(job["job_id"]);self.active=next(iter(self.active_jobs),None)
@@ -4405,7 +4473,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "changed_paths", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "sidekick", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "browser_sync", "ui_test_failure", "ui_test_override", "early_work", "finished_at", "rebuild_closeout") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "changed_paths", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "test_group", "test_repeat", "test_run_timeout", "test_group_result", "runtime_preflight", "verification_cache", "focused_verification", "sidekick", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "browser_sync", "ui_test_failure", "ui_test_override", "early_work", "finished_at", "rebuild_closeout") if key in job}
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
@@ -5995,6 +6063,53 @@ class Broker:
             time.sleep(0.05)
         raise TimeoutError("Check remains queued or running; inspect the existing job receipt")
 
+    def test_group_request(self,args,trusted,workspace):
+        """Queue a listed opt-in test group (executor OPT_IN_TEST_GROUPS) repeat times; deploys and promotes nothing.
+
+        Local operator only, with enforced resource admission. Source is an open task's tree
+        (task_id with its expected digest) or, without a task, the published release."""
+        if set(args)-{"action","group","task_id","expected_inputs_sha256","repeat","run_timeout_seconds","request_id"}:raise ValueError("Unsupported test group arguments")
+        if trusted.get("local_caller")is not True or not self.resources.enabled:raise PermissionError("Opt-in test groups require the local operator and enforced resource admission")
+        group,repeat,run_timeout=executor_module.test_group_request(args.get("group"),args.get("repeat"),args.get("run_timeout_seconds"))
+        request_id=args.get("request_id");task_id=args.get("task_id");expected=args.get("expected_inputs_sha256")
+        if not isinstance(request_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id):raise ValueError("Stable test group request ID required")
+        if (task_id is None)!=(expected is None):raise ValueError("A task run needs task_id and expected_inputs_sha256 together")
+        if task_id is not None and(not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)):raise ValueError("Bounded task test group request required")
+        request_key="test-group-"+hashlib.sha256(canonical([trusted["user_id"],workspace,task_id or "",request_id])).hexdigest()
+        signature=hashlib.sha256(canonical([task_id,expected,group,repeat,run_timeout])).hexdigest()
+        with self.lock:
+            self._incoming_lease(trusted)
+            previous=next((j for j in self.jobs.values()if j.get("request_key")==request_key),None)
+            if previous:
+                if previous.get("check_signature")!=signature:raise ValueError("Test group request ID reused with different inputs")
+                return previous.get("check_result")or{"job_id":previous["job_id"],"task":"test_group","group":group,"status":previous["status"],"inputs_sha256":previous["inputs_sha256"]}
+            item=root=None;ownership_value=None
+            if task_id is not None:
+                key=hashlib.sha256(canonical([trusted["user_id"],workspace,task_id])).hexdigest();item=self.work.get(key)
+                if not item or item.get("mode")!="isolated"or item["status"]!="open":raise ValueError("Open isolated task required")
+                root=self.work_dir/"trees"/key;blob=release.snapshot(root,TASK_CONTEXT,context_digest);before=context_digest(blob)[0]
+                if before!=expected:raise ValueError("Stale task source inputs")
+                if any(j.get("task_id")==task_id and self._owned(j,trusted,workspace)and j["status"]in {"running","queued"}and j["operation"]!="check"for j in self.jobs.values()):
+                    raise ValueError("This task already has pending execution")
+                if self.scheduler.mode=="enforce":
+                    self.scheduler.submit(item,trusted,workspace,["src","Cargo.toml","Cargo.lock"],before);ownership_value=self.scheduler.store.get(key)
+            else:
+                blob=self._current_release_blob();before=context_digest(blob)[0]
+            cap=CONFIG.get("scheduler",{}).get("compiler_memory_default_bytes",12*1024**3)
+            job_id=str(uuid.uuid4());event=threading.Event();self.job_cancellations[job_id]=event
+            job={"job_id":job_id,"request_key":request_key,"check_signature":signature,"task_id":task_id,"user_id":trusted["user_id"],"workspace":workspace,
+                "operation":"check","check_task":"test_group","test_group":group,"test_repeat":repeat,"test_run_timeout":run_timeout,"status":"queued","phase":"queued_check",
+                "created_at":time.time(),"started_at":None,"inputs_sha256":before,"source":"task"if task_id else"published",
+                # Covers a queue wait behind release builds, the compile and every repetition.
+                "lease_until":time.time()+6*3600+repeat*run_timeout,"access_fingerprint":trusted["access_fingerprint"],
+                "images":{},"log":"","phase_history":[],"summary":"Opt-in test group "+group+" x"+str(repeat),"compiler_memory_cap":cap,"test_filter":None,"feature_profile":"default"}
+            if ownership_value:job.update(ownership_id=key,ownership_epoch=ownership_value["epoch"],source_generation=ownership_value["generation"])
+            self.jobs[job_id]=job;self._save(job)
+            if item is not None:item["last_check_job_id"]=job_id;item["last_activity_at"]=time.time();self._save_work()
+            self.check_runs[job_id]=(job,item,root,blob,before,"test_group",run_timeout,event)
+            self._start_next()
+        return {"job_id":job_id,"task":"test_group","group":group,"repeat":repeat,"run_timeout_seconds":run_timeout,"source":job["source"],"status":"queued","inputs_sha256":before}
+
     def _execute_check(self,job,item,root,blob,before,task,timeout,event):
         """Execute a captured check outside coordination; interrupted jobs require an explicit new request."""
         job_id=job["job_id"];task_id=job["task_id"]
@@ -6003,10 +6118,11 @@ class Broker:
         try:
             self._lease(job)
             if event.is_set():raise PermissionError("Check cancelled before execution")
-            if context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]!=before:
+            if root is not None and context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]!=before:
                 raise ValueError("Task changed before check execution")
             if hasattr(self.runner,"job_context"):self.runner.job_context.job=job;self.runner.job_context.event=event
-            if task=="ui_test":
+            if task=="test_group":log=self.runner.executor.test_group(job,blob,lambda p,b:release.extract(p,b,context_digest))
+            elif task=="ui_test":
                 # Same fixture run as a release's early UI tests, never followed by publication;
                 # its own fixture timeout (at most 900 s) applies, which the lease above covers.
                 # Inspection snapshots stay out of the fixture copy.
@@ -6024,13 +6140,15 @@ class Broker:
         finally:
             if hasattr(self.runner,"job_context"):self.runner.job_context.job=None;self.runner.job_context.event=None
         with self.lock:
-            after=context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]
+            after=context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]if root is not None else before
             if after!=before:status="stale"
             job.update(status=status,phase="finished",finished_at=time.time(),log=scrub(log)[-MAX_LOG:],reason=("Inputs unchanged"if status=="completed"else("Task changed during check"if after!=before else scrub(log)[-600:])))
             job["rust_tests"]={"status":("passed" if status=="completed" else status) if task=="test" else "not_run","check":task,"feature_profile":job.get("feature_profile","default")}
-            job["check_result"]={"task_id":task_id,"job_id":job_id,"task":task,"feature_profile":job.get("feature_profile","default"),"status":status,"inputs_sha256":after,"log_excerpt":scrub(log)[-4096:]}
+            job["check_result"]={"task_id":task_id,"job_id":job_id,"task":task,"feature_profile":job.get("feature_profile","default"),"status":status,"inputs_sha256":after,"log_excerpt":scrub(log)[-4096:],
+                **({"test_group_result":job["test_group_result"]}if "test_group_result"in job else{})}
             job.setdefault("phase_history",[]).append({"phase":"finished","at":job["finished_at"]})
-            self._save(job);self.job_cancellations.pop(job_id,None);item["last_activity_at"]=time.time();self._save_work()
+            self._save(job);self.job_cancellations.pop(job_id,None)
+            if item is not None:item["last_activity_at"]=time.time();self._save_work()
             self.active_jobs.discard(job_id);self.active=next(iter(self.active_jobs),None)
             self._start_next()
         return job["check_result"]
@@ -6171,6 +6289,7 @@ class Broker:
             return result
         if name=="build_service_sidekick":
             return self.sidekick_switch(trusted,args)
+        if name=="build_work"and args.get("action")=="test_group":return self.test_group_request(args,trusted,workspace)
         if name=="build_work"and args.get("action")=="check":
             if set(args)-{"action","task_id","check","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}:raise ValueError("Unsupported check arguments")
             return self.cargo_request({"task_id":args.get("task_id"),"task":args.get("check","check"),"expected_inputs_sha256":args.get("expected_inputs_sha256"),"timeout_seconds":args.get("timeout_seconds",600),**({"request_id":args["request_id"]} if "request_id" in args else {}),**({"compiler_memory_cap":args["compiler_memory_cap"]}if "compiler_memory_cap"in args else{}),**({"test_filter":args["test_filter"]}if "test_filter"in args else{}),**({"feature_profile":args["feature_profile"]}if "feature_profile"in args else{})},trusted,workspace)
@@ -6187,7 +6306,7 @@ class Broker:
                         self._start_next()
                 return {**self._maintenance(),"busy":bool(self.active or self.active_ui or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
             read_actions={"heartbeat","status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview","note","notes"}
-            read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_supply_chain","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_build_progress","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
+            read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_supply_chain","v3_opt_in_tests","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_build_progress","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
             # Isolated task work (edits, checks, finish) is admitted while drained; _start_next holds its jobs until resume.
             task_work=name in {"build_work","v3_build_work","v3_cargo_task","v3_source_prepare","v3_source_apply","v3_source_apply_prepared","file_edit","file_write"}and args.get("action")not in {"reconcile_release","reload_resource_policy","reload_memory_policy"}
             if name not in read_names and args.get("action") not in read_actions and not task_work and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
@@ -6272,6 +6391,12 @@ class Broker:
                 return {"notices": rows[:20], "total": len(rows), "policy": policy}
             if name == "v3_build_leftover_review":
                 return self._review_leftover(args, trusted, workspace)
+            if name == "v3_opt_in_tests":
+                # Report-only view of the nightly opt-in test run for the Dashboard card and its alert.
+                if args or not (self.administrator(trusted) or trusted.get("local_caller") is True):
+                    raise PermissionError("administrator opt-in test report denied")
+                self._incoming_lease(trusted)
+                return opt_in_tests_summary()
             if name == "v3_supply_chain":
                 # Report-only view for the administrator Dashboard card and its alerts.
                 if args or not self.administrator(trusted):

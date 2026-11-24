@@ -90,6 +90,7 @@ the live checkout or containers by hand. All commands below run **on the server*
    use its pre-refresh digest, once, after a grant another call took (for example a
    `reserve`); every other apply is judged against the current digest.
 5. Optional server checks: `check TASK --check check|test|fmt|clippy|ui_test [--test-filter NAME] --expected DIGEST --request-id ID`.
+   Ignored, load-sensitive tests run as listed groups: `test-group` (see Opt-in test groups).
    A release runs the full suite anyway; use checks to catch errors before queueing.
    `ui_test` runs the browser fixtures the task's changed paths select, exactly as a
    release's UI stage does, and never deploys; a failure's output is in `log_excerpt`.
@@ -239,6 +240,41 @@ cookie, auth or private (any case), plus the names listed in `secret_env_names`
 (default `[]`, at most 64 names). Other values, such as `V3_PROCESS_ROLE=loop`, stay
 readable in logs. Pattern redaction of `authorization:`, `bearer`, `password=` and
 similar text applies to all output regardless.
+
+## Opt-in test groups
+
+Some tests are too slow or too sensitive to load for every release's suite (they are
+`#[ignore]`d there). They are listed by name in `OPT_IN_TEST_GROUPS` in `executor.py`; each
+entry fixes the whole cargo command, so a caller can only name a group, never pass arguments.
+First entry: `multi_loop`, the five two-process agent-loop tests of the `webagent-v3` binary
+(`cargo test --bin webagent-v3 multi_loop -- --test-threads=1 --ignored`, 1800 s per run).
+To add a group, add one entry there (a broker-only task and install).
+
+```bash
+buildctl test-group multi_loop --repeat 20                       # published source
+buildctl test-group multi_loop --task TASK --expected DIGEST     # an open task's tree
+buildctl job JOB_ID     # test_group_result: each repetition, each test, failure output
+```
+
+- Local operator only (the in-app `build_work` tool does not expose it). Deploys nothing,
+  promotes nothing, takes no source claim for a published-source run (only the check token).
+- `--repeat` 1–30 (default 1); `--run-timeout` 60–3600 s per repetition (default: the group's).
+- The broker admits the job only while no release build (`build`/`build_deploy`) runs; until
+  then it waits with `waiting_reason`. Every phase runs at the lowest CPU weight
+  (`release_cpu_shares`), with the normal recipe, dependency cache and memory admission.
+- The group's test binary compiles once; every repetition then runs, even after a failure.
+  `test_group_result.runs[]` lists each repetition's status (`passed`, `failed`,
+  `timed_out`), seconds, every test's outcome and, for a failed one, `failure_output`: the start
+  of libtest's failures section and its last 28 KiB (where the panic is). Any failed repetition
+  fails the job.
+- **Nightly:** the broker install writes `webagent-dev-opt-in-tests.timer` (about 02:40, as the
+  checkout owner, `Nice=19`). It runs `buildctl nightly-tests`: every listed group once on the
+  published source. A run still queued behind release builds after 3 h is cancelled and recorded
+  as skipped. The summary (states, job ids, test counts and failed test names only) goes to
+  `../opt-in-tests/latest.json` beside the checkout; administrators read it through
+  `v3_opt_in_tests` (bounded, strict, no links), which feeds the Dashboard card and the
+  administrator alert. The timer is written by the installer, which is the previous release's
+  code, so it appears from the second install after this change.
 
 ## New broker files need two installs
 

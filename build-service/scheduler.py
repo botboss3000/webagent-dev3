@@ -609,6 +609,8 @@ class Scheduler:
         if job.get("ownership_id"):
             value=self.store.get(job["ownership_id"])
             return {s for s in value["scopes"]if s.startswith("module:")}|({"execution:rust-check"}if job["operation"]=="check"else{"execution:rust-build"}if job["operation"]in {"build","build_deploy"}else set())
+        # A published-source opt-in test group has no task: it takes only the check token.
+        if job.get("operation")=="check"and job.get("check_task")=="test_group":return {"execution:rust-check"}
         # One release compile and one check run at a time, each beside the other; these execution tokens never touch source write claims.
         # Legacy unclassified executable work is conservative until explicit recovery.
         return {"execution:rust-build"}if job["operation"]=="build_deploy"else{"module:legacy-publication"}
