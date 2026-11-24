@@ -462,7 +462,9 @@ impl<
                     // ago offers its remembered queued runs without being opened; a run its
                     // last claim refused waits for a run to end (a slot release) instead of
                     // being tried on every pass. Component trouble or shutoff forgets all.
-                    let releases = RELEASES.load(Ordering::Acquire);
+                    let releases = RELEASES
+                        .load(Ordering::Acquire)
+                        .wrapping_add(crate::wake::slots_freed());
                     if restore_sweep {
                         own_work.clear();
                     }
@@ -634,8 +636,9 @@ impl<
                     }
                     // C5 fair admission: queued runs start in turn over requesters, starting
                     // after the one served last, not in account order. Admission decides each
-                    // claim in its writer transaction (requester limit, per-agent cap, slots
-                    // kept for administrators); the loop's ceiling still stops the pass.
+                    // claim in its writer transaction (requester limit, per-agent cap, the
+                    // server's ceiling over every loop, slots kept for administrators); this
+                    // loop's own runs reaching the ceiling still stop the pass.
                     let mut waiting = std::collections::HashSet::new();
                     // Paid-tier priority (plus tier spec 8.3): runs whose slot goes first now
                     // (paid owners' agents, Free runs past their longest wait) are served
@@ -678,10 +681,7 @@ impl<
                         if ceiling != 0 && active.len() >= ceiling {
                             break;
                         }
-                        let capacity = Capacity {
-                            active: active.len(),
-                            ceiling,
-                        };
+                        let capacity = Capacity { ceiling };
                         let permit = match app.slots.clone().try_acquire_owned() {
                             Ok(p) => p,
                             Err(_) => break,
@@ -759,6 +759,9 @@ impl<
                         {
                             Ok(access) => cloned.chat_access = Some(access),
                             Err(_) => {
+                                // Not started: recovery takes the run back; its place is free.
+                                let _ =
+                                    crate::send_future(user_app.store.release_run_place(&id)).await;
                                 crate::send_future(app.active.lock()).await.remove(&id);
                                 continue;
                             }
@@ -819,10 +822,20 @@ impl<
                             }
                             cancel.cancel();
                             watcher.abort();
+                            // Give back its place under the server's ceiling first, so a loop
+                            // woken by the slot-freed hint finds it free.
+                            if let Err(error) =
+                                crate::send_future(cloned.store.release_run_place(&id)).await
+                            {
+                                tracing::warn!(run_id=%id, %error, "Run place not given back");
+                            }
                             crate::send_future(cloned.active.lock()).await.remove(&id);
                             drop(permit);
-                            // A run slot is free: runs waiting on a refused claim try again.
+                            // A run slot is free: runs waiting on a refused claim try again, in
+                            // this loop and (a hint without an account) in the others.
                             RELEASES.fetch_add(1, Ordering::AcqRel);
+                            crate::send_future(crate::wake::notify_slot_freed(&cloned.control_dir))
+                                .await;
                             crate::send_future(crate::wake::notify_account(
                                 &cloned.control_dir,
                                 crate::ports::Records::current_user_id(cloned.store.records()),
@@ -924,7 +937,7 @@ pub async fn first_in_line(
 const OWN_WORK: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Runs this loop has ended (each gives back a run slot); a refused claim is tried again
-/// once this moves.
+/// once this or [`crate::wake::slots_freed`] (runs other loops ended) moves.
 static RELEASES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// One queued run an account offered: its requester, the account's view, id and record.

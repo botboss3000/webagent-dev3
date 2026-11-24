@@ -1160,6 +1160,9 @@ async fn serve_loop(app: App, lock: Option<std::fs::File>, stop: CancellationTok
         }
     }
     webagent_engine::partition::set_member_owner(&owner);
+    // This loop's earlier process is gone: the run places it held go back (start-up recovery
+    // queues its runs again).
+    app.store.release_places_of_loop(member.index).await?;
     recover(&app, true).await?;
     app.ready.store(true, Ordering::Release);
     let slots = app.store.clone();

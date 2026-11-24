@@ -159,6 +159,23 @@ pub async fn notify_account(control_dir: &Path, user: &str, kind: Kind) {
         send(control_dir, index, &message).await;
     }
 }
+/// Runs other loop processes ended since this process started (their slot-freed hints).
+static SLOTS_FREED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How many slot-freed hints other loops sent: a run refused under the server's ceiling or a
+/// shared limit is tried again once this moves, without a pass over every account.
+pub fn slots_freed() -> u64 {
+    SLOTS_FREED.load(std::sync::atomic::Ordering::Acquire)
+}
+/// Tell the other loop processes that a run ended here and gave back its run place. Nothing is
+/// sent with one loop.
+pub async fn notify_slot_freed(control_dir: &Path) {
+    let own = crate::partition::own().unwrap_or_default().index;
+    for index in targets(None, crate::partition::routes()) {
+        if index != own {
+            send(control_dir, index, b"S").await;
+        }
+    }
+}
 fn named_message(user: &str, kind: Kind) -> Vec<u8> {
     let mut message = vec![b'W', kind.byte()];
     message.extend_from_slice(user.as_bytes());
@@ -222,7 +239,10 @@ pub async fn listener(
                         let mut message=Vec::with_capacity(MAX_ID+3);
                         let read=tokio::time::timeout(Duration::from_millis(100),
                             stream.take((MAX_ID+3) as u64).read_to_end(&mut message)).await;
-                        if read.is_ok(){
+                        if read.is_ok() && message==b"S"{
+                            SLOTS_FREED.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
+                            signal().notify_one();
+                        } else if read.is_ok(){
                             match parse(&message){
                                 Some(Some((user,kind))) if crate::partition::owns(&user)=>emit(Some((&user,kind))),
                                 // A sender that routed over a stale loop count: pass the hint
@@ -324,6 +344,22 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_slot_freed_hint_moves_the_count_without_a_hint_about_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let stop = CancellationToken::new();
+        let listening = listener(dir.path(), stop.clone()).await.unwrap();
+        let before = slots_freed();
+        send(dir.path(), 0, b"S").await;
+        let start = std::time::Instant::now();
+        while slots_freed() == before && start.elapsed() < Duration::from_secs(2) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(slots_freed() > before);
+        stop.cancel();
+        let _ = listening.await;
     }
     #[test]
     fn named_accounts_follow_each_cursor() {

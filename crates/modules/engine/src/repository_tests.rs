@@ -332,8 +332,19 @@ impl ChatEffects for Fixture {
 }
 
 impl AdmissionEffects for Fixture {
-    async fn requester_claim_ready<'a>(&'a self, _: &'a Value, _: Capacity) -> Result<bool> {
+    async fn requester_claim_ready<'a>(
+        &'a self,
+        _: &'a Value,
+        _: &'a str,
+        _: Capacity,
+    ) -> Result<bool> {
         Ok(true)
+    }
+    async fn release_run_place<'a>(&'a self, _: &'a str) -> Result<()> {
+        Ok(())
+    }
+    async fn release_places_of_gone_loops<'a>(&'a self, _: &'a [String]) -> Result<()> {
+        Ok(())
     }
     async fn reconcile_requester_slots<'a>(&'a self) -> Result<()> {
         self.reconciliations.fetch_add(1, Ordering::SeqCst);

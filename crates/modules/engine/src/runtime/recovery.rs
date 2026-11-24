@@ -1032,6 +1032,20 @@ impl<
             }
             Self::follow_detached_builds(&user_app).await?;
         }
+        // With several loops, the run places of a loop that is gone (killed, still restarting)
+        // go back now rather than when that loop starts again.
+        if !startup && own.loops > 1 {
+            let released = match app.store.live_loop_owners(None).await {
+                Ok(mut live) => {
+                    live.extend(crate::partition::member_owner());
+                    app.store.release_places_of_gone_loops(&live).await
+                }
+                Err(error) => Err(error),
+            };
+            if let Err(error) = released {
+                tracing::warn!(%error, "Run places of gone loops not given back; next pass");
+            }
+        }
         // Board notes are delivered once for the installation, by loop 0.
         if own.index == 0 {
             if let Err(error) = Self::follow_board(app).await {

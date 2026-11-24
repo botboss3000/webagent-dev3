@@ -39,6 +39,12 @@ impl Store {
         Ok(())
     }
     async fn create_requester_slots(&self) -> Result<()> {
+        // The runs going now in every loop process, one row each (plain ids, the loop's index and
+        // process id, whether an administrator asked, a time): the server-wide run ceiling and
+        // the administrator's reserved slots are counted here at claim time.
+        sqlx::query("CREATE TABLE IF NOT EXISTS running_runs(run_id TEXT PRIMARY KEY,idx INTEGER NOT NULL,holder TEXT NOT NULL,admin INTEGER NOT NULL,since INTEGER NOT NULL)")
+            .execute(&self.app_pool)
+            .await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS requester_run_slots(run_id TEXT PRIMARY KEY,requester_id TEXT NOT NULL,owner_id TEXT NOT NULL,session_id TEXT NOT NULL,released INTEGER NOT NULL DEFAULT 0,sequence INTEGER NOT NULL,replaced_by TEXT); CREATE INDEX IF NOT EXISTS requester_run_slots_actor ON requester_run_slots(requester_id,released)").execute(&self.app_pool).await?;
         // `agent_id` and `admin` (the requester was an administrator when last checked) serve the
         // per-agent cap; `released` is 0 while held, 1 once the run finished and 2 while it is
@@ -589,16 +595,19 @@ impl Store {
     /// once there (a test account's also within its cap); for a non-administrator, its place
     /// among the owner's held slots is within the owner's total, among the agent's held
     /// non-administrator slots is within `run_limits.max_active_runs_per_agent` (default half
-    /// the loop's ceiling, at least 2), and the loop has a slot outside the
-    /// `reserved_admin_runs`. Places follow the slot sequence, so each line is served in order.
+    /// the server's ceiling, at least 2), and fewer runs are going in all loops than the
+    /// ceiling less `reserved_admin_runs` (an administrator: the whole ceiling), which then
+    /// counts this run (`running_runs`). Places follow the slot sequence, so each line is
+    /// served in order.
     pub(crate) async fn requester_claim_ready(&self, run: &Value) -> Result<bool> {
-        self.requester_claim_ready_within(run, webagent_engine::ports::Capacity::UNBOUNDED)
+        self.requester_claim_ready_within(run, "", webagent_engine::ports::Capacity::UNBOUNDED)
             .await
     }
 
     pub(crate) async fn requester_claim_ready_within(
         &self,
         run: &Value,
+        holder: &str,
         capacity: webagent_engine::ports::Capacity,
     ) -> Result<bool> {
         let access = self.reserve_requester_slot(run).await?;
@@ -607,13 +616,6 @@ impl Store {
             .ok_or_else(|| anyhow!("Run id missing"))?;
         let limits = access.run_limits;
         let admin = access.principal.administrator();
-        if !admin
-            && limits
-                .ordinary_ceiling(capacity.ceiling)
-                .is_some_and(|ordinary| capacity.active >= ordinary)
-        {
-            return Ok(false);
-        }
         let mut tx = self.app_pool.begin_with("BEGIN IMMEDIATE").await?;
         if let Some(limit) = access.account_run_limit() {
             let rank: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM requester_run_slots WHERE requester_id=(SELECT requester_id FROM requester_run_slots WHERE run_id=?) AND released=0 AND sequence <= (SELECT sequence FROM requester_run_slots WHERE run_id=?)")
@@ -685,8 +687,68 @@ impl Store {
                 }
             }
         }
+        // The server's ceiling, over the runs going in every loop process: an ordinary run
+        // starts while fewer than the ceiling less the administrator's reserved slots are going,
+        // an administrator's while fewer than the whole ceiling. Its place is taken here, in the
+        // same transaction, so two loops never both take the last one.
+        if capacity.ceiling != 0 {
+            let going: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM running_runs WHERE run_id<>?")
+                    .bind(rid)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let limit = if admin {
+                Some(capacity.ceiling)
+            } else {
+                limits.ordinary_ceiling(capacity.ceiling)
+            };
+            if limit.is_some_and(|limit| going >= i64::try_from(limit).unwrap_or(i64::MAX)) {
+                return Ok(false);
+            }
+            let index = webagent_engine::partition::own().unwrap_or_default().index;
+            sqlx::query("INSERT OR REPLACE INTO running_runs(run_id,idx,holder,admin,since) VALUES(?,?,?,?,unixepoch())")
+                .bind(rid)
+                .bind(index)
+                .bind(holder)
+                .bind(admin)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         Ok(true)
+    }
+
+    /// Give back the server run place `run` holds: its run stopped, or its claim failed after
+    /// admission said yes.
+    pub(crate) async fn release_run_place(&self, run: &str) -> Result<()> {
+        self.requester_slots_schema().await?;
+        sqlx::query("DELETE FROM running_runs WHERE run_id=?")
+            .bind(run)
+            .execute(&self.app_pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Give back the run places held by loop processes that are no longer live members.
+    pub(crate) async fn release_places_of_gone_loops(&self, live: &[String]) -> Result<()> {
+        self.requester_slots_schema().await?;
+        sqlx::query(
+            "DELETE FROM running_runs WHERE holder NOT IN (SELECT value FROM json_each(?))",
+        )
+        .bind(serde_json::to_string(live)?)
+        .execute(&self.app_pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Give back every run place loop `index` held: at its start, its earlier process is gone.
+    pub(crate) async fn release_places_of_loop(&self, index: u32) -> Result<()> {
+        self.requester_slots_schema().await?;
+        sqlx::query("DELETE FROM running_runs WHERE idx=?")
+            .bind(index)
+            .execute(&self.app_pool)
+            .await?;
+        Ok(())
     }
 }
 
@@ -1006,8 +1068,19 @@ mod tests {
             .unwrap();
         (root, store)
     }
-    fn capacity(active: usize, ceiling: usize) -> webagent_engine::ports::Capacity {
-        webagent_engine::ports::Capacity { active, ceiling }
+    fn capacity(ceiling: usize) -> webagent_engine::ports::Capacity {
+        webagent_engine::ports::Capacity { ceiling }
+    }
+    /// `n` runs going in another loop process (places in `running_runs`).
+    async fn going(store: &Store, n: usize) {
+        store.requester_slots_schema().await.unwrap();
+        for i in 0..n {
+            sqlx::query("INSERT OR REPLACE INTO running_runs VALUES(?,1,'other-loop',0,0)")
+                .bind(format!("going-{i}"))
+                .execute(&store.app_pool)
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test]
@@ -1025,13 +1098,13 @@ mod tests {
                 queued.push((me.clone(), (owner.clone(), r)));
             }
         }
-        // The loop's ceiling is 10 with one slot kept for administrators: 9 ordinary runs.
+        // The server's ceiling is 10 with one slot kept for administrators: 9 ordinary runs.
         let mut active = 0;
         let mut started = Vec::new();
         for (requester, (owner, r)) in webagent_engine::runtime::scheduler::fair_order(queued, None)
         {
             if owner
-                .requester_claim_ready_within(&r, capacity(active, 10))
+                .requester_claim_ready_within(&r, "loop-test", capacity(10))
                 .await
                 .unwrap()
             {
@@ -1067,7 +1140,8 @@ mod tests {
             visitor.reserve_requester_run(r).await.unwrap();
         }
         // Ceiling 4: the default agent cap is half of it, 2.
-        let ready = |i: usize| visitors[i].requester_claim_ready_within(&runs[i], capacity(0, 4));
+        let ready =
+            |i: usize| visitors[i].requester_claim_ready_within(&runs[i], "loop-test", capacity(4));
         assert!(ready(0).await.unwrap());
         assert!(ready(1).await.unwrap());
         assert!(
@@ -1077,14 +1151,15 @@ mod tests {
         let admin_run = run_on("admin-run", store.current_user_id(), "shared_default");
         store.reserve_requester_run(&admin_run).await.unwrap();
         assert!(store
-            .requester_claim_ready_within(&admin_run, capacity(0, 4))
+            .requester_claim_ready_within(&admin_run, "loop-test", capacity(4))
             .await
             .unwrap());
-        // The first visitor's run ends: the third one's turn comes.
+        // The first visitor's run ends (its loop gives its place back): the third one's turn.
         let mut done = runs[0].clone();
         done["status"] = json!("completed");
         visitors[0].put("run:visit-0", &done).await.unwrap();
         visitors[0].reconcile_requester_slots().await.unwrap();
+        visitors[0].release_run_place("visit-0").await.unwrap();
         assert!(ready(2).await.unwrap());
     }
 
@@ -1164,7 +1239,7 @@ mod tests {
             .await
             .unwrap();
         assert!(member
-            .requester_claim_ready_within(&first, capacity(0, 10))
+            .requester_claim_ready_within(&first, "loop-test", capacity(10))
             .await
             .unwrap());
     }
@@ -1282,19 +1357,47 @@ mod tests {
         user.reserve_requester_run(&mine).await.unwrap();
         let admin_run = run_on("administrator", store.current_user_id(), "shared_default");
         store.reserve_requester_run(&admin_run).await.unwrap();
-        // 9 of 10 running, 1 reserved: the ordinary run waits, the administrator's starts.
+        // 9 of 10 running in other loops, 1 reserved: the ordinary run waits, the
+        // administrator's starts (and takes the tenth place).
+        going(&store, 9).await;
         assert!(!user
-            .requester_claim_ready_within(&mine, capacity(9, 10))
+            .requester_claim_ready_within(&mine, "loop-test", capacity(10))
             .await
             .unwrap());
         assert!(store
-            .requester_claim_ready_within(&admin_run, capacity(9, 10))
+            .requester_claim_ready_within(&admin_run, "loop-test", capacity(10))
             .await
             .unwrap());
+        // The ceiling is full: no further run starts, not even an administrator's.
+        let second = run_on("administrator-2", store.current_user_id(), "shared_default");
+        store.reserve_requester_run(&second).await.unwrap();
+        assert!(!store
+            .requester_claim_ready_within(&second, "loop-test", capacity(10))
+            .await
+            .unwrap());
+        // Two runs end (their loops give their places back): the ordinary run starts.
+        store.release_run_place("going-8").await.unwrap();
+        store.release_run_place("administrator").await.unwrap();
         assert!(user
-            .requester_claim_ready_within(&mine, capacity(8, 10))
+            .requester_claim_ready_within(&mine, "loop-test", capacity(10))
             .await
             .unwrap());
+        let places: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM running_runs WHERE run_id='ordinary'")
+                .fetch_one(&store.app_pool)
+                .await
+                .unwrap();
+        assert_eq!(places, 1);
+        // A loop that is gone gives back every place it held.
+        store
+            .release_places_of_gone_loops(&["loop-test".to_owned()])
+            .await
+            .unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM running_runs")
+            .fetch_one(&store.app_pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 1, "only the live loop's place stays");
     }
 
     #[tokio::test]
@@ -1382,7 +1485,7 @@ mod tests {
         // Resuming "one" never fails: it takes a slot again at the end of the line and waits.
         user.put("run:one", &one).await.unwrap();
         assert!(!user
-            .requester_claim_ready_within(&one, capacity(0, 10))
+            .requester_claim_ready_within(&one, "loop-test", capacity(10))
             .await
             .unwrap());
         let held: i64 = sqlx::query_scalar(
@@ -1397,7 +1500,7 @@ mod tests {
         user.put("run:two", &finished).await.unwrap();
         user.reconcile_requester_slots().await.unwrap();
         assert!(user
-            .requester_claim_ready_within(&one, capacity(0, 10))
+            .requester_claim_ready_within(&one, "loop-test", capacity(10))
             .await
             .unwrap());
         // Approval waits keep their slot.
@@ -1581,7 +1684,7 @@ mod tests {
         let admin_run = run_on("o-admin", store.current_user_id(), &agent);
         store.reserve_requester_run(&admin_run).await.unwrap();
         assert!(store
-            .requester_claim_ready_within(&admin_run, capacity(0, 10))
+            .requester_claim_ready_within(&admin_run, "loop-test", capacity(10))
             .await
             .unwrap());
         // A finished run frees a place for the next person.
@@ -1592,7 +1695,7 @@ mod tests {
         let three = run_on("o-3", &id(3), &agent);
         accounts[3].reserve_requester_run(&three).await.unwrap();
         assert!(accounts[3]
-            .requester_claim_ready_within(&three, capacity(0, 10))
+            .requester_claim_ready_within(&three, "loop-test", capacity(10))
             .await
             .unwrap());
         // The owner moved to Plus from the administrator's sign-in: 9 at once, so a fourth
@@ -1636,18 +1739,18 @@ mod tests {
         // Ceiling 10, one kept for administrators, 5 for paid owners: Free holds at most 4.
         for (account, run) in &free_runs[..4] {
             assert!(account
-                .requester_claim_ready_within(run, capacity(0, 10))
+                .requester_claim_ready_within(run, "loop-test", capacity(10))
                 .await
                 .unwrap());
         }
         let (fifth, fifth_run) = &free_runs[4];
         assert!(!fifth
-            .requester_claim_ready_within(fifth_run, capacity(0, 10))
+            .requester_claim_ready_within(fifth_run, "loop-test", capacity(10))
             .await
             .unwrap());
         // The paid owner's run is not held back, and it goes first in the scheduler's line.
         assert!(accounts[6]
-            .requester_claim_ready_within(&paid, capacity(0, 10))
+            .requester_claim_ready_within(&paid, "loop-test", capacity(10))
             .await
             .unwrap());
         let ids = ["free-0", "free-4", "paid-1"];
@@ -1662,7 +1765,7 @@ mod tests {
             .await
             .unwrap();
         assert!(fifth
-            .requester_claim_ready_within(fifth_run, capacity(0, 10))
+            .requester_claim_ready_within(fifth_run, "loop-test", capacity(10))
             .await
             .unwrap());
         let first = webagent_engine::runtime::scheduler::first_in_line(&store.app_pool, &ids).await;
@@ -1748,7 +1851,7 @@ mod tests {
             runs.push(run);
         }
         assert!(accounts[1]
-            .requester_claim_ready_within(&runs[3], capacity(3, 10))
+            .requester_claim_ready_within(&runs[3], "loop-test", capacity(10))
             .await
             .unwrap());
         // Refused: a fifth (the level's limit) and a start with the server's slots full.
@@ -1757,8 +1860,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(limit_refusal(&fifth));
+        going(&store, 9).await;
         assert!(!accounts[1]
-            .requester_claim_ready_within(&runs[0], capacity(9, 10))
+            .requester_claim_ready_within(&runs[0], "loop-test", capacity(10))
             .await
             .unwrap());
     }

@@ -123,6 +123,12 @@ impl<
     pub async fn live_loop_owners(&self, except: Option<u32>) -> Result<Vec<String>> {
         self.repository().live_loop_owners(except).await
     }
+    pub async fn release_run_place(&self, rid: &str) -> Result<()> {
+        self.repository().release_run_place(rid).await
+    }
+    pub async fn release_places_of_gone_loops(&self, live: &[String]) -> Result<()> {
+        self.repository().release_places_of_gone_loops(live).await
+    }
     pub async fn acknowledge_loop_commands(&self) -> Result<usize> {
         self.repository().acknowledge_loop_commands().await
     }

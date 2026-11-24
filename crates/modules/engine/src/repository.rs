@@ -1134,8 +1134,9 @@ impl<
         self.claim_run_within(run, owner, generation, crate::ports::Capacity::UNBOUNDED)
     }
 
-    /// [`Self::claim_run`] by the loop's scheduler, which says how full the loop is so
-    /// admission can keep the reserved administrator slots and the per-agent cap.
+    /// [`Self::claim_run`] by the loop's scheduler, which passes the server's run ceiling so
+    /// admission can count the runs going in every loop, keep the reserved administrator slots
+    /// and the per-agent cap.
     pub fn claim_run_within<'s>(
         &'s self,
         run: &'s mut Value,
@@ -1165,9 +1166,37 @@ impl<
             )
             .await?;
             lifecycle.commit().await?;
-            if !crate::send_future(self.admission.requester_claim_ready(&saved, capacity)).await? {
+            if !crate::send_future(
+                self.admission
+                    .requester_claim_ready(&saved, owner, capacity),
+            )
+            .await?
+            {
                 return Ok(false);
             }
+            // A yes took one of the server's run places: give it back when the claim fails.
+            let claimed =
+                crate::send_future(self.claim_admitted(run, rid.clone(), owner, generation)).await;
+            if capacity.ceiling != 0 && !matches!(claimed, Ok(true)) {
+                if let Err(error) = crate::send_future(self.admission.release_run_place(&rid)).await
+                {
+                    tracing::warn!(run_id = %rid, %error, "Run place not given back");
+                }
+            }
+            claimed
+        }
+    }
+
+    /// The claim itself once admission said yes: the run is still queued with the same
+    /// generation, lease epoch and revision, and becomes `running` under `owner`'s lease.
+    fn claim_admitted<'s>(
+        &'s self,
+        run: &'s mut Value,
+        rid: String,
+        owner: &'s str,
+        generation: &'s str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send + 's {
+        async move {
             // Read-then-write: take the write lock first, so a concurrent writer makes this wait
             // (busy_timeout) instead of failing with 'database is locked'.
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -1391,6 +1420,16 @@ impl<
         .bind(except)
         .fetch_all(&pool)
         .await?)
+    }
+
+    /// Give back the server run place `rid` holds (see `AdmissionEffects`).
+    pub async fn release_run_place(&self, rid: &str) -> Result<()> {
+        self.admission.release_run_place(rid).await
+    }
+
+    /// Give back the run places of loop processes not in `live`.
+    pub async fn release_places_of_gone_loops(&self, live: &[String]) -> Result<()> {
+        self.admission.release_places_of_gone_loops(live).await
     }
 
     /// Remove this loop's member row at the end of its drain.

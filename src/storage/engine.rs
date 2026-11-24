@@ -215,9 +215,22 @@ impl AdmissionEffects for Store {
     fn requester_claim_ready<'a>(
         &'a self,
         run: &'a Value,
+        holder: &'a str,
         capacity: Capacity,
     ) -> impl std::future::Future<Output = Result<bool>> + Send + 'a {
-        Store::requester_claim_ready_within(self, run, capacity)
+        Store::requester_claim_ready_within(self, run, holder, capacity)
+    }
+    fn release_run_place<'a>(
+        &'a self,
+        run: &'a str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        Store::release_run_place(self, run)
+    }
+    fn release_places_of_gone_loops<'a>(
+        &'a self,
+        live: &'a [String],
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        Store::release_places_of_gone_loops(self, live)
     }
     fn reconcile_requester_slots<'a>(
         &'a self,

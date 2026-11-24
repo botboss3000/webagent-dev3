@@ -131,30 +131,40 @@ pub trait ChatEffects: Sync {
         'c: 'a;
 }
 
-/// How full the loop is when it claims a run: runs it is executing and its
-/// `scheduler.max_active_runs` (0: no ceiling). Admission derives the reserved
-/// administrator slots and the per-agent cap from it.
+/// The server's run ceiling when a loop claims a run: `scheduler.max_active_runs` (0: no
+/// ceiling). Admission counts the runs going in every loop process against it (`running_runs`
+/// in `app.db`) and derives the reserved administrator slots and the per-agent cap from it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Capacity {
-    pub active: usize,
     pub ceiling: usize,
 }
 
 impl Capacity {
-    /// No loop ceiling (claims outside the loop's run slots, such as follow-up reviews).
-    pub const UNBOUNDED: Self = Self {
-        active: 0,
-        ceiling: 0,
-    };
+    /// No ceiling (claims outside the loop's run slots, such as follow-up reviews).
+    pub const UNBOUNDED: Self = Self { ceiling: 0 };
 }
 
 pub trait AdmissionEffects: Sync {
-    /// Whether `run` may start now, given how full the loop is (see `Capacity`).
+    /// Whether `run` may start now under the server's ceiling (see `Capacity`). With a
+    /// ceiling, a yes also takes one of the server's run places for loop process `holder`;
+    /// the caller gives it back with [`Self::release_run_place`] when the run stops or its
+    /// claim fails.
     fn requester_claim_ready<'a>(
         &'a self,
         run: &'a Value,
+        holder: &'a str,
         capacity: Capacity,
     ) -> impl Future<Output = Result<bool>> + Send + 'a;
+    /// Give back the server run place `run` holds (none: nothing happens).
+    fn release_run_place<'a>(
+        &'a self,
+        run: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a;
+    /// Give back the run places held by loop processes not in `live` (they are gone).
+    fn release_places_of_gone_loops<'a>(
+        &'a self,
+        live: &'a [String],
+    ) -> impl Future<Output = Result<()>> + Send + 'a;
     fn reconcile_requester_slots<'a>(&'a self) -> impl Future<Output = Result<()>> + Send + 'a;
     fn reserve_requester_run<'a>(
         &'a self,
