@@ -39,7 +39,7 @@ impl Roster {
             for (id, e) in entries {
                 if id!=&e.id || !webagent_access::valid_id(id) || e.display_name.trim().is_empty()
                     || e.display_name.len()>200 || !valid_model(&e.upstream_model)
-                    // A bridge link answers only its owner's chats, so it cannot be published to others.
+                    // A bridge link runs on its owner's own machine and account, so it is not published to others.
                     || e.transport.provider_id().is_bridge()
                     // Local models answer decision requests only, until a chat route exists.
                     || (e.transport == Transport::Local

@@ -78,6 +78,21 @@ function esc(s) {
 const OPENCODE_BRIDGE_NOTE = "Free models (opencode/…) answer only while OpenCode's own tools stay switched on, "
   + 'so the bridge client keeps them on but rejects every tool use. OpenCode limits free use and may end it at any time. '
   + "OpenCode Go models (opencode-go/…) count against your Go plan's usage limits.";
+// BRIDGE-SHARING: a bridge model answers everyone its agent admits, on one person's own
+// account and harness, so it carries a standing warning wherever it can be chosen. The test
+// model (`loadtest`) runs on the server and is not a bridge for this purpose.
+const BRIDGE_SHARING_WARNING = 'Bridge models are recommended for personal use only. This model runs through '
+  + "one person's own account and tool. On an agent that other people or website visitors use, their "
+  + 'conversations go through that account, and data could leak between users.';
+const BRIDGE_SHARED_AGENT = 'This agent is open to other people or website visitors. ';
+const isBridgeRow = p => String(p?.provider || '').endsWith('_bridge');
+function bridgeSharingWarning(shared, lead = '') {
+  const el = document.createElement('div');
+  el.className = 'ac-hint ac-model-bridge-sharing' + (shared ? ' is-shared' : '');
+  el.setAttribute('role', 'note');
+  el.textContent = lead + (shared ? BRIDGE_SHARED_AGENT : '') + BRIDGE_SHARING_WARNING;
+  return el;
+}
 function makeCheck() {
   const el = document.createElement('span');
   el.className = 'agents-autosave-check';
@@ -323,6 +338,9 @@ export function mountModelTable(host, opts = {}) {
   // read the removed per-row chart used to give — and falls back to the whole group
   // when no row is open. Fired with the row's model id, or '' to release the filter.
   const onModelFocus = typeof opts.onModelFocus === 'function' ? opts.onModelFocus : null;
+  // Whether this agent serves other people (open joining, visitors or the website widget): the
+  // bridge sharing warning is then shown more prominently.
+  const sharedAgent = () => (typeof opts.sharedAgent === 'function' ? opts.sharedAgent() : opts.sharedAgent) === true;
   const subscriptionScope = opts.subscriptionScope || 'platform';
   // 'user' (default) shows only the current user's usage for each model; 'global'
   // (admin Agent Settings) sums every agent, user, and background task app-wide.
@@ -624,6 +642,14 @@ export function mountModelTable(host, opts = {}) {
   opencodeNoteRow.innerHTML = '<span class="ac-ability-label"><span class="ac-ability-name">Limits</span></span>'
     + `<span class="ac-model-cfg-control ac-hint" style="margin:0;">${esc(OPENCODE_BRIDGE_NOTE)}</span>`;
   table.appendChild(opencodeNoteRow);
+
+  // BRIDGE-SHARING: stays visible under the provider choice while a bridge is chosen.
+  const bridgeSharingRow = document.createElement('div');
+  bridgeSharingRow.className = 'ac-ability-row ac-model-cfg-row ac-model-cfg-stacked ac-row-static';
+  bridgeSharingRow.hidden = true;
+  bridgeSharingRow.innerHTML = '<span class="ac-ability-label"><span class="ac-ability-name">Sharing</span></span>'
+    + '<span class="ac-model-cfg-control"></span>';
+  table.appendChild(bridgeSharingRow);
 
   // OpenAI subscription account row. Issuing a code never opens a browser;
   // opening OpenAI is a separate, explicit user action.
@@ -2276,6 +2302,7 @@ export function mountModelTable(host, opts = {}) {
       : p.provider === 'opencode_bridge'
         ? `<div class="ac-hint" style="margin:8px 0 0;"><strong>OpenCode Bridge:</strong> ${esc(OPENCODE_BRIDGE_NOTE)}</div>`
         : '';
+    const bridgeSharing = isBridgeRow(p) ? bridgeSharingWarning(sharedAgent()).outerHTML : '';
     // MODEL-NAME-LEVELS: the Model name line is the model's canonical name — the
     // catalog's alias for a catalog row, the real model id for a BYO row. A catalog
     // row never prints its real upstream id. The Auth line is gone: catalog
@@ -2310,7 +2337,7 @@ export function mountModelTable(host, opts = {}) {
     // The "no data" hint keys off the model's own published figures, not off the
     // price line: a BYO row always renders that line so its owner can set an estimate.
     const hasModelSpec = !!(ctx || out || price);
-    body.innerHTML = automaticRouting + `<div class="ac-model-meta-list">${identityHtml + specHtml + usageHtml + capsHtml + aliasLineHtml + defaultLineHtml}</div>` + desc
+    body.innerHTML = automaticRouting + bridgeSharing + `<div class="ac-model-meta-list">${identityHtml + specHtml + usageHtml + capsHtml + aliasLineHtml + defaultLineHtml}</div>` + desc
       + (hasModelSpec ? '' : '<div class="ac-hint" style="margin:8px 0 0;">No token or cost data available for this model.</div>');
 
     // MODEL-ALIASES: an agent model's ordered backups. A call that fails on this model moves
@@ -3052,7 +3079,7 @@ export function mountModelTable(host, opts = {}) {
     // single-model focus goes with them. Without this, saving the roster would leave
     // the chart narrowed to a model whose row no longer reads as open.
     _releaseModelFocus();
-    table.querySelectorAll('.ac-saved-injected, .ac-model-catalog-empty').forEach(n => n.remove());
+    table.querySelectorAll('.ac-saved-injected, .ac-model-catalog-empty, .ac-model-bridge-sharing-standing').forEach(n => n.remove());
     // Every rendered row belongs to this mount's persisted roster.
     // The provider array is the single user-visible order. Roles remain row
     // metadata and are deliberately not used to sort or group models.
@@ -3076,6 +3103,14 @@ export function mountModelTable(host, opts = {}) {
     const cfgAnchor = table.querySelector('.ac-model-cfg-row');
     _buildSavedHead(cfgAnchor);
     rows.forEach(({ p, readOnly, rolesEditable }) => _buildSavedRow(p, readOnly, false, cfgAnchor, rolesEditable));
+    // BRIDGE-SHARING: a bridge model holding a role gets a standing warning under the list.
+    const bridgeInUse = rows.filter(({ p }) => isBridgeRow(p) && Object.keys(S.roleAssignments).some(role => hasRole(p, role)));
+    if (bridgeInUse.length) {
+      const standing = bridgeSharingWarning(sharedAgent(),
+        `In use: ${bridgeInUse.map(({ p }) => rowDisplayName(p)).join(', ')}. `);
+      standing.classList.add('ac-model-bridge-sharing-standing');
+      table.insertBefore(standing, cfgAnchor);
+    }
     // keep the advanced/+ row pinned last
     table.appendChild(advRow);
     // Wire drag-to-reorder on the agent's own rows (not inherited/read-only).
@@ -3200,6 +3235,8 @@ export function mountModelTable(host, opts = {}) {
     keyInput.value = ''; keyInput.placeholder = bridge ? 'Generate a link token' : 'sk-...';
     generateLinkBtn.hidden = !bridge;
     opencodeNoteRow.hidden = S.currentProvider !== 'opencode_bridge';
+    bridgeSharingRow.hidden = !isBridgeRow({ provider: S.currentProvider });
+    bridgeSharingRow.lastElementChild.replaceChildren(bridgeSharingWarning(sharedAgent()));
     validatedCredential = ''; clearTimeout(credentialValidationTimer);
     credentialSelect.hidden = true; credentialSelect.replaceChildren(); credentialLabelInput.value = '';
     S.selectedModel = inlineCatalogAdd ? '' : ((saved && saved.model) || '');

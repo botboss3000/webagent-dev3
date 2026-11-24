@@ -693,6 +693,57 @@ pub struct Candidate {
     pub bridge_clients: Vec<String>,
 }
 
+impl Candidate {
+    /// For a bridge candidate on someone else's link: the same model on `requester`'s own link
+    /// in this agent's roster, usable for `role`, so their chats run on their own account.
+    /// `None` when the candidate is not a bridge, is already theirs, or they have no such link;
+    /// the candidate then answers every caller the agent admits.
+    pub fn own_bridge_link(
+        &self,
+        requester: &str,
+        role: ModelRole,
+        roster: &AgentModels,
+        entries: &BTreeMap<String, ModelEntry>,
+        connections: &BTreeMap<String, Connection>,
+    ) -> Option<Candidate> {
+        if !self.transport.provider_id().is_bridge()
+            || connections
+                .get(&self.connection_id)
+                .is_some_and(|c| c.owner_id == requester)
+        {
+            return None;
+        }
+        roster.entry_ids.iter().find_map(|id| {
+            let entry = entries.get(id)?;
+            let connection = connections.get(&entry.connection_id)?;
+            let own = entry.id == *id
+                && connection.id == entry.connection_id
+                && connection.owner_id == requester
+                && connection.transport == self.transport
+                && entry.upstream_model == self.upstream_model
+                && role.supported_by(entry)
+                && entry.revision != 0
+                && connection.revision != 0
+                && !connection.revoked
+                && entry.allowed_agents.contains(&roster.agent_id)
+                && connection.allowed_agents.contains(&roster.agent_id);
+            own.then(|| Candidate {
+                default_effort: roster.efforts.get(id).cloned(),
+                platform: None,
+                entry_id: id.clone(),
+                entry_revision: entry.revision,
+                connection_id: connection.id.clone(),
+                connection_revision: connection.revision,
+                connection_owner_id: connection.owner_id.clone(),
+                credential_ref: connection.credential_ref.clone(),
+                vision: entry.capabilities.contains("vision"),
+                bridge_clients: entry.bridge_clients.clone(),
+                ..self.clone()
+            })
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectionPlan {
@@ -945,6 +996,57 @@ mod tests {
             serde_json::from_value::<SelectionPlan>(saved).unwrap(),
             plan
         );
+    }
+    /// Bridge rule (owner decision 2026-11-23): the agent's link answers anyone; a caller's own
+    /// link for the same model on the agent answers that caller.
+    #[test]
+    fn a_callers_own_bridge_link_for_the_same_model_answers_them() {
+        let mut c = catalog_fixture();
+        for connection in c.connections.values_mut() {
+            connection.transport = Transport::OpencodeBridge;
+        }
+        // b is the member's own link for the same model; c is theirs for another model.
+        c.connections.get_mut("b").unwrap().owner_id = "member".into();
+        c.connections.get_mut("c").unwrap().owner_id = "member".into();
+        c.entries.get_mut("c").unwrap().upstream_model = "other".into();
+        let plan = c.resolve("agent-a").unwrap();
+        let roster = &c.agent_models["agent-a"];
+        let pick = |who: &str, c: &Catalog| {
+            plan.candidates[0].own_bridge_link(
+                who,
+                ModelRole::Standard,
+                roster,
+                &c.entries,
+                &c.connections,
+            )
+        };
+        let own = pick("member", &c).expect("member's own link");
+        assert_eq!(
+            (own.entry_id.as_str(), own.credential_ref.as_str()),
+            ("b", "credential:b")
+        );
+        // The link owner and a visitor without a link keep the agent's link.
+        assert!(pick("owner", &c).is_none());
+        assert!(pick("visitor", &c).is_none());
+        // A revoked own link, or one not granted to this agent, is not used.
+        c.connections.get_mut("b").unwrap().revoked = true;
+        assert!(pick("member", &c).is_none());
+        c.connections.get_mut("b").unwrap().revoked = false;
+        c.entries.get_mut("b").unwrap().allowed_agents.clear();
+        assert!(pick("member", &c).is_none());
+        // Other transports never switch links.
+        let mut c = catalog_fixture();
+        c.connections.get_mut("b").unwrap().owner_id = "member".into();
+        let plan = c.resolve("agent-a").unwrap();
+        assert!(plan.candidates[0]
+            .own_bridge_link(
+                "member",
+                ModelRole::Standard,
+                &c.agent_models["agent-a"],
+                &c.entries,
+                &c.connections,
+            )
+            .is_none());
     }
     #[test]
     fn aliases_follow_the_selected_entry_in_order() {

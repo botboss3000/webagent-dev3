@@ -5931,6 +5931,129 @@ async fn model_selection_failover_is_ordered_durable_and_revocation_is_live() {
     assert!(detail.contains("Last error: Model unavailable"));
 }
 
+/// Owner decision 2026-11-23: an agent's bridge model answers everyone the agent admits on its
+/// owner's link (a member, a widget visitor), like any other model; someone the agent does not
+/// admit and a revoked link are still refused, and a caller's own link for the same model on
+/// the agent answers that caller.
+#[tokio::test]
+async fn an_agents_bridge_model_answers_everyone_the_agent_admits() {
+    use webagent_accounts_host::AccountsStore;
+    let (_root, app) = fixture().await;
+    let mut catalog = selection_fixture(&app).await;
+    for id in ["one", "two"] {
+        catalog.connections.get_mut(id).unwrap().transport =
+            model_selection::Transport::OpencodeBridge;
+    }
+    let catalog = app
+        .store
+        .save_model_catalog(&catalog, catalog.revision)
+        .await
+        .unwrap();
+    let account = |name: &'static str| {
+        let app = app.clone();
+        async move {
+            let account = app
+                .store
+                .create_user_account(name, "fixture-only-password-hash")
+                .await
+                .unwrap();
+            let id = account["user_id"].as_str().unwrap().to_owned();
+            app.store
+                .update_account_access(&id, 1, crate::access::AccountStatus::Active, "free")
+                .await
+                .unwrap();
+            id
+        }
+    };
+    let member = account("bridge_member").await;
+    let outsider = account("bridge_outsider").await;
+    app.store
+        .set_agent_membership(
+            &member,
+            "shared_default",
+            crate::access::Relationship::Caller,
+            0,
+        )
+        .await
+        .unwrap();
+    // A widget visitor is admitted exactly as the widget's guest route does it.
+    app.store.set_registration_policy("open").unwrap();
+    let guest = app.store.create_guest_account().await.unwrap()["user_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    app.store
+        .set_agent_membership(
+            &guest,
+            "shared_default",
+            crate::access::Relationship::Caller,
+            0,
+        )
+        .await
+        .unwrap();
+    let plan = catalog.resolve("shared_default").unwrap();
+    let state = model_selection::FailoverState {
+        candidate_index: 0,
+        retries: 0,
+        response_started: false,
+        uncertain_tool_effect: false,
+        history: Vec::new(),
+    };
+    let run = |user: &str| {
+        json!({"id":"bridge-run","agent_id":"shared_default","session_id":"bridge-session",
+            "requester_user_id":user,"selection_plan":plan,"failover_state":state})
+    };
+    let answering = |user: String| {
+        let app = app.clone();
+        let run = run(&user);
+        async move {
+            app.run_candidate(&run)
+                .await
+                .map(|c| c.unwrap().connection_id)
+        }
+    };
+    for user in ["admin".to_owned(), member.clone(), guest.clone()] {
+        assert_eq!(answering(user.clone()).await.unwrap(), "one", "{user}");
+    }
+    assert!(answering(outsider.clone()).await.is_err());
+    // The member's own link for the same model on this agent answers the member only.
+    let mut own = catalog.clone();
+    let mut connection = own.connections["one"].clone();
+    connection.id = "mine".into();
+    connection.owner_id = member.clone();
+    connection.credential_ref = "credential:mine".into();
+    connection.revision = 1;
+    let mut entry = own.entries["one"].clone();
+    entry.id = "mine".into();
+    entry.owner_id = member.clone();
+    entry.connection_id = "mine".into();
+    entry.revision = 1;
+    own.connections.insert("mine".into(), connection);
+    own.entries.insert("mine".into(), entry);
+    own.agent_models
+        .get_mut("shared_default")
+        .unwrap()
+        .entry_ids
+        .push("mine".into());
+    let mut own = app
+        .store
+        .save_model_catalog(&own, own.revision)
+        .await
+        .unwrap();
+    assert_eq!(answering(member.clone()).await.unwrap(), "mine");
+    assert_eq!(answering(guest.clone()).await.unwrap(), "one");
+    assert_eq!(answering("admin".into()).await.unwrap(), "one");
+    // A revoked agent link is refused for everyone, as for any model.
+    own.connections.get_mut("one").unwrap().revoked = true;
+    app.store
+        .save_model_catalog(&own, own.revision)
+        .await
+        .unwrap();
+    for user in [guest, "admin".to_owned()] {
+        assert!(answering(user).await.is_err());
+    }
+}
+
 #[tokio::test]
 // A cleared role is authoritative even while legacy credentials still exist.
 async fn model_roles_standard_is_required_even_with_legacy_default_and_other_roles() {

@@ -77,3 +77,10 @@
 .ac-model-alias-select { flex: 1; min-width: 0; max-width: 320px; }
 /* Matches the light-mode hint rule so the warning keeps its colour in both themes. */
 .ac-hint.ac-model-alias-warning, body.light-mode .ac-hint.ac-model-alias-warning { color: var(--warning); overflow-wrap: anywhere; }
+/* BRIDGE-SHARING: standing warning for a bridge model; stronger on an agent other people use. */
+.ac-hint.ac-model-bridge-sharing, body.light-mode .ac-hint.ac-model-bridge-sharing { color: var(--warning); overflow-wrap: anywhere; margin: 8px 0 0; }
+.ac-hint.ac-model-bridge-sharing.is-shared, body.light-mode .ac-hint.ac-model-bridge-sharing.is-shared {
+  color: var(--fg-1); font-weight: 600; padding: 8px 10px; border-radius: 8px;
+  border: var(--border-width) solid rgba(var(--warning-rgb), .55); background: var(--warning-soft);
+}
+.ac-model-bridge-sharing-standing { margin: 8px 0; }

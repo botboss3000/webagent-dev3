@@ -814,8 +814,8 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
 
 impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
     /// Catalog models an agent's owner may choose on its Models page: each model an active
-    /// administrator added whose name `owner_tier` allows, except bridge links (they answer
-    /// only their own account) and the test model. Adds `agent` to each one's grants in
+    /// administrator added whose name `owner_tier` allows, except bridge links (one person's
+    /// own machine and account: only their owner puts them on an agent) and the test model. Adds `agent` to each one's grants in
     /// `catalog`, as [`Self::with_local_sources`] does; nothing is stored here, and a saved
     /// roster keeps only the ones it uses ([`drop_catalog_offers`]). Returns the offered ids.
     pub async fn with_catalog_offers(

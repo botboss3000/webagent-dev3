@@ -192,20 +192,22 @@ impl<'a, C: RuntimeStorage> Runtime<'a, C> {
                 &catalog.connections,
             )?
             .clone();
-        // A bridge link runs on its owner's own account, so it answers only the owner's chats.
-        if candidate.transport.provider_id().is_bridge()
-            && candidate.transport.provider_id() != provider::ProviderId::Loadtest
-            && catalog
-                .connections
-                .get(&candidate.connection_id)
-                .is_none_or(|c| c.owner_id != requester)
-        {
-            return Err(provider::typed_failure(
-                model_selection::FailureKind::InvalidCredentials,
-                false,
-                "No bridge link of yours on this agent; add your own link",
-            ));
-        }
+        // A bridge model on the agent answers every caller the agent admits, like any other
+        // model (owner decision 2026-11-23; the Model page warns that it runs on one person's
+        // account). A caller with their own link for the same model on this agent uses theirs,
+        // when their own model grant allows it.
+        let candidate = match catalog.agent_models.get(&plan.agent_id).and_then(|roster| {
+            candidate.own_bridge_link(
+                requester,
+                plan.role,
+                roster,
+                &catalog.entries,
+                &catalog.connections,
+            )
+        }) {
+            Some(own) if access.model_allowed(&own.upstream_model, requester) => own,
+            _ => candidate,
+        };
         if let Some(pin) = &candidate.platform {
             let live = catalog
                 .platform_sources

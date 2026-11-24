@@ -55,7 +55,8 @@
 #   WebAgent never runs its tools here: this client only returns the model's reply and the tool
 #   calls it asked for, and WebAgent runs those on its own server under its own permissions and
 #   approvals. What runs here is the local harness (claude / opencode) on WebAgent's prompts, so
-#   keep it away from this computer's other data:
+#   keep it away from this computer's other data (every chat on an agent using this model
+#   is answered here, including other members' and website visitors' chats):
 #   a. One dedicated home per bridge. Run the client with HOME set to a folder of its own, for
 #      example ~/webagent-bridge/home, so the harness keeps its sessions, database, settings and
 #      login there instead of in your own ~/.claude or ~/.local/share/opencode (and never mixes

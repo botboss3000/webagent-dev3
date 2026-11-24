@@ -6,7 +6,15 @@ import { showNotification } from '../../../../chat/core/chat-action-panel.js';
 
 // Agent Models mount: analytics sibling + shared model table, through the agent catalog adapter.
 export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
-  const bridge=createModelAdapter(request,agentId,onAssignment);await bridge.ready();
+  const bridge=createModelAdapter(request,agentId,onAssignment);
+  // BRIDGE-SHARING: an agent open to other people or visitors, or with the website widget on,
+  // shows the bridge model warning more prominently. Reads a manager may make; refused ones count as not shared.
+  const id=encodeURIComponent(agentId);
+  const sharing=Promise.allSettled([request('/models/agents/'+id+'/identity'),request('/agents/'+id+'/embed')]);
+  await bridge.ready();
+  const [identity,embed]=await sharing;
+  const access=identity.value?.member_access||{};
+  const sharedAgent=!!(access.visitor_access||access.app_login_members||embed.value?.config?.enabled);
   host.replaceChildren();
   const css=document.createElement('link');css.rel='stylesheet';css.href='/ui/shared/models/reference.css';
   const pendingCss=document.createElement('link');pendingCss.rel='stylesheet';pendingCss.href='/ui/shared/models/pending.css';
@@ -24,7 +32,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
     await request('/usage/models/undo?'+new URLSearchParams({agent_id:agentId}),'POST');await Promise.all([table.reload(),analytics.reload()]);
   }}]});};
   const analytics=initModelAnalytics(analyticsHost,{fetchFn:usageFetch('/usage/models'),apiPath:p=>p,scope:'user',agentId,description:'Compare the daily usage of every model used with this agent.',onHistoryCleared:model=>usageCleared('Usage history cleared for '+model)});
-  const table=mountModelTable(tableHost,{adapter:bridge.adapter,agentLocalRoster:true,userCatalog:true,inlineCatalogAdd:true,subscriptionScope:'agent',manualModelEntry:true,
+  const table=mountModelTable(tableHost,{adapter:bridge.adapter,sharedAgent,agentLocalRoster:true,userCatalog:true,inlineCatalogAdd:true,subscriptionScope:'agent',manualModelEntry:true,
     fetchFn:bridge.blockedFetch,onRoster:p=>analytics?.setModelLabels(p),onModelFocus:m=>analytics?.setModelFocus(m),onModelChange:()=>{analytics?.reload();},
     advancedExtra:body=>{
       const row=document.createElement('div');row.className='ac-row';row.dataset.ownUsage='';row.innerHTML='<div class="ac-ability-row"><span class="ac-ability-label"><span class="ac-ability-name">Reset Usage Counters</span><span class="ac-ability-desc">Clear your own usage with this agent: the tokens and cost in the table and graph above. Other users\' usage is unchanged.</span></span></div><div class="ac-ability-body"><select class="ac-input"><option value="all">All (input + output + cost)</option><option value="input">Input Tokens only</option><option value="output">Output Tokens only</option><option value="cost">Cost only</option></select> <button type="button" class="ac-btn ac-btn-ghost" style="color:var(--danger)">Reset</button> <span class="ac-ability-desc" role="status"></span></div>';

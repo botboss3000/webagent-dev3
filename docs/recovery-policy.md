@@ -92,6 +92,15 @@ page shows a checkbox per client, and a model with some unticked is offered only
 "Offline" is then judged by those clients alone. The same model can be added once per client, with
 one entry listed as the other's alias, so one computer backs up another.
 
+**Who it answers** (owner decision 2026-11-23). A bridge model on an agent answers everyone the
+agent admits, like any other model: the owner, members and website-widget visitors, on the link of
+whoever added it. Every other check still applies (agent access, the owner's tier models, limits,
+tool checks and approvals). A caller who has added their own link for the same model to that agent
+is answered on their own link. Because every such chat then runs through one person's account and
+computer, the agent Model page shows a standing warning under any bridge model holding a role
+("recommended for personal use only"), stronger when the agent is open to others or has the website
+widget on. Bridge links are still not offered to other owners' agents or published in the app catalog.
+
 **Online and offline.** The script keeps a request open to WebAgent at all times (each held up to
 `poll_hold_seconds` = 10). A bridge with no request seen for `client_online_seconds` = 120 shows as
 offline on the Models page.
