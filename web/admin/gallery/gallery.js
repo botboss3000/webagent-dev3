@@ -57,6 +57,14 @@ const SPECIMENS = {
     <div class="g-row g-icons">${['grid', 'users', 'cpu', 'settings', 'hammer', 'layers', 'message', 'bot', 'plus', 'book', 'menu', 'sun', 'moon']
       .map((name) => icon(name, 20))
       .join('')}</div>`,
+  refresh: `
+    <div class="g-row">
+      <svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true">
+        <path class="ptr-arc ptr-arc-soft" d="M24,7 A17,17 0 1,1 10.3,15.3 L15.5,10.5" stroke-dasharray="98" stroke-dashoffset="40"/>
+        <path class="ptr-arc ptr-arc-hard" d="M24,7 A17,17 0 1,1 10.3,15.3 L15.5,10.5" stroke-dasharray="98" stroke-dashoffset="98"/>
+      </svg>
+      <span class="ptr-hint show">Hard refresh</span>
+    </div>`,
 };
 
 function card(component) {

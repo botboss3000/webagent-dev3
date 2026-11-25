@@ -133,6 +133,7 @@ for (const viewport of VIEWPORTS) {
         assert.equal(await page.locator('.main-foot').isVisible(), true, 'footer is visible');
         assert.equal(await page.locator('#page-title').textContent(), 'All sessions', 'header names the route');
         assert.equal(await page.locator('#footer-status').textContent(), 'Signed in as administrator');
+        assert.equal(await page.locator('#refresh-button').isVisible(), true, 'the refresh action shows for an administrator');
 
         // The body holds only the placeholder page: title plus one line.
         const bodyLines = await page.$$eval('#page-body > *', (nodes) => nodes.length);
@@ -244,7 +245,83 @@ test('signed-out visitors get no Administrator group and no admin page', async (
     const body = await page.$eval('#page-body', (node) => node.textContent);
     assert.match(body, /Administrator only/, 'the admin route refuses without the flag');
     assert.equal(await page.locator('#footer-status').textContent(), 'Signed out');
+    assert.equal(await page.locator('#refresh-button').isVisible(), false, 'the refresh action stays hidden when signed out');
     assert.deepEqual(errors, []);
     await page.close();
+  });
+});
+
+test('a pull refreshes, and a longer pull runs the hard refresh', async () => {
+  await withPage(true, async ({ browser, origin }) => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+      isMobile: true,
+    });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(String(error)));
+    page.setDefaultTimeout(8000);
+
+    // Pulls from the top band by a share of the viewport height and reports the hint.
+    const pull = (share) =>
+      page.evaluate((fraction) => {
+        const start = new Touch({ identifier: 1, target: document.body, clientX: 180, clientY: 10 });
+        document.dispatchEvent(new TouchEvent('touchstart', { touches: [start], bubbles: true }));
+        const moved = new Touch({
+          identifier: 1,
+          target: document.body,
+          clientX: 180,
+          clientY: 10 + window.innerHeight * fraction,
+        });
+        document.dispatchEvent(new TouchEvent('touchmove', { touches: [moved], cancelable: true, bubbles: true }));
+        return {
+          hidden: document.getElementById('ptr-indicator').hidden,
+          hint: document.getElementById('ptr-hint').textContent,
+        };
+      }, share);
+
+    const release = () =>
+      page.evaluate(() => {
+        document.dispatchEvent(new TouchEvent('touchend', { touches: [], bubbles: true }));
+      });
+
+    await page.goto(`${origin}/web/index.html`, { waitUntil: 'load' });
+    await page.waitForSelector('#sidebar-nav .nav-item');
+
+    // A short pull shows the indicator, half a screen arms the refresh, most of one the hard refresh.
+    assert.deepEqual(await pull(0.3), { hidden: false, hint: 'PULL TO REFRESH' });
+    assert.deepEqual(await pull(0.6), { hidden: false, hint: 'RELEASE TO REFRESH' });
+    assert.deepEqual(await pull(0.9), { hidden: false, hint: 'HARD REFRESH' });
+
+    // Releasing at the hard stage clears the shell's browser data and reloads past the cache.
+    await page.evaluate(() => localStorage.setItem('webagent.web.theme', 'light'));
+    const hardNavigation = page.waitForNavigation({ waitUntil: 'load' });
+    await release();
+    await hardNavigation;
+    assert.match(page.url(), /[?&]_=\d+/, 'the hard refresh adds a cache-buster');
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem('webagent.web.theme')),
+      null,
+      'the hard refresh cleared browser data',
+    );
+
+    // A plain refresh keeps browser data and does not add the cache-buster.
+    await page.goto(`${origin}/web/index.html`, { waitUntil: 'load' });
+    await page.waitForSelector('#sidebar-nav .nav-item');
+    await page.evaluate(() => localStorage.setItem('webagent.web.theme', 'light'));
+    assert.equal((await pull(0.6)).hint, 'RELEASE TO REFRESH');
+    const softNavigation = page.waitForNavigation({ waitUntil: 'load' });
+    await release();
+    await softNavigation;
+    assert.doesNotMatch(page.url(), /[?&]_=\d+/, 'a plain refresh has no cache-buster');
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem('webagent.web.theme')),
+      'light',
+      'a plain refresh keeps browser data',
+    );
+
+    assert.deepEqual(errors, [], `no page errors: ${errors.join(' | ')}`);
+    await context.close();
   });
 });

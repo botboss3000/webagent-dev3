@@ -87,6 +87,11 @@ body.sidebar-collapsed #sidebar {
   color: var(--fg-1);
 }
 
+/* The shared display would otherwise beat the hidden attribute on a header button. */
+.icon-button[hidden] {
+  display: none;
+}
+
 .icon-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

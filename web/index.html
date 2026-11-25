@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="./components/stat/stat.css">
 <link rel="stylesheet" href="./components/tile/tile.css">
 <link rel="stylesheet" href="./chat/chat.css">
+<link rel="stylesheet" href="./components/refresh/refresh.css">
 </head>
 <body>
 <div class="app">
@@ -66,6 +67,12 @@
       </button>
       <h1 id="page-title">Sessions</h1>
       <span class="main-head-note" id="page-note"></span>
+      <button type="button" id="refresh-button" class="icon-button" hidden title="Clear browser data and reload (stay signed in)" aria-label="Clear browser data and reload">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6"/>
+          <path d="M20.5 4.5V11H14"/>
+        </svg>
+      </button>
       <button type="button" id="chat-switch" class="icon-button" aria-label="Open chat" aria-pressed="false">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M20 11.5a8 8 0 0 1-8.2 8 8.6 8.6 0 0 1-3.5-.7L4 20l1.3-4a8 8 0 0 1-1.3-4.4A8 8 0 0 1 12 3.5a8 8 0 0 1 8 8z"/>
@@ -80,6 +87,14 @@
   </main>
 </div>
 <div id="sidebar-backdrop" aria-hidden="true"></div>
+<!-- Pull-to-refresh indicator: the soft arc fills first, the hard arc past the hard pull. -->
+<div id="ptr-indicator" hidden aria-live="polite" aria-label="Pull to refresh">
+  <svg viewBox="0 0 48 48" aria-hidden="true">
+    <path id="ptr-soft" class="ptr-arc ptr-arc-soft" d="M24,7 A17,17 0 1,1 10.3,15.3 L15.5,10.5" stroke-dasharray="98" stroke-dashoffset="98"/>
+    <path id="ptr-hard" class="ptr-arc ptr-arc-hard" d="M24,7 A17,17 0 1,1 10.3,15.3 L15.5,10.5" stroke-dasharray="98" stroke-dashoffset="98" style="display:none"/>
+  </svg>
+  <span id="ptr-hint" class="ptr-hint"></span>
+</div>
 <script type="module" src="./shell/shell.js"></script>
 </body>
 </html>

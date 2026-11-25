@@ -36,6 +36,13 @@ export const components = [
     css: 'list/list.css',
   },
   {
+    id: 'refresh',
+    title: 'Refresh',
+    summary: 'Two-stage pull to refresh or hard refresh, plus the header hard-refresh button.',
+    css: 'refresh/refresh.css',
+    js: 'refresh/refresh.js',
+  },
+  {
     id: 'stat',
     title: 'Stat',
     summary: 'One number with its label, for dashboards.',

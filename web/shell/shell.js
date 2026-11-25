@@ -6,6 +6,7 @@
 // ported back one at a time, so nothing mounts into #page-body by itself.
 
 import { icon } from '../components/icon/icon.js';
+import { installPullToRefresh, wireRefreshButton } from '../components/refresh/refresh.js';
 
 // The phone header switch shows a chat bubble on the panel and a back chevron on chat.
 const CHAT_ICON =
@@ -321,6 +322,15 @@ async function boot() {
   }
 
   renderNav();
+
+  // The refresh component is the shell's refresh action: the header button runs the
+  // hard refresh (administrators only, as in the app) and the pull gesture offers both
+  // stages — refresh, then hard refresh.
+  const refreshButton = document.getElementById('refresh-button');
+  if (refreshButton) refreshButton.hidden = !state.me?.is_admin;
+  wireRefreshButton(refreshButton);
+  installPullToRefresh();
+
   await renderRoute();
 }
 
