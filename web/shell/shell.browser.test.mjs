@@ -95,11 +95,11 @@ async function withPage(admin, run) {
 // Reads the mounted chat shell: its three regions and its rendered size.
 async function probeShell(page) {
   return page.evaluate(() => {
-    const panel = document.getElementById('chat-panel');
+    const panel = document.querySelector('.chat-surface');
     if (!panel) return null;
-    const header = document.getElementById('chat-header');
-    const footer = document.getElementById('chat-footer');
-    const inner = document.getElementById('chat-messages-inner');
+    const header = panel.querySelector('.chat-panel-head');
+    const footer = panel.querySelector('#composer');
+    const inner = panel.querySelector('#chat-messages-inner');
     const box = panel.getBoundingClientRect();
     return {
       headerChildren: header ? header.children.length : -1,
@@ -146,9 +146,9 @@ for (const viewport of VIEWPORTS) {
         assert.ok(agentLabels.includes('New agent'), 'New agent entry is listed');
 
         // The shell is header, empty body and footer: three regions, nothing else.
-        assert.equal(await page.locator('.main-head').count(), 1, 'one main header');
+        assert.equal(await page.locator('.content-head').count(), 1, 'one content header');
         assert.equal(await page.locator('.main-foot').count(), 0, 'no main footer');
-        assert.equal(await page.locator('.main-head').isVisible(), true, 'header is visible');
+        assert.equal(await page.locator('.content-head').isVisible(), true, 'header is visible');
         assert.equal(await page.locator('.main-foot').count(), 0, 'the shell has no footer strip');
         assert.equal(await page.locator('#page-title').textContent(), 'All sessions', 'header names the route');
         assert.equal(await page.locator('.main-foot').count(), 0, 'no footer strip on the content region');
@@ -166,8 +166,8 @@ for (const viewport of VIEWPORTS) {
         assert.equal(cardStyle.border, '0px', 'the card has no border');
         assert.notEqual(cardStyle.shadow, 'none', 'the card carries elevation');
 
-        // The chat is stripped: no column, no grip, no panel, no transcript.
-        for (const selector of ['#chat-resize-handle', '.msg', '.composer']) {
+        // The old chat chrome is gone: no divider grip and no message bubbles.
+        for (const selector of ['#chat-resize-handle', '.msg']) {
           assert.equal(await page.locator(selector).count(), 0, `${selector} must not exist`);
         }
         const chatVar = await page.evaluate(() =>
@@ -193,7 +193,7 @@ for (const viewport of VIEWPORTS) {
           // The stage splits between the main panel, the divider and the chat column.
           const shared = await page.evaluate(() => {
             const width = (id) => Math.round(document.getElementById(id).getBoundingClientRect().width);
-            const stage = document.querySelector('.stage');
+            const stage = document.querySelector('.shell-body');
             const styles = getComputedStyle(stage);
             // The stage carries the shell gap, so compare against its content width.
             return {
@@ -202,8 +202,8 @@ for (const viewport of VIEWPORTS) {
                   parseFloat(styles.paddingLeft) -
                   parseFloat(styles.paddingRight),
               ),
-              main: width('main-panel'),
-              column: width('chat-column'),
+              main: width('content'),
+              column: width('chat-panel'),
               divider: width('chat-divider'),
             };
           });
@@ -217,9 +217,9 @@ for (const viewport of VIEWPORTS) {
           assert.equal(await page.locator('#chat-switch').isVisible(), false, 'no chat switch on desktop');
 
           // The chat is a column beside the main panel, always visible and edgeless.
-          await page.waitForSelector('#chat-column #chat-panel');
+          await page.waitForSelector('#chat-panel .chat-surface');
           const geometry = await page.evaluate(() => {
-            const col = document.getElementById('chat-column');
+            const col = document.getElementById('chat-panel');
             const divider = document.getElementById('chat-divider');
             const panel = document.getElementById('chat-panel');
             const styles = getComputedStyle(panel);
@@ -251,7 +251,7 @@ for (const viewport of VIEWPORTS) {
           await page.mouse.down();
           await page.mouse.move(handle.x + handle.width / 2 - 80, handle.y + handle.height / 2, { steps: 8 });
           await page.mouse.up();
-          const after = await page.$eval('#chat-column', (node) => Math.round(node.getBoundingClientRect().width));
+          const after = await page.$eval('#chat-panel', (node) => Math.round(node.getBoundingClientRect().width));
           assert.ok(after > before + 40, `dragging left widened the chat column (${before} -> ${after})`);
           assert.equal(await page.evaluate(() => document.body.classList.contains('chat-resizing')), false);
         } else {
@@ -271,14 +271,14 @@ for (const viewport of VIEWPORTS) {
           assert.equal(await page.locator('#chat-switch').isVisible(), true, 'chat switch shows on a phone');
           await page.click('#chat-switch');
           await page.waitForFunction(() => window.location.hash === '#/chat');
-          await page.waitForSelector('#page-body #chat-panel');
+          await page.waitForSelector('#page-body .chat-surface');
           await page.waitForFunction(() => document.getElementById('page-title').textContent === 'Chat');
           assert.equal(await page.locator('#page-title').textContent(), 'Chat', 'header switches to the chat');
           assert.equal(await page.locator('#chat-switch').getAttribute('aria-pressed'), 'true');
           assert.equal(await page.locator('#chat-switch').getAttribute('aria-label'), 'Back to the panel');
 
           // The column and divider stand down on a phone; the chat is its own page.
-          assert.equal(await page.locator('#chat-column').isVisible(), false, 'no chat column on a phone');
+          assert.equal(await page.locator('#chat-panel').isVisible(), false, 'no chat panel on a phone');
           assert.equal(await page.locator('#chat-divider').isVisible(), false, 'no divider on a phone');
 
           // The phone chat is the same empty shell, filling the body.

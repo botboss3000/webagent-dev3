@@ -397,7 +397,7 @@ function applyChatShellProfile(profile) {
 
 /* The column is always visible for now; showing and hiding it is a later decision. */
 async function mountChatColumn(config) {
-  const host = document.getElementById('chat-column');
+  const host = document.getElementById('chat-panel');
   if (!host) return;
   const profile = applyChatShellProfile(chatShellProfile(config, 'column'));
   if (profile.chat_is !== 'column') return;
@@ -409,11 +409,11 @@ async function mountChatColumn(config) {
 /* Drag or arrow-key the divider to set the column width, clamped to the config. */
 function wireChatDivider(profile) {
   const divider = document.getElementById('chat-divider');
-  const stage = document.querySelector('.stage');
+  const stage = document.querySelector('.shell-body');
   if (!divider || !stage) return;
   const column = profile.column || {};
   const min = column.min_width_px ?? 250;
-  const current = () => Math.round(document.getElementById('chat-column')?.getBoundingClientRect().width || 0);
+  const current = () => Math.round(document.getElementById('chat-panel')?.getBoundingClientRect().width || 0);
   const clamp = (px) => {
     const stageWidth = stage.getBoundingClientRect().width;
     return Math.round(Math.min(Math.max(min, stageWidth - Math.min(320, stageWidth / 2)), Math.max(min, px)));

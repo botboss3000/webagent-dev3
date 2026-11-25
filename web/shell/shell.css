@@ -294,7 +294,7 @@ body.sidebar-collapsed #sidebar-toggle {
 }
 
 /* ── Main panel: header, empty body, footer ──────────────── */
-#main-panel {
+#content {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
@@ -307,7 +307,7 @@ body.sidebar-collapsed #sidebar-toggle {
   overflow: hidden;
 }
 
-.main-head {
+.content-head {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -316,7 +316,7 @@ body.sidebar-collapsed #sidebar-toggle {
   min-height: 54px;
 }
 
-.main-head h1 {
+.content-head h1 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
@@ -326,7 +326,7 @@ body.sidebar-collapsed #sidebar-toggle {
   text-overflow: ellipsis;
 }
 
-.main-head-note {
+.content-head-note {
   font-size: 12px;
   color: var(--fg-3);
   white-space: nowrap;
@@ -340,7 +340,7 @@ body.sidebar-collapsed #sidebar-toggle {
 }
 
 /* The body stays empty until a component is ported into it. */
-.main-body {
+.content-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -348,7 +348,7 @@ body.sidebar-collapsed #sidebar-toggle {
 }
 
 /* The chat page fills the body edge to edge: the panel draws its own frame. */
-body.chat-route .main-body {
+body.chat-route .content-body {
   padding: 0;
   overflow: hidden;
   display: flex;
@@ -360,30 +360,6 @@ body.chat-route .main-body {
   min-height: 0;
   display: flex;
   padding: var(--shell-gap);
-}
-
-.main-foot {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
-  border-top: var(--border-width) solid var(--border-soft);
-  min-height: 40px;
-  font-size: 11.5px;
-  color: var(--fg-4);
-}
-
-.main-foot-note {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.main-foot-status {
-  margin-left: auto;
-  flex: 0 0 auto;
-  color: var(--fg-3);
 }
 
 /* The phone menu button and the chat switch exist only at drawer width. */
@@ -454,12 +430,12 @@ body.chat-route .main-body {
 }
 
 @media (max-width: 700px) {
-  .main-head {
+  .content-head {
     padding: 8px 10px;
     min-height: 48px;
   }
 
-  .main-body {
+  .content-body {
     padding: var(--space-4);
   }
 
@@ -481,19 +457,19 @@ body.chat-route .main-body {
 /* ── Chat column and divider (desktop) ──────────────────────
    The chat sits beside the main panel, always visible, with the app's 14 px drag
    divider between them. Every value here comes from config/web/chat/chat-shell.json. */
-.stage {
+.shell-body {
   flex: 1 1 auto;
   display: flex;
   min-width: 0;
   min-height: 0;
 }
 
-.stage > #main-panel {
+.shell-body > #content {
   flex: 1 1 0;
   min-width: 0;
 }
 
-#chat-column {
+#chat-panel {
   flex: 0 0 var(--chat-panel-width, 380px);
   width: var(--chat-panel-width, 380px);
   min-height: 0;
@@ -568,7 +544,7 @@ body.chat-resizing {
 
 /* A phone gets the chat as its own page, so the column and divider step out. */
 @media (max-width: 800px) {
-  #chat-column,
+  #chat-panel,
   #chat-divider {
     display: none;
   }
@@ -584,17 +560,15 @@ body.chat-resizing {
 /* ── The chat page is an empty surface ────────────────────────
    The current chat has no frame and no separator line under its header or above its
    footer, so on the chat route the shell's own card and rules come off. */
-body.chat-route #main-panel {
+body.chat-route #content {
   border: none;
   border-radius: 0;
   box-shadow: none;
   background: transparent;
 }
 
-body.chat-route .main-head,
-body.chat-route .main-foot {
+body.chat-route .content-head {
   border-bottom: none;
-  border-top: none;
 }
 
 /* ── Sidebar is a column and the phone drawer is a shelf ──────
@@ -606,7 +580,7 @@ body.chat-route .main-foot {
   gap: 0;
 }
 
-.stage {
+.shell-body {
   padding: var(--shell-gap);
 }
 
@@ -618,7 +592,7 @@ body.chat-route .main-foot {
 }
 
 @media (max-width: 900px) {
-  .stage {
+  .shell-body {
     padding: 6px;
   }
 

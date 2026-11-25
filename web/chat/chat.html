@@ -1,11 +1,11 @@
-<!-- Chat shell, ported from ui/chat/chat.html: the panel frame plus its three
-     regions. The header and footer are deliberately empty in this release and
-     the transcript is empty too; each region is filled component by component.
-     No scripts live here (CSP), chat.js mounts this file. -->
-<div id="chat-panel" class="chat-panel">
-  <header id="chat-header" class="chat-header" aria-label="Chat header"></header>
+<!-- Chat surface, ported from ui/chat/chat.html: the three regions that fill the docked
+     panel (#chat-panel in the shell). The head, transcript and composer are empty until
+     their components are ported. No scripts live here (CSP): chat/chat.js mounts this
+     file into the panel. -->
+<div class="chat-surface">
+  <header class="chat-panel-head" aria-label="Chat header"></header>
   <div id="chat-messages" class="chat-messages" tabindex="0">
     <div id="chat-messages-inner" class="chat-messages-inner"></div>
   </div>
-  <footer id="chat-footer" class="chat-footer" aria-label="Chat footer"></footer>
+  <footer id="composer" class="composer" aria-label="Composer"></footer>
 </div>

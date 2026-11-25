@@ -59,16 +59,16 @@
     </div>
   </aside>
 
-  <div class="stage">
-  <main id="main-panel">
-    <header class="main-head">
+  <div class="shell-body">
+  <main id="content" class="content">
+    <header class="content-head">
       <button type="button" id="menu-open" class="icon-button" aria-label="Open menu" aria-expanded="false">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
           <path d="M4 7h16M4 12h16M4 17h16"/>
         </svg>
       </button>
       <h1 id="page-title">Sessions</h1>
-      <span class="main-head-note" id="page-note"></span>
+      <span class="content-head-note" id="page-note"></span>
       <button type="button" id="refresh-button" class="icon-button" hidden title="Clear browser data and reload (stay signed in)" aria-label="Clear browser data and reload">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6"/>
@@ -81,10 +81,10 @@
         </svg>
       </button>
     </header>
-    <div class="main-body" id="page-body"></div>
+    <div class="content-body" id="page-body"></div>
   </main>
   <div id="chat-divider" role="separator" aria-orientation="vertical" aria-label="Resize chat" tabindex="0"></div>
-  <div id="chat-column"></div>
+  <aside id="chat-panel" aria-label="Chat"></aside>
   </div>
 </div>
 <div id="sidebar-backdrop" aria-hidden="true"></div>
