@@ -14,7 +14,7 @@ export function renderCompaction(host, agent, persist, request) {
   fallback.textContent = 'Context-limit fallback: when the System model writes the summaries and the history since the last summary would outgrow its input budget, compaction starts earlier at that budget. Your saved trigger stays unchanged. Each System summary chunk must fit that budget; if even the required instructions and minimum summary request cannot fit, the run pauses with a budget error.';
   const estimate = document.createElement('p');
   estimate.className = 'ac-hint';
-  estimate.textContent = 'Token sizing is estimated, so actual provider counts can differ. Set per-model input and output budgets on the Models page.';
+  estimate.textContent = 'Token sizing is estimated, so actual provider counts can differ. The provider counts the output allowance against the same context window as the request, so keep the trigger below the model’s context minus that allowance. Set per-model input and output budgets on the Models page.';
   const scope = document.createElement('p');
   scope.className = 'ac-hint';
   scope.textContent = 'The trigger counts instructions, tool definitions, history and the verbatim tail together. Only eligible older history is summarized. For example, at a 150,000-token trigger, 50,000 tokens of instructions, tools and retained recent history leave about 100,000 tokens eligible for compaction.';
@@ -58,9 +58,11 @@ export function renderCompaction(host, agent, persist, request) {
     ['trigger_tokens', 'Summary trigger', 'Estimated total request tokens, including instructions, tools and the verbatim tail'],
     ['tail_tokens', 'Verbatim tail', 'Recent estimated tokens to keep word for word'],
     ['ceiling_tokens', 'Ceiling', 'Size at which the agent stops to finish the summary. Below the trigger, the trigger is used. The model’s context limit caps both'],
+    ['output_tokens', 'Output allowance', 'Tokens the provider is asked to allow for a reply. It counts against the same context window as the request, so a larger allowance leaves less room for history'],
   ];
   // An absent ceiling means the trigger.
-  const saved = (key) => agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ?? agent.compaction_thresholds.trigger_tokens;
+  const saved = (key) => agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ??
+    (key === 'output_tokens' ? 64000 : agent.compaction_thresholds.trigger_tokens);
   const summarizerValue = () => agent.compaction_thresholds.summarizer || agent.compaction_defaults.summarizer || 'system';
   // Fold by tasks: 'verbatim' folds by the verbatim tail; a number keeps that many finished tasks.
   const foldValue = () => agent.compaction_thresholds.fold_tasks_retained == null ? 'verbatim' : String(agent.compaction_thresholds.fold_tasks_retained);

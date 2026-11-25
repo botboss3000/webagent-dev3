@@ -57,7 +57,7 @@ try {
   await page.getByLabel('Summary trigger',{exact:true}).fill('160000');
   await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).click();
   await page.getByText('Saved. New model calls use these thresholds.',{exact:true}).waitFor();
-  assert.deepEqual(await page.evaluate(()=>fixture.writes),[{compaction_thresholds:{trigger_tokens:160000,tail_tokens:20000,ceiling_tokens:250000,summarizer:'self'}}]);
+  assert.deepEqual(await page.evaluate(()=>fixture.writes),[{compaction_thresholds:{trigger_tokens:160000,tail_tokens:20000,ceiling_tokens:250000,output_tokens:64000,summarizer:'self'}}]);
   await page.getByRole('button',{name:'Use app defaults',exact:true}).click();
   await page.getByText('Saved. New model calls use the app defaults.',{exact:true}).waitFor();
   assert.deepEqual((await page.evaluate(()=>fixture.writes)).at(-1),{reset_compaction_thresholds:true});

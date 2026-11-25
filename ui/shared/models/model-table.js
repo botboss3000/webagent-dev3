@@ -1035,13 +1035,14 @@ export function mountModelTable(host, opts = {}) {
       if (m.id === S.selectedModel) item.style.background = 'rgba(var(--brand-rgb),0.12)';
       const isPlatformCatalogModel = m.catalog_origin === 'platform';
       const ctx = fmtContext(m.context);
+      const out = (typeof m.max_output === 'number') ? 'out ' + fmtContext(m.max_output).replace(' ctx', '') : '';
       const creditInput = m.credit_input_per_million;
       const creditOutput = m.credit_output_per_million;
       const credits = isPlatformCatalogModel && (creditInput !== undefined || creditOutput !== undefined)
         ? `${creditInput ?? '—'} credits / 1M in · ${creditOutput ?? '—'} credits / 1M out`
         : '';
       const price = isPlatformCatalogModel ? credits : fmtPrice(m.cost_input, m.cost_output);
-      const badges = [ctx, price].filter(Boolean).map(t => `<span class="ac-model-badge">${esc(t)}</span>`).join('');
+      const badges = [ctx, out, price].filter(Boolean).map(t => `<span class="ac-model-badge">${esc(t)}</span>`).join('');
       // MODEL-CATALOG-IDENTITY: catalog items are labelled by the catalog name only —
       // never the real "provider / model" string.
       const visibleModelName = isPlatformCatalogModel
@@ -2781,12 +2782,14 @@ export function mountModelTable(host, opts = {}) {
     // The model's context limit (its hard cap for compaction), filled once its catalog info loads.
     const ctxCell = document.createElement('span');
     ctxCell.className = 'ac-saved-ctx';
-    ctxCell.title = 'Context limit';
+    ctxCell.title = 'Context limit and maximum output';
     label.querySelector('.ac-saved-model-name').appendChild(ctxCell);
     const ctxKey = `${p.provider || ''}|${p.model || ''}`;
     Promise.resolve(metaCache[ctxKey] || fetchModelInfo(p.model, p.provider)).then(info => {
       metaCache[ctxKey] = info;
-      ctxCell.textContent = (typeof info?.context === 'number') ? fmtContext(info.context).replace(' ctx', '') : '';
+      const ctx = (typeof info?.context === 'number') ? fmtContext(info.context).replace(' ctx', '') : '';
+      const out = (typeof info?.max_output === 'number') ? fmtContext(info.max_output).replace(' ctx', '') : '';
+      ctxCell.textContent = ctx && out ? `${ctx} · out ${out}` : ctx || (out ? `out ${out}` : '');
     });
 
     // Roles more-button — opens a floating popover with the roster-role toggles
