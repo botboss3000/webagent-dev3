@@ -203,6 +203,7 @@ impl Store {
                 agent_keys: AgentKeys::default(),
                 context_cache: admin_state.context_cache,
                 context_gate: admin_state.context_gate,
+                plane_use: None,
             },
         };
         sqlx::raw_sql(
@@ -286,43 +287,32 @@ impl Store {
         }
         self.open_user(user_id).await
     }
-    /// One connected-account slot: wait for an idle plane to give way when all are held, and
-    /// refuse with [`webagent_storage::pool::Busy`] after the configured wait.
+    /// One connected-account slot (API-SLOT-WAIT): take a free one; otherwise one eviction
+    /// pass, then a first-come wait on the slot queue, where another pass runs only when an
+    /// account's last handle drops; refuse with [`webagent_storage::pool::Busy`] at `deadline`.
     async fn connected_slot(
         &self,
-        deadline: std::time::Instant,
+        deadline: tokio::time::Instant,
     ) -> Result<tokio::sync::OwnedSemaphorePermit> {
-        loop {
-            if let Some(permit) = webagent_storage::pool::try_connected_slot() {
-                return Ok(permit);
-            }
-            // A database whose connections already closed holds no thread: give its slot back
-            // before evicting one that is still connected.
-            let gone = {
-                let mut states = self.user_states.write().await;
-                webagent_storage::pool::release_disconnected(&mut states)
-            };
-            drop(gone);
-            if let Some(permit) = webagent_storage::pool::try_connected_slot() {
-                return Ok(permit);
-            }
-            let removed = {
-                let mut states = self.user_states.write().await;
-                webagent_storage::pool::evict_oldest_idle(&mut states)
-            };
-            if let Some(plane) = removed {
-                // Its connections and its slot close with it; a slot is free now.
-                drop(plane);
-                continue;
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(webagent_storage::pool::Busy.into());
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
+        let states = self.user_states.clone();
+        let queue = webagent_storage::pool::connected_slots();
+        queue
+            .take(deadline, || {
+                let states = states.clone();
+                async move {
+                    let freed = {
+                        let mut states = states.write().await;
+                        webagent_storage::pool::free_one_slot(&mut states)
+                    };
+                    // Dropped after the registry lock: their connections and slots close here.
+                    !freed.is_empty()
+                }
+            })
+            .await
+            .map_err(Into::into)
     }
     async fn open_user(&self, user_id: &str) -> Result<Self> {
-        let deadline = std::time::Instant::now()
+        let deadline = tokio::time::Instant::now()
             + std::time::Duration::from_millis(webagent_storage::pool::connect_wait_ms());
         let state = loop {
             if let Some(state) = self.user_states.read().await.get(user_id).cloned() {
@@ -367,6 +357,8 @@ impl Store {
         };
         state.touch();
         let migrated = state.migrated.clone();
+        // The administrator's plane is never evicted, so its handles need no idle signal.
+        let plane_use = (user_id != "admin").then(|| state.handle_use());
         let handle = Self {
             core: StoreCore {
                 app_pool: self.app_pool.clone(),
@@ -383,6 +375,7 @@ impl Store {
                 agent_keys: self.agent_keys.clone(),
                 context_cache: state.context_cache,
                 context_gate: state.context_gate,
+                plane_use,
             },
         };
         // Marker-guarded migrations never revert; scans call for_user for every account each tick.
@@ -447,6 +440,7 @@ impl Store {
                 agent_keys: self.agent_keys.clone(),
                 context_cache: self.context_cache.clone(),
                 context_gate: self.context_gate.clone(),
+                plane_use: self.plane_use.clone(),
             },
         };
         view.initialize_agent_encryption().await?;

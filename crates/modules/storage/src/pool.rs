@@ -129,15 +129,22 @@ pub async fn connect_pool(path: &Path, events: bool, runs: bool) -> Result<Sqlit
         .pragma("journal_size_limit", WAL_SIZE_LIMIT.to_string());
     // The application plane (events without runs: app.db) is shared by every account's
     // sign-in, directory, scan and relay access, so it gets twice the connections, keeps one
-    // open and closes idle ones after 60 s. Account and agent planes take
-    // `user_database_pools.max_connections` (2 by default) and close idle connections after
-    // `user_database_pools.idle_seconds` (5): each connection is one thread, and the account
-    // bound multiplies the two, so both are settings (API-TASK-BOUND).
+    // open and closes idle ones after 60 s. Per-account databases (`user_data/<id>/`, not the
+    // administrator's) take `user_database_pools.max_connections` (2 by default) and close idle
+    // connections after `user_database_pools.idle_seconds` (5): each connection is one thread,
+    // and the account bound multiplies the two, so both are settings (API-TASK-BOUND). The
+    // administrator's database and agent databases are shared by every account using them
+    // (the shared default agent serves all of them), are few and outside the account bound, so
+    // they keep the fixed 4 connections and 5 s they had before the account bound.
     let application = events && !runs;
+    let account = family == Some(std::ffi::OsStr::new("user_data"))
+        && profile != Some(std::ffi::OsStr::new("admin"));
     let idle = std::time::Duration::from_secs(if application {
         APPLICATION_IDLE_SECONDS
-    } else {
+    } else if account {
         idle_seconds()
+    } else {
+        SHARED_IDLE_SECONDS
     });
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         // IDLE-POOL-BOUND: release idle connections without closing pools that
@@ -148,8 +155,10 @@ pub async fn connect_pool(path: &Path, events: bool, runs: bool) -> Result<Sqlit
         .idle_timeout(idle)
         .max_connections(if application {
             APPLICATION_CONNECTIONS
-        } else {
+        } else if account {
             pool_connections()
+        } else {
+            SHARED_CONNECTIONS
         })
         .connect_with(options)
         .await?;
@@ -356,8 +365,11 @@ pub struct UserPlane {
     /// When this process last selected the account ([`UserPlane::touch`]); orders eviction.
     pub last_use: Arc<AtomicU64>,
     /// API-TASK-BOUND: the process-wide connected-account slot this plane holds
-    /// ([`connected_slot`]). Dropping the plane (eviction) gives the slot back.
+    /// ([`try_connected_slot`]). Dropping the plane (eviction) gives the slot back.
     pub slot: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+    /// The [`PlaneUse`] every live Store handle of this account shares; the registry keeps only
+    /// this weak reference, so the use ends when the account's last handle drops.
+    pub in_use: Arc<Mutex<std::sync::Weak<PlaneUse>>>,
 }
 
 impl UserPlane {
@@ -370,6 +382,7 @@ impl UserPlane {
             migrated: Arc::new(AtomicBool::new(false)),
             last_use: Arc::new(AtomicU64::new(USE_SEQUENCE.fetch_add(1, Ordering::Relaxed))),
             slot: None,
+            in_use: Arc::default(),
         }
     }
 
@@ -379,6 +392,37 @@ impl UserPlane {
             USE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             Ordering::Relaxed,
         );
+    }
+
+    /// The use a new Store handle of this account holds: the live one while any handle exists,
+    /// otherwise a new one. Dropping the last handle drops it and wakes a slot waiter.
+    pub fn handle_use(&self) -> Arc<PlaneUse> {
+        let mut weak = self
+            .in_use
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(live) = weak.upgrade() {
+            return live;
+        }
+        let live = Arc::new(PlaneUse {
+            queue: connected_slots(),
+        });
+        *weak = Arc::downgrade(&live);
+        live
+    }
+}
+
+/// API-SLOT-WAIT: held by every Store handle of one account plane and never by the registry,
+/// so its drop is the moment the account's last handle went away and the plane became
+/// evictable. It then wakes one request waiting for a slot, which evicts an idle plane once.
+#[derive(Debug)]
+pub struct PlaneUse {
+    queue: Arc<SlotQueue>,
+}
+
+impl Drop for PlaneUse {
+    fn drop(&mut self) {
+        self.queue.plane_went_idle();
     }
 }
 
@@ -401,29 +445,130 @@ pub fn max_connected_users() -> usize {
     MAX_CONNECTED_USERS.load(Ordering::Relaxed)
 }
 
-static CONNECTED_SLOTS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
-    std::sync::OnceLock::new();
+/// API-SLOT-WAIT: the account-database slots and the requests waiting for one. A request that
+/// finds no free slot tries one eviction pass when it arrives, then waits in the semaphore's
+/// first-come queue; another pass runs only when an account's last Store handle drops
+/// ([`PlaneUse`]), the moment a plane can become evictable. Nothing polls the registry lock.
+#[derive(Debug)]
+pub struct SlotQueue {
+    permits: Arc<tokio::sync::Semaphore>,
+    waiters: AtomicUsize,
+    idle: tokio::sync::Notify,
+}
+
+/// Counts one waiting request while it lives.
+struct Waiting<'a>(&'a AtomicUsize);
+
+impl<'a> Waiting<'a> {
+    fn enter(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::AcqRel);
+        Self(count)
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl SlotQueue {
+    /// A queue over `slots` slots.
+    pub fn new(slots: usize) -> Arc<Self> {
+        Arc::new(Self {
+            permits: Arc::new(tokio::sync::Semaphore::new(slots)),
+            waiters: AtomicUsize::new(0),
+            idle: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// A free slot now, or `None`. While requests wait, released slots go to them first, so
+    /// this never takes a slot ahead of the queue.
+    pub fn try_take(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.permits.clone().try_acquire_owned().ok()
+    }
+
+    /// Free slots right now.
+    pub fn available(&self) -> usize {
+        self.permits.available_permits()
+    }
+
+    /// Requests waiting for a slot right now.
+    pub fn waiting(&self) -> usize {
+        self.waiters.load(Ordering::Acquire)
+    }
+
+    /// An account's last Store handle dropped: wake one waiter to run an eviction pass. Without
+    /// waiters nothing happens; a wake with no waiter parked is kept for the next one.
+    pub fn plane_went_idle(&self) {
+        if self.waiting() > 0 {
+            self.idle.notify_one();
+        }
+    }
+
+    /// Take a slot: at once when one is free; otherwise run `free_one` (one eviction pass,
+    /// true when it freed a slot) once, then wait in arrival order until a slot is released or
+    /// `deadline` passes ([`Busy`]). `free_one` runs again only when a plane goes idle while
+    /// this request waits; a pass that freed a slot passes the wake on, because several planes
+    /// can go idle while one wake is pending.
+    pub async fn take<F, Fut>(
+        &self,
+        deadline: tokio::time::Instant,
+        mut free_one: F,
+    ) -> std::result::Result<tokio::sync::OwnedSemaphorePermit, Busy>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        if let Some(permit) = self.try_take() {
+            return Ok(permit);
+        }
+        // Counted as waiting before the arrival pass: a plane that goes idle after this point
+        // leaves a wake, and one that went idle before it is found by the pass.
+        let _waiting = Waiting::enter(&self.waiters);
+        free_one().await;
+        let acquire = self.permits.clone().acquire_owned();
+        tokio::pin!(acquire);
+        let expiry = tokio::time::sleep_until(deadline);
+        tokio::pin!(expiry);
+        loop {
+            tokio::select! {
+                biased;
+                permit = &mut acquire => return permit.map_err(|_| Busy),
+                () = &mut expiry => return Err(Busy),
+                () = self.idle.notified() => {
+                    // Another waiter besides this one may need the next idle plane.
+                    if free_one().await && self.waiting() > 1 {
+                        self.idle.notify_one();
+                    }
+                }
+            }
+        }
+    }
+}
+
+static CONNECTED_SLOTS: std::sync::OnceLock<Arc<SlotQueue>> = std::sync::OnceLock::new();
 
 /// The process-wide account-database slots: `max_connected` of them, created on first use.
 /// Settings are read before the first plane opens, so the size is the configured one.
-fn connected_slots() -> Arc<tokio::sync::Semaphore> {
+pub fn connected_slots() -> Arc<SlotQueue> {
     CONNECTED_SLOTS
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(max_connected_users())))
+        .get_or_init(|| SlotQueue::new(max_connected_users()))
         .clone()
 }
 
 /// Take a free account-database slot without waiting, or `None` when all are held.
 pub fn try_connected_slot() -> Option<tokio::sync::OwnedSemaphorePermit> {
-    connected_slots().try_acquire_owned().ok()
+    connected_slots().try_take()
 }
 
 /// How many account-database slots are free right now (diagnostics and tests).
 pub fn free_connected_slots() -> usize {
-    connected_slots().available_permits()
+    connected_slots().available()
 }
 
-/// Connections one account (or agent) database may hold open; each connection is one OS
-/// thread, so [`max_connected_users`] times this bounds the account threads in a process.
+/// Connections one per-account database may hold open; each connection is one OS thread, so
+/// [`max_connected_users`] times this bounds the account threads in a process.
 pub const DEFAULT_POOL_CONNECTIONS: u32 = 2;
 /// The widest accepted account pool. The application database keeps its own fixed value.
 pub const MAX_POOL_CONNECTIONS: u32 = 8;
@@ -477,6 +622,10 @@ pub fn connect_wait_ms() -> u64 {
 /// The shared application database is one plane, not one per account, so its pool stays fixed.
 const APPLICATION_CONNECTIONS: u32 = 8;
 const APPLICATION_IDLE_SECONDS: u64 = 60;
+/// The administrator's and the agent databases: shared by every account that uses them and
+/// outside the account bound, so they keep their own fixed pool.
+pub const SHARED_CONNECTIONS: u32 = 4;
+const SHARED_IDLE_SECONDS: u64 = 5;
 
 /// No account-database slot was free within [`connect_wait_ms`]: the request must retry rather
 /// than open another connection past the bound. Host adapters map this to a retryable response.
@@ -571,6 +720,19 @@ pub fn evict_oldest_idle(states: &mut HashMap<String, UserPlane>) -> Option<User
         .min_by_key(|(_, state)| state.last_use.load(Ordering::Relaxed))
         .map(|(id, _)| id.clone());
     oldest.and_then(|id| states.remove(&id))
+}
+
+/// One eviction pass for a request waiting for a slot: give back the slots of planes that hold
+/// no connection and no Store handle (they keep no thread), or, when there are none, evict the
+/// least recently used idle plane. The caller drops the returned planes after releasing the
+/// registry lock; each one's slot is then free.
+#[must_use]
+pub fn free_one_slot(states: &mut HashMap<String, UserPlane>) -> Vec<UserPlane> {
+    let mut freed = release_disconnected(states);
+    if freed.is_empty() {
+        freed.extend(evict_oldest_idle(states));
+    }
+    freed
 }
 
 /// Registered user databases kept before idle ones are dropped. An idle entry holds no
@@ -690,6 +852,145 @@ mod registry_tests {
         assert_eq!(max_connected_users(), MIN_CONNECTED_USERS);
         set_max_connected_users(DEFAULT_MAX_CONNECTED_USERS);
         assert_eq!(max_connected_users(), DEFAULT_MAX_CONNECTED_USERS);
+    }
+
+    #[tokio::test]
+    async fn only_per_account_pools_take_the_account_width() {
+        let root = tempfile::tempdir().unwrap();
+        let width = |path: &str| {
+            let path = root.path().join(path);
+            // Account and administrator databases carry events and runs; agent ones neither.
+            let user = path.starts_with(root.path().join("user_data"));
+            async move {
+                let pool = open_pool(&path, user, user).await.unwrap();
+                let width = pool.options().get_max_connections();
+                pool.close().await;
+                width
+            }
+        };
+        // Only Store::open (root crate) sets the account width, so this binary keeps the default.
+        assert_eq!(width("user_data/u1/u1.db").await, DEFAULT_POOL_CONNECTIONS);
+        // The administrator's and the agent databases are shared and keep their fixed 4.
+        assert_eq!(width("user_data/admin/admin.db").await, SHARED_CONNECTIONS);
+        assert_eq!(width("agent_data/a1/a1.db").await, SHARED_CONNECTIONS);
+        assert_eq!(
+            width("agent_data/shared_default/shared_default.db").await,
+            SHARED_CONNECTIONS
+        );
+    }
+
+    /// Wait (bounded) until `queue` counts `n` waiters.
+    async fn until_waiting(queue: &SlotQueue, n: usize) {
+        for _ in 0..1000 {
+            if queue.waiting() == n {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        panic!("expected {n} waiters, found {}", queue.waiting());
+    }
+
+    fn deadline(millis: u64) -> tokio::time::Instant {
+        tokio::time::Instant::now() + std::time::Duration::from_millis(millis)
+    }
+
+    #[tokio::test]
+    async fn slot_waiters_are_served_first_come_without_polling() {
+        let queue = SlotQueue::new(1);
+        let held = queue.try_take().unwrap();
+        let passes = Arc::new(AtomicUsize::new(0));
+        let waiter = |queue: Arc<SlotQueue>, passes: Arc<AtomicUsize>| {
+            tokio::spawn(async move {
+                queue
+                    .take(deadline(10_000), || {
+                        passes.fetch_add(1, Ordering::SeqCst);
+                        async { false }
+                    })
+                    .await
+            })
+        };
+        let first = waiter(queue.clone(), passes.clone());
+        until_waiting(&queue, 1).await;
+        let second = waiter(queue.clone(), passes.clone());
+        until_waiting(&queue, 2).await;
+        // Each waiter ran one eviction pass on arrival and none while it waits.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(passes.load(Ordering::SeqCst), 2);
+        // A new arrival cannot take a released slot ahead of the queue.
+        drop(held);
+        assert!(queue.try_take().is_none());
+        let first = first
+            .await
+            .unwrap()
+            .expect("the first waiter gets the slot");
+        assert!(!second.is_finished());
+        drop(first);
+        second.await.unwrap().expect("then the second");
+        assert_eq!(queue.waiting(), 0);
+        assert_eq!(queue.available(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_plane_going_idle_wakes_a_waiter_to_evict_it() {
+        let queue = SlotQueue::new(1);
+        // The slot held by an idle plane in a registry; evicting it frees the slot.
+        let registry = Arc::new(Mutex::new(Some(queue.try_take().unwrap())));
+        let idle = Arc::new(AtomicBool::new(false));
+        let passes = Arc::new(AtomicUsize::new(0));
+        let waiter = {
+            let (queue, registry, idle, passes) = (
+                queue.clone(),
+                registry.clone(),
+                idle.clone(),
+                passes.clone(),
+            );
+            tokio::spawn(async move {
+                queue
+                    .take(deadline(10_000), || {
+                        passes.fetch_add(1, Ordering::SeqCst);
+                        let freed = idle.load(Ordering::SeqCst)
+                            && registry.lock().unwrap().take().is_some();
+                        async move { freed }
+                    })
+                    .await
+            })
+        };
+        until_waiting(&queue, 1).await;
+        // The arrival pass found the plane still in use.
+        assert_eq!(passes.load(Ordering::SeqCst), 1);
+        idle.store(true, Ordering::SeqCst);
+        queue.plane_went_idle();
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("woken by the idle plane")
+            .unwrap()
+            .expect("a slot");
+        assert!(passes.load(Ordering::SeqCst) >= 2);
+        drop(permit);
+        assert_eq!(queue.waiting(), 0);
+        assert_eq!(queue.available(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_waiter_is_refused_busy_at_its_deadline() {
+        let queue = SlotQueue::new(1);
+        let _held = queue.try_take().unwrap();
+        let refused = queue.take(deadline(50), || async { false }).await;
+        assert!(matches!(refused, Err(Busy)));
+        assert_eq!(queue.waiting(), 0);
+    }
+
+    #[tokio::test]
+    async fn handles_of_one_account_share_one_use() {
+        let plane = UserPlane::new(SqlitePool::connect_lazy("sqlite::memory:").unwrap());
+        let first = plane.handle_use();
+        let second = plane.handle_use();
+        assert!(Arc::ptr_eq(&first, &second));
+        drop((first, second));
+        // The registry's weak reference does not keep the use alive.
+        assert!(plane.in_use.lock().unwrap().upgrade().is_none());
+        let again = plane.handle_use();
+        assert_eq!(Arc::strong_count(&again), 1);
     }
 
     #[tokio::test]

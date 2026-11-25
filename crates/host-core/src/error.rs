@@ -29,20 +29,19 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Every temporary capacity refusal in the error chain: the account-database slot budget, a
-/// connection pool that timed out, a thread that could not be created ("Resource temporarily
-/// unavailable") or a database that stayed locked. These are answered 503 with a retry hint,
-/// never 500: the work did not start and a client may safely ask again.
+/// Every temporary capacity refusal in the error chain, where the refused step wrote nothing:
+/// the account-database slot budget ([`webagent_storage::pool::Busy`], refused before the
+/// database opens), a connection pool that timed out handing out a connection, or a thread that
+/// could not be created ("Resource temporarily unavailable", os error 11). These are answered
+/// 503 with a retry hint, never 500. A database that stayed locked past its busy timeout is not
+/// in this list: it can fail a handler after earlier statements committed, and a client repeating
+/// such a request could repeat those effects, so it stays a 500 (API-SLOT-WAIT).
 fn retryable_capacity(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| match cause.downcast_ref::<sqlx::Error>() {
-            Some(sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed) => true,
+            Some(sqlx::Error::PoolTimedOut) => true,
             Some(sqlx::Error::Io(io)) => io.raw_os_error() == Some(11),
-            Some(sqlx::Error::Database(database)) => {
-                let text = database.message().to_ascii_lowercase();
-                text.contains("database is locked") || text.contains("database table is locked")
-            }
             _ => false,
         })
         || error.chain().any(|cause| {
@@ -157,6 +156,14 @@ mod tests {
         )));
         assert!(!retryable_capacity(&anyhow::anyhow!(
             "not a database or I/O error"
+        )));
+        // A pool that handed out no connection refused before any statement ran.
+        assert!(retryable_capacity(&anyhow::Error::from(
+            sqlx::Error::PoolTimedOut
+        )));
+        // A closed pool is a fault, not capacity, and stays a 500.
+        assert!(!retryable_capacity(&anyhow::Error::from(
+            sqlx::Error::PoolClosed
         )));
     }
 

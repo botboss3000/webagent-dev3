@@ -49,5 +49,6 @@ pub async fn store_core(root: &Path, user: &str) -> StoreCore {
         agent_keys: AgentKeys::default(),
         context_cache: Arc::new(Mutex::new(ContextCache::new(16))),
         context_gate: Arc::default(),
+        plane_use: None,
     }
 }

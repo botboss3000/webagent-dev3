@@ -221,6 +221,16 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
     // This request read the account row (or its epoch) just now, so it still exists.
     caller.store = match app.store.for_identity(&identity).await {
         Ok(store) => store,
+        // API-SLOT-WAIT: the sign-in is valid; no account-database slot came free in time.
+        // Answer the retryable 503, not "Sign in required", so a client under load keeps its
+        // sign-in and retries. Every other failure still refuses with 401.
+        Err(error)
+            if error
+                .downcast_ref::<webagent_storage::pool::Busy>()
+                .is_some() =>
+        {
+            return ApiError::from(error).into_response()
+        }
         Err(_) => {
             return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()).into_response()
         }

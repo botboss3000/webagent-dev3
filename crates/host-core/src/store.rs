@@ -37,6 +37,10 @@ pub struct StoreCore {
     pub agent_keys: AgentKeys,
     pub context_cache: Arc<Mutex<ContextCache>>,
     pub context_gate: Arc<RwLock<()>>,
+    /// API-SLOT-WAIT: the account plane's use, shared by its handles (`None` for the
+    /// administrator and fixtures). Declared last, so it drops after `context_gate` and the
+    /// plane already reads as idle when a waiting request is woken to evict it.
+    pub plane_use: Option<Arc<webagent_storage::pool::PlaneUse>>,
 }
 
 // Small accessors are `#[inline]` so release builds keep inlining them across
