@@ -579,3 +579,19 @@ body.chat-resizing {
     transition: none;
   }
 }
+
+/* ── The chat page is an empty surface ────────────────────────
+   The current chat has no frame and no separator line under its header or above its
+   footer, so on the chat route the shell's own card and rules come off. */
+body.chat-route #main-panel {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+body.chat-route .main-head,
+body.chat-route .main-foot {
+  border-bottom: none;
+  border-top: none;
+}
