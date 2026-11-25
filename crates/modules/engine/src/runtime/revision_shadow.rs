@@ -11,6 +11,15 @@
 //! tool arguments or grants), and persisted in the application database for the administrator
 //! Diagnostics view. Nothing here changes a decision.
 //!
+//! Beside the totals (release R1 of the access-check switch plan) each check is also counted
+//! per vector part that moved (changed, and changed with effect) and per content-free caller
+//! class (administrator, guest, owner, member, shared participant, other caller), so the
+//! evidence shows which parts and callers were exercised. Five check kinds: the dispatch fence,
+//! the tool execution check, the tool decision when the model proposes a tool (P1), the
+//! admission and model grant before an approved tool is dispatched (P2) and the model grant
+//! after the model call returns (P3). A check whose run moved to another model candidate since
+//! the step top counts the subject part `candidate` as moved (rule S3: rebuild, never reuse).
+//!
 //! Ordering keeps the comparison sound: the vector is read before the context's data and after
 //! the check's data, so a write in between always shows as a moved vector, never as a false
 //! disagreement.
@@ -21,15 +30,18 @@ use std::sync::{
     Mutex,
 };
 use webagent_access::authority::LiveAccess;
-use webagent_storage::revisions::{self, Principals, SessionHeader, SessionRevisions};
+use webagent_storage::revisions::{
+    self, AgentRevision, Principals, SessionHeader, SessionRevisions,
+};
 
 /// The plain revisions an access decision depends on. `None` = unreadable = changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RevisionVector {
-    /// Agent owner (directory) and both accounts' `auth_epoch`.
+    /// Agent owner (directory) and both accounts' (instance, `auth_epoch`).
     pub principals: Option<Principals>,
-    /// The agent database's epoch (agent row, memberships, ability connections, main chat).
-    pub agent: Option<i64>,
+    /// The agent database's (instance, epoch) (agent row, memberships, ability connections,
+    /// main chat).
+    pub agent: Option<AgentRevision>,
     /// The session's mode and ability-state counters (its `record` counter is not compared:
     /// the record is rewritten for reasons that are not access; `header` stands for it).
     pub session: Option<SessionRevisions>,
@@ -38,9 +50,26 @@ pub struct RevisionVector {
     /// Whether the caller is a shared participant of the session (`shared_participants`).
     pub participant: Option<bool>,
     pub model_catalog: Option<i64>,
+    /// The platform model roster and its credentials (`platform_catalog:v1`,
+    /// `platform_credential:v1:*`).
+    pub platform: Option<i64>,
     /// The access policy file's digest (it keeps its digest, stream B part 1 assumption 4).
     pub policy: Option<String>,
 }
+
+/// Every part `RevisionVector::moved` can name, plus the subject part `candidate`.
+pub const PARTS: [&str; 10] = [
+    "accounts",
+    "agent",
+    "session_mode",
+    "session_abilities",
+    "header",
+    "participant",
+    "model_catalog",
+    "platform",
+    "policy",
+    "candidate",
+];
 
 fn differ<T: PartialEq>(before: &Option<T>, now: &Option<T>) -> bool {
     before.is_none() || now.is_none() || before != now
@@ -60,11 +89,12 @@ impl RevisionVector {
     ) -> Self {
         Self {
             principals: revisions::principals(app, requester, agent_id).await,
-            agent: revisions::agent(agent).await,
+            agent: revisions::agent_revision(agent).await,
             session: revisions::session(user, sid).await,
             header: revisions::session_header(user, sid, unseal).await,
             participant: revisions::shared_participant(app, sid, requester).await,
             model_catalog: revisions::model_catalog(app).await,
+            platform: revisions::platform_catalog(app).await,
             policy: webagent_access::policy_file::policy_digest(root).ok(),
         }
     }
@@ -77,15 +107,27 @@ impl RevisionVector {
         if differ(&self.agent, &now.agent) {
             moved.push("agent");
         }
-        let counters = |s: &Option<SessionRevisions>| s.map(|s| (s.mode, s.abilities));
-        if differ(&counters(&self.session), &counters(&now.session))
-            || differ(&self.header, &now.header)
-            || differ(&self.participant, &now.participant)
-        {
-            moved.push("session");
+        // The session `record` counter is not compared: `header` stands for the record.
+        if differ(&self.session.map(|s| s.mode), &now.session.map(|s| s.mode)) {
+            moved.push("session_mode");
+        }
+        if differ(
+            &self.session.map(|s| s.abilities),
+            &now.session.map(|s| s.abilities),
+        ) {
+            moved.push("session_abilities");
+        }
+        if differ(&self.header, &now.header) {
+            moved.push("header");
+        }
+        if differ(&self.participant, &now.participant) {
+            moved.push("participant");
         }
         if differ(&self.model_catalog, &now.model_catalog) {
             moved.push("model_catalog");
+        }
+        if differ(&self.platform, &now.platform) {
+            moved.push("platform");
         }
         if differ(&self.policy, &now.policy) {
             moved.push("policy");
@@ -96,11 +138,14 @@ impl RevisionVector {
     fn summary(&self) -> Value {
         json!({
             "auth_epochs": self.principals.as_ref().map(|p| [p.caller_epoch, p.owner_epoch]),
-            "agent_epoch": self.agent,
+            "account_instances": self.principals.as_ref().map(|p| [p.caller_instance, p.owner_instance]),
+            "agent_epoch": self.agent.as_ref().map(|a| a.epoch),
+            "agent_instance": self.agent.as_ref().map(|a| a.instance.chars().take(8).collect::<String>()),
             "session": self.session.map(|s| [s.record, s.mode, s.abilities]),
             "header_status": self.header.as_ref().and_then(|h| h.status.clone()),
             "participant": self.participant,
             "model_catalog": self.model_catalog,
+            "platform": self.platform,
             "policy": self.policy.as_ref().map(|p| p.chars().take(12).collect::<String>()),
         })
     }
@@ -135,6 +180,38 @@ pub struct Baseline {
     pub session_id: String,
     pub agent_id: String,
     pub requester: String,
+    /// Content-free caller class (`caller_class`), counted per check.
+    pub caller: &'static str,
+    /// The run's model candidate (`failover_state.candidate_index`) at the step top.
+    pub candidate: Option<u64>,
+}
+
+/// The caller's class for the per-class counts: no ids, only the relationship.
+pub fn caller_class(access: &LiveAccess, participant: Option<bool>) -> &'static str {
+    use webagent_access::{Relationship, Role};
+    match (&access.principal.role, &access.relationship) {
+        (Role::Administrator, _) => "administrator",
+        (Role::Guest, _) => "guest",
+        (_, Relationship::Owner) => "owner",
+        (_, Relationship::Member) => "member",
+        _ if participant == Some(true) => "shared_participant",
+        _ => "caller",
+    }
+}
+
+/// Every class `caller_class` returns.
+pub const CALLERS: [&str; 6] = [
+    "administrator",
+    "guest",
+    "owner",
+    "member",
+    "shared_participant",
+    "caller",
+];
+
+/// The run's current model candidate, as `Baseline::candidate` holds it.
+pub fn candidate_of(run: &Value) -> Option<u64> {
+    run["failover_state"]["candidate_index"].as_u64()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,19 +220,32 @@ pub enum Kind {
     Fence,
     /// `foreground_authorized`, right before a tool runs.
     ToolCheck,
+    /// The tool decision's inputs when the model proposes a tool (phase 2, P1).
+    ToolDecision,
+    /// Admission and model grant before an approved tool is dispatched (P2).
+    ApprovedDispatch,
+    /// The model grant after the model call returns (P3).
+    ModelReturn,
 }
+pub const KINDS: [Kind; 5] = [
+    Kind::Fence,
+    Kind::ToolCheck,
+    Kind::ToolDecision,
+    Kind::ApprovedDispatch,
+    Kind::ModelReturn,
+];
 impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Fence => "fence",
             Kind::ToolCheck => "tool_check",
+            Kind::ToolDecision => "tool_decision",
+            Kind::ApprovedDispatch => "approved_dispatch",
+            Kind::ModelReturn => "model_return",
         }
     }
     fn index(self) -> usize {
-        match self {
-            Kind::Fence => 0,
-            Kind::ToolCheck => 1,
-        }
+        self as usize
     }
 }
 
@@ -205,7 +295,22 @@ fn differing(baseline: &Baseline, observed: &Observed) -> Vec<&'static str> {
 }
 
 pub fn compare(baseline: &Baseline, now: &RevisionVector, observed: &Observed) -> Outcome {
-    let moved = baseline.vector.moved(now);
+    compare_at(baseline, now, observed, None)
+}
+
+/// `compare` for a check that also knows the run's current model `candidate` (`None`: not
+/// compared). A different candidate is a different subject: it counts as moved, never as a
+/// disagreement, because the step top authorized another candidate.
+pub fn compare_at(
+    baseline: &Baseline,
+    now: &RevisionVector,
+    observed: &Observed,
+    candidate: Option<u64>,
+) -> Outcome {
+    let mut moved = baseline.vector.moved(now);
+    if candidate.is_some() && candidate != baseline.candidate {
+        moved.push("candidate");
+    }
     let parts = differing(baseline, observed);
     if !moved.is_empty() {
         return Outcome::Changed {
@@ -249,10 +354,21 @@ impl Counters {
 }
 
 /// Counts of this process, per kind; `FLUSHED` is what was already added to the database.
-static COUNTS: [Counters; 2] = [Counters::new(), Counters::new()];
-static FLUSHED: Mutex<[[u64; 5]; 2]> = Mutex::new([[0; 5]; 2]);
+static COUNTS: [Counters; 5] = [
+    Counters::new(),
+    Counters::new(),
+    Counters::new(),
+    Counters::new(),
+    Counters::new(),
+];
+static FLUSHED: Mutex<[[u64; 5]; 5]> = Mutex::new([[0; 5]; 5]);
 /// The newest disagreement per kind not yet written.
-static PENDING_EXAMPLE: Mutex<[Option<Value>; 2]> = Mutex::new([None, None]);
+static PENDING_EXAMPLE: Mutex<[Option<Value>; 5]> = Mutex::new([None, None, None, None, None]);
+/// Per-part and per-caller counts not yet written, keyed by (kind, dimension, name):
+/// `[checks, changed, changed_with_effect, disagreements]`. A part row counts only the checks
+/// where that part moved (`checks` stays 0).
+type Detail = HashMap<(usize, &'static str, &'static str), [u64; 4]>;
+static DETAIL: Mutex<Option<Detail>> = Mutex::new(None);
 static LAST_FLUSH: AtomicI64 = AtomicI64::new(0);
 static TABLE_READY: AtomicBool = AtomicBool::new(false);
 /// Seconds between writes of unchanged counts; a disagreement is written at its next check.
@@ -265,7 +381,19 @@ pub fn record(
     now: &RevisionVector,
     observed: &Observed,
 ) -> Outcome {
-    let outcome = compare(baseline, now, observed);
+    record_at(kind, baseline, now, observed, None)
+}
+
+/// `record` with the run's current model candidate (`compare_at`).
+pub fn record_at(
+    kind: Kind,
+    baseline: &Baseline,
+    now: &RevisionVector,
+    observed: &Observed,
+    candidate: Option<u64>,
+) -> Outcome {
+    let outcome = compare_at(baseline, now, observed, candidate);
+    count_detail(kind, baseline.caller, &outcome);
     let counts = &COUNTS[kind.index()];
     counts.checks.fetch_add(1, Ordering::Relaxed);
     match &outcome {
@@ -305,6 +433,36 @@ pub fn record(
         }
     }
     outcome
+}
+
+fn count_detail(kind: Kind, caller: &'static str, outcome: &Outcome) {
+    if let Ok(mut detail) = DETAIL.lock() {
+        add_detail(
+            detail.get_or_insert_with(HashMap::new),
+            kind,
+            caller,
+            outcome,
+        );
+    }
+}
+
+fn add_detail(detail: &mut Detail, kind: Kind, caller: &'static str, outcome: &Outcome) {
+    let index = kind.index();
+    let row = detail.entry((index, "caller", caller)).or_default();
+    row[0] += 1;
+    match outcome {
+        Outcome::Unchanged => {}
+        Outcome::Changed { moved, effect } => {
+            row[1] += 1;
+            row[2] += u64::from(*effect);
+            for part in moved {
+                let row = detail.entry((index, "part", *part)).or_default();
+                row[1] += 1;
+                row[2] += u64::from(*effect);
+            }
+        }
+        Outcome::Disagreement { .. } => row[3] += 1,
+    }
 }
 
 fn now_seconds() -> i64 {
@@ -348,9 +506,18 @@ async fn write(app: &sqlx::SqlitePool) -> anyhow::Result<()> {
         )
         .execute(app)
         .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS revision_shadow_detail(kind TEXT NOT NULL,
+            dimension TEXT NOT NULL, name TEXT NOT NULL, checks INTEGER NOT NULL,
+            changed INTEGER NOT NULL, changed_with_effect INTEGER NOT NULL,
+            disagreements INTEGER NOT NULL, PRIMARY KEY(kind,dimension,name))",
+        )
+        .execute(app)
+        .await?;
         TABLE_READY.store(true, Ordering::Relaxed);
     }
-    for kind in [Kind::Fence, Kind::ToolCheck] {
+    write_detail(app).await?;
+    for kind in KINDS {
         let index = kind.index();
         let values = COUNTS[index].values();
         let delta = {
@@ -404,6 +571,56 @@ async fn write(app: &sqlx::SqlitePool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Adds the pending per-part and per-caller counts in one transaction; on failure they are
+/// put back for the next flush.
+async fn write_detail(app: &sqlx::SqlitePool) -> anyhow::Result<()> {
+    let pending = DETAIL
+        .lock()
+        .map_err(|_| anyhow::anyhow!("shadow detail lock"))?
+        .take()
+        .unwrap_or_default();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let result = async {
+        let mut tx = app.begin().await?;
+        for ((index, dimension, name), values) in &pending {
+            sqlx::query(
+                "INSERT INTO revision_shadow_detail(kind,dimension,name,checks,changed,
+                changed_with_effect,disagreements) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(kind,dimension,name) DO UPDATE SET checks=checks+excluded.checks,
+                changed=changed+excluded.changed,
+                changed_with_effect=changed_with_effect+excluded.changed_with_effect,
+                disagreements=disagreements+excluded.disagreements",
+            )
+            .bind(KINDS[*index].name())
+            .bind(*dimension)
+            .bind(*name)
+            .bind(values[0] as i64)
+            .bind(values[1] as i64)
+            .bind(values[2] as i64)
+            .bind(values[3] as i64)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        anyhow::Ok(())
+    }
+    .await;
+    if result.is_err() {
+        if let Ok(mut detail) = DETAIL.lock() {
+            let detail = detail.get_or_insert_with(HashMap::new);
+            for (key, values) in pending {
+                let row = detail.entry(key).or_default();
+                for (slot, value) in values.iter().enumerate() {
+                    row[slot] += value;
+                }
+            }
+        }
+    }
+    result
+}
+
 /// The stored counts for the administrator view; an absent table reads as no checks yet.
 pub async fn report(app: &sqlx::SqlitePool) -> Value {
     use sqlx::Row;
@@ -415,9 +632,9 @@ pub async fn report(app: &sqlx::SqlitePool) -> Value {
     .await
     .unwrap_or_default();
     let mut kinds = serde_json::Map::new();
-    for name in [Kind::Fence.name(), Kind::ToolCheck.name()] {
+    for kind in KINDS {
         kinds.insert(
-            name.into(),
+            kind.name().into(),
             json!({"checks":0,"unchanged":0,"changed":0,"changed_without_effect":0,
                 "disagreements":0,"last_example":null,"updated_at":null}),
         );
@@ -439,6 +656,51 @@ pub async fn report(app: &sqlx::SqlitePool) -> Value {
                 "updated_at": row.get::<i64,_>("updated_at"),
             }),
         );
+    }
+    let detail = sqlx::query(
+        "SELECT kind,dimension,name,checks,changed,changed_with_effect,disagreements
+        FROM revision_shadow_detail ORDER BY kind,dimension,name",
+    )
+    .fetch_all(app)
+    .await
+    .unwrap_or_default();
+    for kind in kinds.values_mut() {
+        kind["parts"] = json!(PARTS
+            .iter()
+            .map(|part| (
+                part.to_string(),
+                json!({"changed":0,"changed_with_effect":0})
+            ))
+            .collect::<serde_json::Map<_, _>>());
+        kind["callers"] = json!(CALLERS
+            .iter()
+            .map(|caller| (
+                caller.to_string(),
+                json!({"checks":0,"changed":0,"changed_with_effect":0,"disagreements":0})
+            ))
+            .collect::<serde_json::Map<_, _>>());
+    }
+    for row in detail {
+        let kind: String = row.get("kind");
+        let dimension: String = row.get("dimension");
+        let name: String = row.get("name");
+        let Some(entry) = kinds.get_mut(&kind) else {
+            continue;
+        };
+        let value = if dimension == "part" {
+            json!({"changed": row.get::<i64,_>("changed"),
+                "changed_with_effect": row.get::<i64,_>("changed_with_effect")})
+        } else {
+            json!({"checks": row.get::<i64,_>("checks"), "changed": row.get::<i64,_>("changed"),
+                "changed_with_effect": row.get::<i64,_>("changed_with_effect"),
+                "disagreements": row.get::<i64,_>("disagreements")})
+        };
+        let group = if dimension == "part" {
+            "parts"
+        } else {
+            "callers"
+        };
+        entry[group][name] = value;
     }
     json!({"mode":"shadow","decides":"full recomputation","kinds":kinds})
 }

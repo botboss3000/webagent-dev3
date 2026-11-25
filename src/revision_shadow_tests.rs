@@ -19,7 +19,10 @@ async fn step(app: &App, sid: &str, requester: &str) -> Baseline {
         .call_context(sid, AGENT, requester, &access)
         .await
         .expect("call context");
+    let caller = shadow::caller_class(&context.access, vector.participant);
     Baseline {
+        caller,
+        candidate: None,
         vector,
         access: shadow::access_part(
             &context.access,
@@ -169,7 +172,7 @@ async fn each_access_record_family_moves_the_vector_without_a_disagreement() {
     )
     .await
     .unwrap();
-    moved(check(&app, &baseline).await, "session", "session mode");
+    moved(check(&app, &baseline).await, "session_mode", "session mode");
 
     // Session ability state.
     let baseline = step(&app, &sid, "admin").await;
@@ -181,7 +184,7 @@ async fn each_access_record_family_moves_the_vector_without_a_disagreement() {
         .unwrap();
     moved(
         check(&app, &baseline).await,
-        "session",
+        "session_abilities",
         "session ability state",
     );
 
@@ -203,7 +206,7 @@ async fn each_access_record_family_moves_the_vector_without_a_disagreement() {
     // must have moved too.
     let now = app.engine().revision_vector("admin", &sid, AGENT).await;
     assert!(
-        baseline.vector.moved(&now).contains(&"session"),
+        baseline.vector.moved(&now).contains(&"header"),
         "session status"
     );
     session["status"] = json!("active");
@@ -211,10 +214,11 @@ async fn each_access_record_family_moves_the_vector_without_a_disagreement() {
 
     // Shared participant: another account joins the session.
     let baseline = step(&app, &sid, &member).await;
+    assert_eq!(baseline.caller, "member");
     app.store.shared_join(&sid, &member).await.unwrap();
     moved(
         check(&app, &baseline).await,
-        "session",
+        "participant",
         "shared participant",
     );
 
@@ -238,19 +242,212 @@ async fn each_access_record_family_moves_the_vector_without_a_disagreement() {
         .execute(&app.store.pool)
         .await
         .unwrap();
-    moved(check(&app, &baseline).await, "session", "missing revision");
+    moved(
+        check(&app, &baseline).await,
+        "session_mode",
+        "missing revision",
+    );
 }
 
 #[tokio::test]
-async fn the_access_policy_file_moves_the_vector() {
-    let (root, app) = fixture().await;
+async fn the_caller_class_names_the_administrator() {
+    let (_root, app) = fixture().await;
     let sid = conversation(&app).await;
-    let path = webagent_access::policy_file::policy_path(root.path());
-    // `live_access` reads this file, so the fixture has it.
-    let text = std::fs::read_to_string(&path).expect("fixture access policy file");
+    assert_eq!(step(&app, &sid, "admin").await.caller, "administrator");
+}
+
+#[tokio::test]
+async fn an_account_re_created_with_the_same_id_and_epoch_reads_as_moved() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
     let baseline = step(&app, &sid, "admin").await;
-    let mut policy: Value = serde_json::from_str(&text).unwrap();
-    policy["revision"] = json!(policy["revision"].as_u64().unwrap_or(0) + 1);
-    std::fs::write(&path, serde_json::to_vec(&policy).unwrap()).unwrap();
-    moved(check(&app, &baseline).await, "policy", "access policy");
+    // No code path deletes an account row; a restore or a hand edit can. The row comes back
+    // byte for byte, `auth_epoch` included, inside one transaction (other rows refer to it).
+    let pool = &app.store.app_pool;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("PRAGMA defer_foreign_keys=ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TEMP TABLE kept AS SELECT * FROM user_accounts WHERE user_id='admin'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM user_accounts WHERE user_id='admin'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO user_accounts SELECT * FROM kept")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE kept")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let now = app.engine().revision_vector("admin", &sid, AGENT).await;
+    let (before, after) = (
+        baseline.vector.principals.clone().unwrap(),
+        now.principals.clone().unwrap(),
+    );
+    assert_eq!(before.caller_epoch, after.caller_epoch);
+    assert_ne!(before.caller_instance, after.caller_instance);
+    // Today's recomputation finds the same account, so the move has no effect.
+    match check(&app, &baseline).await {
+        Outcome::Changed { moved, effect } => {
+            assert_eq!(moved, vec!["accounts"]);
+            assert!(!effect);
+        }
+        other => panic!("expected a moved account, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_platform_catalog_change_moves_the_vector_and_a_rotation_changes_the_grant() {
+    use crate::account_catalog::{platform_id, Adoption, Origin, Source};
+    use crate::platform_catalog::{Entry, Mutation};
+    use std::collections::{BTreeMap, BTreeSet};
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let user = app
+        .store
+        .create_user_account("platform_shadow", "fixture-only-password-hash")
+        .await
+        .unwrap();
+    let user = user["user_id"].as_str().unwrap().to_owned();
+    app.store
+        .update_account_access(&user, 1, access::AccountStatus::Active, "free")
+        .await
+        .unwrap();
+    app.store
+        .assign_agent_membership("admin", &user, AGENT, access::Relationship::Member, true, 0)
+        .await
+        .unwrap();
+    let entry = Entry {
+        id: "model".into(),
+        display_name: "Platform".into(),
+        upstream_model: "fixture".into(),
+        transport: crate::model_selection::Transport::Deepseek,
+        capabilities: BTreeSet::from(["text".into()]),
+    };
+    let entries = BTreeMap::from([("model".to_owned(), entry)]);
+    app.store
+        .mutate_platform_roster(
+            0,
+            Mutation::Draft {
+                entries: entries.clone(),
+            },
+            "admin",
+        )
+        .await
+        .unwrap();
+    app.store
+        .platform_credential_set("model", 1, Some("platform-fixture-key"), "admin")
+        .await
+        .unwrap();
+    app.store
+        .mutate_platform_roster(2, Mutation::Publish { rollback: None }, "admin")
+        .await
+        .unwrap();
+    let before = app.store.model_catalog().await.unwrap();
+    let adopted = app
+        .store
+        .adopt_byo_source(
+            &user,
+            AGENT,
+            &Adoption {
+                client_request_id: "platform_shadow".into(),
+                expected_roster_revision: before.agent_models[AGENT].revision,
+                source: Source {
+                    origin: Origin::Platform,
+                    entry_id: platform_id("model"),
+                },
+                alias: "Shadow platform alias".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut catalog = app.store.model_catalog().await.unwrap();
+    let id = adopted["entry_id"].as_str().unwrap();
+    catalog.agent_models.get_mut(AGENT).unwrap().roles.insert(
+        crate::model_selection::ModelRole::Standard,
+        crate::model_selection::RoleAssignment::new(id),
+    );
+    app.store
+        .save_model_catalog(&catalog, catalog.revision)
+        .await
+        .unwrap();
+    let mut caller = app.clone();
+    caller.store = app.store.for_user(&user).await.unwrap();
+    let mut plan = catalog
+        .resolve_role(AGENT, crate::model_selection::ModelRole::Standard)
+        .unwrap();
+    caller.pin_model_plan(&mut plan).await.unwrap();
+    let run = json!({"agent_id":AGENT,"requester_user_id":&user,
+        "selection_plan":plan,"failover_state":crate::model_selection::FailoverState::default()});
+    assert!(caller.run_model_authorized(&run).await);
+    let start = platform_baseline(&app, &sid, &user).await;
+    assert_eq!(
+        platform_check(&app, &caller, &run, &start).await,
+        Outcome::Unchanged
+    );
+    // A roster write that withdraws nothing (a draft edit) moves the platform part only.
+    let start = platform_baseline(&app, &sid, &user).await;
+    app.store
+        .mutate_platform_roster(3, Mutation::Draft { entries }, "admin")
+        .await
+        .unwrap();
+    assert_eq!(
+        platform_check(&app, &caller, &run, &start).await,
+        Outcome::Changed {
+            moved: vec!["platform"],
+            effect: false
+        }
+    );
+    // A rotated key refuses the pinned platform model: the vector moved with it, so the
+    // shadow answer is "rebuild", never a disagreement.
+    let start = platform_baseline(&app, &sid, &user).await;
+    app.store
+        .platform_credential_set("model", 4, Some("rotated-fixture-key"), "admin")
+        .await
+        .unwrap();
+    assert_eq!(
+        platform_check(&app, &caller, &run, &start).await,
+        Outcome::Changed {
+            moved: vec!["platform"],
+            effect: true
+        }
+    );
+}
+
+/// A step baseline for `user`'s platform run (the grant was true at the step top). The vector
+/// is read through the session owner's store, as the loop reads it for the run's session.
+async fn platform_baseline(app: &App, sid: &str, user: &str) -> Baseline {
+    let engine = app.engine();
+    Baseline {
+        vector: engine.revision_vector(user, sid, AGENT).await,
+        access: String::new(),
+        mode_revision: 0,
+        run_id: "platform-run".into(),
+        generation: "platform-generation".into(),
+        session_id: sid.into(),
+        agent_id: AGENT.into(),
+        requester: user.into(),
+        caller: "member",
+        candidate: Some(0),
+    }
+}
+
+/// The fence's order: the grant is recomputed first (as the caller), then the vector is read.
+async fn platform_check(app: &App, caller: &App, run: &Value, baseline: &Baseline) -> Outcome {
+    let observed = Observed {
+        model_authorized: Some(caller.run_model_authorized(run).await),
+        ..Observed::default()
+    };
+    let engine = app.engine();
+    let now = engine
+        .revision_vector(&baseline.requester, &baseline.session_id, AGENT)
+        .await;
+    shadow::compare(baseline, &now, &observed)
 }

@@ -21,7 +21,14 @@
 //!   `doc_owner`: the plain ownership ids of a document (which session or run it belongs to),
 //!   recorded by a session deletion that decrypted it; every write or delete of the document
 //!   removes the row in the writing statement, so a row exists only for an unchanged document.
-//! - Application database: `plain_revisions` row `model_catalog`.
+//! - Application database: `plain_revisions` rows `model_catalog` and `platform_catalog` (the
+//!   platform roster `platform_catalog:v1` and every `platform_credential:v1:` record: a
+//!   withdrawn or unpublished platform model, or a rotated key, refuses the model grant).
+//! - Counters that never restart for a re-created id: the agent database keeps a random
+//!   `agent_instance` set when the database is created, and each `user_accounts` row has an
+//!   `account_instance` number from a sequence that is never reused (set by triggers on the
+//!   row's insert, so a deleted and re-created account reads as a new one). Decisions compare
+//!   (instance, counter), never the counter alone.
 //!
 //! Reads fail closed: a missing table, row or value reads as `None`, which callers treat as
 //! "changed". Re-sealing an unchanged value counts as a change (the stored bytes differ); that
@@ -42,6 +49,10 @@ const SESSION_FAMILIES: [(&str, &str); 3] = [
 pub const MODEL_CATALOG_KEY: &str = "model_selection:catalog:v1";
 /// The agent database's main-chat state document (its schedule approval decides modes).
 pub const MAIN_CHAT_KEY: &str = "main_chat";
+/// The platform model roster in the application database (`webagent_models` platform catalog).
+pub const PLATFORM_CATALOG_KEY: &str = "platform_catalog:v1";
+/// Key prefix of the platform credential records beside it.
+pub const PLATFORM_CREDENTIAL_PREFIX: &str = "platform_credential:v1:";
 
 fn session_matches(side: &str) -> String {
     SESSION_FAMILIES
@@ -168,7 +179,11 @@ fn agent_script() -> String {
     let mut script = String::from(
         "CREATE TABLE IF NOT EXISTS agent_epoch(singleton INTEGER PRIMARY KEY CHECK(singleton=1),
             epoch INTEGER NOT NULL);
-        INSERT OR IGNORE INTO agent_epoch(singleton,epoch) VALUES(1,0);",
+        INSERT OR IGNORE INTO agent_epoch(singleton,epoch) VALUES(1,0);
+        CREATE TABLE IF NOT EXISTS agent_instance(singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+            instance TEXT NOT NULL);
+        INSERT OR IGNORE INTO agent_instance(singleton,instance)
+            VALUES(1,lower(hex(randomblob(16))));",
     );
     // A lock statement (`SET revision=revision`) changes no column and moves nothing.
     let tables = [
@@ -219,11 +234,24 @@ fn agent_script() -> String {
 const CATALOG_BUMP: &str = "INSERT INTO plain_revisions(name,revision) SELECT 'model_catalog',0
         WHERE NOT EXISTS(SELECT 1 FROM plain_revisions WHERE name='model_catalog');
     UPDATE plain_revisions SET revision=revision+1 WHERE name='model_catalog';";
+const PLATFORM_BUMP: &str = "INSERT INTO plain_revisions(name,revision) SELECT 'platform_catalog',0
+        WHERE NOT EXISTS(SELECT 1 FROM plain_revisions WHERE name='platform_catalog');
+    UPDATE plain_revisions SET revision=revision+1 WHERE name='platform_catalog';";
+
+/// Whether `side`'s key (`NEW` or `OLD`) is a platform catalog record.
+fn platform_key(side: &str) -> String {
+    format!(
+        "({side}.key='{PLATFORM_CATALOG_KEY}' OR {side}.key GLOB '{PLATFORM_CREDENTIAL_PREFIX}*')"
+    )
+}
 
 fn app_script() -> String {
+    let new_platform = platform_key("NEW");
+    let old_platform = platform_key("OLD");
     format!(
         "CREATE TABLE IF NOT EXISTS plain_revisions(name TEXT PRIMARY KEY, revision INTEGER NOT NULL);
         INSERT OR IGNORE INTO plain_revisions(name,revision) VALUES('model_catalog',0);
+        INSERT OR IGNORE INTO plain_revisions(name,revision) VALUES('platform_catalog',0);
         CREATE TRIGGER IF NOT EXISTS rev_catalog_insert AFTER INSERT ON docs
             WHEN NEW.key='{MODEL_CATALOG_KEY}' BEGIN {CATALOG_BUMP} END;
         CREATE TRIGGER IF NOT EXISTS rev_catalog_update AFTER UPDATE ON docs
@@ -231,7 +259,37 @@ fn app_script() -> String {
                 AND (OLD.key IS NOT NEW.key OR OLD.value IS NOT NEW.value)
             BEGIN {CATALOG_BUMP} END;
         CREATE TRIGGER IF NOT EXISTS rev_catalog_delete AFTER DELETE ON docs
-            WHEN OLD.key='{MODEL_CATALOG_KEY}' BEGIN {CATALOG_BUMP} END;"
+            WHEN OLD.key='{MODEL_CATALOG_KEY}' BEGIN {CATALOG_BUMP} END;
+        CREATE TRIGGER IF NOT EXISTS rev_platform_insert AFTER INSERT ON docs
+            WHEN {new_platform} BEGIN {PLATFORM_BUMP} END;
+        CREATE TRIGGER IF NOT EXISTS rev_platform_update AFTER UPDATE ON docs
+            WHEN ({old_platform} OR {new_platform})
+                AND (OLD.key IS NOT NEW.key OR OLD.value IS NOT NEW.value)
+            BEGIN {PLATFORM_BUMP} END;
+        CREATE TRIGGER IF NOT EXISTS rev_platform_delete AFTER DELETE ON docs
+            WHEN {old_platform} BEGIN {PLATFORM_BUMP} END;"
+    )
+}
+
+// A row's instance comes from the AUTOINCREMENT key, which SQLite never hands out twice in
+// one database, so a deleted and re-created account never reads its old (instance, epoch).
+// The row is replaced on every insert of the account and on a change of its id.
+const ACCOUNT_INSTANCE: &str = "DELETE FROM account_instance WHERE user_id=NEW.user_id;
+    INSERT INTO account_instance(user_id) VALUES(NEW.user_id);";
+
+fn account_script() -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS account_instance(instance INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL UNIQUE);
+        CREATE TRIGGER IF NOT EXISTS rev_account_insert AFTER INSERT ON user_accounts
+            BEGIN {ACCOUNT_INSTANCE} END;
+        CREATE TRIGGER IF NOT EXISTS rev_account_update AFTER UPDATE ON user_accounts
+            WHEN OLD.user_id IS NOT NEW.user_id
+            BEGIN DELETE FROM account_instance WHERE user_id=OLD.user_id; {ACCOUNT_INSTANCE} END;
+        CREATE TRIGGER IF NOT EXISTS rev_account_delete AFTER DELETE ON user_accounts
+            BEGIN DELETE FROM account_instance WHERE user_id=OLD.user_id; END;
+        INSERT INTO account_instance(user_id) SELECT user_id FROM user_accounts
+            WHERE user_id NOT IN (SELECT user_id FROM account_instance) ORDER BY user_id;"
     )
 }
 
@@ -302,7 +360,8 @@ const USER_TRIGGERS: [&str; 16] = [
     "rev_owner_update",
     "rev_owner_delete",
 ];
-const AGENT_TRIGGERS: [&str; 12] = [
+const AGENT_TRIGGERS: [&str; 13] = [
+    "agent_instance",
     "rev_agents_insert",
     "rev_agents_update",
     "rev_agents_delete",
@@ -316,15 +375,25 @@ const AGENT_TRIGGERS: [&str; 12] = [
     "rev_docs_update",
     "rev_docs_delete",
 ];
-const APP_TRIGGERS: [&str; 3] = [
+const APP_TRIGGERS: [&str; 6] = [
     "rev_catalog_insert",
     "rev_catalog_update",
     "rev_catalog_delete",
+    "rev_platform_insert",
+    "rev_platform_update",
+    "rev_platform_delete",
+];
+const ACCOUNT_TRIGGERS: [&str; 4] = [
+    "account_instance",
+    "rev_account_insert",
+    "rev_account_update",
+    "rev_account_delete",
 ];
 
 static USER: std::sync::OnceLock<Texts> = std::sync::OnceLock::new();
 static AGENT: std::sync::OnceLock<Texts> = std::sync::OnceLock::new();
 static APP: std::sync::OnceLock<Texts> = std::sync::OnceLock::new();
+static ACCOUNTS: std::sync::OnceLock<Texts> = std::sync::OnceLock::new();
 
 /// User database (`docs` must exist).
 pub async fn install_user(pool: &SqlitePool) -> anyhow::Result<()> {
@@ -340,6 +409,11 @@ pub async fn install_agent(pool: &SqlitePool) -> anyhow::Result<()> {
 pub async fn install_app(pool: &SqlitePool) -> anyhow::Result<()> {
     let texts = texts(&APP, &APP_TRIGGERS, app_script);
     install(pool, &texts.present, APP_TRIGGERS.len(), &texts.script).await
+}
+/// Application database, after `user_accounts` exists (Accounts initialization).
+pub async fn install_accounts(pool: &SqlitePool) -> anyhow::Result<()> {
+    let texts = texts(&ACCOUNTS, &ACCOUNT_TRIGGERS, account_script);
+    install(pool, &texts.present, ACCOUNT_TRIGGERS.len(), &texts.script).await
 }
 
 /// The session's three counters; `None` when unreadable (read as changed).
@@ -708,6 +782,28 @@ pub async fn agent(pool: &SqlitePool) -> Option<i64> {
         .ok()?
 }
 
+/// The agent database's instance (random, set when the database was created) and epoch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentRevision {
+    pub instance: String,
+    pub epoch: i64,
+}
+
+/// Both in one read; `None` when either is missing or unreadable (read as changed).
+pub async fn agent_revision(pool: &SqlitePool) -> Option<AgentRevision> {
+    let row = sqlx::query(
+        "SELECT i.instance AS instance, e.epoch AS epoch FROM agent_epoch e, agent_instance i
+        WHERE e.singleton=1 AND i.singleton=1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    Some(AgentRevision {
+        instance: row.try_get("instance").ok()?,
+        epoch: row.try_get("epoch").ok()?,
+    })
+}
+
 /// The model catalog's plain revision; `None` when unreadable (read as changed).
 pub async fn model_catalog(app: &SqlitePool) -> Option<i64> {
     sqlx::query_scalar("SELECT revision FROM plain_revisions WHERE name='model_catalog'")
@@ -716,21 +812,35 @@ pub async fn model_catalog(app: &SqlitePool) -> Option<i64> {
         .ok()?
 }
 
-/// The agent's owner and both accounts' `auth_epoch`, in one application-database read.
+/// The platform catalog's plain revision (roster and credentials); `None` when unreadable.
+pub async fn platform_catalog(app: &SqlitePool) -> Option<i64> {
+    sqlx::query_scalar("SELECT revision FROM plain_revisions WHERE name='platform_catalog'")
+        .fetch_optional(app)
+        .await
+        .ok()?
+}
+
+/// The agent's owner and both accounts' (`account_instance`, `auth_epoch`), in one
+/// application-database read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Principals {
     pub owner_id: String,
     pub caller_epoch: i64,
     pub owner_epoch: i64,
+    pub caller_instance: i64,
+    pub owner_instance: i64,
 }
 
-/// `None` (read as changed) when the directory row, either account or either epoch is missing.
+/// `None` (read as changed) when the directory row, either account, either epoch or either
+/// instance (`install_accounts` not run) is missing.
 pub async fn principals(app: &SqlitePool, caller: &str, agent: &str) -> Option<Principals> {
     let row = sqlx::query(
         "SELECT d.owner_id AS owner_id,
-            (SELECT auth_epoch FROM user_accounts WHERE user_id=?) AS caller_epoch,
-            (SELECT auth_epoch FROM user_accounts WHERE user_id=d.owner_id) AS owner_epoch
-        FROM agent_directory d WHERE d.id=?",
+            (SELECT auth_epoch FROM user_accounts WHERE user_id=?1) AS caller_epoch,
+            (SELECT auth_epoch FROM user_accounts WHERE user_id=d.owner_id) AS owner_epoch,
+            (SELECT instance FROM account_instance WHERE user_id=?1) AS caller_instance,
+            (SELECT instance FROM account_instance WHERE user_id=d.owner_id) AS owner_instance
+        FROM agent_directory d WHERE d.id=?2",
     )
     .bind(caller)
     .bind(agent)
@@ -741,6 +851,8 @@ pub async fn principals(app: &SqlitePool, caller: &str, agent: &str) -> Option<P
         owner_id: row.try_get("owner_id").ok()?,
         caller_epoch: row.try_get::<Option<i64>, _>("caller_epoch").ok()??,
         owner_epoch: row.try_get::<Option<i64>, _>("owner_epoch").ok()??,
+        caller_instance: row.try_get::<Option<i64>, _>("caller_instance").ok()??,
+        owner_instance: row.try_get::<Option<i64>, _>("owner_instance").ok()??,
     })
 }
 

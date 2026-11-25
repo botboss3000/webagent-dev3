@@ -7,6 +7,9 @@ use webagent_accounts_host::AccountsStore;
 impl Store {
     pub async fn init_accounts(&self) -> Result<()> {
         self.accounts_repository().initialize().await?;
+        // Each account row's never-reused instance (revision vector), once `user_accounts`
+        // exists.
+        webagent_storage::revisions::install_accounts(&self.app_pool).await?;
         self.access_repository()
             .initialize_authorization_tables()
             .await?;

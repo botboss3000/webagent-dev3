@@ -13,8 +13,9 @@ replaces nothing in them. Sections A and B state the access and background-work 
    re-read the account, role or tier in a handler, and do not build identity from loose JSON fields
    in new code.
 3. **Every record an access decision depends on has a plain integer revision** (`auth_epoch`,
-   `agent_epoch`, session header, model catalog revision, ability catalog revision; the access
-   policy uses its digest). A change to such a record goes through that record family's **one
+   `agent_epoch`, session header, model catalog revision, platform catalog revision, ability
+   catalog revision; the access policy uses its digest). Accounts and agent databases also carry
+   an instance that never repeats for a re-created id, and decisions compare (instance, revision). A change to such a record goes through that record family's **one
    write function**, which raises the revision in the same transaction. Never write those tables
    or keys from anywhere else; the code-search guard tests fail the build if you do.
 4. **Fail closed.** A missing or unreadable revision, identity or policy value means "changed" or

@@ -1502,6 +1502,24 @@ impl<
             )
             .await?;
         let mode = app.session_mode(&sid).await?;
+        // Shadow (P1): these inputs against the step's revision answer; never decides.
+        app.shadow_check_at(
+            super::revision_shadow::Kind::ToolDecision,
+            super::revision_shadow::baseline(id, generation).as_ref(),
+            &super::revision_shadow::Observed {
+                model_authorized: None,
+                mode_revision: Some(mode_revision),
+                access: Some(super::revision_shadow::access_part(
+                    access,
+                    mode_revision,
+                    &visibility,
+                    &ability_state,
+                    &mode,
+                )),
+            },
+            super::revision_shadow::candidate_of(&run),
+        )
+        .await;
         let authorization_mode = mode.clone();
         let mut effective = if always_on(&name) {
             access.tool_decision(&name, true, true)
@@ -1868,6 +1886,19 @@ impl<
             .ok();
         let admitted = current.as_ref().is_some_and(|current| current.admitted())
             && app.run_model_authorized(&run).await;
+        // Shadow (P2): an unreadable access record is no evidence, so only a read one counts.
+        if current.is_some() {
+            app.shadow_check_at(
+                super::revision_shadow::Kind::ApprovedDispatch,
+                super::revision_shadow::baseline(id, generation).as_ref(),
+                &super::revision_shadow::Observed {
+                    model_authorized: Some(admitted),
+                    ..Default::default()
+                },
+                super::revision_shadow::candidate_of(&run),
+            )
+            .await;
+        }
         let unchanged = current
             .as_ref()
             .is_some_and(|current| json!(current.revision) == run["pending"]["access_revision"]);
@@ -4337,10 +4368,11 @@ impl<
                 let model_authorized = app.run_model_authorized(&current).await;
                 observed.model_authorized = Some(model_authorized);
                 if !model_authorized {
-                    app.shadow_check(
+                    app.shadow_check_at(
                         super::revision_shadow::Kind::Fence,
                         shadow_baseline.as_ref(),
                         &observed,
+                        super::revision_shadow::candidate_of(&current),
                     )
                     .await;
                     current["status"] = json!("stopped");
@@ -4365,10 +4397,11 @@ impl<
                         .unwrap_or(0)
                         != current["chat_model_revision"].as_u64().unwrap_or(0)
                 {
-                    app.shadow_check(
+                    app.shadow_check_at(
                         super::revision_shadow::Kind::Fence,
                         shadow_baseline.as_ref(),
                         &observed,
+                        super::revision_shadow::candidate_of(&current),
                     )
                     .await;
                     drop(sender);
@@ -4390,10 +4423,11 @@ impl<
                 )
                 .await;
                 observed.access = fence_key.as_ref().ok().map(|(_, access)| access.clone());
-                app.shadow_check(
+                app.shadow_check_at(
                     super::revision_shadow::Kind::Fence,
                     shadow_baseline.as_ref(),
                     &observed,
+                    super::revision_shadow::candidate_of(&current),
                 )
                 .await;
                 if !fence_key.is_ok_and(|(key, _)| key == assembled_asset_key) {
@@ -4508,7 +4542,19 @@ impl<
                 if run["generation"] != generation || status(&run) != "running" {
                     return Ok(());
                 }
-                if !app.run_model_authorized(&run).await {
+                let model_authorized = app.run_model_authorized(&run).await;
+                // Shadow (P3): the grant against the step's revision answer; never decides.
+                app.shadow_check_at(
+                    super::revision_shadow::Kind::ModelReturn,
+                    super::revision_shadow::baseline(&id, &generation).as_ref(),
+                    &super::revision_shadow::Observed {
+                        model_authorized: Some(model_authorized),
+                        ..Default::default()
+                    },
+                    super::revision_shadow::candidate_of(&run),
+                )
+                .await;
+                if !model_authorized {
                     run["status"] = json!("stopped");
                     run["error"] = json!("Access changed during model call");
                     app.save(&mut run).await?;

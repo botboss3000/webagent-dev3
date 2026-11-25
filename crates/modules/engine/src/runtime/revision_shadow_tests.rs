@@ -6,8 +6,10 @@ fn vector() -> RevisionVector {
             owner_id: "owner".into(),
             caller_epoch: 1,
             owner_epoch: 2,
+            caller_instance: 11,
+            owner_instance: 12,
         }),
-        agent: Some(3),
+        agent: Some(agent(3)),
         session: Some(SessionRevisions {
             record: 4,
             mode: 5,
@@ -20,7 +22,15 @@ fn vector() -> RevisionVector {
         }),
         participant: Some(false),
         model_catalog: Some(7),
+        platform: Some(8),
         policy: Some("digest".into()),
+    }
+}
+
+fn agent(epoch: i64) -> AgentRevision {
+    AgentRevision {
+        instance: "instance".into(),
+        epoch,
     }
 }
 
@@ -34,6 +44,8 @@ fn baseline() -> Baseline {
         session_id: "session".into(),
         agent_id: "agent".into(),
         requester: "user".into(),
+        caller: "member",
+        candidate: Some(0),
     }
 }
 
@@ -64,18 +76,33 @@ fn each_moved_part_is_named_and_a_missing_value_counts_as_moved() {
     let mut now = vector();
     now.session.as_mut().unwrap().record += 5;
     assert_eq!(compare(&baseline(), &now, &agreeing()), Outcome::Unchanged);
-    let cases: [(&str, fn(&mut RevisionVector)); 9] = [
-        ("session", |v| {
+    let cases: [(&str, fn(&mut RevisionVector)); 15] = [
+        ("header", |v| {
             v.header.as_mut().unwrap().status = Some("archived".into())
         }),
-        ("session", |v| v.participant = Some(true)),
-        ("session", |v| v.header = None),
+        ("participant", |v| v.participant = Some(true)),
+        ("header", |v| v.header = None),
         ("accounts", |v| {
             v.principals.as_mut().unwrap().caller_epoch += 1
         }),
-        ("agent", |v| v.agent = Some(4)),
-        ("session", |v| v.session.as_mut().unwrap().mode += 1),
+        // A re-created account or agent: same counter, new instance.
+        ("accounts", |v| {
+            v.principals.as_mut().unwrap().caller_instance += 1
+        }),
+        ("accounts", |v| {
+            v.principals.as_mut().unwrap().owner_instance += 1
+        }),
+        ("agent", |v| v.agent = Some(agent(4))),
+        ("agent", |v| {
+            v.agent.as_mut().unwrap().instance = "other".into()
+        }),
+        ("session_mode", |v| v.session.as_mut().unwrap().mode += 1),
+        ("session_abilities", |v| {
+            v.session.as_mut().unwrap().abilities += 1
+        }),
         ("model_catalog", |v| v.model_catalog = None),
+        ("platform", |v| v.platform = Some(9)),
+        ("platform", |v| v.platform = None),
         ("policy", |v| v.policy = Some("other".into())),
         ("accounts", |v| v.principals = None),
     ];
@@ -115,7 +142,7 @@ fn a_changed_input_under_an_unchanged_vector_is_a_disagreement() {
         }
     );
     let mut now = vector();
-    now.agent = Some(99);
+    now.agent = Some(agent(99));
     assert_eq!(
         compare(&baseline(), &now, &observed),
         Outcome::Changed {
@@ -130,7 +157,7 @@ fn record_counts_each_outcome_and_keeps_a_content_free_example() {
     let before = COUNTS[Kind::ToolCheck.index()].values();
     record(Kind::ToolCheck, &baseline(), &vector(), &agreeing());
     let mut moved = vector();
-    moved.agent = Some(4);
+    moved.agent = Some(agent(4));
     record(Kind::ToolCheck, &baseline(), &moved, &agreeing());
     let wrong = Observed {
         access: Some("other".into()),
@@ -185,6 +212,82 @@ async fn flush_adds_only_new_counts_and_reports_both_kinds() {
         counted
     );
     assert_eq!(report(&pool).await["decides"], "full recomputation");
+    // Per-part and per-caller counts (no other test records this kind or writes).
+    let mut moved = vector();
+    moved.platform = Some(9);
+    let refused = Observed {
+        model_authorized: Some(false),
+        ..Observed::default()
+    };
+    record(Kind::ModelReturn, &baseline(), &moved, &refused);
+    record(Kind::ModelReturn, &baseline(), &vector(), &agreeing());
+    write(&pool).await.unwrap();
+    let report = report(&pool).await;
+    let kind = &report["kinds"]["model_return"];
+    assert_eq!(kind["checks"], 2);
+    assert_eq!(kind["parts"]["platform"]["changed"], 1);
+    assert_eq!(kind["parts"]["platform"]["changed_with_effect"], 1);
+    assert_eq!(kind["parts"]["agent"]["changed"], 0);
+    assert_eq!(kind["callers"]["member"]["checks"], 2);
+    assert_eq!(kind["callers"]["member"]["changed_with_effect"], 1);
+    assert_eq!(kind["callers"]["guest"]["checks"], 0);
+    for kind in KINDS {
+        assert!(report["kinds"][kind.name()]["parts"]["candidate"].is_object());
+    }
+}
+
+#[test]
+fn a_moved_candidate_is_a_changed_subject_not_a_disagreement() {
+    let refused = Observed {
+        model_authorized: Some(false),
+        ..Observed::default()
+    };
+    // Failover moved the run to another candidate after the step top.
+    assert_eq!(
+        compare_at(&baseline(), &vector(), &refused, Some(1)),
+        Outcome::Changed {
+            moved: vec!["candidate"],
+            effect: true
+        }
+    );
+    // The same candidate, or none known, is compared as before.
+    assert_eq!(
+        compare_at(&baseline(), &vector(), &agreeing(), Some(0)),
+        Outcome::Unchanged
+    );
+    assert_eq!(
+        compare_at(&baseline(), &vector(), &refused, None),
+        Outcome::Disagreement {
+            parts: vec!["model"]
+        }
+    );
+}
+
+#[test]
+fn detail_counts_each_moved_part_and_the_caller_class() {
+    let mut detail = Detail::new();
+    let mut now = vector();
+    now.platform = Some(9);
+    now.session.as_mut().unwrap().mode += 1;
+    add_detail(
+        &mut detail,
+        Kind::Fence,
+        "owner",
+        &compare(&baseline(), &now, &agreeing()),
+    );
+    add_detail(
+        &mut detail,
+        Kind::Fence,
+        "owner",
+        &Outcome::Disagreement {
+            parts: vec!["access"],
+        },
+    );
+    add_detail(&mut detail, Kind::Fence, "owner", &Outcome::Unchanged);
+    assert_eq!(detail[&(0, "caller", "owner")], [3, 1, 0, 1]);
+    assert_eq!(detail[&(0, "part", "platform")], [0, 1, 0, 0]);
+    assert_eq!(detail[&(0, "part", "session_mode")], [0, 1, 0, 0]);
+    assert!(!detail.contains_key(&(0, "part", "agent")));
 }
 
 #[test]

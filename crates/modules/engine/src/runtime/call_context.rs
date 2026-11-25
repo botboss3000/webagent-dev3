@@ -145,6 +145,17 @@ impl<
         baseline: Option<&super::revision_shadow::Baseline>,
         observed: &super::revision_shadow::Observed,
     ) {
+        self.shadow_check_at(kind, baseline, observed, None).await
+    }
+    /// `shadow_check` for a check that also knows the run's current model `candidate`
+    /// (`revision_shadow::candidate_of`); a moved candidate counts as a changed subject.
+    pub async fn shadow_check_at(
+        &self,
+        kind: super::revision_shadow::Kind,
+        baseline: Option<&super::revision_shadow::Baseline>,
+        observed: &super::revision_shadow::Observed,
+        candidate: Option<u64>,
+    ) {
         let Some(baseline) = baseline else {
             return;
         };
@@ -155,7 +166,7 @@ impl<
                 &baseline.agent_id,
             )
             .await;
-        super::revision_shadow::record(kind, baseline, &now, observed);
+        super::revision_shadow::record_at(kind, baseline, &now, observed, candidate);
         super::revision_shadow::flush(self.store.records().application_pool()).await;
     }
     /// The step's shadow baseline: `vector` was read before `context`'s data.
@@ -164,6 +175,7 @@ impl<
         vector: super::revision_shadow::RevisionVector,
         run: &Value,
     ) -> super::revision_shadow::Baseline {
+        let caller = super::revision_shadow::caller_class(&context.access, vector.participant);
         let baseline = super::revision_shadow::Baseline {
             vector,
             access: super::revision_shadow::access_part(
@@ -179,6 +191,8 @@ impl<
             session_id: context.session_id.clone(),
             agent_id: context.agent_id.clone(),
             requester: context.requester.clone(),
+            caller,
+            candidate: super::revision_shadow::candidate_of(run),
         };
         super::revision_shadow::remember(baseline.clone());
         baseline

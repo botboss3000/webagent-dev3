@@ -118,6 +118,8 @@ async fn missing_revisions_read_as_unknown() {
     assert_eq!(session(&bare, "s1").await, None);
     assert_eq!(agent(&bare).await, None);
     assert_eq!(model_catalog(&bare).await, None);
+    assert_eq!(platform_catalog(&bare).await, None);
+    assert_eq!(agent_revision(&bare).await, None);
     assert_eq!(principals(&bare, "u", "a").await, None);
     install_user(&bare).await.unwrap();
     assert_eq!(session(&bare, "never-written").await, None);
@@ -198,7 +200,12 @@ async fn principals_read_owner_and_both_epochs_or_nothing() {
     let app = pool(root.path(), "app.db").await;
     run(&app, "CREATE TABLE agent_directory(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL);
         CREATE TABLE user_accounts(user_id TEXT PRIMARY KEY, auth_epoch INTEGER NOT NULL DEFAULT 0);
-        INSERT INTO agent_directory VALUES('a','owner'); INSERT INTO user_accounts VALUES('caller',3);").await;
+        INSERT INTO agent_directory VALUES('a','owner'); INSERT INTO user_accounts VALUES('caller',3);
+        INSERT INTO user_accounts VALUES('owner',7);").await;
+    // No account instances yet (`install_accounts` not run): unknown.
+    assert_eq!(principals(&app, "caller", "a").await, None);
+    run(&app, "DELETE FROM user_accounts WHERE user_id='owner'").await;
+    install_accounts(&app).await.unwrap();
     // The owner's account is missing: unknown.
     assert_eq!(principals(&app, "caller", "a").await, None);
     run(&app, "INSERT INTO user_accounts VALUES('owner',7)").await;
@@ -207,7 +214,9 @@ async fn principals_read_owner_and_both_epochs_or_nothing() {
         Some(Principals {
             owner_id: "owner".into(),
             caller_epoch: 3,
-            owner_epoch: 7
+            owner_epoch: 7,
+            caller_instance: 1,
+            owner_instance: 2,
         })
     );
     assert_eq!(principals(&app, "nobody", "a").await, None);
@@ -216,7 +225,15 @@ async fn principals_read_owner_and_both_epochs_or_nothing() {
 
 /// Statements that would write a revision outside its triggers, or remove the triggers or the
 /// tables they watch. Only `revisions.rs` may contain them outside tests.
-const FORBIDDEN: [&str; 39] = [
+const FORBIDDEN: [&str; 47] = [
+    "INTO agent_instance",
+    "UPDATE agent_instance",
+    "DELETE FROM agent_instance",
+    "DROP TABLE agent_instance",
+    "INTO account_instance",
+    "UPDATE account_instance",
+    "DELETE FROM account_instance",
+    "DROP TABLE account_instance",
     "INTO session_header",
     "UPDATE session_header",
     "DELETE FROM session_header",
@@ -371,6 +388,8 @@ fn the_guard_catches_a_write_that_skips_the_triggers() {
         "fn f() { sqlx::query(\"DROP TRIGGER IF EXISTS rev_agents_update\") }",
         "fn f() { sqlx::query(\"INSERT OR REPLACE INTO session_revisions VALUES(?,0,0,0)\") }",
         "fn f() { sqlx::raw_sql(\"DROP TABLE IF EXISTS agents\") }",
+        "fn f() { sqlx::query(\"delete from account_instance where user_id=?\") }",
+        "fn f() { sqlx::query(\"UPDATE agent_instance SET instance='x'\") }",
     ];
     for (index, case) in cases.iter().enumerate() {
         let path = root.path().join(format!("stray{index}.rs"));
@@ -609,4 +628,176 @@ async fn session_facts_decrypt_only_changed_records() {
         decrypts.load(std::sync::atomic::Ordering::Relaxed),
         before + 1
     );
+}
+
+#[tokio::test]
+async fn platform_catalog_revision_moves_with_the_roster_and_every_credential() {
+    let root = tempfile::tempdir().unwrap();
+    let app = pool(root.path(), "app.db").await;
+    // A database installed before the platform revision existed gains it.
+    sqlx::raw_sql(
+        "CREATE TABLE plain_revisions(name TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+        INSERT INTO plain_revisions VALUES('model_catalog',4);",
+    )
+    .execute(&app)
+    .await
+    .unwrap();
+    install_app(&app).await.unwrap();
+    install_app(&app).await.unwrap();
+    assert_eq!(model_catalog(&app).await, Some(4));
+    assert_eq!(platform_catalog(&app).await, Some(0));
+    // Another process: a second pool on the same file.
+    let other = pool(root.path(), "app.db").await;
+    let steps: [(&str, bool); 12] = [
+        ("INSERT INTO docs VALUES('platform_catalog:v1',x'01')", true),
+        // The roster's lock statement changes nothing.
+        ("UPDATE docs SET value=value WHERE key='platform_catalog:v1'", false),
+        ("UPDATE docs SET value=x'02' WHERE key='platform_catalog:v1'", true),
+        ("INSERT INTO docs VALUES('platform_catalog:v1',x'03') ON CONFLICT(key) DO UPDATE SET value=excluded.value", true),
+        ("INSERT OR REPLACE INTO docs VALUES('platform_catalog:v1',x'04')", true),
+        ("INSERT INTO docs VALUES('platform_credential:v1:e1',x'01')", true),
+        ("UPDATE docs SET value=x'02' WHERE key='platform_credential:v1:e1'", true),
+        ("UPDATE docs SET key='platform_credential:v1:e2' WHERE key='platform_credential:v1:e1'", true),
+        ("DELETE FROM docs WHERE key='platform_credential:v1:e2'", true),
+        ("INSERT INTO docs VALUES('platform_catalog:v2',x'01')", false),
+        ("INSERT INTO docs VALUES('model_selection:catalog:v1',x'01')", false),
+        ("DELETE FROM docs WHERE key='platform_catalog:v1'", true),
+    ];
+    let mut last = platform_catalog(&app).await.unwrap();
+    for (sql, expect) in steps {
+        run(&other, sql).await;
+        let now = platform_catalog(&app).await.unwrap();
+        assert_eq!(now != last, expect, "{sql}");
+        last = now;
+    }
+    // The model catalog moved only with its own document.
+    assert_eq!(model_catalog(&app).await, Some(5));
+    // A write rolled back moves nothing.
+    let mut tx = other.begin().await.unwrap();
+    sqlx::query("INSERT INTO docs VALUES('platform_catalog:v1',x'09')")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(platform_catalog(&app).await, Some(last));
+}
+
+#[tokio::test]
+async fn agent_instance_differs_for_a_re_created_database() {
+    let root = tempfile::tempdir().unwrap();
+    let first = agent_pool(root.path(), "agent.db").await;
+    install_agent(&first).await.unwrap();
+    let before = agent_revision(&first).await.unwrap();
+    assert_eq!(before.instance.len(), 32);
+    // An installation of the instance on an older database keeps its epoch.
+    run(
+        &first,
+        "INSERT INTO agents VALUES('a','A','','p','m','active',x'01',1,0,0)",
+    )
+    .await;
+    let moved = agent_revision(&first).await.unwrap();
+    assert_eq!(moved.instance, before.instance);
+    assert_eq!(moved.epoch, before.epoch + 1);
+    install_agent(&first).await.unwrap();
+    assert_eq!(agent_revision(&first).await.unwrap(), moved);
+    first.close().await;
+    // The agent is removed with its database and re-created with the same id: the epoch
+    // starts again, the instance does not repeat.
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(root.path().join(format!("agent.db{suffix}")));
+    }
+    let again = agent_pool(root.path(), "agent.db").await;
+    install_agent(&again).await.unwrap();
+    run(
+        &again,
+        "INSERT INTO agents VALUES('a','A','','p','m','active',x'01',1,0,0)",
+    )
+    .await;
+    let now = agent_revision(&again).await.unwrap();
+    assert_eq!(now.epoch, moved.epoch);
+    assert_ne!(now, moved);
+    // A database with the epoch but no instance (installed by an older build) reads as
+    // unknown until it is installed again.
+    let old = agent_pool(root.path(), "old.db").await;
+    run(&old, "CREATE TABLE agent_epoch(singleton INTEGER PRIMARY KEY CHECK(singleton=1), epoch INTEGER NOT NULL);
+        INSERT INTO agent_epoch VALUES(1,9);").await;
+    assert_eq!(agent_revision(&old).await, None);
+    install_agent(&old).await.unwrap();
+    assert_eq!(agent_revision(&old).await.unwrap().epoch, 9);
+}
+
+async fn caller_principals(app: &SqlitePool) -> Principals {
+    principals(app, "caller", "a").await.unwrap()
+}
+
+#[tokio::test]
+async fn account_instance_never_repeats_for_a_re_created_account() {
+    let root = tempfile::tempdir().unwrap();
+    let app = pool(root.path(), "app.db").await;
+    run(
+        &app,
+        "CREATE TABLE agent_directory(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL);
+        CREATE TABLE user_accounts(user_id TEXT PRIMARY KEY, username TEXT, value BLOB,
+            auth_epoch INTEGER NOT NULL DEFAULT 0);
+        INSERT INTO agent_directory VALUES('a','owner');
+        INSERT INTO user_accounts VALUES('owner','owner',x'01',0);
+        INSERT INTO user_accounts VALUES('caller','caller',x'01',0);",
+    )
+    .await;
+    // Existing accounts are seeded once.
+    install_accounts(&app).await.unwrap();
+    install_accounts(&app).await.unwrap();
+    let other = pool(root.path(), "app.db").await;
+    let start = caller_principals(&app).await;
+    // Ordinary row writes keep the instance (the epoch is the account writer's business).
+    run(
+        &other,
+        "UPDATE user_accounts SET value=x'02',auth_epoch=auth_epoch+1 WHERE user_id='caller'",
+    )
+    .await;
+    let updated = caller_principals(&app).await;
+    assert_eq!(updated.caller_instance, start.caller_instance);
+    assert_eq!(updated.caller_epoch, 1);
+    // Deleted and re-created with the same id from another handle: the epoch starts again
+    // at the old value, the instance is new, so the pair never matches the old one.
+    run(&other, "DELETE FROM user_accounts WHERE user_id='caller'").await;
+    assert_eq!(principals(&app, "caller", "a").await, None);
+    run(
+        &other,
+        "INSERT INTO user_accounts VALUES('caller','caller',x'01',1)",
+    )
+    .await;
+    let again = caller_principals(&app).await;
+    assert_eq!(again.caller_epoch, updated.caller_epoch);
+    assert!(again.caller_instance > updated.caller_instance);
+    assert_ne!(again, updated);
+    // The highest instance deleted is not handed out again (AUTOINCREMENT).
+    run(&other, "DELETE FROM user_accounts WHERE user_id='caller'").await;
+    run(
+        &other,
+        "INSERT OR IGNORE INTO user_accounts VALUES('caller','caller',x'01',1)",
+    )
+    .await;
+    assert!(caller_principals(&app).await.caller_instance > again.caller_instance);
+    // An ignored insert of an existing account changes nothing.
+    let now = caller_principals(&app).await;
+    run(
+        &other,
+        "INSERT OR IGNORE INTO user_accounts VALUES('caller','caller',x'03',0)",
+    )
+    .await;
+    assert_eq!(caller_principals(&app).await, now);
+    // A changed id moves the instance of both ids.
+    run(
+        &other,
+        "UPDATE user_accounts SET user_id='owner2' WHERE user_id='owner'",
+    )
+    .await;
+    assert_eq!(principals(&app, "caller", "a").await, None);
+    run(
+        &other,
+        "UPDATE user_accounts SET user_id='owner' WHERE user_id='owner2'",
+    )
+    .await;
+    assert!(caller_principals(&app).await.owner_instance > now.owner_instance);
 }
