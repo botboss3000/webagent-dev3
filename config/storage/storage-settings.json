@@ -5,11 +5,11 @@
     "enabled": true
   },
   "user_database_pools": {
-    "_instructions": "max_connected: how many account databases may hold open connections at once in each process (API and loop; at least 8). Each connection is one thread and the containers allow 1,024 tasks. A request that finds every slot in use waits for an idle database to give way, then for connect_wait_ms, and is refused with a retryable 503 instead of opening another thread. max_connections: connections one account database may hold (1-8, default 2). idle_seconds: how long an idle account connection stays open (1-60, default 5). Read at process start.",
-    "max_connected": 64,
+    "_instructions": "max_connected: how many account databases may hold open connections at once in each process (API and loop; at least 8). Each connection is one thread and the containers allow 1,024 tasks. A request that finds every slot in use waits for an idle database to give way, then for connect_wait_ms, and is refused with a retryable 503 instead of opening another thread. 192 slots with 2 connections each is at most 384 account threads: measured at 400 concurrent users on the tester, 2026-11-24 (work/unified-plan/api-task-limit.md). max_connections: connections one account database may hold (1-8, default 2). idle_seconds: how long an idle account connection stays open (1-60, default 5). Read at process start.",
+    "max_connected": 192,
     "max_connections": 2,
     "idle_seconds": 5,
-    "connect_wait_ms": 2000
+    "connect_wait_ms": 5000
   },
   "deleted_sessions": {
     "_instructions": "retention_days: how long the records a permanently deleted chat leaves behind (its deletion marker, delete receipts and Main Notes) are kept before they are purged (at least 1). A deleted chat can never be opened or restored; the wait only keeps a repeated delete request answering as before. The purge runs when the same account deletes another chat. Read on each deletion.",
