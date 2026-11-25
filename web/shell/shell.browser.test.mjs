@@ -315,6 +315,34 @@ for (const viewport of VIEWPORTS) {
           assert.equal(composer.square, true, 'stop draws the square icon');
           assert.equal(composer.triangle, true, 'send draws the triangle icon');
           assert.equal(composer.mic, true, 'mic draws the microphone icon');
+
+          // The bar itself: panel surface, as tall as its largest control, pill radius.
+          const bar = await page.evaluate(() => {
+            const el = document.querySelector('#composer .composer-surface');
+            if (!el) return null;
+            const styles = getComputedStyle(el);
+            const heights = [...el.querySelectorAll('.composer-btn')].map(
+              (b) => b.getBoundingClientRect().height,
+            );
+            return {
+              height: el.getBoundingClientRect().height,
+              tallest: Math.max(...heights, 0),
+              radius: parseFloat(styles.borderTopLeftRadius),
+              background: styles.backgroundColor,
+              border: styles.borderTopWidth,
+            };
+          });
+          assert.ok(bar, 'the composer bar is mounted');
+          assert.ok(
+            Math.abs(bar.height - bar.tallest) <= 1,
+            `the bar is as tall as its largest control (${bar.height} vs ${bar.tallest})`,
+          );
+          assert.ok(
+            Math.abs(bar.radius - bar.height / 2) <= 1,
+            `the radius is half the bar height (${bar.radius} for ${bar.height})`,
+          );
+          assert.notEqual(bar.background, 'rgba(0, 0, 0, 0)', 'the bar carries the panel surface');
+          assert.equal(bar.border, '0px', 'the bar has no border');
         } else {
           // Phone: the sidebar is a drawer over the stage.
           assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');

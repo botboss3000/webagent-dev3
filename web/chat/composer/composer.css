@@ -99,3 +99,32 @@
     min-width: 44px;
   }
 }
+
+/* The composer surface: the bar that holds the rows. Panel-like by default — the same
+   surface as cards and tiles — as tall as its largest control, with a pill radius of
+   half that height. composer.js writes --composer-height and --composer-radius from the
+   rendered controls, and config/web/chat/chat-footer.json can override either. */
+.composer-surface {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--composer-height, 34px);
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--composer-radius, calc(var(--composer-height, 34px) / 2));
+  background: var(--bg-elev);
+  box-shadow: var(--elevation-1-ambient), var(--elevation-1-drop), var(--elevation-1-contact);
+  pointer-events: auto;
+}
+
+/* Inside the bar the rows stack flush; the bar's own height sets the shape. */
+.composer-surface .composer-grid {
+  gap: 0;
+  max-width: none;
+}
+
+/* Config may ask for a flat bar: no surface tint behind the controls. */
+.composer-surface.is-transparent {
+  background: none;
+  box-shadow: none;
+}

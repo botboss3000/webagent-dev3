@@ -53,8 +53,20 @@ async function control(id) {
   }
 }
 
-/* Renders one state (active or idle) of the composer into a fresh grid. */
-async function renderGrid(host, profile, state) {
+/* Sizes the bar from its own controls: as tall as the tallest one, with a pill radius of
+   half that height. Config may override either, or ask for a flat bar. */
+function applySurface(surface, profile) {
+  const spec = profile?.surface || {};
+  const controls = [...surface.querySelectorAll('.composer-btn')];
+  const tallest = controls.reduce((max, el) => Math.max(max, el.getBoundingClientRect().height), 0);
+  const height = spec.height_px ?? (tallest > 0 ? tallest : 34);
+  surface.style.setProperty('--composer-height', `${height}px`);
+  surface.style.setProperty('--composer-radius', `${spec.radius_px ?? height / 2}px`);
+  surface.classList.toggle('is-transparent', spec.background === 'transparent');
+}
+
+/* Renders one state (active or idle) into a fresh bar: the surface plus its grid. */
+async function renderComposer(host, profile, state) {
   const rows = profile?.[state]?.rows || [];
   const grid = document.createElement('div');
   grid.className = 'composer-grid';
@@ -78,8 +90,12 @@ async function renderGrid(host, profile, state) {
     if (row.querySelector('.composer-btn')) grid.append(row);
   }
 
-  host.replaceChildren(grid);
-  return grid;
+  const surface = document.createElement('div');
+  surface.className = 'composer-surface';
+  surface.append(grid);
+  host.replaceChildren(surface);
+  applySurface(surface, profile);
+  return { surface, grid };
 }
 
 /* Mounts the composer into the region the chat partial provides (#composer). */
@@ -88,9 +104,9 @@ export async function mountComposer(host) {
   const config = await loadConfig();
   const profile = composerProfile(config);
   const state = host.dataset.composerState === 'idle' ? 'idle' : 'active';
-  const grid = await renderGrid(host, profile, state);
+  const mounted = await renderComposer(host, profile, state);
   host.dataset.mounted = 'yes';
-  return { grid, profile };
+  return { ...mounted, profile };
 }
 
 /* Switches between the active and idle geometry from the same config. */
@@ -99,5 +115,5 @@ export async function setComposerState(host, state) {
   const config = await loadConfig();
   const profile = composerProfile(config);
   host.dataset.composerState = state === 'idle' ? 'idle' : 'active';
-  return renderGrid(host, profile, host.dataset.composerState);
+  return renderComposer(host, profile, host.dataset.composerState);
 }
