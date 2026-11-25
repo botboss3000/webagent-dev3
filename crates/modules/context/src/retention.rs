@@ -1181,16 +1181,29 @@ pub async fn dedup_prepare(
                     .await?
                     .map(|text| json!({"output":text})),
                 };
-                let Some(result) = found else {
-                    if is_compacted_preview(&item["output"], id) {
-                        bail!("Original tool output unavailable for preview reconstruction");
+                let stored = match found {
+                    Some(result) => result["output"]
+                        .as_str()
+                        .context("Original result text missing")?
+                        .to_owned(),
+                    None => {
+                        // A compaction receipt can outlive its original when the run that
+                        // produced it never journaled the result. The receipt describes this
+                        // very original (its call ID and the recorded digest match) and is the
+                        // only copy left, so it stands in as a preview: the context copy is
+                        // kept, and it is never treated as a full original for duplication.
+                        if !compacted_output_matches(
+                            &item["output"],
+                            id,
+                            origin["sha256"].as_str().unwrap_or_default(),
+                        ) {
+                            bail!("Original tool output unavailable");
+                        }
+                        trimmed = true;
+                        output_text(&item["output"])
                     }
-                    bail!("Original tool output unavailable");
                 };
-                let stored = result["output"]
-                    .as_str()
-                    .context("Original result text missing")?;
-                match trimmed_original(stored) {
+                match trimmed_original(&stored) {
                     // Trimmed before fingerprints were kept, or a trim of this very original.
                     Some(recorded)
                         if recorded
@@ -1200,7 +1213,7 @@ pub async fn dedup_prepare(
                         trimmed = true;
                         (source.to_owned(), output_text(&item["output"]))
                     }
-                    _ => (source.to_owned(), stored.to_owned()),
+                    _ => (source.to_owned(), stored),
                 }
             }
         } else if let Some((source, result)) = journal.tool_result_origin(&sid, id).await? {
@@ -1214,9 +1227,9 @@ pub async fn dedup_prepare(
                 (source, stored.to_owned())
             }
         } else {
-            if is_compacted_preview(&item["output"], id) {
-                bail!("Original tool output unavailable for preview reconstruction");
-            }
+            // The same receipt with no origin at all: the result was never journaled, so
+            // the bounded preview is the only copy. Keep it as a preview copy too.
+            trimmed = is_compacted_preview(&item["output"], id);
             (rid(run).to_owned(), output_text(&item["output"]))
         };
         let source_scope = if source_run == rid(run) {
@@ -2013,6 +2026,168 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// Nothing was ever journaled for this call; only the context copy survives.
+    struct LostOriginal;
+    impl crate::ports::Journal for LostOriginal {
+        fn run<'a>(&'a self, _: &'a str) -> impl Future<Output = Result<Value>> + Send + 'a {
+            ready(Err(anyhow!("unused")))
+        }
+        fn document<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok(None))
+        }
+        fn tool_result<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok(None))
+        }
+        fn tool_result_origin<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<(String, Value)>>> + Send + 'a {
+            ready(Ok(None))
+        }
+        fn tool_call_record<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok(None))
+        }
+    }
+
+    struct DefaultSettings;
+    impl crate::ports::DedupSettings for DefaultSettings {
+        fn dedup_settings<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Value>> + Send + 'a {
+            ready(Ok(json!({})))
+        }
+    }
+
+    /// Every observation keeps its own sequence; nothing is a duplicate.
+    struct Identity;
+    impl crate::ports::Planner for Identity {
+        fn assets_plan<'a>(
+            &'a self,
+            _: &'a Path,
+            _: &'a webagent_assets_contracts::Request,
+            _: &'a tokio_util::sync::CancellationToken,
+        ) -> impl Future<Output = Result<webagent_assets_contracts::Plan>> + Send + 'a {
+            ready(Err(anyhow!("unused")))
+        }
+        fn tool_results_plan<'a>(
+            &'a self,
+            _: &'a Path,
+            _: &'a Value,
+            request: &'a webagent_context_contracts::tool_results::Request,
+            _: &'a tokio_util::sync::CancellationToken,
+        ) -> impl Future<Output = Result<webagent_context_contracts::tool_results::Plan>> + Send + 'a
+        {
+            use webagent_context_contracts::tool_results as contract;
+            ready(Ok(contract::Plan {
+                version: contract::VERSION,
+                state: contract::State {
+                    assignments: request
+                        .observations
+                        .iter()
+                        .map(|item| {
+                            (
+                                item.call_id.clone(),
+                                contract::Assignment {
+                                    key: contract::key(item).unwrap(),
+                                    output_sha256: contract::fingerprint(&item.output),
+                                    sequence: item.call_id.clone(),
+                                    primary: item.call_id.clone(),
+                                    placeholder: None,
+                                    template: None,
+                                },
+                            )
+                        })
+                        .collect(),
+                    last: request
+                        .observations
+                        .iter()
+                        .map(|item| (contract::key(item).unwrap(), item.call_id.clone()))
+                        .collect(),
+                },
+                replacements: std::collections::BTreeMap::new(),
+            }))
+        }
+    }
+
+    fn preview_fixture(receipt_sha: &str, origin_sha: &str) -> Value {
+        let receipt = json!({"status":"success","output":{
+            "preview":"bounded prefix","context_truncated":true,"full_output_bytes":9_000,
+            "sha256":receipt_sha,"call_id":"lost","recall":"full output retained"}})
+        .to_string();
+        json!({"id":"run-1","session_id":"s","agent_id":"a","input":[
+            {"type":"function_call","call_id":"lost","name":"file_read","arguments":"{}"},
+            {"type":"function_call_output","call_id":"lost","output":receipt}
+        ],"tool_result_projection":{"origins":{"lost":{"run_id":"old","tool":"file_read",
+            "scope":{"session":"s"},"sha256":origin_sha}}}})
+    }
+
+    /// A compaction receipt whose original was never journaled stands in as the preview copy;
+    /// a receipt that does not match the recorded digest still stops the run.
+    #[tokio::test]
+    async fn preview_receipt_stands_in_when_its_original_was_never_journaled() {
+        use webagent_context_contracts::tool_results as contract;
+        let digest = contract::fingerprint("full");
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut r = preview_fixture(&digest, &digest);
+        let receipt = r["input"][1]["output"].as_str().unwrap().to_owned();
+        let (projected, changed) = dedup_prepare(
+            &mut r,
+            8_192,
+            1_000_000,
+            Path::new("/nonexistent"),
+            DedupPolicy::default(),
+            None,
+            &DefaultSettings,
+            &LostOriginal,
+            &Identity,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        assert!(changed);
+        assert_eq!(projected[1]["output"], receipt);
+        assert_eq!(
+            r["tool_result_projection"]["origins"]["lost"]["sha256"],
+            contract::fingerprint(&receipt)
+        );
+        assert_eq!(
+            r["tool_result_projection"]["origins"]["lost"]["previewed"],
+            true
+        );
+
+        let mut forged = preview_fixture(&"0".repeat(64), &digest);
+        let err = dedup_prepare(
+            &mut forged,
+            8_192,
+            1_000_000,
+            Path::new("/nonexistent"),
+            DedupPolicy::default(),
+            None,
+            &DefaultSettings,
+            &LostOriginal,
+            &Identity,
+            &cancel,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err}").contains("Original tool output unavailable"));
     }
 }
 
