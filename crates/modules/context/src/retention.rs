@@ -408,6 +408,42 @@ fn is_compacted_preview(output: &Value, call_id: &str) -> bool {
         })
 }
 
+/// A duplicate placeholder can outlive the run row that held its original. Its primary is
+/// the contract-certified equal result, so the primary's durable copy (or the primary's
+/// full context copy) stands in for the missing original. `expected` is the recorded
+/// digest of the original and still verifies the recovered text.
+async fn recovered_original(
+    journal: &impl crate::ports::Journal,
+    sid: &str,
+    state: &webagent_context_contracts::tool_results::State,
+    id: &str,
+    text: &str,
+    expected: &str,
+    input: &[Value],
+) -> Result<Option<String>> {
+    use webagent_context_contracts::tool_results as contract;
+    let Some(entry) = state.assignments.get(id) else {
+        return Ok(None);
+    };
+    // Only an item that is still this call's placeholder may borrow its primary's text.
+    if entry.placeholder.as_deref() != Some(text) {
+        return Ok(None);
+    }
+    let matches = |stored: &str| contract::fingerprint(stored) == expected;
+    if let Some((_, stored)) = journal.tool_result_origin(sid, &entry.primary).await? {
+        if let Some(text) = stored["output"].as_str().filter(|text| matches(text)) {
+            return Ok(Some(text.to_owned()));
+        }
+    }
+    Ok(input
+        .iter()
+        .find(|item| {
+            item["type"] == "function_call_output" && call_id(item) == Some(entry.primary.as_str())
+        })
+        .map(|item| output_text(&item["output"]))
+        .filter(|text| matches(text)))
+}
+
 fn entry_key(entry: &Value, run_id: &str, id: &str) -> bool {
     entry["origin_run_id"].as_str() == Some(run_id) && entry["call_id"].as_str() == Some(id)
 }
@@ -1126,10 +1162,31 @@ pub async fn dedup_prepare(
             if origin["sha256"] == hash_output(&item["output"]) {
                 (source.to_owned(), output_text(&item["output"]))
             } else {
-                let result = journal
-                    .tool_result(&sid, source, id)
+                let found = match journal.tool_result(&sid, source, id).await? {
+                    Some(result) => Some(result),
+                    // A placeholder can outlive the run row that held its original: a
+                    // cancelled run never journaled the result, or a rebased journal dropped
+                    // it. Its primary is the contract-certified equal result, so that durable
+                    // copy stands in for the missing original; the recorded digest still
+                    // verifies it in the provenance check below.
+                    None => recovered_original(
+                        journal,
+                        &sid,
+                        &state,
+                        id,
+                        &output_text(&item["output"]),
+                        origin["sha256"].as_str().unwrap_or_default(),
+                        &input,
+                    )
                     .await?
-                    .context("Original tool output unavailable")?;
+                    .map(|text| json!({"output":text})),
+                };
+                let Some(result) = found else {
+                    if is_compacted_preview(&item["output"], id) {
+                        bail!("Original tool output unavailable for preview reconstruction");
+                    }
+                    bail!("Original tool output unavailable");
+                };
                 let stored = result["output"]
                     .as_str()
                     .context("Original result text missing")?;
@@ -1869,6 +1926,93 @@ mod tests {
         let full = dedup_summary_source(&KeptOnly, &r, &source).await.unwrap();
         assert_eq!(full[0]["output"], "full");
         assert_eq!(full[1], source[1]);
+    }
+
+    /// Journal holding only the primary call `kept`'s original.
+    struct PrimaryOnly;
+    impl crate::ports::Journal for PrimaryOnly {
+        fn run<'a>(&'a self, _: &'a str) -> impl Future<Output = Result<Value>> + Send + 'a {
+            ready(Err(anyhow!("unused")))
+        }
+        fn document<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok(None))
+        }
+        fn tool_result<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok(None))
+        }
+        fn tool_result_origin<'a>(
+            &'a self,
+            _: &'a str,
+            id: &'a str,
+        ) -> impl Future<Output = Result<Option<(String, Value)>>> + Send + 'a {
+            ready(Ok(
+                (id == "kept").then(|| ("old".to_owned(), json!({"output":"full"})))
+            ))
+        }
+        fn tool_call_record<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok(None))
+        }
+    }
+
+    fn placeholder_state(
+        primary: &str,
+        text: &str,
+    ) -> webagent_context_contracts::tool_results::State {
+        use webagent_context_contracts::tool_results as contract;
+        let mut state = contract::State::default();
+        state.assignments.insert(
+            "lost".into(),
+            contract::Assignment {
+                key: "key".into(),
+                output_sha256: contract::fingerprint("full"),
+                sequence: primary.into(),
+                primary: primary.into(),
+                placeholder: Some(text.into()),
+                template: None,
+            },
+        );
+        state
+    }
+
+    /// A placeholder whose own run row was never journaled still reconstructs its original
+    /// from the primary's durable copy; a mismatched digest or a non-placeholder item does not.
+    #[tokio::test]
+    async fn missing_placeholder_origin_recovers_the_primary_copy() {
+        use webagent_context_contracts::tool_results as contract;
+        let text = "Call lost matches kept (file_read)";
+        let state = placeholder_state("kept", text);
+        let input = [json!({"type":"function_call_output","call_id":"lost","output":text})];
+        let digest = contract::fingerprint("full");
+        let found = recovered_original(&PrimaryOnly, "s", &state, "lost", text, &digest, &input)
+            .await
+            .unwrap();
+        assert_eq!(found.as_deref(), Some("full"));
+        let other = contract::fingerprint("other");
+        assert!(
+            recovered_original(&PrimaryOnly, "s", &state, "lost", text, &other, &input)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            recovered_original(&PrimaryOnly, "s", &state, "lost", "full", &digest, &input)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
