@@ -823,6 +823,15 @@ impl<
                     &prompt, &config, &settings, error.as_deref())}),
                 );
                 let cancel = CancellationToken::new();
+                // The status call repeats the main request plus the reply, so it needs the
+                // same provider-window clamp as the main call.
+                let status_ratio = bytes_per_token(run, &call_selection).unwrap_or(4.0);
+                let status_prompt_tokens = (serde_json::to_vec(&input)
+                    .map(|body| body.len())
+                    .unwrap_or(0) as f64
+                    / status_ratio)
+                    .ceil() as usize;
+                let status_cap = output_allowance(&call_selection, status_prompt_tokens, 64_000);
                 let response = async {
                     let prepared = crate::provider::CallDraft::new(
                         &call_selection,
@@ -832,6 +841,7 @@ impl<
                         &instructions,
                     )
                     .with_bridge_fork(fork)
+                    .with_output_cap(Some(status_cap))
                     .prepare(
                         crate::ports::AgentMetadata::root(app.store.records()),
                         &cancel,
