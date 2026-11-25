@@ -55,6 +55,12 @@ export const components = [
     js: 'refresh/refresh.js',
   },
   {
+    id: 'sidebar-button',
+    title: 'Sidebar button',
+    summary: 'Round icon button that asks the host to open the sidebar via shell:sidebar.',
+    js: 'sidebar-button/sidebar-button.js',
+  },
+  {
     id: 'stack',
     title: 'Stack',
     summary: 'Vertical rhythm between a page\'s blocks; the gap comes from the spacing scale.',

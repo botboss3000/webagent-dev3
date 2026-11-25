@@ -58,6 +58,28 @@ function startServer(admin) {
         }),
       );
     }
+    // Chat header placement: the sidebar control in the mobile block only.
+    if (url.pathname === '/config/web/chat/chat-header.json') {
+      return send(200, JSON.stringify({
+        version: 1,
+        common: {
+          rows: [
+            { left: [], center: [], right: [] },
+            { left: [], center: [], right: [] },
+            { left: [], center: [], right: [] },
+          ],
+        },
+        desktop: {},
+        mobile: {
+          rows: [
+            { left: ['sidebar'], center: [], right: [] },
+            { left: [], center: [], right: [] },
+            { left: [], center: [], right: [] },
+          ],
+        },
+        widget: {},
+      }));
+    }
     // Composer placement: the four buttons in the third row, attach left, the rest right.
     if (url.pathname === '/config/web/chat/chat-footer.json') {
       return send(
@@ -267,7 +289,7 @@ for (const viewport of VIEWPORTS) {
 
           const shell = await probeShell(page);
           assert.ok(shell, 'chat panel is mounted in the column');
-          assert.equal(shell.headerChildren, 0, 'header region is empty');
+          assert.ok(shell.headerChildren >= 1, 'the chat header grid is mounted');
           assert.ok(shell.footerChildren >= 1, 'the composer grid fills the footer region');
           assert.equal(shell.innerChildren, 0, 'transcript region is empty');
           assert.ok(shell.height > 300, `chat panel fills the height (${shell.height}px)`);
@@ -345,6 +367,12 @@ for (const viewport of VIEWPORTS) {
           assert.notEqual(bar.background, 'rgba(0, 0, 0, 0)', 'the bar carries the panel surface');
           assert.equal(bar.border, '0px', 'the bar has no border');
           assert.equal(bar.padding, '0px', 'the bar takes no padding unless the config sets it');
+
+          // The chat header is its own region; desktop gets no mobile-only controls.
+          const headControls = await page.evaluate(
+            () => document.querySelectorAll('.chat-panel-head .sidebar-button').length,
+          );
+          assert.equal(headControls, 0, 'the desktop chat header carries no sidebar control');
         } else {
           // Phone: the sidebar is a drawer over the stage.
           assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');
@@ -375,10 +403,17 @@ for (const viewport of VIEWPORTS) {
           // The phone chat is the same empty shell, filling the body.
           const phoneShell = await probeShell(page);
           assert.ok(phoneShell, 'chat panel is mounted on a phone');
-          assert.equal(phoneShell.headerChildren, 0, 'header region is empty');
+          assert.ok(phoneShell.headerChildren >= 1, 'the chat header grid is mounted on a phone');
           assert.ok(phoneShell.footerChildren >= 1, 'the composer grid fills the footer region on a phone');
           assert.equal(phoneShell.innerChildren, 0, 'transcript region is empty');
           assert.ok(phoneShell.height > 300, `chat panel fills the height (${phoneShell.height}px)`);
+
+          // The mobile chat header carries the sidebar control from chat-header.json.
+          // Scope to the page: the hidden desktop dock mounts its own copy of the shell.
+          const phoneHeadControls = await page.evaluate(
+            () => document.querySelectorAll('#page-body .chat-panel-head .sidebar-button').length,
+          );
+          assert.equal(phoneHeadControls, 1, 'the mobile chat header carries the sidebar control');
 
           await page.click('#chat-switch');
           await page.waitForFunction(() => window.location.hash === '#/sessions');

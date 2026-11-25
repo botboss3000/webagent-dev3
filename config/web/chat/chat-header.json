@@ -1,0 +1,20 @@
+{
+  "_instructions": "Chat header placement. Three rows of three cells; a cell lists control ids from web/chat/controls/<id>/ and a control the config does not name is not rendered. Rows are independent and an empty row takes no space. Arrays replace, so a profile that sets rows replaces the common rows entirely: the sidebar control is named only for the mobile view, which is why desktop and widget show no header controls.",
+  "version": 1,
+  "common": {
+    "rows": [
+      { "left": [], "center": [], "right": [] },
+      { "left": [], "center": [], "right": [] },
+      { "left": [], "center": [], "right": [] }
+    ]
+  },
+  "desktop": {},
+  "mobile": {
+    "rows": [
+      { "left": ["sidebar"], "center": [], "right": [] },
+      { "left": [], "center": [], "right": [] },
+      { "left": [], "center": [], "right": [] }
+    ]
+  },
+  "widget": {}
+}

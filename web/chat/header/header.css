@@ -1,0 +1,37 @@
+/* Chat header: the same three rows of three cells as the composer, so a control can be
+   placed in any cell of any profile. An empty row takes no space. */
+
+.chat-head-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  pointer-events: auto;
+}
+
+.chat-head-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.chat-head-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.chat-head-cell-left {
+  justify-content: flex-start;
+}
+
+.chat-head-cell-center {
+  justify-content: center;
+}
+
+.chat-head-cell-right {
+  justify-content: flex-end;
+}
