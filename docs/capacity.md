@@ -141,7 +141,11 @@ weight to the shares that produce it. Check the result in
 | Administrator reserve | `config/access/policy.json`, `run_limits.reserved_admin_runs` | 1 | Run slots ordinary accounts cannot take, so an administrator can always start a run. | Read live. |
 | Per-agent cap | same file, `run_limits.max_active_runs_per_agent` | `null` = half the run ceiling, at least 2 | Active runs one agent may have at once for non-administrators. | Read live. |
 | Command budgets | same file, `run_limits.concurrent_commands_per_run` (2), `concurrent_commands_per_user` (4), `command_cpu_seconds_per_run` (3600), `command_cpu_seconds_per_user_day` (14400) | as shown | How many shell commands run at once and how much processor time they may use. | Read live. |
-| Open account databases | `config/storage/storage-settings.json`, `user_database_pools.max_connected` | 64 | Account databases holding open connections at once in each process (each connection is a thread, so this counts against the task limit). At least 8. | Read at process start: the next release. |
+| Open account databases | `config/storage/storage-settings.json`, `user_database_pools.max_connected` | 64 | Account databases holding open connections at once in each process (each connection is a thread). It is a hard bound: a request that finds every slot in use waits for an idle database to give way. At least 8. | Read at process start: the next release. |
+| Connections per account | same file, `user_database_pools.max_connections` | 2 | Connections one account database may hold. Account threads ≈ `max_connected` × this. 1–8. | Process start. |
+| Idle account lifetime | same file, `user_database_pools.idle_seconds` | 5 | Seconds before an idle account connection closes. 1–60. | Process start. |
+| Connect wait | same file, `user_database_pools.connect_wait_ms` | 2000 | How long a request waits for a free account-database slot before it is refused with a retryable 503 (`Retry-After: 2`). 0–10000. | Read live. |
+| Runtime blocking threads | same file, `process.max_blocking_threads` | 64 | Threads the runtime may add for blocking work; each is one task against the limit. 8–256. | Process start. |
 | Browser limits | `config/browser/browser-limits.json`: `max_running_per_app` (5), `max_running_per_user` (4), `idle_seconds` (180), `queued_idle_seconds` (30), `max_wait_seconds` (600); also `min_extension_version` (0.2.0), the oldest Browser Extension that may take actions | as shown | Private browsers running at once, per server and per user, and how fast idle ones close while others wait. | Read live for each new browser. |
 
 The JSON files under `config/` are the app's single live settings files. Change them in the
@@ -164,8 +168,17 @@ states its range.
 5. **Memory:** keep about 15 % of M (at least 1 GB) for the system. Of the rest, the loop needs the
    most (context and tool results for every run in progress): give it about half, the browser
    about a quarter (each Chromium needs a few hundred MB), and the API 1–2 GB.
-6. **Tasks:** 1,024 per container is enough for one loop; the broker raises the loop's to 512 per
-   loop process. `max_connected` open databases count against it.
+6. **Tasks:** 1,024 per container is enough, and the broker raises the loop's to 512 per loop
+   process. Budget the API's threads rather than raising it: account databases take at most
+   `max_connected` × `max_connections` (64 × 2 = 128 by default), plus the application and agent
+   pools (about 10), the runtime's workers (C) and its blocking pool (`process.max_blocking_threads`,
+   64). That is about 210 threads on a 6-core server; a limit of 1,024 leaves room for tool
+   processes, previews and browsers started by tools. Raise `api.pids_limit` only together with
+   that budget: a server with 64 GB or many browsers may need 2,048, while one with 8 GB should
+   lower `max_connected` and keep 1,024. Measured on the sidekick tester, 2026-11-24, four loops,
+   400 users, a 20 s model: before the bound held, the API reached 1,011 threads, 362 account
+   databases and refused 44 requests with HTTP 500; after it, see the verification in
+   `work/unified-plan/api-task-limit.md`.
 7. **Builds:** if the server builds, keep `cargo_build_jobs` at most C − 2 and `test_threads` at
    most C − 4 (broker README, "Tuning settings"); the low build weight keeps the app responsive
    even then.

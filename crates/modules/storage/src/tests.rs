@@ -779,3 +779,74 @@ fn shipped_storage_settings_keep_encryption_on() {
     .unwrap();
     assert!(settings::admin_encryption_enabled(&settings::parse(&bytes).unwrap()).unwrap());
 }
+
+#[test]
+/// API-TASK-BOUND: the account-pool width, idle lifetime, connect wait and runtime blocking
+/// pool are validated in the same file, with the documented defaults when absent.
+fn account_pool_and_runtime_bounds_are_validated() {
+    let empty = settings::parse(b"{}").unwrap();
+    assert_eq!(
+        settings::pool_connections(&empty).unwrap(),
+        pool::DEFAULT_POOL_CONNECTIONS
+    );
+    assert_eq!(
+        settings::idle_seconds(&empty).unwrap(),
+        pool::DEFAULT_IDLE_SECONDS
+    );
+    assert_eq!(
+        settings::connect_wait_ms(&empty).unwrap(),
+        pool::DEFAULT_CONNECT_WAIT_MS
+    );
+    assert_eq!(
+        settings::max_blocking_threads(&empty).unwrap(),
+        settings::DEFAULT_MAX_BLOCKING_THREADS
+    );
+    let good = settings::parse(
+        br#"{"user_database_pools":{"max_connections":3,"idle_seconds":2,"connect_wait_ms":0},
+             "process":{"max_blocking_threads":32}}"#,
+    )
+    .unwrap();
+    assert_eq!(settings::pool_connections(&good).unwrap(), 3);
+    assert_eq!(settings::idle_seconds(&good).unwrap(), 2);
+    assert_eq!(settings::connect_wait_ms(&good).unwrap(), 0);
+    assert_eq!(settings::max_blocking_threads(&good).unwrap(), 32);
+    for bad in [
+        br#"{"user_database_pools":{"max_connections":0}}"#.as_slice(),
+        br#"{"user_database_pools":{"max_connections":9}}"#.as_slice(),
+        br#"{"user_database_pools":{"idle_seconds":0}}"#.as_slice(),
+        br#"{"user_database_pools":{"idle_seconds":61}}"#.as_slice(),
+        br#"{"user_database_pools":{"connect_wait_ms":10001}}"#.as_slice(),
+        br#"{"process":{"max_blocking_threads":7}}"#.as_slice(),
+        br#"{"process":{"max_blocking_threads":257}}"#.as_slice(),
+    ] {
+        assert!(
+            settings::parse(bad).is_err(),
+            "{}",
+            String::from_utf8_lossy(bad)
+        );
+    }
+}
+
+#[tokio::test]
+/// A slot is taken by a connected plane and given back when the plane is evicted while idle.
+/// (Async: dropping a sqlx pool closes it, which needs a Tokio context.)
+async fn an_idle_plane_gives_its_connected_slot_back() {
+    let free = pool::free_connected_slots();
+    let permit = pool::try_connected_slot().expect("a free slot at test start");
+    assert_eq!(pool::free_connected_slots(), free - 1);
+    let mut states = std::collections::HashMap::new();
+    let mut plane =
+        pool::UserPlane::new(sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap());
+    plane.slot = Some(std::sync::Arc::new(permit));
+    states.insert("first".to_owned(), plane);
+    // A second, more recently used plane is kept while the oldest idle one gives way.
+    let mut newer =
+        pool::UserPlane::new(sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap());
+    newer.touch();
+    states.insert("second".to_owned(), newer);
+    let removed = pool::evict_oldest_idle(&mut states).expect("an idle plane");
+    assert!(removed.slot.is_some());
+    drop(removed);
+    assert_eq!(pool::free_connected_slots(), free);
+    assert!(states.contains_key("second"));
+}

@@ -269,7 +269,16 @@ fn main() -> Result<()> {
     if let Some(code) = local_worker_mode(std::env::args().nth(1).as_deref()) {
         std::process::exit(code);
     }
+    // API-TASK-BOUND: each blocking thread is one task against the container's limit, so the
+    // pool is bounded by `process.max_blocking_threads` (read before the runtime exists; a
+    // malformed file is refused by Store::open with its own message).
+    let blocking_threads =
+        webagent_storage::settings::read_settings(&webagent_configuration::paths::state())
+            .ok()
+            .and_then(|settings| webagent_storage::settings::max_blocking_threads(&settings).ok())
+            .unwrap_or(webagent_storage::settings::DEFAULT_MAX_BLOCKING_THREADS);
     tokio::runtime::Builder::new_multi_thread()
+        .max_blocking_threads(blocking_threads)
         .enable_all()
         .build()?
         .block_on(run_process())

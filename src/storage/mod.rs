@@ -155,14 +155,27 @@ impl Store {
         std::fs::create_dir_all(root)?;
         let codec = Codec::open(root)?;
         // A malformed file was refused by `Codec::open` above; a missing one keeps the default.
+        let settings = webagent_storage::settings::read_settings(root)?;
         webagent_storage::pool::set_max_connected_users(
-            webagent_storage::settings::max_connected_users(
-                &webagent_storage::settings::read_settings(root)?,
-            )?,
+            webagent_storage::settings::max_connected_users(&settings)?,
         );
+        // API-TASK-BOUND: every account connection is a thread. The process opens at most
+        // `max_connected` account databases, each with `max_connections` connections that an
+        // idle database gives up after `idle_seconds`; together both bound the thread count.
+        webagent_storage::pool::set_pool_connections(webagent_storage::settings::pool_connections(
+            &settings,
+        )?);
+        webagent_storage::pool::set_idle_seconds(webagent_storage::settings::idle_seconds(
+            &settings,
+        )?);
+        webagent_storage::pool::set_connect_wait_ms(webagent_storage::settings::connect_wait_ms(
+            &settings,
+        )?);
         // Keep the administrator's original data path during migration.
-        let admin_state =
+        let mut admin_state =
             UserPlane::new(open_pool(&root.join("user_data/admin/admin.db"), true, true).await?);
+        // The administrator's plane counts as a connected database and is never evicted.
+        admin_state.slot = webagent_storage::pool::try_connected_slot().map(Arc::new);
         let mut user_states = HashMap::new();
         user_states.insert("admin".to_owned(), admin_state.clone());
         let shared_agent_pool = open_pool(
@@ -273,58 +286,86 @@ impl Store {
         }
         self.open_user(user_id).await
     }
+    /// One connected-account slot: wait for an idle plane to give way when all are held, and
+    /// refuse with [`webagent_storage::pool::Busy`] after the configured wait.
+    async fn connected_slot(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        loop {
+            if let Some(permit) = webagent_storage::pool::try_connected_slot() {
+                return Ok(permit);
+            }
+            // A database whose connections already closed holds no thread: give its slot back
+            // before evicting one that is still connected.
+            let gone = {
+                let mut states = self.user_states.write().await;
+                webagent_storage::pool::release_disconnected(&mut states)
+            };
+            drop(gone);
+            if let Some(permit) = webagent_storage::pool::try_connected_slot() {
+                return Ok(permit);
+            }
+            let removed = {
+                let mut states = self.user_states.write().await;
+                webagent_storage::pool::evict_oldest_idle(&mut states)
+            };
+            if let Some(plane) = removed {
+                // Its connections and its slot close with it; a slot is free now.
+                drop(plane);
+                continue;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(webagent_storage::pool::Busy.into());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
     async fn open_user(&self, user_id: &str) -> Result<Self> {
-        let existing = self.user_states.read().await.get(user_id).cloned();
-        let mut opened = false;
-        let state = match existing {
-            Some(state) => state,
-            None => {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(webagent_storage::pool::connect_wait_ms());
+        let state = loop {
+            if let Some(state) = self.user_states.read().await.get(user_id).cloned() {
+                break state;
+            }
+            // A slot is taken before the database opens, so concurrent requests cannot pass
+            // the bound between the check and the open.
+            let slot = self.connected_slot(deadline).await?;
+            {
                 let mut states = self.user_states.write().await;
                 if let Some(state) = states.get(user_id) {
-                    state.clone()
-                } else {
-                    webagent_storage::pool::retain_active_users(&mut states);
-                    let path = self
-                        .root
-                        .join("user_data")
-                        .join(user_id)
-                        .join(format!("{user_id}.db"));
-                    // C7: a file this process already set up (schema, notification tables,
-                    // one-time migrations) only reconnects after its plane was evicted.
-                    let known = webagent_storage::pool::set_up_key(&path)
-                        .is_some_and(|key| webagent_storage::pool::is_set_up(&key));
-                    let pool = if known {
-                        webagent_storage::pool::connect_pool(&path, true, true).await?
-                    } else {
-                        open_pool(&path, true, true).await?
-                    };
-                    let mut state = UserPlane::new(pool);
-                    if known {
-                        state
-                            .migrated
-                            .store(true, std::sync::atomic::Ordering::Release);
-                    }
-                    // Every user shares one retained-cache budget per Store family.
-                    // User-qualified context keys prevent cross-account collisions.
-                    state.context_cache = self.context_cache.clone();
-                    states.insert(user_id.to_owned(), state.clone());
-                    opened = true;
-                    state
+                    break state.clone();
                 }
+                webagent_storage::pool::retain_active_users(&mut states);
+                let path = self
+                    .root
+                    .join("user_data")
+                    .join(user_id)
+                    .join(format!("{user_id}.db"));
+                // C7: a file this process already set up (schema, notification tables,
+                // one-time migrations) only reconnects after its plane was evicted.
+                let known = webagent_storage::pool::set_up_key(&path)
+                    .is_some_and(|key| webagent_storage::pool::is_set_up(&key));
+                let pool = if known {
+                    webagent_storage::pool::connect_pool(&path, true, true).await?
+                } else {
+                    open_pool(&path, true, true).await?
+                };
+                let mut state = UserPlane::new(pool);
+                if known {
+                    state
+                        .migrated
+                        .store(true, std::sync::atomic::Ordering::Release);
+                }
+                // Every user shares one retained-cache budget per Store family.
+                // User-qualified context keys prevent cross-account collisions.
+                state.context_cache = self.context_cache.clone();
+                state.slot = Some(Arc::new(slot));
+                states.insert(user_id.to_owned(), state.clone());
+                break state;
             }
         };
         state.touch();
-        // Just opened, or about to reconnect: keep connected accounts under the bound.
-        if opened || state.pool.size() == 0 {
-            let limit = webagent_storage::pool::max_connected_users();
-            if webagent_storage::pool::connected_users(&*self.user_states.read().await) > limit {
-                let removed = webagent_storage::pool::evict_idle_connected(
-                    &mut *self.user_states.write().await,
-                    limit,
-                );
-                drop(removed);
-            }
-        }
         let migrated = state.migrated.clone();
         let handle = Self {
             core: StoreCore {

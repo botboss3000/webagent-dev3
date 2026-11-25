@@ -11,7 +11,7 @@ use std::{
     path::Path,
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
 };
@@ -129,9 +129,16 @@ pub async fn connect_pool(path: &Path, events: bool, runs: bool) -> Result<Sqlit
         .pragma("journal_size_limit", WAL_SIZE_LIMIT.to_string());
     // The application plane (events without runs: app.db) is shared by every account's
     // sign-in, directory, scan and relay access, so it gets twice the connections, keeps one
-    // open and closes idle ones after 60 s; user and agent planes keep 4.
+    // open and closes idle ones after 60 s. Account and agent planes take
+    // `user_database_pools.max_connections` (2 by default) and close idle connections after
+    // `user_database_pools.idle_seconds` (5): each connection is one thread, and the account
+    // bound multiplies the two, so both are settings (API-TASK-BOUND).
     let application = events && !runs;
-    let idle = std::time::Duration::from_secs(if application { 60 } else { 5 });
+    let idle = std::time::Duration::from_secs(if application {
+        APPLICATION_IDLE_SECONDS
+    } else {
+        idle_seconds()
+    });
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         // IDLE-POOL-BOUND: release idle connections without closing pools that
         // active Store clones still use. Each connection holds an OS thread, and scans visit
@@ -139,7 +146,11 @@ pub async fn connect_pool(path: &Path, events: bool, runs: bool) -> Result<Sqlit
         // 60 s the loop held one thread per account and passed the container's 1024-task limit.
         .min_connections(u32::from(application))
         .idle_timeout(idle)
-        .max_connections(if application { 8 } else { 4 })
+        .max_connections(if application {
+            APPLICATION_CONNECTIONS
+        } else {
+            pool_connections()
+        })
         .connect_with(options)
         .await?;
     std::fs::set_permissions(
@@ -344,6 +355,9 @@ pub struct UserPlane {
     pub migrated: Arc<AtomicBool>,
     /// When this process last selected the account ([`UserPlane::touch`]); orders eviction.
     pub last_use: Arc<AtomicU64>,
+    /// API-TASK-BOUND: the process-wide connected-account slot this plane holds
+    /// ([`connected_slot`]). Dropping the plane (eviction) gives the slot back.
+    pub slot: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
 }
 
 impl UserPlane {
@@ -355,6 +369,7 @@ impl UserPlane {
             context_gate: Arc::new(RwLock::new(())),
             migrated: Arc::new(AtomicBool::new(false)),
             last_use: Arc::new(AtomicU64::new(USE_SEQUENCE.fetch_add(1, Ordering::Relaxed))),
+            slot: None,
         }
     }
 
@@ -386,6 +401,96 @@ pub fn max_connected_users() -> usize {
     MAX_CONNECTED_USERS.load(Ordering::Relaxed)
 }
 
+static CONNECTED_SLOTS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+
+/// The process-wide account-database slots: `max_connected` of them, created on first use.
+/// Settings are read before the first plane opens, so the size is the configured one.
+fn connected_slots() -> Arc<tokio::sync::Semaphore> {
+    CONNECTED_SLOTS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(max_connected_users())))
+        .clone()
+}
+
+/// Take a free account-database slot without waiting, or `None` when all are held.
+pub fn try_connected_slot() -> Option<tokio::sync::OwnedSemaphorePermit> {
+    connected_slots().try_acquire_owned().ok()
+}
+
+/// How many account-database slots are free right now (diagnostics and tests).
+pub fn free_connected_slots() -> usize {
+    connected_slots().available_permits()
+}
+
+/// Connections one account (or agent) database may hold open; each connection is one OS
+/// thread, so [`max_connected_users`] times this bounds the account threads in a process.
+pub const DEFAULT_POOL_CONNECTIONS: u32 = 2;
+/// The widest accepted account pool. The application database keeps its own fixed value.
+pub const MAX_POOL_CONNECTIONS: u32 = 8;
+static POOL_CONNECTIONS: AtomicU32 = AtomicU32::new(DEFAULT_POOL_CONNECTIONS);
+
+/// Set connections per account database (read once at `Store::open`).
+pub fn set_pool_connections(connections: u32) {
+    POOL_CONNECTIONS.store(
+        connections.clamp(1, MAX_POOL_CONNECTIONS),
+        Ordering::Relaxed,
+    );
+}
+
+/// Connections per account database.
+pub fn pool_connections() -> u32 {
+    POOL_CONNECTIONS.load(Ordering::Relaxed)
+}
+
+/// Seconds an idle account connection stays open before sqlx closes it.
+pub const DEFAULT_IDLE_SECONDS: u64 = 5;
+/// The longest accepted idle lifetime.
+pub const MAX_IDLE_SECONDS: u64 = 60;
+static IDLE_SECONDS: AtomicU64 = AtomicU64::new(DEFAULT_IDLE_SECONDS);
+
+/// Set the idle lifetime of account connections (read once at `Store::open`).
+pub fn set_idle_seconds(seconds: u64) {
+    IDLE_SECONDS.store(seconds.clamp(1, MAX_IDLE_SECONDS), Ordering::Relaxed);
+}
+
+/// The idle lifetime of account connections in seconds.
+pub fn idle_seconds() -> u64 {
+    IDLE_SECONDS.load(Ordering::Relaxed)
+}
+
+/// Milliseconds a request may wait for a free account-database slot before it is refused.
+pub const DEFAULT_CONNECT_WAIT_MS: u64 = 2_000;
+/// The longest accepted wait.
+pub const MAX_CONNECT_WAIT_MS: u64 = 10_000;
+static CONNECT_WAIT_MS: AtomicU64 = AtomicU64::new(DEFAULT_CONNECT_WAIT_MS);
+
+/// Set how long a request waits for a free account-database slot (read live).
+pub fn set_connect_wait_ms(millis: u64) {
+    CONNECT_WAIT_MS.store(millis.min(MAX_CONNECT_WAIT_MS), Ordering::Relaxed);
+}
+
+/// How long a request waits for a free account-database slot.
+pub fn connect_wait_ms() -> u64 {
+    CONNECT_WAIT_MS.load(Ordering::Relaxed)
+}
+
+/// The shared application database is one plane, not one per account, so its pool stays fixed.
+const APPLICATION_CONNECTIONS: u32 = 8;
+const APPLICATION_IDLE_SECONDS: u64 = 60;
+
+/// No account-database slot was free within [`connect_wait_ms`]: the request must retry rather
+/// than open another connection past the bound. Host adapters map this to a retryable response.
+#[derive(Debug)]
+pub struct Busy;
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("account database capacity is busy; retry shortly")
+    }
+}
+
+impl std::error::Error for Busy {}
+
 /// Registered account databases that hold at least one open connection.
 pub fn connected_users(states: &HashMap<String, UserPlane>) -> usize {
     states
@@ -411,6 +516,18 @@ pub fn evict_idle_connected(
     if connected <= limit {
         return Vec::new();
     }
+    evict_idle_to(states, limit * 3 / 4)
+}
+
+/// API-TASK-BOUND: remove idle planes until at most `target` hold a connection. The hard bound
+/// needs no slack: a request that finds every slot live waits for one to go idle instead of
+/// opening past the bound.
+#[must_use]
+pub fn evict_idle_to(states: &mut HashMap<String, UserPlane>, target: usize) -> Vec<UserPlane> {
+    let connected = connected_users(states);
+    if connected <= target {
+        return Vec::new();
+    }
     let mut idle: Vec<(u64, String)> = states
         .iter()
         .filter(|(id, state)| {
@@ -420,9 +537,41 @@ pub fn evict_idle_connected(
         .collect();
     idle.sort_unstable();
     idle.into_iter()
-        .take(connected - limit * 3 / 4)
+        .take(connected - target)
         .filter_map(|(_, id)| states.remove(&id))
         .collect()
+}
+
+/// Drop registered planes that hold no connection and no live Store: they keep no thread,
+/// only their [`UserPlane::slot`], which a waiting request needs. The administrator's plane is
+/// kept. The next visit reopens the database (cheaply: its set-up is already recorded).
+#[must_use]
+pub fn release_disconnected(states: &mut HashMap<String, UserPlane>) -> Vec<UserPlane> {
+    let idle: Vec<String> = states
+        .iter()
+        .filter(|(id, plane)| {
+            *id != "admin" && plane.pool.size() == 0 && Arc::strong_count(&plane.context_gate) == 1
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    idle.into_iter()
+        .filter_map(|id| states.remove(&id))
+        .collect()
+}
+
+/// Remove the least recently used idle plane, freeing its connections and its
+/// [`UserPlane::slot`]; `None` when every connected plane is in use.
+#[must_use]
+pub fn evict_oldest_idle(states: &mut HashMap<String, UserPlane>) -> Option<UserPlane> {
+    let mut idle: Vec<(u64, String)> = states
+        .iter()
+        .filter(|(id, state)| *id != "admin" && Arc::strong_count(&state.context_gate) == 1)
+        .map(|(id, state)| (state.last_use.load(Ordering::Relaxed), id.clone()))
+        .collect();
+    idle.sort_unstable();
+    idle.into_iter()
+        .next()
+        .and_then(|(_, id)| states.remove(&id))
 }
 
 /// Registered user databases kept before idle ones are dropped. An idle entry holds no

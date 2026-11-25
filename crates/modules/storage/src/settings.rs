@@ -35,6 +35,10 @@ pub fn parse(bytes: &[u8]) -> Result<Value> {
     }
     admin_encryption_enabled(&value)?;
     max_connected_users(&value)?;
+    pool_connections(&value)?;
+    idle_seconds(&value)?;
+    connect_wait_ms(&value)?;
+    max_blocking_threads(&value)?;
     deleted_session_retention_days(&value)?;
     Ok(value)
 }
@@ -57,6 +61,74 @@ pub fn max_connected_users(settings: &Value) -> Result<usize> {
             )
         })
 }
+
+/// Connections one account database may hold open (`user_database_pools.max_connections`,
+/// 1 to [`crate::pool::MAX_POOL_CONNECTIONS`]); absence keeps the default.
+pub fn pool_connections(settings: &Value) -> Result<u32> {
+    let Some(value) = settings.pointer("/user_database_pools/max_connections") else {
+        return Ok(crate::pool::DEFAULT_POOL_CONNECTIONS);
+    };
+    value
+        .as_u64()
+        .filter(|connections| (1..=u64::from(crate::pool::MAX_POOL_CONNECTIONS)).contains(connections))
+        .map(|connections| connections as u32)
+        .ok_or_else(|| {
+            anyhow!(
+                "storage-settings.json user_database_pools.max_connections must be an integer from 1 to {}",
+                crate::pool::MAX_POOL_CONNECTIONS
+            )
+        })
+}
+
+/// Seconds an idle account connection stays open (`user_database_pools.idle_seconds`, 1–60);
+/// absence keeps [`crate::pool::DEFAULT_IDLE_SECONDS`].
+pub fn idle_seconds(settings: &Value) -> Result<u64> {
+    let Some(value) = settings.pointer("/user_database_pools/idle_seconds") else {
+        return Ok(crate::pool::DEFAULT_IDLE_SECONDS);
+    };
+    value
+        .as_u64()
+        .filter(|seconds| (1..=crate::pool::MAX_IDLE_SECONDS).contains(seconds))
+        .ok_or_else(|| {
+            anyhow!(
+                "storage-settings.json user_database_pools.idle_seconds must be an integer from 1 to {}",
+                crate::pool::MAX_IDLE_SECONDS
+            )
+        })
+}
+
+/// Milliseconds a request waits for a free account-database slot
+/// (`user_database_pools.connect_wait_ms`, 0–10000); absence keeps the default.
+pub fn connect_wait_ms(settings: &Value) -> Result<u64> {
+    match settings.pointer("/user_database_pools/connect_wait_ms") {
+        None => Ok(crate::pool::DEFAULT_CONNECT_WAIT_MS),
+        Some(value) => value
+            .as_u64()
+            .filter(|millis| *millis <= crate::pool::MAX_CONNECT_WAIT_MS)
+            .ok_or_else(|| anyhow!(
+                "storage-settings.json user_database_pools.connect_wait_ms must be an integer from 0 to {}",
+                crate::pool::MAX_CONNECT_WAIT_MS
+            )),
+    }
+}
+
+/// Threads the runtime may add for blocking work (`process.max_blocking_threads`, 8–256);
+/// absence keeps [`DEFAULT_MAX_BLOCKING_THREADS`].
+pub fn max_blocking_threads(settings: &Value) -> Result<usize> {
+    match settings.pointer("/process/max_blocking_threads") {
+        None => Ok(DEFAULT_MAX_BLOCKING_THREADS),
+        Some(value) => value
+            .as_u64()
+            .and_then(|threads| usize::try_from(threads).ok())
+            .filter(|threads| (8..=256).contains(threads))
+            .ok_or_else(|| anyhow!(
+                "storage-settings.json process.max_blocking_threads must be an integer from 8 to 256"
+            )),
+    }
+}
+
+/// Runtime blocking threads unless the settings say otherwise.
+pub const DEFAULT_MAX_BLOCKING_THREADS: usize = 64;
 
 /// Days a deleted session's remaining records are kept before they are purged
 /// (`deleted_sessions.retention_days`, at least 1); absence keeps
