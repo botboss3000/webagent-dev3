@@ -132,11 +132,13 @@ body.light-mode {
   --ink-rgb: 120, 124, 135;
   --shadow-rgb: 120, 124, 135;
 
-  --bg-0: #ffffff;
-  --bg-0-rgb: 255, 255, 255;
+  /* Inverted from the app's light palette: the page is the tinted grey and every
+     raised surface (sidebar, cards, tiles) is white. */
+  --bg-0: #f5f5f5;
+  --bg-0-rgb: 245, 245, 245;
   --bg-1: color-mix(in oklab, var(--bg-0) 97%, var(--fg-1));
   --bg-2: color-mix(in oklab, var(--bg-0) 93%, var(--fg-1));
-  --bg-elev: #f5f5f5;
+  --bg-elev: #ffffff;
   --bg-elev-2: color-mix(in oklab, var(--bg-elev) 90%, var(--fg-1));
   --bg-tint: #e8e8e8;
   --bg-tint-2: color-mix(in oklab, var(--bg-tint) 82%, var(--fg-1));
