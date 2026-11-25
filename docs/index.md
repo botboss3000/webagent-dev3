@@ -15,8 +15,8 @@ Deleted 2026-11-24 (v2-era or superseded): `ui-theming-design-history.md`,
 | [AGENTS.md](AGENTS.md) | Checkout workflow rules | living | 2026-11-24 |
 | [docs/workflow-foundation.md](workflow-foundation.md) | Record ownership, workflow checks, storage | living | 2026-11-24 |
 | [docs/context-assembly.md](context-assembly.md) | Model-call context assembly, compaction, dedup | living | 2026-11-24 |
-| [docs/capacity.md](capacity.md) | Server capacity limits and how to choose values | living (maintained by codebase_admin skill) | 2026-11-24 |
-| [docs/security-spec.md](security-spec.md) | Security requirements with IDs, threat model, accepted risks | living (cite requirement IDs) | 2026-11-24 |
+| [docs/capacity.md](capacity.md) | Server capacity limits and how to choose values | living (maintained by codebase_admin skill) | 2026-11-25 |
+| [docs/security-spec.md](security-spec.md) | Security requirements with IDs, threat model, accepted risks | living (cite requirement IDs) | 2026-11-25 |
 | [docs/tool-policy.md](tool-policy.md) | Tool decisions, saved approvals, gates, history retention | living | 2026-11-24 |
 | [docs/recovery-policy.md](recovery-policy.md) | Failure classes, retries, bridge/approval timers | living | 2026-11-24 |
 | [docs/build-protocol.md](build-protocol.md) | Unified plan gates every new build is checked against | living gate | 2026-11-23 |

@@ -225,6 +225,11 @@ about 235 MiB. To switch off: set `worker_container` back to `false` in the inst
 (Host Admin `host_revert` of that write), restart the broker while idle, then any `build_deploy`.
 Ability-only and Markdown releases (`plugin_deploy`) need broker `0ad17c1` or later, which probes the
 worker on the API's own socket.
+Since stream D5 (2026-11-24) the API and the loop mount only the socket folders they use (not all of
+`runtime/`), the API runs without added capabilities and with a read-only checkout, and the
+diagnostics database lives in `/state/diagnostics/`; these hold only with the worker container on
+(with it off the API again mounts all of `runtime/`). After D5 the multi-loop tests passed again
+(`buildctl test-group multi_loop`, one run of 97 s on 2026-11-25; 20 of 20 on 2026-11-24).
 
 ### Worked example: a small cloud server (2 processor threads, 4 GB, no builds)
 
