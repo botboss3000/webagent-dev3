@@ -294,8 +294,21 @@ test('a pull refreshes, and a longer pull runs the hard refresh', async () => {
     assert.deepEqual(await pull(0.6), { hidden: false, hint: 'RELEASE TO REFRESH' });
     assert.deepEqual(await pull(0.9), { hidden: false, hint: 'HARD REFRESH' });
 
-    // Releasing at the hard stage clears the shell's browser data and reloads past the cache.
+    // Releasing at the hard stage resets the origin's browser data and reloads past the cache.
     await page.evaluate(() => localStorage.setItem('webagent.web.theme', 'light'));
+    await page.evaluate(() => localStorage.setItem('probe-key', 'should-not-survive'));
+    await page.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const request = indexedDB.open('webagent-probe', 1);
+          request.onupgradeneeded = () => request.result.createObjectStore('rows');
+          request.onsuccess = () => {
+            request.result.close();
+            resolve(true);
+          };
+          request.onerror = () => reject(request.error);
+        }),
+    );
     const hardNavigation = page.waitForNavigation({ waitUntil: 'load' });
     await release();
     await hardNavigation;
@@ -303,7 +316,21 @@ test('a pull refreshes, and a longer pull runs the hard refresh', async () => {
     assert.equal(
       await page.evaluate(() => localStorage.getItem('webagent.web.theme')),
       null,
-      'the hard refresh cleared browser data',
+      'web storage was cleared',
+    );
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem('probe-key')),
+      null,
+      'a key outside the shell was cleared too, so the reset is not a key allowlist',
+    );
+    const databases = await page.evaluate(async () => {
+      if (typeof indexedDB.databases !== 'function') return [];
+      return (await indexedDB.databases()).map((row) => row?.name);
+    });
+    assert.equal(databases.includes('webagent-probe'), false, 'the IndexedDB database was deleted');
+    // The HttpOnly session cookie is out of page script's reach, so the user stays signed in.
+    await page.waitForFunction(
+      () => document.getElementById('footer-status')?.textContent === 'Signed in as administrator',
     );
 
     // A plain refresh keeps browser data and does not add the cache-buster.

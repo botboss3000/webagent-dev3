@@ -1,31 +1,24 @@
 // The shell's refresh action, ported from the app: one gesture with two stages —
-// pull to refresh, pull further for a hard refresh that clears browser data and
-// reloads past the HTTP cache — plus the header button that runs the hard refresh
-// directly. Replaces the plain browser reload as the app's refresh action.
+// pull to refresh, pull further for a hard refresh that resets this origin's
+// browser data and reloads past the HTTP cache — plus the header button that runs
+// the hard refresh directly.
+
+import { purgeAllBrowserData } from './browser-data-reset.js';
 
 const PULL_NORMAL_AT = 0.5; // share of the viewport height that arms a refresh
 const PULL_HARD_AT = 0.85; // share that arms the hard refresh
 const DASH = 98; // arc length of the indicator path
 
-/* The browser data this shell owns; a hard refresh clears exactly these keys. */
-const OWNED_KEYS = ['webagent.web.theme', 'webagent.web.sidebar'];
-
-export function clearBrowserData() {
-  for (const key of OWNED_KEYS) {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      /* private mode: nothing stored to clear */
-    }
+/* Hard refresh: wipe the origin's browser data, then reload past the cache. The
+   HttpOnly session cookie is invisible to page script, so the user stays signed in. */
+export async function hardRefresh() {
+  try {
+    await purgeAllBrowserData();
+  } finally {
+    const url = new URL(location.href);
+    url.searchParams.set('_', String(Date.now()));
+    location.replace(url);
   }
-}
-
-/* Hard refresh: drop the shell's browser data, then reload past the cache. */
-export function hardRefresh() {
-  clearBrowserData();
-  const url = new URL(location.href);
-  url.searchParams.set('_', String(Date.now()));
-  location.replace(url);
 }
 
 /* Plain refresh: reload the page and keep browser data. */
@@ -40,12 +33,12 @@ export function wireRefreshButton(button) {
     if (button.disabled) return;
     button.disabled = true;
     button.classList.add('spinning');
-    hardRefresh();
+    void hardRefresh();
   });
 }
 
 // Two-stage pull from the top of the viewport: half a screen refreshes, most of
-// one clears browser data. Returns a teardown so a page can stop listening.
+// one resets browser data. Returns a teardown so a page can stop listening.
 export function installPullToRefresh({ startZone = 50 } = {}) {
   const indicator = document.getElementById('ptr-indicator');
   const soft = document.getElementById('ptr-soft');
@@ -137,7 +130,7 @@ export function installPullToRefresh({ startZone = 50 } = {}) {
     hint.classList.add('show');
     // One frame of feedback before the page goes away.
     if (action === 1) setTimeout(refresh, 120);
-    if (action === 2) setTimeout(hardRefresh, 120);
+    if (action === 2) setTimeout(() => void hardRefresh(), 120);
   };
 
   const onCancel = () => {
