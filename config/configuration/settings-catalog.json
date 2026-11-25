@@ -100,6 +100,7 @@
     "config/inference/value-words.json": "Vocabulary data for value detection, not a setting.",
     "config/ui/*.json": "Touch feedback settings for app pages; not offered by the composer yet.",
     "config/ui/chat/controls/session-dropdown/*.json": "UI page descriptor or display data; not offered by the composer yet.",
+    "config/web/chat/*.json": "New UI settings read live by the web/ shell; the composer does not offer them yet.",
     "abilities/*/_group.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
     "abilities/*/*/*.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",
     "abilities/*/*/skills/*.json": "Ability definitions, manifests and skills, edited on the Abilities page's App Default level, not composer settings.",

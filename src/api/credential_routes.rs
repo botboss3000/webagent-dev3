@@ -415,6 +415,7 @@ pub(crate) const ROUTES: &[Route] = &[
     none("/api/v3/workflow/policy"),
     public("/app"),
     public("/config/ui/{*path}"),
+    public("/config/web/{*path}"),
     public("/embed/{id}"),
     public("/"),
     public("/health/live"),

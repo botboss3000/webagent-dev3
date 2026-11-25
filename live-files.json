@@ -49,6 +49,7 @@
     "config/ui/*.json",
     "config/ui/chat/chat.json",
     "config/ui/chat/controls/session-dropdown/*.json",
+    "config/web/chat/*.json",
     "config/webapp/*.settings.json",
     "config/webapp/app-settings.json",
     "config/worker/*.settings.json",

@@ -287,6 +287,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(ui: &Path) -> Router<S> {
         )
         .route_service("/setup.html", ServeFile::new(ui.join("setup.html")))
         .route("/config/ui/{*path}", get(config_ui))
+        .route("/config/web/{*path}", get(config_web))
         .nest_service("/ui", ui_files(ui))
         .nest_service("/web", ui_files(&web_root(ui)))
 }
@@ -308,6 +309,32 @@ pub fn ui_config(path: &str) -> Option<Vec<u8>> {
 
 async fn config_ui(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
     match ui_config(&path) {
+        Some(bytes) => (
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The new UI's settings live in `config/web/` (read live, checkout first), served at
+/// `/config/web/<path>` so the replacement shell owns its configuration separately from
+/// the `config/ui/` files the current app reads.
+pub fn web_config(path: &str) -> Option<Vec<u8>> {
+    let relative = path.trim_start_matches('/');
+    if !relative.ends_with(".json") {
+        return None;
+    }
+    let file = format!("config/web/{relative}");
+    webagent_configuration::live::read(&file, 4 * 1024 * 1024, |_| Ok(())).ok()
+}
+
+async fn config_web(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    match web_config(&path) {
         Some(bytes) => (
             [
                 (header::CONTENT_TYPE, "application/json"),

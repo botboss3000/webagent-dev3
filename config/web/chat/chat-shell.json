@@ -1,0 +1,48 @@
+{
+  "_instructions": "Shell geometry for the new UI. The view type is declared by whatever mounts the chat: the desktop column passes 'desktop', the chat page passes 'mobile', an embed passes 'widget'; it is never inferred from width alone. common is the base and the active profile overlays it: objects merge, arrays replace, null inherits. narrow_follows_mobile decides whether that profile hands a narrow window to the mobile profile (desktop false keeps the column at any width; widget is always false).",
+  "version": 1,
+  "common": {
+    "surface": {
+      "background": "transparent",
+      "border": "none",
+      "radius": "0",
+      "shadow": "none",
+      "backdrop_filter": "none"
+    },
+    "column": {
+      "default_width_px": 380,
+      "min_width_px": 250,
+      "flex_basis": "45%",
+      "draggable": true
+    },
+    "divider": {
+      "hit_width_px": 14,
+      "grip_width_px": 2,
+      "grip_height_px": 36,
+      "grip_height_active_px": 56
+    },
+    "breakpoints": {
+      "mobile_px": 800,
+      "column_clamp_px": 514
+    },
+    "default_view": "panel"
+  },
+  "desktop": {
+    "chat_is": "column",
+    "narrow_follows_mobile": false,
+    "column": {
+      "default_width_px": 380
+    }
+  },
+  "mobile": {
+    "chat_is": "page",
+    "narrow_follows_mobile": true
+  },
+  "widget": {
+    "chat_is": "embed",
+    "narrow_follows_mobile": false,
+    "column": {
+      "draggable": false
+    }
+  }
+}
