@@ -563,15 +563,14 @@ pub fn release_disconnected(states: &mut HashMap<String, UserPlane>) -> Vec<User
 /// [`UserPlane::slot`]; `None` when every connected plane is in use.
 #[must_use]
 pub fn evict_oldest_idle(states: &mut HashMap<String, UserPlane>) -> Option<UserPlane> {
-    let mut idle: Vec<(u64, String)> = states
+    // One pass under the registry write lock: the caller may reach this often while slots are
+    // full, so no allocation of every entry and no sort.
+    let oldest = states
         .iter()
         .filter(|(id, state)| *id != "admin" && Arc::strong_count(&state.context_gate) == 1)
-        .map(|(id, state)| (state.last_use.load(Ordering::Relaxed), id.clone()))
-        .collect();
-    idle.sort_unstable();
-    idle.into_iter()
-        .next()
-        .and_then(|(_, id)| states.remove(&id))
+        .min_by_key(|(_, state)| state.last_use.load(Ordering::Relaxed))
+        .map(|(id, _)| id.clone());
+    oldest.and_then(|id| states.remove(&id))
 }
 
 /// Registered user databases kept before idle ones are dropped. An idle entry holds no

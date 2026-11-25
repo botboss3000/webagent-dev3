@@ -117,10 +117,14 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
                 .await
             {
                 Ok(Some(candidate)) => candidate,
-                _ => {
+                // Only an absent or invalid token is "sign in required". A storage failure (a
+                // busy account database, an I/O error) is retryable and must not read as a
+                // sign-in failure; the ApiError mapping answers 503 with a retry hint.
+                Ok(None) => {
                     return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into())
                         .into_response()
                 }
+                Err(error) => return ApiError::from(error).into_response(),
             };
             let principal = match access::Principal::from_account(candidate.account_state()) {
                 Ok(principal) if principal.active() => principal,
