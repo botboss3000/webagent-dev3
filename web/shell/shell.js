@@ -56,8 +56,9 @@ function toggleCollapse() {
 
 function closeMenu() {
   document.body.classList.remove('menu-open');
-  const open = document.getElementById('menu-open');
-  if (open) open.setAttribute('aria-expanded', 'false');
+  for (const button of document.querySelectorAll('.sidebar-button')) {
+    button.setAttribute('aria-expanded', 'false');
+  }
 }
 
 /* ── Data ── */
@@ -279,9 +280,16 @@ async function boot() {
 
   document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
   document.getElementById('sidebar-toggle')?.addEventListener('click', toggleCollapse);
-  document.getElementById('menu-open')?.addEventListener('click', () => {
-    document.body.classList.add('menu-open');
-    document.getElementById('menu-open')?.setAttribute('aria-expanded', 'true');
+
+  // The content header's sidebar button asks to open the sidebar; the host owns what that
+  // means — the phone shelf here, and expanding the rail when it is collapsed.
+  document.addEventListener('shell:sidebar', () => {
+    const open = document.body.classList.contains('menu-open');
+    document.body.classList.toggle('menu-open', !open);
+    if (!open) document.body.classList.remove('sidebar-collapsed');
+    for (const button of document.querySelectorAll('.sidebar-button')) {
+      button.setAttribute('aria-expanded', String(!open));
+    }
   });
   document.getElementById('sidebar-backdrop')?.addEventListener('click', closeMenu);
   document.addEventListener('keydown', (event) => {
@@ -305,7 +313,8 @@ async function boot() {
     window.location.hash = '#/account';
   });
 
-  document.getElementById('chat-switch')?.addEventListener('click', () => {
+  // The content header's chat button asks to show the chat; the host routes it.
+  document.addEventListener('shell:chat', () => {
     window.location.hash = currentRoute().startsWith('/chat') ? '#/sessions' : '#/chat';
   });
 
@@ -319,12 +328,18 @@ async function boot() {
 
   renderNav();
 
+  // The content shell renders its own header: sidebar button left, chat button right.
+  const { mountContentHeader } = await import('../content/content.js');
+  mountContentHeader(document.getElementById('content'));
+
   // The refresh component is the shell's refresh action: the header button runs the
   // hard refresh (administrators only, as in the app) and the pull gesture offers both
   // stages — refresh, then hard refresh.
   const refreshButton = document.getElementById('refresh-button');
-  if (refreshButton) refreshButton.hidden = !state.me?.is_admin;
-  wireRefreshButton(refreshButton);
+  if (refreshButton) {
+    refreshButton.hidden = !state.me?.is_admin;
+    wireRefreshButton(refreshButton);
+  }
   installPullToRefresh();
 
   await renderRoute();

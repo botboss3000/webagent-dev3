@@ -202,7 +202,8 @@ for (const viewport of VIEWPORTS) {
         assert.equal(await page.locator('.main-foot').count(), 0, 'the shell has no footer strip');
         assert.equal(await page.locator('#page-title').textContent(), 'All sessions', 'header names the route');
         assert.equal(await page.locator('.main-foot').count(), 0, 'no footer strip on the content region');
-        assert.equal(await page.locator('#refresh-button').isVisible(), true, 'the refresh action shows for an administrator');
+        assert.equal(await page.locator('.content-head-left .sidebar-button').count(), 1, 'the content header carries the sidebar button');
+        assert.equal(await page.locator('.content-head-right .content-head-btn').count(), 1, 'the content header carries the chat button');
 
         // The body holds only the placeholder page: title plus one line.
         const bodyLines = await page.$$eval('#page-body > *', (nodes) => nodes.length);
@@ -263,8 +264,13 @@ for (const viewport of VIEWPORTS) {
             `main, divider and column fill the stage (${JSON.stringify(shared)})`,
           );
 
-          // The chat switch is a phone affordance only.
-          assert.equal(await page.locator('#chat-switch').isVisible(), false, 'no chat switch on desktop');
+          // The chat button lives in the content header's right slot at every width.
+          assert.equal(await page.locator('#chat-switch').count(), 1, 'the content header carries one chat button');
+          assert.equal(
+            await page.locator('.content-head-right #chat-switch').count(),
+            1,
+            'the chat button sits in the right slot',
+          );
 
           // The chat is a column beside the main panel, always visible and edgeless.
           await page.waitForSelector('#chat-panel .chat-surface');
@@ -446,7 +452,7 @@ test('signed-out visitors get no Administrator group and no admin page', async (
     const body = await page.$eval('#page-body', (node) => node.textContent);
     assert.match(body, /Administrator only/, 'the admin route refuses without the flag');
     assert.equal(await page.locator('.main-foot').count(), 0, 'no footer strip signed out either');
-    assert.equal(await page.locator('#refresh-button').isVisible(), false, 'the refresh action stays hidden when signed out');
+    assert.equal(await page.locator('.content-head-left .sidebar-button').count(), 1, 'the header still carries the sidebar button');
     assert.deepEqual(errors, []);
     await page.close();
   });

@@ -4,6 +4,12 @@
    The chat column is deliberately gone: this shell is the frame only, and
    components are ported back one at a time. */
 
+/* Controls carry no padding of their own: this removes the browser's default button
+   padding so every inset comes from config. */
+button {
+  padding: 0;
+}
+
 .app {
   display: flex;
   height: 100dvh;

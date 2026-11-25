@@ -1,0 +1,50 @@
+/* The content shell's header: sidebar button on the left, title in the centre, chat button
+   on the right. The header frame itself (.content-head) is the shell's layout rule. */
+
+.content-head-left,
+.content-head-centre,
+.content-head-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.content-head-centre {
+  flex: 1 1 auto;
+}
+
+/* The chat button: the same footprint and states as the shared sidebar button. */
+.content-head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--fg-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.content-head-btn:hover {
+  background: var(--bg-tint);
+  color: var(--fg-1);
+}
+
+.content-head-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .content-head-btn {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+}
