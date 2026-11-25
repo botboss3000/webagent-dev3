@@ -92,6 +92,17 @@ tokens and provider latency are not guaranteed by placement tests. Tool schemas
 remain in each endpoint's native request field; this feature does not move them
 into durable transcript text.
 
+**Output allowance and the provider window.** The provider counts the requested
+output against the same context window as the prompt, so every call sends
+`max_tokens = min(configured allowance (default 64k), the model's published
+maximum, context − prompt − safety)`. The engine derives the same reserve for its
+compaction ceiling (the larger of the call's allowance and the summary's), and the
+summarizer call is clamped the same way. A provider that rejects
+`prompt + allowance` above its window therefore sees conforming requests; the
+allowance is a ceiling, not a target, and a reply that reaches it fails the turn
+rather than being published truncated. The configured allowance is per agent
+(Identity → Context compaction → Output allowance).
+
 ## Compaction layout and cache reuse
 
 Providers cache a request from its first byte up to the first byte that changed,

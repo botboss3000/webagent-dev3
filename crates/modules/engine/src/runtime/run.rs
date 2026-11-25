@@ -210,6 +210,31 @@ fn bytes_per_token(run: &Value, selection: &provider::ProviderSelection) -> Opti
         .flatten()
 }
 
+/// Provider tokens for serialized bytes, using the call's measured ratio when known.
+fn tokens_for(bytes: usize, config: &context_compaction::Config) -> usize {
+    match config.bytes_per_token {
+        Some(ratio) => (bytes as f64 / ratio).ceil() as usize,
+        None => bytes / config.characters_per_token.max(1),
+    }
+}
+
+/// The output allowance a call may request: the configured budget (default 64k), capped by
+/// the model's published maximum and by the room its context window leaves after the prompt.
+fn output_allowance(
+    selection: &provider::ProviderSelection,
+    prompt_tokens: usize,
+    desired: usize,
+) -> usize {
+    let model_max = webagent_models::providers::max_output(selection.provider, &selection.model)
+        .unwrap_or(desired);
+    let context = webagent_models::providers::context(selection.provider, &selection.model)
+        .unwrap_or(prompt_tokens.saturating_add(desired));
+    desired
+        .min(model_max)
+        .min(context.saturating_sub(prompt_tokens).saturating_sub(8_192))
+        .max(1_024)
+}
+
 /// Content-free outline of a history for the operator log: each item's kind, and the
 /// call id of tool calls and results so an unpaired one can be spotted.
 fn history_shape(history: &[Value]) -> String {
@@ -1018,11 +1043,18 @@ impl<
         let done = background_compaction::register(&sid);
         let app = app.clone();
         let cancel = cancel.child_token();
+        let summary_output = (config.max_summary_bytes / 4).clamp(1_024, 65_536);
+        let summary_cap = output_allowance(
+            &selection,
+            tokens_for(request.envelope_bytes, config),
+            summary_output,
+        );
         tokio::spawn(async move {
             let response = async {
                 let prepared =
                     crate::provider::CallDraft::new(&selection, input, tools, &sid, &instructions)
                         .with_reasoning_effort(effort.as_deref())
+                        .with_output_cap(Some(summary_cap))
                         .with_bridge_fork(bridge_fork)
                         .prepare(
                             crate::ports::AgentMetadata::root(app.store.records()),
@@ -3233,9 +3265,29 @@ impl<
                 context_accounting.contributions_projected = contributions_projected;
                 // MODEL-CONTEXT-CEILING: runtime profiles bound the entire envelope;
                 // compaction JSON still owns folding policy and summary reserves.
+                // The provider counts the requested output against the same window, so the
+                // call's output allowance is reserved here too.
+                let context_tokens =
+                    webagent_models::providers::context(selection.provider, &selection.model)
+                        .unwrap_or(1_048_576);
+                let output_budget = compaction_config
+                    .output_tokens
+                    .unwrap_or(64_000)
+                    .min(
+                        webagent_models::providers::max_output(
+                            selection.provider,
+                            &selection.model,
+                        )
+                        .unwrap_or(usize::MAX),
+                    )
+                    .min(context_tokens.saturating_sub(16_384).max(1_024));
+                let summary_output = (compaction_config.max_summary_bytes / 4).clamp(1_024, 65_536);
+                let output_reserve = output_budget
+                    .max(summary_output)
+                    .min(context_tokens.saturating_sub(8_192));
                 let model_ceiling = config::Config::<C>::read(&app.runtime_path)?
                     .context
-                    .ceiling(&selection)?
+                    .ceiling_with(&selection, output_reserve)?
                     .min(workflow_policy.max_context_bytes);
                 // BACKGROUND COMPACTION: between the trigger and the ceiling a summary runs
                 // beside the main call, so the main call assembles with the ceiling as its
@@ -3593,6 +3645,17 @@ impl<
                             "summarizer":"system","fork":false}),
                     );
                     app.save(&mut run).await?;
+                    let summary_output =
+                        (compaction_config.max_summary_bytes / 4).clamp(1_024, 65_536);
+                    let summary_prompt_bytes: usize = summary_input
+                        .iter()
+                        .map(|item| item["content"].as_str().map_or(0, str::len))
+                        .sum();
+                    let summary_cap = output_allowance(
+                        &selection,
+                        tokens_for(summary_prompt_bytes, &compaction_config),
+                        summary_output,
+                    );
                     let prepared_system = match crate::provider::CallDraft::new(
                         &selection,
                         summary_input,
@@ -3600,6 +3663,7 @@ impl<
                         &sid,
                         &system_instructions,
                     )
+                    .with_output_cap(Some(summary_cap))
                     .prepare(
                         crate::ports::AgentMetadata::root(app.store.records()),
                         &cancel,
@@ -4299,6 +4363,11 @@ impl<
                     &instructions,
                 )
                 .with_reasoning_effort(core_effort.as_deref())
+                .with_output_cap(Some(output_allowance(
+                    &selection,
+                    tokens_for(envelope_bytes, &compaction_config),
+                    output_budget,
+                )))
                 .prepare(
                     crate::ports::AgentMetadata::root(app.store.records()),
                     &cancel,

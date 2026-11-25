@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 pub struct CallDraft<'a> {
     selection: &'a ProviderSelection,
     reasoning_effort: Option<&'a str>,
+    output_cap: Option<usize>,
     input: Vec<Value>,
     tools: Vec<Value>,
     session: &'a str,
@@ -97,6 +98,7 @@ impl<'a> CallDraft<'a> {
         Self {
             selection,
             reasoning_effort: None,
+            output_cap: None,
             input,
             tools,
             session,
@@ -104,6 +106,14 @@ impl<'a> CallDraft<'a> {
             bridge_fork: false,
             bridge_closing: false,
         }
+    }
+
+    /// Override the output allowance the provider is asked for. The engine caps it by the
+    /// model's published maximum and by the room left after the prompt, so prompt + output
+    /// always fits the provider's context window.
+    pub fn with_output_cap(mut self, cap: Option<usize>) -> Self {
+        self.output_cap = cap;
+        self
     }
 
     pub fn with_reasoning_effort(mut self, effort: Option<&'a str>) -> Self {
@@ -277,7 +287,7 @@ impl<'a> CallDraft<'a> {
                 }
                 PreparedRequest::Subscription(SubscriptionRequest {
                     reasoning_effort: self.reasoning_effort,
-                    max_output_tokens: output_cap(self.selection),
+                    max_output_tokens: self.output_cap.or_else(|| output_cap(self.selection)),
                     model: &self.selection.model,
                     input,
                     tools,
@@ -288,7 +298,12 @@ impl<'a> CallDraft<'a> {
             webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools }
                 if self.selection.provider.is_bridge() =>
             {
-                let mut body = compatible_body(self.selection, messages, tools);
+                let mut body = compatible_body(
+                    self.selection,
+                    messages,
+                    tools,
+                    self.output_cap.or_else(|| output_cap(self.selection)),
+                );
                 if let Some(effort) = self.reasoning_effort {
                     body["reasoning_effort"] = json!(effort);
                 }
@@ -308,7 +323,12 @@ impl<'a> CallDraft<'a> {
                     .provider
                     .chat_endpoint()
                     .ok_or_else(|| anyhow!("Provider does not use API keys"))?;
-                let mut body = compatible_body(self.selection, messages, tools);
+                let mut body = compatible_body(
+                    self.selection,
+                    messages,
+                    tools,
+                    self.output_cap.or_else(|| output_cap(self.selection)),
+                );
                 if let Some(effort) = self.reasoning_effort {
                     if self.selection.provider == ProviderId::Openrouter {
                         body["reasoning"] = json!({"effort":effort});
@@ -339,6 +359,7 @@ pub(super) fn compatible_body(
     selection: &ProviderSelection,
     messages: Vec<Value>,
     tools: Vec<Value>,
+    cap: Option<usize>,
 ) -> Value {
     let mut body = json!({"model":selection.model,"messages":messages,"stream":true,
         "stream_options":{"include_usage":true}});
@@ -346,7 +367,7 @@ pub(super) fn compatible_body(
         body["tools"] = json!(tools);
         body["tool_choice"] = json!("auto");
     }
-    if let Some(cap) = output_cap(selection) {
+    if let Some(cap) = cap {
         // OpenAI's chat API renamed the field; other compatible providers keep max_tokens.
         let field = if selection.provider == ProviderId::OpenaiApi {
             "max_completion_tokens"
@@ -540,6 +561,25 @@ mod tests {
                 .validate()
                 .is_ok());
         }
+    }
+
+    /// An explicit output allowance overrides the catalog maximum, and no cap is sent when
+    /// neither is known.
+    #[test]
+    fn explicit_output_cap_overrides_the_catalog_maximum() {
+        let selection = ProviderSelection {
+            provider: ProviderId::Deepseek,
+            model: "deepseek-flash".into(),
+        };
+        let body = compatible_body(
+            &selection,
+            vec![json!({"role":"user","content":"hi"})],
+            vec![],
+            Some(9_000),
+        );
+        assert_eq!(body["max_tokens"], 9_000);
+        let body = compatible_body(&selection, vec![], vec![], None);
+        assert!(body.get("max_tokens").is_none());
     }
 
     #[test]

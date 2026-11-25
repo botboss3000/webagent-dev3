@@ -40,7 +40,12 @@ pub(super) fn request_body(
         provider: ProviderId::Deepseek,
         model: model.to_owned(),
     };
-    Ok(super::call::compatible_body(&selection, messages, tools))
+    Ok(super::call::compatible_body(
+        &selection,
+        messages,
+        tools,
+        super::call::output_cap(&selection),
+    ))
 }
 
 #[derive(Default)]

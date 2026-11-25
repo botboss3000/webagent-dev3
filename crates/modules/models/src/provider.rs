@@ -128,10 +128,16 @@ impl ProviderSelection {
     /// less an 8,192-token output reserve. `None` when the catalog lists no context.
     /// This sizes compaction only; calls are not rejected by it (the provider decides).
     pub fn input_budget_bytes(&self) -> Result<Option<usize>> {
+        self.input_budget_bytes_with(8_192)
+    }
+
+    /// Compaction budget with an explicit output reserve in tokens: the room a prompt may
+    /// use once the provider counts the requested output against the same context window.
+    pub fn input_budget_bytes_with(&self, output_reserve_tokens: usize) -> Result<Option<usize>> {
         crate::providers::context(self.provider, &self.model)
             .map(|context| {
                 context
-                    .saturating_sub(8_192)
+                    .saturating_sub(output_reserve_tokens)
                     .checked_mul(4)
                     .ok_or_else(|| anyhow!("Model input budget overflow"))
             })
@@ -176,6 +182,10 @@ mod selection_tests {
         // The compaction budget follows the catalog context window, less the output reserve.
         let luna = ProviderSelection::parse(&json!({"model":"gpt-6-luna"}), "default").unwrap();
         assert_eq!(luna.input_budget_bytes().unwrap(), Some(263_808 * 4));
+        assert_eq!(
+            luna.input_budget_bytes_with(64_000).unwrap(),
+            Some((272_000 - 64_000) * 4)
+        );
         assert_eq!(parsed.input_budget_bytes().unwrap(), None);
         for provider in [json!("other"), json!(null), json!(7), json!("")] {
             assert!(ProviderSelection::parse(

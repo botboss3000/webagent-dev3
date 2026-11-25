@@ -77,6 +77,32 @@
       "notes": "Below trigger_tokens or absent means the trigger; the model's context limit caps it."
     },
     {
+      "id": "context.compaction.output_tokens",
+      "description": "Output allowance requested from the provider each call. The provider counts it against the same context window as the prompt, so a larger allowance leaves less room for history.",
+      "type": "integer",
+      "pointer": "/output_tokens",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "cap replies at 32k tokens",
+        "give the model more room to answer",
+        "leave more context for history"
+      ],
+      "areas": [
+        "context",
+        "memory",
+        "agent"
+      ],
+      "unit": "tokens",
+      "min": 1024,
+      "max": 1000000,
+      "agent_pointer": "/compaction_thresholds/output_tokens",
+      "bounds": "validator + proposed",
+      "notes": "Capped by the model's published maximum output and by the room left after the prompt. The request is prompt + allowance; the provider rejects the sum above its context window."
+    },
+    {
       "id": "context.compaction.summarizer",
       "description": "Whether summaries are written by the agent's own model (reusing its cached request) or by the System model.",
       "type": "enum",

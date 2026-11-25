@@ -101,13 +101,23 @@ impl Context {
         &self,
         selection: &webagent_models::provider::ProviderSelection,
     ) -> Result<usize> {
+        self.ceiling_with(selection, 8_192)
+    }
+
+    /// Same ceiling with an explicit output reserve in tokens, so a prompt + the output the
+    /// provider will be asked for fits the model's published context window.
+    pub fn ceiling_with(
+        &self,
+        selection: &webagent_models::provider::ProviderSelection,
+        output_reserve_tokens: usize,
+    ) -> Result<usize> {
         let provider = serde_json::to_value(selection.provider)?
             .as_str()
             .unwrap_or("")
             .to_owned();
         let ceiling = self.max_context_bytes.min(
             selection
-                .input_budget_bytes()?
+                .input_budget_bytes_with(output_reserve_tokens)?
                 .unwrap_or(self.max_context_bytes),
         );
         match self

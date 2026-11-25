@@ -17,6 +17,11 @@ pub struct Config {
     pub trigger_tokens: usize,
     pub tail_tokens: usize,
     pub summary_tokens: usize,
+    /// Desired output allowance sent as the provider's `max_tokens`; the engine caps it by
+    /// the model's published maximum and by the room left in its context window. Absent
+    /// uses the engine's safe default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<usize>,
     pub characters_per_token: usize,
     pub summary_reserve_bytes: usize,
     pub max_source_bytes: usize,
@@ -113,6 +118,9 @@ impl Config {
                 .checked_add(self.summary_tokens)
                 .is_none_or(|n| n >= self.trigger_tokens)
             || self.trigger_tokens > 1_000_000
+            || self
+                .output_tokens
+                .is_some_and(|tokens| !(1..=1_000_000).contains(&tokens))
             || !(1..=16).contains(&self.characters_per_token)
             || !(1..=65536).contains(&self.summary_reserve_bytes)
             || !(1..=262144).contains(&self.max_source_bytes)
@@ -1422,6 +1430,27 @@ mod tests {
         let text = serde_json::to_string(&json!({ "bytes_per_token": ratio })).unwrap();
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["bytes_per_token"].as_f64(), Some(ratio));
+    }
+
+    /// The output allowance is optional, bounded, and never zero.
+    #[test]
+    fn output_allowance_is_bounded() {
+        let base = json!({
+            "schema_version": 1, "trigger_tokens": 10000, "tail_tokens": 40, "summary_tokens": 20,
+            "characters_per_token": 4, "summary_reserve_bytes": 300, "max_source_bytes": 9000,
+            "max_summary_bytes": 300,
+            "summary_prefix": "Earlier conversation summary (background context, not a new request):\n",
+            "active_summary_prefix": "Active task progress summary (background context, not a new request):\n",
+            "summary_prompt": "Summarize under {summary_characters} characters. Conversation JSON: {source}"
+        });
+        let mut parsed: super::Config = serde_json::from_value(base).unwrap();
+        assert_eq!(parsed.output_tokens, None);
+        parsed.output_tokens = Some(64_000);
+        assert!(parsed.validate().is_ok());
+        parsed.output_tokens = Some(0);
+        assert!(parsed.validate().is_err());
+        parsed.output_tokens = Some(1_000_001);
+        assert!(parsed.validate().is_err());
     }
 
     /// The fullest shortening level is exactly the planner's measure (stubs of the original
