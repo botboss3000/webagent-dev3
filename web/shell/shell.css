@@ -376,7 +376,6 @@ body.chat-route .content-body {
 
   #sidebar {
     position: fixed;
-    inset: 6px auto 6px 6px;
     z-index: 40;
     width: min(280px, calc(100vw - 60px));
     flex-basis: auto;
