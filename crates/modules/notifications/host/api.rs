@@ -15,6 +15,7 @@ use std::time::Duration;
 use webagent_accounts_host::AccountsStore;
 use webagent_notifications::connections::{AcquireError, Connection};
 use webagent_notifications::cursor::{self, Args, Bounds};
+use webagent_notifications::outbox;
 use webagent_notifications::readers::{self, ReaderBody};
 
 use crate::{access, bad, conflict, now, Api, ApiError, App, State};
@@ -329,8 +330,60 @@ pub(super) async fn stream(
         .into_response())
 }
 
-/// The relay and retention loop: relay every user's staging rows each second, prune each
-/// minute.
+/// The relay's name in the account scan's per-scanner record (`Store::looked`).
+const RELAY: &str = "notification_relay";
+
+/// What one relay pass did: the accounts it opened, in order, and the rows it moved.
+#[derive(Debug, Default)]
+struct Pass {
+    opened: Vec<String>,
+    moved: usize,
+}
+
+/// One relay pass. It opens only the scanned accounts written since the relay last found them
+/// with nothing staged, or not looked at for `sweep` (the safety net). A staging row is a
+/// commit to the account's database, whichever process made it, and every commit changes the
+/// file marks the change watch reads, so a new row is seen on the next pass. All accounts'
+/// rows move in one `app.db` transaction with one prune; each account's rows are deleted
+/// after that commit, and only an account found with nothing staged is recorded as looked at
+/// (one whose rows were moved changed its database by the delete and is looked at again).
+async fn relay_pass(app: &App, sweep: Duration) -> anyhow::Result<Pass> {
+    let mut pass = Pass::default();
+    let mut stores = Vec::new();
+    let mut batches = Vec::new();
+    for (id, marks) in app.store.scan_user_ids_for(RELAY, sweep).await? {
+        if app.stop.is_cancelled() || batches.len() >= outbox::PASS_ACCOUNTS {
+            // Not recorded, so the next pass takes the rest.
+            break;
+        }
+        pass.opened.push(id.clone());
+        let collected = async {
+            let store = app.store.for_user(&id).await?;
+            let batch = outbox::collect(&store.app_pool, &store.pool, &id).await?;
+            Ok::<_, anyhow::Error>((store, batch))
+        }
+        .await;
+        match collected {
+            Ok((_, None)) => crate::store::Store::looked(RELAY, id, marks),
+            Ok((store, Some(batch))) => {
+                stores.push(store);
+                batches.push(batch);
+            }
+            Err(_) => tracing::error!("Notification relay deferred"),
+        }
+    }
+    let acknowledged = outbox::commit(&app.store.app_pool, &batches).await?;
+    for ((store, batch), through) in stores.iter().zip(&batches).zip(acknowledged) {
+        if outbox::acknowledge(&store.pool, through).await.is_err() {
+            // The rows stay below the committed watermark; the next pass only deletes them.
+            tracing::error!("Notification relay acknowledgement deferred");
+        }
+        pass.moved += batch.len();
+    }
+    Ok(pass)
+}
+
+/// The relay and retention loop: a relay pass each second, prune each minute.
 ///
 /// One API-owned relay; run emission still belongs to the independent loop's transactions.
 /// Store methods are the only permitted route to user state.
@@ -340,24 +393,17 @@ pub(crate) async fn service(app: App) {
         if app.stop.is_cancelled() {
             break;
         }
-        match app.store.scan_user_ids().await {
-            Ok(ids) => {
-                for id in ids {
-                    if app.stop.is_cancelled() {
-                        break;
-                    }
-                    let result = async {
-                        let store = app.store.for_user(&id).await?;
-                        store.relay_notifications().await?;
-                        Ok::<(), anyhow::Error>(())
-                    }
-                    .await;
-                    if result.is_err() {
-                        tracing::error!("Notification relay deferred");
-                    }
-                }
-            }
-            Err(_) => tracing::error!("Notification owner scan deferred"),
+        let sweep = webagent_notifications::alerts::Config::live()
+            .relay
+            .sweep_seconds;
+        match relay_pass(&app, Duration::from_secs(sweep)).await {
+            Ok(pass) if pass.moved > 0 => tracing::debug!(
+                opened = pass.opened.len(),
+                moved = pass.moved,
+                "Notifications relayed"
+            ),
+            Ok(_) => {}
+            Err(_) => tracing::error!("Notification relay deferred"),
         }
         if now().saturating_sub(last_pruned) >= 60 {
             if app.store.prune_notifications(now() as i64).await.is_err() {
@@ -398,6 +444,70 @@ mod tests {
         identity["_user_id"] = json!("admin");
         (format!("v3_session={token}"), identity)
     }
+    #[tokio::test]
+    async fn relay_opens_only_written_accounts_and_the_sweep_catches_a_missed_row() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        // A new account has a random id: the scan's per-scanner records are process-wide.
+        let created = app
+            .store
+            .create_user_account("relaywatch", "fixture-only-password-hash")
+            .await
+            .unwrap();
+        let id = created["user_id"].as_str().unwrap().to_owned();
+        let account = app.store.for_user(&id).await.unwrap();
+        // Work the account scan lists (a pending manager review), nothing staged.
+        account
+            .put("manager_pending:x", &json!({"id":"x"}))
+            .await
+            .unwrap();
+        account
+            .put("session:s", &json!({"id":"s","agent_id":"shared_default"}))
+            .await
+            .unwrap();
+        let hour = Duration::from_secs(3600);
+        assert!(relay_pass(&app, hour).await.unwrap().opened.contains(&id));
+        // Listed by the scan again, but unchanged since the relay found nothing: not opened.
+        assert!(!relay_pass(&app, hour).await.unwrap().opened.contains(&id));
+        // A staged row is a write: the next pass opens the account and moves it.
+        let mut tx = account.pool.begin().await.unwrap();
+        account
+            .stage_notification(&mut tx, "created:s", "session.created", "s", None, None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let pass = relay_pass(&app, hour).await.unwrap();
+        assert!(pass.opened.contains(&id));
+        assert!(pass.moved >= 1);
+        // A row whose write the relay missed (recorded as looked at its new marks) waits for
+        // the sweep, which moves it.
+        let mut tx = account.pool.begin().await.unwrap();
+        account
+            .stage_notification(&mut tx, "message:m", "message.received", "s", None, None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        crate::store::Store::looked(RELAY, id.clone(), app.store.write_marks(&id));
+        assert!(!relay_pass(&app, hour).await.unwrap().opened.contains(&id));
+        assert!(relay_pass(&app, Duration::ZERO)
+            .await
+            .unwrap()
+            .opened
+            .contains(&id));
+        let page = app.store.notification_page(0, 200).await.unwrap();
+        for event in ["created:s", "message:m"] {
+            let event_id = format!("{id}:{event}");
+            assert_eq!(
+                page["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| row["event_id"] == event_id.as_str())
+                    .count(),
+                1
+            );
+        }
+    }
+
     #[tokio::test]
     async fn outbox_admin_auth_bounds_backfill_and_stream() {
         let (_root, app) = crate::runtime_tests::fixture().await;

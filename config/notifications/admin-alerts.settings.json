@@ -220,6 +220,28 @@
       "unit": "seconds",
       "min": 60,
       "max": 86400
+    },
+    {
+      "id": "notifications.relay.sweep_seconds",
+      "description": "Seconds after which the notification relay looks again at an account with work even though nothing shows it was written; the safety net behind the change signal that relays new notifications within about a second.",
+      "type": "integer",
+      "pointer": "/relay/sweep_seconds",
+      "layers": [
+        "app"
+      ],
+      "areas": [
+        "notifications",
+        "performance"
+      ],
+      "bounds": "validator",
+      "examples": [
+        "check every account for missed notifications each minute",
+        "notification relay safety sweep interval",
+        "how often the relay rechecks accounts"
+      ],
+      "unit": "seconds",
+      "min": 5,
+      "max": 600
     }
   ],
   "excluded": {

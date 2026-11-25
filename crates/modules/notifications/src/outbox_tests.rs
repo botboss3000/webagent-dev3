@@ -206,3 +206,121 @@ async fn unsupported_kinds_and_plane_wide_agent() {
         .unwrap();
     assert_eq!(staged, 1);
 }
+
+#[tokio::test]
+async fn one_pass_moves_every_account_in_order_and_a_crash_before_the_delete_duplicates_nothing() {
+    let planes = planes().await;
+    let other = webagent_storage::pool::open_pool(&planes.root.join("other.db"), true, true)
+        .await
+        .unwrap();
+    schema(&other, Plane::User).await.unwrap();
+    sqlx::query("INSERT INTO docs(key,value) VALUES('session:s',?)")
+        .bind(br#"{"id":"s","agent_id":"other_agent"}"#.to_vec())
+        .execute(&other)
+        .await
+        .unwrap();
+    let source = Source {
+        user_id: "other",
+        agent_id: "shared_default",
+    };
+    stage_once(&planes, &notice("created:s", "session.created"))
+        .await
+        .unwrap();
+    stage_once(&planes, &notice("message:r", "message.received"))
+        .await
+        .unwrap();
+    let mut tx = other.begin().await.unwrap();
+    stage(
+        &mut tx,
+        &source,
+        &notice("created:s", "session.created"),
+        plain,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let first = collect(&planes.app, &planes.user, "admin")
+        .await
+        .unwrap()
+        .unwrap();
+    let second = collect(&planes.app, &other, "other")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((first.len(), second.len()), (2, 1));
+    assert_eq!(
+        commit(&planes.app, &[first, second]).await.unwrap(),
+        vec![2, 1]
+    );
+    // A crash here leaves both accounts' rows staged: the next pass moves none of them again,
+    // and a row staged after the crash follows the earlier ones.
+    stage_once(&planes, &notice("run:r", "run.started"))
+        .await
+        .unwrap();
+    let first = collect(&planes.app, &planes.user, "admin")
+        .await
+        .unwrap()
+        .unwrap();
+    let second = collect(&planes.app, &other, "other")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((first.len(), second.len()), (1, 0));
+    let through = commit(&planes.app, &[first, second]).await.unwrap();
+    assert_eq!(through, vec![3, 1]);
+    acknowledge(&planes.user, through[0]).await.unwrap();
+    acknowledge(&other, through[1]).await.unwrap();
+    let page = page(&planes.app, 0, 20).await.unwrap();
+    let events: Vec<(i64, &str)> = page["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["seq"].as_i64().unwrap(),
+                row["event_id"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        events,
+        vec![
+            (1, "admin:created:s"),
+            (2, "admin:message:r"),
+            (3, "other:created:s"),
+            (4, "admin:run:r"),
+        ]
+    );
+    let watermarks: Vec<(String, i64)> =
+        sqlx::query_as("SELECT source_user,through_seq FROM notification_relay ORDER BY 1")
+            .fetch_all(&planes.app)
+            .await
+            .unwrap();
+    assert_eq!(
+        watermarks,
+        vec![("admin".to_owned(), 3), ("other".to_owned(), 1)]
+    );
+    assert!(collect(&planes.app, &planes.user, "admin")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(collect(&planes.app, &other, "other")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_pass_with_nothing_staged_writes_nothing() {
+    let planes = planes().await;
+    assert!(collect(&planes.app, &planes.user, "admin")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(commit(&planes.app, &[]).await.unwrap().is_empty());
+    let watermarks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notification_relay")
+        .fetch_one(&planes.app)
+        .await
+        .unwrap();
+    assert_eq!(watermarks, 0);
+}

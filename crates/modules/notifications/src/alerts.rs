@@ -50,6 +50,14 @@ pub struct SupplyChain {
     pub check_seconds: u64,
 }
 
+/// How the notification relay finds accounts with staged rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Relay {
+    /// Seconds after which the relay looks at a listed account again even though its
+    /// database files show no write since it last found nothing staged (the safety net).
+    pub sweep_seconds: u64,
+}
+
 /// The parsed live configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
@@ -57,6 +65,7 @@ pub struct Config {
     pub rules: BTreeMap<String, Rule>,
     pub channels: BTreeMap<String, bool>,
     pub supply_chain: SupplyChain,
+    pub relay: Relay,
 }
 
 fn object<'a>(value: &'a Value, what: &str) -> Result<&'a serde_json::Map<String, Value>> {
@@ -80,13 +89,14 @@ impl Config {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let value: Value = serde_json::from_slice(bytes)?;
         let top = object(&value, "Alert configuration")?;
-        const KEYS: [&str; 6] = [
+        const KEYS: [&str; 7] = [
             "_instructions",
             "schema_version",
             "retention_days",
             "events",
             "channels",
             "supply_chain",
+            "relay",
         ];
         if top.keys().any(|key| !KEYS.contains(&key.as_str())) {
             bail!("Unknown alert setting");
@@ -149,11 +159,21 @@ impl Config {
             missed_check_hours: bounded(supply, "missed_check_hours", 1, 720)?,
             check_seconds: bounded(supply, "check_seconds", 60, 86_400)?,
         };
+        if object(&value["relay"], "relay")?
+            .keys()
+            .any(|key| key != "sweep_seconds")
+        {
+            bail!("Unknown setting in relay");
+        }
+        let relay = Relay {
+            sweep_seconds: bounded(&value["relay"], "sweep_seconds", 5, 600)?,
+        };
         Ok(Self {
             retention_days,
             rules,
             channels,
             supply_chain,
+            relay,
         })
     }
 
@@ -533,6 +553,15 @@ mod tests {
         assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
         value["supply_chain"] =
             json!({"stale_days":8,"missed_check_hours":24,"check_seconds":900,"x":1});
+        assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        assert_eq!(config.relay.sweep_seconds, 30);
+        let mut value: Value = serde_json::from_slice(include_bytes!(
+            "../../../../config/notifications/admin-alerts.json"
+        ))
+        .unwrap();
+        value["relay"]["sweep_seconds"] = json!(4);
+        assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        value["relay"] = json!({"sweep_seconds":30,"x":1});
         assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
         let mut fixable = single(&config, "supply_chain_fixable").unwrap();
         fixable.count = 2;

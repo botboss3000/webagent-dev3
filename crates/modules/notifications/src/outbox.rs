@@ -4,8 +4,13 @@
 //! moves committed staging rows into the application outbox; its durable watermark and the
 //! insertions share one transaction, so a crash before the staging rows are acknowledged
 //! cannot recreate events below the watermark, including pruned ones.
+//!
+//! A relay pass reads each account's rows ([`collect`]), moves every account's rows in one
+//! application-plane transaction with one prune ([`commit`]), then deletes each account's
+//! moved rows ([`acknowledge`]). [`relay`] is that pass for one account.
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::now;
@@ -15,6 +20,11 @@ use crate::staging::{self, Notice};
 pub const RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const MAX_OUTBOX_ROWS: i64 = 1_000_000;
 const MAX_STAGED_ROWS: i64 = 10_000;
+/// Most staging rows one account contributes to a relay pass.
+const PASS_ROWS: i64 = 200;
+/// Most accounts with staged rows one relay pass moves; the rest wait for the next pass, so
+/// one application-plane transaction stays short and the pass holds few account handles.
+pub const PASS_ACCOUNTS: usize = 64;
 
 /// The storage plane whose notification tables [`schema`] creates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,68 +155,148 @@ where
     stage(tx, source, &notice, unseal).await
 }
 
-/// Move up to 200 committed staging rows of `user_id` from `user_pool` into the outbox in
-/// `app_pool`, prune the outbox, then acknowledge the moved rows. Returns the rows moved.
-pub async fn relay(app_pool: &SqlitePool, user_pool: &SqlitePool, user_id: &str) -> Result<usize> {
-    // Most accounts have nothing staged; skip the app.db write transaction (and its fsync) for them.
+/// One account's committed staging rows read for a relay pass.
+pub struct Batch {
+    user_id: String,
+    /// Rows above the watermark read before the pass, oldest first, at most [`PASS_ROWS`].
+    rows: Vec<SqliteRow>,
+    /// The account's watermark when the rows were read. Rows at or below it were moved by an
+    /// earlier pass that stopped before acknowledging them; they are only deleted.
+    through: i64,
+}
+
+impl Batch {
+    /// Rows this batch moves into the outbox.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Whether the batch moves nothing (it then only deletes rows moved before a crash).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
+
+/// Read up to 200 committed staging rows of `user_id` from `user_pool` above its watermark in
+/// `app_pool`. `None` when nothing is staged: the pass writes nothing for this account.
+pub async fn collect(
+    app_pool: &SqlitePool,
+    user_pool: &SqlitePool,
+    user_id: &str,
+) -> Result<Option<Batch>> {
+    // Most accounts have nothing staged; they cost one read and no app.db write.
     let staged: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notification_stage)")
         .fetch_one(user_pool)
         .await?;
     if !staged {
-        return Ok(0);
+        return Ok(None);
     }
-    let mut tx = app_pool.begin().await?;
-    sqlx::query("INSERT OR IGNORE INTO notification_relay VALUES(?,0)")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE notification_relay SET through_seq=through_seq WHERE source_user=?")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-    let mut through: i64 =
-        sqlx::query_scalar("SELECT through_seq FROM notification_relay WHERE source_user=?")
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let through: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT through_seq FROM notification_relay WHERE source_user=?),0)",
+    )
+    .bind(user_id)
+    .fetch_one(app_pool)
+    .await?;
     let rows = sqlx::query(
-        "SELECT * FROM notification_stage WHERE source_seq>? ORDER BY source_seq LIMIT 200",
+        "SELECT * FROM notification_stage WHERE source_seq>? ORDER BY source_seq LIMIT ?",
     )
     .bind(through)
+    .bind(PASS_ROWS)
     .fetch_all(user_pool)
     .await?;
-    for row in &rows {
-        sqlx::query(
-            "INSERT INTO notification_outbox(event_id,type,session_id,run_id,agent_id,actor,payload,created_at,source_user,source_seq,retained_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        )
-        .bind(row.get::<String, _>("event_id"))
-        .bind(row.get::<String, _>("type"))
-        .bind(row.get::<String, _>("session_id"))
-        .bind(row.get::<Option<String>, _>("run_id"))
-        .bind(row.get::<String, _>("agent_id"))
-        .bind(row.get::<String, _>("actor"))
-        .bind(row.get::<String, _>("payload"))
-        .bind(row.get::<i64, _>("created_at"))
-        .bind(user_id)
-        .bind(row.get::<i64, _>("source_seq"))
-        .bind(now() as i64)
-        .execute(&mut *tx)
-        .await?;
-        through = row.get("source_seq");
+    Ok(Some(Batch {
+        user_id: user_id.to_owned(),
+        rows,
+        through,
+    }))
+}
+
+/// Move every batch's rows into the outbox in `app_pool` in one transaction, in batch order,
+/// each account's watermark raised in the same transaction as its rows, and prune the outbox
+/// once. Returns, in batch order, the sequence through which each account's staging rows may
+/// be deleted once this returns. Writes nothing when no batch has rows to move.
+pub async fn commit(app_pool: &SqlitePool, batches: &[Batch]) -> Result<Vec<i64>> {
+    if batches.iter().all(Batch::is_empty) {
+        return Ok(batches.iter().map(|batch| batch.through).collect());
     }
-    sqlx::query("UPDATE notification_relay SET through_seq=? WHERE source_user=?")
-        .bind(through)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = app_pool.begin().await?;
+    let mut acknowledged = Vec::with_capacity(batches.len());
+    for batch in batches {
+        if batch.is_empty() {
+            acknowledged.push(batch.through);
+            continue;
+        }
+        sqlx::query("INSERT OR IGNORE INTO notification_relay VALUES(?,0)")
+            .bind(&batch.user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE notification_relay SET through_seq=through_seq WHERE source_user=?")
+            .bind(&batch.user_id)
+            .execute(&mut *tx)
+            .await?;
+        // Read again under the write lock: rows a concurrent relay already moved are skipped.
+        let mut through: i64 =
+            sqlx::query_scalar("SELECT through_seq FROM notification_relay WHERE source_user=?")
+                .bind(&batch.user_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        for row in &batch.rows {
+            let source_seq: i64 = row.get("source_seq");
+            if source_seq <= through {
+                continue;
+            }
+            sqlx::query(
+                "INSERT INTO notification_outbox(event_id,type,session_id,run_id,agent_id,actor,payload,created_at,source_user,source_seq,retained_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            )
+            .bind(row.get::<String, _>("event_id"))
+            .bind(row.get::<String, _>("type"))
+            .bind(row.get::<String, _>("session_id"))
+            .bind(row.get::<Option<String>, _>("run_id"))
+            .bind(row.get::<String, _>("agent_id"))
+            .bind(row.get::<String, _>("actor"))
+            .bind(row.get::<String, _>("payload"))
+            .bind(row.get::<i64, _>("created_at"))
+            .bind(&batch.user_id)
+            .bind(source_seq)
+            .bind(now() as i64)
+            .execute(&mut *tx)
+            .await?;
+            through = source_seq;
+        }
+        sqlx::query("UPDATE notification_relay SET through_seq=? WHERE source_user=?")
+            .bind(through)
+            .bind(&batch.user_id)
+            .execute(&mut *tx)
+            .await?;
+        acknowledged.push(through);
+    }
     prune_tx(&mut tx, now() as i64).await?;
     tx.commit().await?;
+    Ok(acknowledged)
+}
+
+/// Delete the staging rows of `user_pool` through `through`, a value [`commit`] returned.
+pub async fn acknowledge(user_pool: &SqlitePool, through: i64) -> Result<()> {
     sqlx::query("DELETE FROM notification_stage WHERE source_seq<=?")
         .bind(through)
         .execute(user_pool)
         .await?;
-    Ok(rows.len())
+    Ok(())
+}
+
+/// Move up to 200 committed staging rows of `user_id` from `user_pool` into the outbox in
+/// `app_pool`, prune the outbox, then acknowledge the moved rows. Returns the rows moved.
+pub async fn relay(app_pool: &SqlitePool, user_pool: &SqlitePool, user_id: &str) -> Result<usize> {
+    let Some(batch) = collect(app_pool, user_pool, user_id).await? else {
+        return Ok(0);
+    };
+    for through in commit(app_pool, std::slice::from_ref(&batch)).await? {
+        acknowledge(user_pool, through).await?;
+    }
+    Ok(batch.len())
 }
 
 /// Delete expired and overflowing outbox rows and raise the retention floor over them.
