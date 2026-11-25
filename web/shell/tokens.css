@@ -28,15 +28,15 @@
 
   /* Surfaces: --bg-0, --bg-elev and --bg-tint are the raw swatches;
      every other step derives from them plus the text anchors. */
-  /* Inverted: the page is the dark grey and every raised surface (sidebar, cards,
-     tiles) is black. */
-  --bg-0: #141414;
-  --bg-0-rgb: 20, 20, 20;
+  /* Dark theme: the page is the darker grey and every raised surface (sidebar,
+     cards, tiles) a lighter grey — no pure black underneath. */
+  --bg-0: #0d0d0d;
+  --bg-0-rgb: 13, 13, 13;
   --bg-1: color-mix(in oklab, var(--bg-0) 97%, var(--fg-1));
   --bg-2: color-mix(in oklab, var(--bg-0) 93%, var(--fg-1));
-  --bg-elev: #000000;
+  --bg-elev: #1c1c1c;
   --bg-elev-2: color-mix(in oklab, var(--bg-elev) 90%, var(--fg-1));
-  --bg-tint: #262626;
+  --bg-tint: #2a2a2a;
   --bg-tint-2: color-mix(in oklab, var(--bg-tint) 82%, var(--fg-1));
   --border: #333333;
   --border-soft: color-mix(in oklab, var(--border) 55%, var(--bg-0));
