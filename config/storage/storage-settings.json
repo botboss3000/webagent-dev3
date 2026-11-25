@@ -16,7 +16,7 @@
     "retention_days": 30
   },
   "process": {
-    "_instructions": "max_blocking_threads: threads the runtime may add for blocking work (file and database calls; 8-256, default 64). Each is one task against the container's limit; read before the runtime starts.",
-    "max_blocking_threads": 64
+    "_instructions": "max_blocking_threads: threads the runtime may add for blocking work (file calls, password hashing, database setup; 8-256, default 64, the shipped file 256). Each is one task against the container's limit; read before the runtime starts. The sidekick tester at 400 users, 2026-11-24: 64 queued sign-ins behind password hashing (401s and dropped connections); 256 keeps that path parallel and stays far below 1,024 tasks.",
+    "max_blocking_threads": 256
   }
 }

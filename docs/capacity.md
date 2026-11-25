@@ -145,7 +145,7 @@ weight to the shares that produce it. Check the result in
 | Connections per account | same file, `user_database_pools.max_connections` | 2 | Connections one account database may hold. Account threads ≈ `max_connected` × this. 1–8. | Process start. |
 | Idle account lifetime | same file, `user_database_pools.idle_seconds` | 5 | Seconds before an idle account connection closes. 1–60. | Process start. |
 | Connect wait | same file, `user_database_pools.connect_wait_ms` | 5000 | How long a request waits for a free account-database slot before it is refused with a retryable 503 (`Retry-After: 2`). 0–10000. | Read live. |
-| Runtime blocking threads | same file, `process.max_blocking_threads` | 64 | Threads the runtime may add for blocking work; each is one task against the limit. 8–256. | Process start. |
+| Runtime blocking threads | same file, `process.max_blocking_threads` | 256 | Threads the runtime may add for blocking work; each is one task against the limit. 8–256. | Process start. |
 | Browser limits | `config/browser/browser-limits.json`: `max_running_per_app` (5), `max_running_per_user` (4), `idle_seconds` (180), `queued_idle_seconds` (30), `max_wait_seconds` (600); also `min_extension_version` (0.2.0), the oldest Browser Extension that may take actions | as shown | Private browsers running at once, per server and per user, and how fast idle ones close while others wait. | Read live for each new browser. |
 
 The JSON files under `config/` are the app's single live settings files. Change them in the
@@ -172,7 +172,7 @@ states its range.
    process. Budget the API's threads rather than raising it: account databases take at most
    `max_connected` × `max_connections` (192 × 2 = 384 in the shipped file), plus the application and agent
    pools (about 10), the runtime's workers (C) and its blocking pool (`process.max_blocking_threads`,
-   64). That is about 470 threads on a 6-core server; a limit of 1,024 leaves room for tool
+   256). That is about 470 threads on a 6-core server; a limit of 1,024 leaves room for tool
    processes, previews and browsers started by tools. Raise `api.pids_limit` only together with
    that budget: a server with 64 GB or many browsers may need 2,048, while one with 8 GB should
    lower `max_connected` and keep 1,024. Measured on the sidekick tester, 2026-11-24, four loops,
