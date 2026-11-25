@@ -58,6 +58,34 @@ function startServer(admin) {
         }),
       );
     }
+    // Composer placement: the four buttons in the third row, attach left, the rest right.
+    if (url.pathname === '/config/web/chat/chat-footer.json') {
+      return send(
+        200,
+        JSON.stringify({
+          version: 1,
+          common: {
+            active: {
+              rows: [
+                { left: [], center: [], right: [] },
+                { left: [], center: [], right: [] },
+                { left: ['attach'], center: [], right: ['mic', 'stop', 'send'] },
+              ],
+            },
+            idle: {
+              rows: [
+                { left: [], center: [], right: [] },
+                { left: [], center: [], right: [] },
+                { left: ['attach'], center: [], right: ['mic', 'send'] },
+              ],
+            },
+          },
+          desktop: {},
+          mobile: {},
+          widget: {},
+        }),
+      );
+    }
     if (!url.pathname.startsWith('/web/')) return send(404, '{"error":"not found"}');
 
     const relative = url.pathname.slice('/web/'.length) || 'index.html';
@@ -240,7 +268,7 @@ for (const viewport of VIEWPORTS) {
           const shell = await probeShell(page);
           assert.ok(shell, 'chat panel is mounted in the column');
           assert.equal(shell.headerChildren, 0, 'header region is empty');
-          assert.equal(shell.footerChildren, 0, 'footer region is empty');
+          assert.ok(shell.footerChildren >= 1, 'the composer grid fills the footer region');
           assert.equal(shell.innerChildren, 0, 'transcript region is empty');
           assert.ok(shell.height > 300, `chat panel fills the height (${shell.height}px)`);
 
@@ -254,6 +282,39 @@ for (const viewport of VIEWPORTS) {
           const after = await page.$eval('#chat-panel', (node) => Math.round(node.getBoundingClientRect().width));
           assert.ok(after > before + 40, `dragging left widened the chat column (${before} -> ${after})`);
           assert.equal(await page.evaluate(() => document.body.classList.contains('chat-resizing')), false);
+
+          // The composer dock is a 3x3 grid: empty rows collapse, row 3 holds the buttons.
+          const composer = await page.evaluate(() => {
+            const grid = document.querySelector('#composer .composer-grid');
+            const rows = grid ? [...grid.querySelectorAll('.composer-row')] : [];
+            const last = rows[rows.length - 1];
+            const labels = (cell) =>
+              [...(cell?.querySelectorAll('.composer-btn') || [])].map((b) => b.getAttribute('aria-label'));
+            return {
+              hasGrid: Boolean(grid),
+              rowCount: rows.length,
+              left: labels(last?.querySelector('.composer-cell-left')),
+              right: labels(last?.querySelector('.composer-cell-right')),
+              stop: Boolean(document.querySelector('.composer-btn-stop')),
+              send: Boolean(document.querySelector('.composer-btn-send')),
+              mic: Boolean(document.querySelector('.composer-btn-mic svg rect')),
+              square: Boolean(document.querySelector('.composer-btn-stop svg rect')),
+              triangle: Boolean(document.querySelector('.composer-btn-send svg path')),
+            };
+          });
+          assert.equal(composer.hasGrid, true, 'the composer grid is mounted');
+          assert.equal(composer.rowCount, 1, 'the two empty rows collapse');
+          assert.deepEqual(composer.left, ['Attach files'], 'attach sits in the left cell');
+          assert.deepEqual(
+            composer.right,
+            ['Dictate', 'Stop', 'Send'],
+            'mic, stop and send sit in the right cell',
+          );
+          assert.equal(composer.stop, true, 'stop uses the stop variant');
+          assert.equal(composer.send, true, 'send uses the send variant');
+          assert.equal(composer.square, true, 'stop draws the square icon');
+          assert.equal(composer.triangle, true, 'send draws the triangle icon');
+          assert.equal(composer.mic, true, 'mic draws the microphone icon');
         } else {
           // Phone: the sidebar is a drawer over the stage.
           assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');
@@ -285,7 +346,7 @@ for (const viewport of VIEWPORTS) {
           const phoneShell = await probeShell(page);
           assert.ok(phoneShell, 'chat panel is mounted on a phone');
           assert.equal(phoneShell.headerChildren, 0, 'header region is empty');
-          assert.equal(phoneShell.footerChildren, 0, 'footer region is empty');
+          assert.ok(phoneShell.footerChildren >= 1, 'the composer grid fills the footer region on a phone');
           assert.equal(phoneShell.innerChildren, 0, 'transcript region is empty');
           assert.ok(phoneShell.height > 300, `chat panel fills the height (${phoneShell.height}px)`);
 

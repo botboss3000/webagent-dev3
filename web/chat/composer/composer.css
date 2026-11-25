@@ -1,0 +1,101 @@
+/* Composer: the 3x3 grid that fills the docked composer region, and the single
+   composer-button primitive every composer control is built from.
+
+   Rows are independent: each is its own grid of three cells, so a textarea can span
+   row 1 while row 2 holds unequal cells. An empty row takes no space. */
+
+.composer-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: var(--composer-max-width, 760px);
+  margin-inline: auto;
+  pointer-events: auto;
+}
+
+.composer-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.composer-row:empty {
+  display: none;
+}
+
+.composer-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.composer-cell-left {
+  justify-content: flex-start;
+}
+
+.composer-cell-center {
+  justify-content: center;
+}
+
+.composer-cell-right {
+  justify-content: flex-end;
+}
+
+/* The one composer button: controls differ by icon, colour and variant class only. */
+.composer-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--bg-tint);
+  color: var(--fg-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.06s ease;
+}
+
+.composer-btn:hover {
+  background: var(--bg-tint-2);
+  color: var(--fg-1);
+}
+
+.composer-btn:active {
+  transform: translateY(1px);
+}
+
+.composer-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Stop is the red square; send is the emphatic action; mic and attach stay neutral. */
+.composer-btn-stop {
+  color: var(--danger);
+}
+
+.composer-btn-send {
+  background: var(--accent);
+  color: var(--bg-0);
+}
+
+.composer-btn-send:hover {
+  background: var(--accent-hover);
+  color: var(--bg-0);
+}
+
+@media (pointer: coarse) {
+  .composer-btn {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+}

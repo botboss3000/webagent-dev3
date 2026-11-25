@@ -16,6 +16,11 @@ const PATHS = {
   chevron: '<path d="M9 6l6 6-6 6"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M19.1 4.9l-1.5 1.5M6.4 17.6l-1.5 1.5"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>',
+  // Composer actions: a filled red square for stop, a filled right triangle for send,
+  // and the lucide microphone.
+  square: '<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/>',
+  send: '<path d="M6 4l13 8-13 8z" fill="currentColor" stroke="none"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
 };
 
 export function icon(name, size = 16) {

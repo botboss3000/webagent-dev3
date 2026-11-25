@@ -1,0 +1,23 @@
+{
+  "_instructions": "Composer placement. A cell lists control ids from web/chat/controls/<id>/ (each with its own <id>.control.json); a control the config does not name is not rendered, and a row whose cells are all empty takes no space. Rows are independent: no row's cells affect another row's widths. common is the base and the active profile overlays it (objects merge, arrays replace, null inherits). active and idle are two states of the same dock.",
+  "version": 1,
+  "common": {
+    "active": {
+      "rows": [
+        { "left": [], "center": [], "right": [] },
+        { "left": [], "center": [], "right": [] },
+        { "left": ["attach"], "center": [], "right": ["mic", "stop", "send"] }
+      ]
+    },
+    "idle": {
+      "rows": [
+        { "left": [], "center": [], "right": [] },
+        { "left": [], "center": [], "right": [] },
+        { "left": ["attach"], "center": [], "right": ["mic", "send"] }
+      ]
+    }
+  },
+  "desktop": {},
+  "mobile": {},
+  "widget": {}
+}
