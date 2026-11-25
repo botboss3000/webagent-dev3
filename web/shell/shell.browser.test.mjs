@@ -39,6 +39,25 @@ function startServer(admin) {
     if (url.pathname === '/api/v3/agents') {
       return send(200, JSON.stringify({ agents: [{ id: 'fixture-agent', name: 'Fixture Agent', owned: true }] }));
     }
+    // The shell reads its geometry from here; the fixture serves it so the measured
+    // values come from config, not from CSS fallbacks.
+    if (url.pathname === '/config/web/chat/chat-shell.json') {
+      return send(
+        200,
+        JSON.stringify({
+          version: 1,
+          common: {
+            surface: { background: 'transparent', border: 'none', radius: '0', shadow: 'none' },
+            column: { default_width_px: 380, min_width_px: 250, flex_basis: '45%', draggable: true },
+            divider: { hit_width_px: 14, grip_width_px: 2, grip_height_px: 36, grip_height_active_px: 56 },
+            breakpoints: { mobile_px: 800, column_clamp_px: 514 },
+          },
+          desktop: { chat_is: 'column', narrow_follows_mobile: false },
+          mobile: { chat_is: 'page', narrow_follows_mobile: true },
+          widget: { chat_is: 'embed', narrow_follows_mobile: false },
+        }),
+      );
+    }
     if (!url.pathname.startsWith('/web/')) return send(404, '{"error":"not found"}');
 
     const relative = url.pathname.slice('/web/'.length) || 'index.html';
@@ -140,13 +159,13 @@ for (const viewport of VIEWPORTS) {
         assert.ok(bodyLines >= 1, 'the placeholder page rendered into the body');
 
         // The chat is stripped: no column, no grip, no panel, no transcript.
-        for (const selector of ['#chat-column', '#chat-resize-handle', '#chat-panel', '.msg', '.composer']) {
+        for (const selector of ['#chat-resize-handle', '.msg', '.composer']) {
           assert.equal(await page.locator(selector).count(), 0, `${selector} must not exist`);
         }
         const chatVar = await page.evaluate(() =>
           getComputedStyle(document.documentElement).getPropertyValue('--chat-panel-width').trim(),
         );
-        assert.equal(chatVar, '', 'the chat width variable is gone');
+        assert.equal(chatVar, '380px', 'the column width comes from the shell config');
 
         // The shell fills the viewport with no sideways overflow at either width.
         const overflow = await page.evaluate(
@@ -163,26 +182,63 @@ for (const viewport of VIEWPORTS) {
           assert.ok(rail <= 80, `collapsed sidebar is a rail (${rail}px)`);
           assert.equal(await page.locator('#sidebar .brand-name').isVisible(), false, 'labels hide in the rail');
 
-          // The main panel takes the whole stage once the rail is narrow.
-          const main = await page.$eval('#main-panel', (node) => node.getBoundingClientRect().width);
-          assert.ok(main > 1000, `main panel fills the width beside the rail (${main}px)`);
+          // The stage splits between the main panel, the divider and the chat column.
+          const shared = await page.evaluate(() => {
+            const width = (id) => Math.round(document.getElementById(id).getBoundingClientRect().width);
+            return {
+              stage: Math.round(document.querySelector('.stage').getBoundingClientRect().width),
+              main: width('main-panel'),
+              column: width('chat-column'),
+              divider: width('chat-divider'),
+            };
+          });
+          assert.ok(shared.main > 500, `main panel keeps the larger share (${shared.main}px)`);
+          assert.ok(
+            Math.abs(shared.main + shared.divider + shared.column - shared.stage) <= 2,
+            `main, divider and column fill the stage (${JSON.stringify(shared)})`,
+          );
 
           // The chat switch is a phone affordance only.
           assert.equal(await page.locator('#chat-switch').isVisible(), false, 'no chat switch on desktop');
 
-          // The chat route mounts the ported shell: empty header, transcript and footer.
-          await page.evaluate(() => {
-            window.location.hash = '#/chat';
+          // The chat is a column beside the main panel, always visible and edgeless.
+          await page.waitForSelector('#chat-column #chat-panel');
+          const geometry = await page.evaluate(() => {
+            const col = document.getElementById('chat-column');
+            const divider = document.getElementById('chat-divider');
+            const panel = document.getElementById('chat-panel');
+            const styles = getComputedStyle(panel);
+            return {
+              columnWidth: Math.round(col.getBoundingClientRect().width),
+              dividerWidth: Math.round(divider.getBoundingClientRect().width),
+              border: styles.borderTopWidth,
+              radius: styles.borderTopLeftRadius,
+              shadow: styles.boxShadow,
+            };
           });
-          await page.waitForFunction(() => document.getElementById('page-title').textContent === 'Chat');
-          await page.waitForSelector('#page-body #chat-panel');
+          assert.ok(geometry.columnWidth > 200, `chat column is visible (${geometry.columnWidth}px)`);
+          assert.equal(geometry.dividerWidth, 14, 'the divider is the configured 14px hit area');
+          assert.equal(geometry.border, '0px', 'the panel has no border');
+          assert.equal(geometry.radius, '0px', 'the panel has no radius');
+          assert.equal(geometry.shadow, 'none', 'the panel has no shadow');
+
           const shell = await probeShell(page);
-          assert.ok(shell, 'chat panel is mounted on the chat route');
+          assert.ok(shell, 'chat panel is mounted in the column');
           assert.equal(shell.headerChildren, 0, 'header region is empty');
           assert.equal(shell.footerChildren, 0, 'footer region is empty');
           assert.equal(shell.innerChildren, 0, 'transcript region is empty');
           assert.ok(shell.height > 300, `chat panel fills the height (${shell.height}px)`);
-          assert.ok(shell.width > 400, `chat panel fills the width (${shell.width}px)`);
+
+          // Dragging the divider left widens the column and clamps at the config floor.
+          const before = geometry.columnWidth;
+          const handle = await page.locator('#chat-divider').boundingBox();
+          await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+          await page.mouse.down();
+          await page.mouse.move(handle.x + handle.width / 2 - 80, handle.y + handle.height / 2, { steps: 8 });
+          await page.mouse.up();
+          const after = await page.$eval('#chat-column', (node) => Math.round(node.getBoundingClientRect().width));
+          assert.ok(after > before + 40, `dragging left widened the chat column (${before} -> ${after})`);
+          assert.equal(await page.evaluate(() => document.body.classList.contains('chat-resizing')), false);
         } else {
           // Phone: the sidebar is a drawer over the stage.
           assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');
@@ -205,6 +261,10 @@ for (const viewport of VIEWPORTS) {
           assert.equal(await page.locator('#page-title').textContent(), 'Chat', 'header switches to the chat');
           assert.equal(await page.locator('#chat-switch').getAttribute('aria-pressed'), 'true');
           assert.equal(await page.locator('#chat-switch').getAttribute('aria-label'), 'Back to the panel');
+
+          // The column and divider stand down on a phone; the chat is its own page.
+          assert.equal(await page.locator('#chat-column').isVisible(), false, 'no chat column on a phone');
+          assert.equal(await page.locator('#chat-divider').isVisible(), false, 'no divider on a phone');
 
           // The phone chat is the same empty shell, filling the body.
           const phoneShell = await probeShell(page);

@@ -476,3 +476,106 @@ body.chat-route .main-body {
     transition: none;
   }
 }
+
+/* ── Chat column and divider (desktop) ──────────────────────
+   The chat sits beside the main panel, always visible, with the app's 14 px drag
+   divider between them. Every value here comes from config/web/chat/chat-shell.json. */
+.stage {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.stage > #main-panel {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+#chat-column {
+  flex: 0 0 var(--chat-panel-width, 380px);
+  width: var(--chat-panel-width, 380px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#chat-divider {
+  flex: 0 0 var(--chat-divider-hit-width, 14px);
+  width: var(--chat-divider-hit-width, 14px);
+  position: relative;
+  z-index: 10;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The grip line: 2×36 px at rest, 2×56 px in brand colour while hovered or dragged. */
+#chat-divider::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--chat-divider-grip-width, 2px);
+  height: var(--chat-divider-grip-height, 36px);
+  margin-top: calc(var(--chat-divider-grip-height, 36px) / -2);
+  margin-left: calc(var(--chat-divider-grip-width, 2px) / -2);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, currentColor 18%, transparent);
+  pointer-events: none;
+  transition: height 0.15s ease, margin 0.15s ease, background 0.15s ease;
+}
+
+#chat-divider:hover::before,
+#chat-divider:focus-visible::before,
+#chat-divider.resizing::before {
+  height: var(--chat-divider-grip-height-active, 56px);
+  margin-top: calc(var(--chat-divider-grip-height-active, 56px) / -2);
+  background: rgba(var(--brand-rgb), 0.67);
+}
+
+#chat-divider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+  border-radius: var(--r-sm);
+}
+
+/* Cursor-following glow, only while dragging. */
+#chat-divider::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    100px circle at 50% var(--drag-y, 50%),
+    rgba(var(--brand-rgb), 0.22),
+    transparent 65%
+  );
+  transition: opacity 0.35s ease;
+}
+
+#chat-divider.resizing::after {
+  opacity: 1;
+}
+
+body.chat-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* A phone gets the chat as its own page, so the column and divider step out. */
+@media (max-width: 800px) {
+  #chat-column,
+  #chat-divider {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #chat-divider::before,
+  #chat-divider::after {
+    transition: none;
+  }
+}

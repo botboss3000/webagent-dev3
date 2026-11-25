@@ -339,3 +339,135 @@ if (document.readyState === 'loading') {
 } else {
   boot();
 }
+
+/* ── Chat shell: configuration, the always-visible desktop column and its divider ──
+   The view type is declared by the mount, never inferred from width: this column
+   mounts the desktop profile, the chat page mounts the mobile one, a widget would
+   mount the widget profile. narrow_follows_mobile lets a profile hand a narrow
+   window to the mobile profile. */
+
+const CHAT_SHELL_CONFIG = '/config/web/chat/chat-shell.json';
+
+/* Objects merge, arrays replace, null inherits — the rule the config documents. */
+function mergeProfile(base, override) {
+  if (override === null || override === undefined) return base;
+  if (Array.isArray(override)) return override;
+  if (typeof override !== 'object') return override;
+  const merged = { ...(base || {}) };
+  for (const [key, value] of Object.entries(override)) {
+    merged[key] = mergeProfile(base?.[key], value);
+  }
+  return merged;
+}
+
+async function loadChatShellConfig() {
+  try {
+    const response = await fetch(CHAT_SHELL_CONFIG, { headers: { accept: 'application/json' } });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function chatShellProfile(config, mount) {
+  const common = config?.common || {};
+  const desktop = mergeProfile(common, config?.desktop || {});
+  const mobile = mergeProfile(common, config?.mobile || {});
+  // The mount decides the shape, so a missing or unreachable config is never a reason
+  // to drop the chat: an absent chat_is falls back to what this mount is.
+  if (!desktop.chat_is) desktop.chat_is = 'column';
+  if (!mobile.chat_is) mobile.chat_is = 'page';
+  if (mount === 'page') return mobile;
+  const mobileAt = mobile.breakpoints?.mobile_px ?? 800;
+  const narrow = window.matchMedia(`(max-width: ${mobileAt}px)`).matches;
+  return narrow && desktop.narrow_follows_mobile === true ? mobile : desktop;
+}
+
+/* Writes the active profile's geometry onto the document as CSS variables. */
+function applyChatShellProfile(profile) {
+  const style = document.documentElement.style;
+  const column = profile.column || {};
+  const divider = profile.divider || {};
+  style.setProperty('--chat-panel-width', `${column.default_width_px ?? 380}px`);
+  style.setProperty('--chat-panel-min-width', `${column.min_width_px ?? 250}px`);
+  style.setProperty('--chat-divider-hit-width', `${divider.hit_width_px ?? 14}px`);
+  style.setProperty('--chat-divider-grip-width', `${divider.grip_width_px ?? 2}px`);
+  style.setProperty('--chat-divider-grip-height', `${divider.grip_height_px ?? 36}px`);
+  style.setProperty('--chat-divider-grip-height-active', `${divider.grip_height_active_px ?? 56}px`);
+  document.body.dataset.chatProfile = profile.chat_is || 'column';
+  return profile;
+}
+
+/* The column is always visible for now; showing and hiding it is a later decision. */
+async function mountChatColumn(config) {
+  const host = document.getElementById('chat-column');
+  if (!host) return;
+  const profile = applyChatShellProfile(chatShellProfile(config, 'column'));
+  if (profile.chat_is !== 'column') return;
+  const { mountChat } = await import('../chat/chat.js');
+  await mountChat(host);
+  wireChatDivider(profile);
+}
+
+/* Drag or arrow-key the divider to set the column width, clamped to the config. */
+function wireChatDivider(profile) {
+  const divider = document.getElementById('chat-divider');
+  const stage = document.querySelector('.stage');
+  if (!divider || !stage) return;
+  const column = profile.column || {};
+  const min = column.min_width_px ?? 250;
+  const current = () => Math.round(document.getElementById('chat-column')?.getBoundingClientRect().width || 0);
+  const clamp = (px) => {
+    const stageWidth = stage.getBoundingClientRect().width;
+    return Math.round(Math.min(Math.max(min, stageWidth - Math.min(320, stageWidth / 2)), Math.max(min, px)));
+  };
+  const apply = (px) => {
+    const width = clamp(px);
+    document.documentElement.style.setProperty('--chat-panel-width', `${width}px`);
+    divider.setAttribute('aria-valuenow', String(width));
+    return width;
+  };
+
+  divider.setAttribute('aria-valuemin', String(min));
+  divider.setAttribute('aria-valuenow', String(current()));
+
+  let dragging = false;
+  divider.addEventListener('pointerdown', (event) => {
+    dragging = true;
+    divider.classList.add('resizing');
+    document.body.classList.add('chat-resizing');
+    divider.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  divider.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    const box = stage.getBoundingClientRect();
+    document.documentElement.style.setProperty('--drag-y', `${Math.round(event.clientY - box.top)}px`);
+    apply(box.right - event.clientX);
+  });
+  const end = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    divider.classList.remove('resizing');
+    document.body.classList.remove('chat-resizing');
+    if (event?.pointerId !== undefined) divider.releasePointerCapture?.(event.pointerId);
+  };
+  divider.addEventListener('pointerup', end);
+  divider.addEventListener('pointercancel', end);
+  divider.addEventListener('lostpointercapture', end);
+  divider.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 50 : 10;
+    if (event.key === 'ArrowLeft') apply(current() + step);
+    else if (event.key === 'ArrowRight') apply(current() - step);
+    else if (event.key === 'Home') apply(min);
+    else if (event.key === 'End') apply(stage.getBoundingClientRect().width);
+    else return;
+    event.preventDefault();
+  });
+}
+
+void (async () => {
+  const config = await loadChatShellConfig();
+  await mountChatColumn(config);
+})();

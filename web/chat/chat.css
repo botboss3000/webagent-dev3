@@ -1,38 +1,52 @@
-/* Chat shell frame, ported from the current panel's surface rules in ui/chat/.
-   It draws only the frame: the three regions inside are empty until their
-   components are ported, so nothing here styles a control. */
+/* Chat shell frame, ported from the current panel: an edgeless transparent
+   surface with the header and composer as overlays and the transcript as the one
+   scroller behind them. There is no border, no radius, no shadow and no divider
+   line, exactly as in the app (ui/boot/loading-shell.css strips the card look).
+
+   The three regions are empty until their components are ported. */
 
 .chat-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
-  background: var(--bg-elev);
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow-rest);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 
-/* Header strip: fixed height, hairline divider, contents come later. */
+/* Header: an overlay across the top, capped and centred, with no border. */
 .chat-header {
-  flex: 0 0 auto;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-height: 56px;
-  padding: 8px 10px;
-  border-bottom: var(--border-width) solid var(--border-soft);
+  padding: 4px 2px 0;
+  background: transparent;
+  border: none;
+  max-width: var(--chat-header-max-width, 750px);
+  margin-inline: auto;
 }
 
-/* Transcript: the only scroller inside the panel. */
+/* Transcript: the only scroller, running edge to edge under both overlays. */
 .chat-messages {
-  flex: 1 1 auto;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  padding: 0;
 }
 
 .chat-messages:focus-visible {
@@ -42,34 +56,31 @@
 
 .chat-messages-inner {
   box-sizing: border-box;
-  min-height: 100%;
   width: 100%;
+  min-height: 100%;
+  max-width: var(--chat-content-max-width, 1000px);
+  margin-inline: auto;
   padding: 16px 12px;
 }
 
-/* Footer strip: fixed height, hairline divider, contents come later. */
+/* Composer dock: absolute at the bottom, and pass-through so empty space above
+   the pill scrolls the transcript. Its real children re-enable pointer events. */
 .chat-footer {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-height: 64px;
-  padding: 8px 10px;
-  border-top: var(--border-width) solid var(--border-soft);
+  gap: 0;
+  min-height: 0;
+  padding: 2px 12px 8px;
+  background: transparent;
+  border: none;
+  pointer-events: none;
 }
 
-@media (max-width: 700px) {
-  .chat-header {
-    min-height: 52px;
-    padding: 8px;
-  }
-
-  .chat-messages-inner {
-    padding: 12px 8px;
-  }
-
-  .chat-footer {
-    min-height: 60px;
-    padding: 8px;
-  }
+.chat-footer > * {
+  pointer-events: auto;
 }
