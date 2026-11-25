@@ -9,6 +9,10 @@ export function render(host, ctx) {
   const id = decodeURIComponent((ctx.route || '').replace('/agents/', ''));
   const agent = (ctx.agents || []).find((item) => item.id === id);
 
+  const stack = document.createElement('div');
+  stack.className = 'stack';
+  host.append(stack);
+
   const card = document.createElement('div');
   card.className = 'card';
 
@@ -22,10 +26,10 @@ export function render(host, ctx) {
   hint.textContent = 'Usage statistics, recent sessions and artifacts will be shown here, with a tile per settings area.';
   card.append(hint);
 
-  host.append(card);
+  stack.append(card);
 
   const tiles = document.createElement('div');
-  tiles.className = 'tiles';
+  tiles.className = 'grid grid-narrow';
   for (const name of ['Identity', 'Models', 'Abilities', 'Members', 'Artifacts']) {
     const tile = document.createElement('div');
     tile.className = 'tile tile-static';
@@ -41,5 +45,5 @@ export function render(host, ctx) {
     tile.append(head, note);
     tiles.append(tile);
   }
-  host.append(tiles);
+  stack.append(tiles);
 }

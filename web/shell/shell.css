@@ -344,7 +344,7 @@ body.sidebar-collapsed #sidebar-toggle {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 14px 24px;
+  padding: var(--space-5) var(--space-4);
 }
 
 /* The chat page fills the body edge to edge: the panel draws its own frame. */
@@ -460,7 +460,7 @@ body.chat-route .main-body {
   }
 
   .main-body {
-    padding: 12px 10px 18px;
+    padding: var(--space-4);
   }
 
   .main-foot {

@@ -39,6 +39,17 @@ const SPECIMENS = {
       <div class="card elevation-3">3</div>
       <div class="card elevation-4">4</div>
     </div>`,
+  grid: `
+    <div class="grid grid-narrow">
+      <div class="card">One</div>
+      <div class="card">Two</div>
+      <div class="card">Three</div>
+    </div>`,
+  stack: `
+    <div class="stack stack-tight">
+      <div class="card">First block</div>
+      <div class="card">Second block</div>
+    </div>`,
   list: `
     <div class="list">
       <button type="button" class="list-row">

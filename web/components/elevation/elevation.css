@@ -1,6 +1,6 @@
 /* Elevation: how far a surface floats above the backdrop. Every shadow in web/ comes
-   from here — components must not write their own box-shadow. Each level pairs a wide,
-   very low-alpha ambient shadow with a tight contact shadow; the values live in
+   from here — components must not write their own box-shadow. Each level composes an
+   all-round ambient halo, a downward drop and a tight contact edge; the values live in
    tokens.css per theme, so --shadow-strength still rescales all of them. */
 
 .elevation-0 {
@@ -8,17 +8,17 @@
 }
 
 .elevation-1 {
-  box-shadow: var(--elevation-1-ambient), var(--elevation-1-contact);
+  box-shadow: var(--elevation-1-ambient), var(--elevation-1-drop), var(--elevation-1-contact);
 }
 
 .elevation-2 {
-  box-shadow: var(--elevation-2-ambient), var(--elevation-2-contact);
+  box-shadow: var(--elevation-2-ambient), var(--elevation-2-drop), var(--elevation-2-contact);
 }
 
 .elevation-3 {
-  box-shadow: var(--elevation-3-ambient), var(--elevation-3-contact);
+  box-shadow: var(--elevation-3-ambient), var(--elevation-3-drop), var(--elevation-3-contact);
 }
 
 .elevation-4 {
-  box-shadow: var(--elevation-4-ambient), var(--elevation-4-contact);
+  box-shadow: var(--elevation-4-ambient), var(--elevation-4-drop), var(--elevation-4-contact);
 }

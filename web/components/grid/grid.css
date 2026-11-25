@@ -1,0 +1,17 @@
+/* Grid: a wrapping column layout for cards and tiles. Columns fit to the space they are
+   given and the gap comes from the spacing scale, so no page sets its own widths. */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--grid-min, 220px), 1fr));
+  gap: var(--grid-gap, var(--space-4));
+  align-items: start;
+}
+
+.grid-wide {
+  --grid-min: 320px;
+}
+
+.grid-narrow {
+  --grid-min: 160px;
+}

@@ -67,16 +67,29 @@
 
   /* Depth knob: every neutral shadow alpha is multiplied by --shadow-strength */
   --shadow-strength: 1;
-  /* Elevation: a wide, very low-alpha ambient shadow under a tight contact shadow.
-     Four role levels replace the old shadow-rest/float/lg/modal tokens. */
-  --elevation-1-ambient: 0 18px 40px -24px rgba(var(--shadow-rgb), calc(0.55 * var(--shadow-strength)));
+  /* Elevation: an all-round ambient halo, a downward drop and a tight contact edge.
+     Four role levels; --shadow-strength still rescales all of them. */
+  --elevation-1-ambient: 0 0 24px 0 rgba(var(--shadow-rgb), calc(0.14 * var(--shadow-strength)));
+  --elevation-1-drop: 0 12px 28px -12px rgba(var(--shadow-rgb), calc(0.3 * var(--shadow-strength)));
   --elevation-1-contact: 0 1px 2px rgba(var(--shadow-rgb), calc(0.25 * var(--shadow-strength)));
-  --elevation-2-ambient: 0 24px 48px -24px rgba(var(--shadow-rgb), calc(0.6 * var(--shadow-strength)));
+  --elevation-2-ambient: 0 0 28px 0 rgba(var(--shadow-rgb), calc(0.18 * var(--shadow-strength)));
+  --elevation-2-drop: 0 16px 36px -14px rgba(var(--shadow-rgb), calc(0.34 * var(--shadow-strength)));
   --elevation-2-contact: 0 2px 4px rgba(var(--shadow-rgb), calc(0.3 * var(--shadow-strength)));
-  --elevation-3-ambient: 0 32px 64px -28px rgba(var(--shadow-rgb), calc(0.65 * var(--shadow-strength)));
+  --elevation-3-ambient: 0 0 36px 0 rgba(var(--shadow-rgb), calc(0.22 * var(--shadow-strength)));
+  --elevation-3-drop: 0 22px 48px -18px rgba(var(--shadow-rgb), calc(0.38 * var(--shadow-strength)));
   --elevation-3-contact: 0 4px 10px -2px rgba(var(--shadow-rgb), calc(0.35 * var(--shadow-strength)));
-  --elevation-4-ambient: 0 40px 90px -32px rgba(var(--shadow-rgb), calc(0.7 * var(--shadow-strength)));
+  --elevation-4-ambient: 0 0 48px 0 rgba(var(--shadow-rgb), calc(0.26 * var(--shadow-strength)));
+  --elevation-4-drop: 0 30px 64px -22px rgba(var(--shadow-rgb), calc(0.42 * var(--shadow-strength)));
   --elevation-4-contact: 0 8px 24px -6px rgba(var(--shadow-rgb), calc(0.4 * var(--shadow-strength)));
+
+  /* Spacing scale: every gap and page inset in web/ comes from here. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
 
   /* Roundness knob: every radius is a base size times --radius-scale */
   --radius-scale: 1;
@@ -149,13 +162,17 @@ body.light-mode {
   --danger-soft: rgba(var(--danger-rgb), 0.1);
   --danger-mid: rgba(var(--danger-rgb), 0.25);
 
-  --elevation-1-ambient: 0 16px 32px -20px rgba(var(--shadow-rgb), calc(0.22 * var(--shadow-strength)));
+  --elevation-1-ambient: 0 0 20px 0 rgba(var(--shadow-rgb), calc(0.07 * var(--shadow-strength)));
+  --elevation-1-drop: 0 10px 24px -10px rgba(var(--shadow-rgb), calc(0.16 * var(--shadow-strength)));
   --elevation-1-contact: 0 1px 2px rgba(var(--shadow-rgb), calc(0.08 * var(--shadow-strength)));
-  --elevation-2-ambient: 0 22px 44px -22px rgba(var(--shadow-rgb), calc(0.26 * var(--shadow-strength)));
+  --elevation-2-ambient: 0 0 24px 0 rgba(var(--shadow-rgb), calc(0.08 * var(--shadow-strength)));
+  --elevation-2-drop: 0 14px 30px -12px rgba(var(--shadow-rgb), calc(0.18 * var(--shadow-strength)));
   --elevation-2-contact: 0 2px 4px rgba(var(--shadow-rgb), calc(0.1 * var(--shadow-strength)));
-  --elevation-3-ambient: 0 30px 60px -26px rgba(var(--shadow-rgb), calc(0.3 * var(--shadow-strength)));
+  --elevation-3-ambient: 0 0 30px 0 rgba(var(--shadow-rgb), calc(0.09 * var(--shadow-strength)));
+  --elevation-3-drop: 0 18px 40px -14px rgba(var(--shadow-rgb), calc(0.2 * var(--shadow-strength)));
   --elevation-3-contact: 0 4px 12px -2px rgba(var(--shadow-rgb), calc(0.12 * var(--shadow-strength)));
-  --elevation-4-ambient: 0 36px 80px -30px rgba(var(--shadow-rgb), calc(0.34 * var(--shadow-strength)));
+  --elevation-4-ambient: 0 0 40px 0 rgba(var(--shadow-rgb), calc(0.1 * var(--shadow-strength)));
+  --elevation-4-drop: 0 26px 56px -18px rgba(var(--shadow-rgb), calc(0.22 * var(--shadow-strength)));
   --elevation-4-contact: 0 8px 24px -6px rgba(var(--shadow-rgb), calc(0.16 * var(--shadow-strength)));
 }
 

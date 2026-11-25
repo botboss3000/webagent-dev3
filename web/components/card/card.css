@@ -1,10 +1,11 @@
-/* Card: a bordered surface holding one idea. Everything else composes it. */
+/* Card: a raised surface holding one idea. Everything else composes it. */
 
 .card {
   background: var(--bg-elev);
-  border: var(--border-width) solid var(--border);
+  border: none;
   border-radius: var(--r-lg);
-  padding: 14px;
+  padding: var(--space-4);
+  box-shadow: var(--elevation-1-ambient), var(--elevation-1-drop), var(--elevation-1-contact);
 }
 
 .card-head {
@@ -38,12 +39,3 @@
   color: var(--fg-3);
 }
 
-/* Raised: floats above the panel background. */
-.card-raised {
-  box-shadow: var(--elevation-1-ambient), var(--elevation-1-contact);
-}
-
-.card-flat {
-  background: var(--bg-tint);
-  border-color: transparent;
-}

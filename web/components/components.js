@@ -30,6 +30,12 @@ export const components = [
     css: 'elevation/elevation.css',
   },
   {
+    id: 'grid',
+    title: 'Grid',
+    summary: 'Wrapping columns for cards and tiles; the gap comes from the spacing scale.',
+    css: 'grid/grid.css',
+  },
+  {
     id: 'icon',
     title: 'Icon',
     summary: 'Inline SVG icon set; no icon library and no external files.',
@@ -47,6 +53,12 @@ export const components = [
     summary: 'Two-stage pull to refresh or hard refresh, plus the header hard-refresh button.',
     css: 'refresh/refresh.css',
     js: 'refresh/refresh.js',
+  },
+  {
+    id: 'stack',
+    title: 'Stack',
+    summary: 'Vertical rhythm between a page\'s blocks; the gap comes from the spacing scale.',
+    css: 'stack/stack.css',
   },
   {
     id: 'stat',

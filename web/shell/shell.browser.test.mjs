@@ -158,6 +158,14 @@ for (const viewport of VIEWPORTS) {
         const bodyLines = await page.$$eval('#page-body > *', (nodes) => nodes.length);
         assert.ok(bodyLines >= 1, 'the placeholder page rendered into the body');
 
+        // The card is the raised surface: no border, elevation instead.
+        const cardStyle = await page.$eval('#page-body .card', (node) => {
+          const styles = getComputedStyle(node);
+          return { border: styles.borderTopWidth, shadow: styles.boxShadow };
+        });
+        assert.equal(cardStyle.border, '0px', 'the card has no border');
+        assert.notEqual(cardStyle.shadow, 'none', 'the card carries elevation');
+
         // The chat is stripped: no column, no grip, no panel, no transcript.
         for (const selector of ['#chat-resize-handle', '.msg', '.composer']) {
           assert.equal(await page.locator(selector).count(), 0, `${selector} must not exist`);
