@@ -827,6 +827,9 @@ pub enum FailureKind {
     InvalidCredentials,
     ModelUnavailable,
     MalformedRequest,
+    /// The provider rejected the request because prompt + requested output exceeds its
+    /// context window; one bounded fold and resend can still succeed.
+    ContextLimit,
     Cancelled,
     PolicyRejected,
     Protocol,

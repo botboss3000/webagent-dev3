@@ -100,8 +100,12 @@ compaction ceiling (the larger of the call's allowance and the summary's), and t
 summarizer call is clamped the same way. A provider that rejects
 `prompt + allowance` above its window therefore sees conforming requests; the
 allowance is a ceiling, not a target, and a reply that reaches it fails the turn
-rather than being published truncated. The configured allowance is per agent
-(Identity → Context compaction → Output allowance).
+rather than being published truncated. If a provider still rejects a request for
+its window (tokenizer drift, replayed reasoning, or a mid-run model change), the
+run performs **one** bounded emergency fold and resends; if the compacted
+envelope still cannot fit, it stops with a clear error instead of retrying.
+The configured allowance is per agent (Identity → Context compaction → Output
+allowance).
 
 ## Compaction layout and cache reuse
 

@@ -180,6 +180,9 @@ fn event_failure_kind(value: &Value) -> crate::model_selection::FailureKind {
         .unwrap_or(value);
     let code = error["code"].as_str().unwrap_or("");
     let error_type = error["type"].as_str().unwrap_or("");
+    if failure_detail(value) == "Provider context limit exceeded" {
+        return ContextLimit;
+    }
     if matches!(code, "content_filter" | "policy_violation")
         || matches!(error_type, "permission_error" | "authentication_error")
     {
@@ -228,8 +231,8 @@ fn failure_kind(value: &Value) -> crate::model_selection::FailureKind {
         "Provider usage limit exceeded" | "Provider account has insufficient balance" => {
             QuotaExhausted
         }
-        "Provider context limit exceeded"
-        | "Provider rejected the request format or parameters" => MalformedRequest,
+        "Provider context limit exceeded" => ContextLimit,
+        "Provider rejected the request format or parameters" => MalformedRequest,
         _ => Protocol,
     }
 }

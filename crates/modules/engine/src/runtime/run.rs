@@ -210,6 +210,16 @@ fn bytes_per_token(run: &Value, selection: &provider::ProviderSelection) -> Opti
         .flatten()
 }
 
+/// One bounded emergency fold is allowed when a provider still rejects a request for
+/// exceeding its window (tokenizer drift, replayed reasoning, a mid-run model swap).
+fn context_limit_foldable(run: &Value, error: &anyhow::Error) -> bool {
+    let failure = error.downcast_ref::<provider::ProviderFailure>();
+    failure.is_some_and(|failure| {
+        failure.kind == webagent_models::model_selection::FailureKind::ContextLimit
+            && !failure.response_started
+    }) && run["context_limit_folds"].as_u64().unwrap_or(0) < 1
+}
+
 /// Provider tokens for serialized bytes, using the call's measured ratio when known.
 fn tokens_for(bytes: usize, config: &context_compaction::Config) -> usize {
     match config.bytes_per_token {
@@ -3297,7 +3307,21 @@ impl<
                 // ceiling is summarized from a fork too. This pass assembles against the
                 // model's own limit, starts that summary and waits for it.
                 let hard_limit_fork = run["hard_limit_fork"] == "trying";
-                let assembly_compaction = if hard_limit_fork {
+                // CONTEXT-LIMIT FOLD: a provider rejection for its window gets one forced fold
+                // (almost everything before the tail) and a resend, bounded per run.
+                let context_limit_fold = run["context_limit_fold"] == true;
+                if context_limit_fold {
+                    run["context_limit_fold"] = Value::Null;
+                }
+                let assembly_compaction = if context_limit_fold {
+                    let mut forced = compaction_config.at_ceiling();
+                    forced.trigger_tokens = forced
+                        .tail_tokens
+                        .saturating_add(forced.summary_tokens)
+                        .saturating_add(1_000);
+                    forced.ceiling_tokens = Some(forced.trigger_tokens);
+                    context_compaction::Config(forced)
+                } else if hard_limit_fork {
                     let mut at_model = compaction_config.at_ceiling();
                     let tokens = model_ceiling / compaction_config.token_bytes(1).max(1);
                     at_model.trigger_tokens = tokens;
@@ -4657,6 +4681,15 @@ impl<
                         if cancel.is_cancelled() {
                             run["status"] = json!("stopped");
                             run["error"] = json!("Provider request interrupted");
+                        } else if context_limit_foldable(&run, &error) {
+                            run["context_limit_folds"] =
+                                json!(run["context_limit_folds"].as_u64().unwrap_or(0) + 1);
+                            run["context_limit_fold"] = json!(true);
+                            run["phase"] = json!("model");
+                            app.save(&mut run).await?;
+                            context_accounting.reset();
+                            drop(_guard);
+                            continue;
                         } else {
                             app.trusted_model_failure(&mut run, &error, false)?;
                         }

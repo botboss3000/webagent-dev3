@@ -132,6 +132,7 @@ impl BackupPolicy {
             FailureKind::InvalidCredentials => self.switch_on.invalid_credentials,
             FailureKind::ModelUnavailable => self.switch_on.model_unavailable,
             FailureKind::MalformedRequest
+            | FailureKind::ContextLimit
             | FailureKind::Cancelled
             | FailureKind::PolicyRejected
             | FailureKind::Protocol => false,
