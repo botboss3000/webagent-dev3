@@ -595,3 +595,41 @@ body.chat-route .main-foot {
   border-bottom: none;
   border-top: none;
 }
+
+/* ── Sidebar is a column and the phone drawer is a shelf ──────
+   These override the earlier card treatment: the sidebar is flush to the window
+   with one trailing hairline, the stage keeps the shell gap around the panels, and
+   the drawer slides in edge-flush. */
+.app {
+  padding: 0;
+  gap: 0;
+}
+
+.stage {
+  padding: var(--shell-gap);
+}
+
+#sidebar {
+  border: none;
+  border-right: var(--border-width) solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+@media (max-width: 900px) {
+  .stage {
+    padding: 6px;
+  }
+
+  #sidebar {
+    inset: 0 auto 0 0;
+    width: min(300px, 84vw);
+    border-radius: 0;
+    box-shadow: none;
+    transform: translateX(-100%);
+  }
+
+  body.sidebar-collapsed #sidebar {
+    width: min(300px, 84vw);
+  }
+}

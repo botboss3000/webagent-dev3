@@ -189,8 +189,15 @@ for (const viewport of VIEWPORTS) {
           // The stage splits between the main panel, the divider and the chat column.
           const shared = await page.evaluate(() => {
             const width = (id) => Math.round(document.getElementById(id).getBoundingClientRect().width);
+            const stage = document.querySelector('.stage');
+            const styles = getComputedStyle(stage);
+            // The stage carries the shell gap, so compare against its content width.
             return {
-              stage: Math.round(document.querySelector('.stage').getBoundingClientRect().width),
+              stage: Math.round(
+                stage.getBoundingClientRect().width -
+                  parseFloat(styles.paddingLeft) -
+                  parseFloat(styles.paddingRight),
+              ),
               main: width('main-panel'),
               column: width('chat-column'),
               divider: width('chat-divider'),
