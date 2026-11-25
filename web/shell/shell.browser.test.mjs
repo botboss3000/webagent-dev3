@@ -147,15 +147,11 @@ for (const viewport of VIEWPORTS) {
 
         // The shell is header, empty body and footer: three regions, nothing else.
         assert.equal(await page.locator('.main-head').count(), 1, 'one main header');
-        assert.equal(await page.locator('.main-foot').count(), 1, 'one main footer');
+        assert.equal(await page.locator('.main-foot').count(), 0, 'no main footer');
         assert.equal(await page.locator('.main-head').isVisible(), true, 'header is visible');
-        assert.equal(await page.locator('.main-foot').isVisible(), true, 'footer is visible');
+        assert.equal(await page.locator('.main-foot').count(), 0, 'the shell has no footer strip');
         assert.equal(await page.locator('#page-title').textContent(), 'All sessions', 'header names the route');
-        assert.equal(
-          (await page.locator('.main-foot').textContent()).trim(),
-          '',
-          'the footer strip carries nothing',
-        );
+        assert.equal(await page.locator('.main-foot').count(), 0, 'no footer strip on the content region');
         assert.equal(await page.locator('#refresh-button').isVisible(), true, 'the refresh action shows for an administrator');
 
         // The body holds only the placeholder page: title plus one line.
@@ -315,11 +311,7 @@ test('signed-out visitors get no Administrator group and no admin page', async (
     await page.waitForFunction(() => document.getElementById('page-body')?.textContent?.trim().length > 0);
     const body = await page.$eval('#page-body', (node) => node.textContent);
     assert.match(body, /Administrator only/, 'the admin route refuses without the flag');
-    assert.equal(
-      (await page.locator('.main-foot').textContent()).trim(),
-      '',
-      'the footer strip carries nothing signed out either',
-    );
+    assert.equal(await page.locator('.main-foot').count(), 0, 'no footer strip signed out either');
     assert.equal(await page.locator('#refresh-button').isVisible(), false, 'the refresh action stays hidden when signed out');
     assert.deepEqual(errors, []);
     await page.close();

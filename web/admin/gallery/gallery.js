@@ -32,6 +32,13 @@ const SPECIMENS = {
       <div class="card-head"><h3 class="card-title">Card title</h3></div>
       <p class="card-hint">One idea, one bordered surface.</p>
     </div>`,
+  elevation: `
+    <div class="g-row">
+      <div class="card elevation-1">1</div>
+      <div class="card elevation-2">2</div>
+      <div class="card elevation-3">3</div>
+      <div class="card elevation-4">4</div>
+    </div>`,
   list: `
     <div class="list">
       <button type="button" class="list-row">

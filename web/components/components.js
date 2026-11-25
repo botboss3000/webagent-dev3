@@ -24,6 +24,12 @@ export const components = [
     css: 'card/card.css',
   },
   {
+    id: 'elevation',
+    title: 'Elevation',
+    summary: 'Shadow levels for surfaces above the backdrop: ambient plus contact.',
+    css: 'elevation/elevation.css',
+  },
+  {
     id: 'icon',
     title: 'Icon',
     summary: 'Inline SVG icon set; no icon library and no external files.',

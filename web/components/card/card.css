@@ -40,7 +40,7 @@
 
 /* Raised: floats above the panel background. */
 .card-raised {
-  box-shadow: var(--shadow-rest);
+  box-shadow: var(--elevation-1-ambient), var(--elevation-1-contact);
 }
 
 .card-flat {
