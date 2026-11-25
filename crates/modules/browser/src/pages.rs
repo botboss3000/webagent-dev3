@@ -206,10 +206,10 @@ mod tests {
     }
 
     #[test]
-    fn shipped_file_parses_signed_out_and_blocks_settings_pages() {
+    fn shipped_file_parses_signed_in_and_blocks_settings_pages() {
         let bytes = include_bytes!("../../../../config/browser/browser-pages.json");
         let pages = Pages::parse(bytes).unwrap();
-        assert!(!pages.sign_in_app);
+        assert!(pages.sign_in_app);
         assert!(pages.allows(&query(&[("tab", "session-metrics"), ("session_id", "x")])));
         for blocked in [
             vec![
@@ -232,7 +232,8 @@ mod tests {
         ] {
             assert!(!pages.allows(&query(&blocked)), "{blocked:?}");
         }
-        assert_eq!(Pages::default().sign_in_app, pages.sign_in_app);
+        // The default used when the live file cannot be read stays signed out.
+        assert!(!Pages::default().sign_in_app);
     }
 
     #[test]

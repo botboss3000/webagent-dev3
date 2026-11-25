@@ -728,6 +728,15 @@ pub fn validate_path(
             return Ok(parsed.path);
         }
     }
+    // The new UI and its settings open only to a test-account browser, which the app then
+    // answers for; no other signed-in browser may load them.
+    if pages.persona
+        && ["/web/", "/config/web/"]
+            .iter()
+            .any(|prefix| parsed.path.starts_with(prefix))
+    {
+        return Ok(parsed.path);
+    }
     if !parsed.path.starts_with("/api/") {
         return Err(Fault::rejected(
             "The browser opens app pages (/app?...) only; read source files such as CSS or JS with file_read",
