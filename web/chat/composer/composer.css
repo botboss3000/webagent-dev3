@@ -108,10 +108,9 @@
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: var(--composer-height, 34px);
-  padding: 0 var(--space-2);
+  min-height: var(--composer-height);
   border: none;
-  border-radius: var(--composer-radius, calc(var(--composer-height, 34px) / 2));
+  border-radius: var(--composer-radius);
   background: var(--bg-elev);
   box-shadow: var(--elevation-1-ambient), var(--elevation-1-drop), var(--elevation-1-contact);
   pointer-events: auto;

@@ -53,15 +53,22 @@ async function control(id) {
   }
 }
 
-/* Sizes the bar from its own controls: as tall as the tallest one, with a pill radius of
-   half that height. Config may override either, or ask for a flat bar. */
+/* Sizes the bar from its own controls and applies the surface settings the config names.
+   There are no fallbacks: an absent height is the tallest control (0 when there is none),
+   an absent radius is half the height, and absent padding means no padding at all. */
 function applySurface(surface, profile) {
   const spec = profile?.surface || {};
   const controls = [...surface.querySelectorAll('.composer-btn')];
   const tallest = controls.reduce((max, el) => Math.max(max, el.getBoundingClientRect().height), 0);
-  const height = spec.height_px ?? (tallest > 0 ? tallest : 34);
+  const height = spec.height_px ?? tallest;
   surface.style.setProperty('--composer-height', `${height}px`);
   surface.style.setProperty('--composer-radius', `${spec.radius_px ?? height / 2}px`);
+  const pad = spec.padding_px;
+  surface.style.padding = Array.isArray(pad)
+    ? pad.map((value) => `${value}px`).join(' ')
+    : pad == null
+      ? ''
+      : `${pad}px`;
   surface.classList.toggle('is-transparent', spec.background === 'transparent');
 }
 

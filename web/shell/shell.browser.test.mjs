@@ -330,6 +330,7 @@ for (const viewport of VIEWPORTS) {
               radius: parseFloat(styles.borderTopLeftRadius),
               background: styles.backgroundColor,
               border: styles.borderTopWidth,
+              padding: styles.paddingTop,
             };
           });
           assert.ok(bar, 'the composer bar is mounted');
@@ -343,6 +344,7 @@ for (const viewport of VIEWPORTS) {
           );
           assert.notEqual(bar.background, 'rgba(0, 0, 0, 0)', 'the bar carries the panel surface');
           assert.equal(bar.border, '0px', 'the bar has no border');
+          assert.equal(bar.padding, '0px', 'the bar takes no padding unless the config sets it');
         } else {
           // Phone: the sidebar is a drawer over the stage.
           assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');

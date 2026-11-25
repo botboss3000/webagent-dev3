@@ -5,7 +5,8 @@
     "surface": {
       "background": "panel",
       "height_px": null,
-      "radius_px": null
+      "radius_px": null,
+      "padding_px": null
     },
     "active": {
       "rows": [
