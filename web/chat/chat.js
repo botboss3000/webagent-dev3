@@ -1,7 +1,9 @@
 // Mounts the chat shell partial into a host element. Behaviour only: the markup
 // is chat.html and the frame styles are chat.css. No network calls.
 
-const PARTIAL = new URL('./chat.html', import.meta.url);
+import { WEB_ASSET_VERSION } from '../shell/version.js';
+
+const PARTIAL = new URL(`./chat.html?v=${WEB_ASSET_VERSION}`, import.meta.url);
 
 export async function mountChat(host) {
   if (!host || host.dataset.mounted === 'yes') return host;

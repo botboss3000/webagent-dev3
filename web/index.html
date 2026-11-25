@@ -4,17 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WebAgent</title>
-<!-- Stylesheets first: tokens, then the shell frame, then one file per component. -->
-<link rel="stylesheet" href="./shell/tokens.css">
-<link rel="stylesheet" href="./shell/shell.css">
-<link rel="stylesheet" href="./components/badge/badge.css">
-<link rel="stylesheet" href="./components/button/button.css">
-<link rel="stylesheet" href="./components/card/card.css">
-<link rel="stylesheet" href="./components/list/list.css">
-<link rel="stylesheet" href="./components/stat/stat.css">
-<link rel="stylesheet" href="./components/tile/tile.css">
-<link rel="stylesheet" href="./chat/chat.css">
-<link rel="stylesheet" href="./components/refresh/refresh.css">
+<!-- Stylesheets first: tokens, then the shell frame, then one file per component.
+     Every URL carries the release stamp so no cache layer can serve an older file. -->
+<link rel="stylesheet" href="./shell/tokens.css?v=2026-11-25a">
+<link rel="stylesheet" href="./shell/shell.css?v=2026-11-25a">
+<link rel="stylesheet" href="./components/badge/badge.css?v=2026-11-25a">
+<link rel="stylesheet" href="./components/button/button.css?v=2026-11-25a">
+<link rel="stylesheet" href="./components/card/card.css?v=2026-11-25a">
+<link rel="stylesheet" href="./components/list/list.css?v=2026-11-25a">
+<link rel="stylesheet" href="./components/stat/stat.css?v=2026-11-25a">
+<link rel="stylesheet" href="./components/tile/tile.css?v=2026-11-25a">
+<link rel="stylesheet" href="./chat/chat.css?v=2026-11-25a">
+<link rel="stylesheet" href="./components/refresh/refresh.css?v=2026-11-25a">
 </head>
 <body>
 <div class="app">
@@ -99,6 +100,6 @@
   </svg>
   <span id="ptr-hint" class="ptr-hint"></span>
 </div>
-<script type="module" src="./shell/shell.js"></script>
+<script type="module" src="./shell/shell.js?v=2026-11-25a"></script>
 </body>
 </html>
