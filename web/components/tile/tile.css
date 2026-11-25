@@ -6,20 +6,21 @@
   gap: 4px;
   width: 100%;
   min-height: 74px;
-  padding: 12px;
-  border: var(--border-width) solid var(--border);
+  padding: var(--space-3);
+  border: none;
   border-radius: var(--r-lg);
   background: var(--bg-elev);
+  box-shadow: var(--elevation-1-ambient), var(--elevation-1-drop), var(--elevation-1-contact);
   color: var(--fg-1);
   text-align: left;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background 0.12s ease, box-shadow 0.12s ease;
 }
 
 .tile:hover {
   background: var(--bg-tint);
-  border-color: var(--border-strong);
+  box-shadow: var(--elevation-2-ambient), var(--elevation-2-drop), var(--elevation-2-contact);
 }
 
 .tile:focus-visible {
@@ -61,14 +62,3 @@
   cursor: default;
 }
 
-.tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
-}
-
-@media (max-width: 700px) {
-  .tiles {
-    grid-template-columns: 1fr;
-  }
-}
