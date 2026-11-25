@@ -1,0 +1,110 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see config/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "worker.transport.retries",
+      "description": "How many times a tool call the tool worker never took is tried again before the agent is told it did not start; 0 turns retrying off.",
+      "type": "integer",
+      "pointer": "/retries",
+      "layers": ["app"],
+      "examples": [
+        "wait longer for the tool worker after a restart",
+        "tools fail while the worker restarts",
+        "stop retrying tool calls"
+      ],
+      "areas": ["tools", "worker", "retry"],
+      "unit": "retries",
+      "min": 0,
+      "max": 10,
+      "bounds": "validator"
+    },
+    {
+      "id": "worker.transport.retry_first_delay_ms",
+      "description": "Milliseconds before the first retry of a tool call the tool worker never took; each later retry waits twice as long, at most 30 seconds.",
+      "type": "integer",
+      "pointer": "/retry_first_delay_ms",
+      "layers": ["app"],
+      "examples": [
+        "retry tool calls sooner",
+        "space out retries to the tool worker",
+        "first retry after half a second"
+      ],
+      "areas": ["tools", "worker", "retry"],
+      "unit": "ms",
+      "min": 10,
+      "max": 5000,
+      "bounds": "validator"
+    },
+    {
+      "id": "worker.transport.job_table.ttl_seconds",
+      "description": "Seconds the tool worker remembers a finished call's result, so a lost answer can be asked for again instead of running the call twice.",
+      "type": "integer",
+      "pointer": "/job_table/ttl_seconds",
+      "layers": ["app"],
+      "examples": [
+        "keep tool results longer in the worker",
+        "remember finished calls for 20 minutes",
+        "how long a lost tool answer can be recovered"
+      ],
+      "areas": ["tools", "worker", "memory"],
+      "unit": "s",
+      "min": 10,
+      "max": 3600,
+      "bounds": "validator"
+    },
+    {
+      "id": "worker.transport.job_table.max_jobs",
+      "description": "Most finished tool calls the tool worker remembers at once; the oldest are forgotten first and running calls always stay.",
+      "type": "integer",
+      "pointer": "/job_table/max_jobs",
+      "layers": ["app"],
+      "examples": [
+        "remember more tool calls in the worker",
+        "limit how many results the worker keeps",
+        "keep 2000 calls"
+      ],
+      "areas": ["tools", "worker", "memory"],
+      "unit": "calls",
+      "min": 16,
+      "max": 65536,
+      "bounds": "validator"
+    },
+    {
+      "id": "worker.transport.job_table.max_result_bytes",
+      "description": "Largest single tool result, in bytes, the tool worker remembers; a larger one cannot be asked for again if its answer is lost.",
+      "type": "integer",
+      "pointer": "/job_table/max_result_bytes",
+      "layers": ["app"],
+      "examples": [
+        "remember big tool results too",
+        "do not keep large results in the worker",
+        "keep results up to 2 MB"
+      ],
+      "areas": ["tools", "worker", "memory"],
+      "unit": "bytes",
+      "min": 1024,
+      "max": 2097152,
+      "bounds": "validator"
+    },
+    {
+      "id": "worker.transport.job_table.max_total_bytes",
+      "description": "Most bytes of remembered tool results the tool worker keeps in memory in all; past it the oldest are forgotten.",
+      "type": "integer",
+      "pointer": "/job_table/max_total_bytes",
+      "layers": ["app"],
+      "examples": [
+        "let the worker use less memory for results",
+        "cap remembered results at 32 MB",
+        "worker memory for finished calls"
+      ],
+      "areas": ["tools", "worker", "memory"],
+      "unit": "bytes",
+      "min": 1048576,
+      "max": 536870912,
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {
+    "/schema_version": "File format version."
+  }
+}

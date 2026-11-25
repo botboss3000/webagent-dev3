@@ -58,6 +58,10 @@
       "descriptors": "config/worker/command-limits.settings.json"
     },
     {
+      "config": "config/worker/transport.json",
+      "descriptors": "config/worker/transport.settings.json"
+    },
+    {
       "config": "config/notifications/admin-alerts.json",
       "descriptors": "config/notifications/admin-alerts.settings.json"
     },

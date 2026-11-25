@@ -6,6 +6,7 @@ pub mod browser;
 pub mod commands;
 pub mod files;
 pub mod git;
+pub mod jobs;
 pub mod launch;
 pub mod limits;
 pub mod manager;
@@ -106,6 +107,7 @@ pub async fn serve(config: Config) -> io::Result<()> {
     std::fs::set_permissions(&config.socket, std::fs::Permissions::from_mode(0o660))?;
     let active = Arc::new(Active::default());
     let persistent = Arc::new(Persistent::new(&config));
+    let jobs = Arc::new(jobs::Jobs::default());
     {
         // C6: preview ports go back once nothing runs in their workspace (checked each minute).
         let (active, persistent, files) = (
@@ -138,9 +140,10 @@ pub async fn serve(config: Config) -> io::Result<()> {
         let config = config.clone();
         let active = Arc::clone(&active);
         let persistent = Arc::clone(&persistent);
+        let jobs = Arc::clone(&jobs);
         tokio::spawn(async move {
             // A failed write means the caller left; there is nobody to tell.
-            let _ = handle(stream, &config, &active, &persistent).await;
+            let _ = handle(stream, &config, &active, &persistent, &jobs).await;
         });
     }
 }
@@ -346,30 +349,53 @@ impl Drop for Registered<'_> {
     }
 }
 
-async fn write_reply(
-    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
-    id: &Value,
-    result: Value,
-) -> io::Result<()> {
-    let mut line = json!({"version":2,"id":id,"result":result})
+/// The caller's side of one call: the socket's write half and, for an acknowledged call,
+/// its entry in the job table, which stores the result before it is written.
+struct Reply<'a> {
+    writer: tokio::net::unix::OwnedWriteHalf,
+    job: Option<jobs::Entry<'a>>,
+}
+
+async fn write_reply(reply: &mut Reply<'_>, id: &Value, result: Value) -> io::Result<()> {
+    let envelope = json!({"version":2,"id":id,"result":result});
+    let mut line = envelope.to_string().into_bytes();
+    if let Some(job) = reply.job.take() {
+        job.finish(&envelope["result"], line.len());
+    }
+    line.push(b'\n');
+    reply.writer.write_all(&line).await?;
+    reply.writer.shutdown().await
+}
+
+/// The acknowledgement line: the call is registered and has not started.
+async fn acknowledge(reply: &mut Reply<'_>, id: &str, instance: &str) -> io::Result<()> {
+    let mut line = json!({"version":2,"id":id,"ack":true,"instance":instance})
         .to_string()
         .into_bytes();
     line.push(b'\n');
-    writer.write_all(&line).await?;
-    writer.shutdown().await
+    reply.writer.write_all(&line).await?;
+    reply.writer.flush().await
 }
 
 /// Answers one call. A caller that hangs up (or sends more) before the reply stops its
 /// command, plugin or browser call. A file call always completes, so a write is never
 /// left half done. An unknown tool or a request outside protocol 2 fails unanswered by
-/// any tool.
+/// any tool. A request with `"ack": true` is registered in [`jobs`] and acknowledged
+/// before anything runs; when the acknowledgement cannot be written nothing runs. A
+/// `"resume": true` request, or a repeat of a known id, never runs: it gets the earlier
+/// call's result.
 async fn handle(
     client: UnixStream,
     config: &Config,
     active: &Active,
     persistent: &Persistent,
+    jobs: &jobs::Jobs,
 ) -> io::Result<()> {
-    let (client_read, mut client_write) = client.into_split();
+    let (client_read, client_write) = client.into_split();
+    let mut client_write = Reply {
+        writer: client_write,
+        job: None,
+    };
     let mut client_read = BufReader::new(client_read);
     let mut request = Vec::new();
     let problem = {
@@ -392,6 +418,35 @@ async fn handle(
         .as_ref()
         .and_then(|request| request["name"].as_str())
         .unwrap_or_default();
+    let tracked = parsed
+        .as_ref()
+        .filter(|request| request["ack"] == true || request["resume"] == true);
+    if let Some((request, id)) = tracked.and_then(|r| Some((r, r["id"].as_str()?))) {
+        jobs.limit(&request["job_table"]);
+        let workspace = request["workspace"].as_str().unwrap_or_default();
+        match jobs.admit(id, workspace, name, request["resume"] == true) {
+            jobs::Admission::Run(entry) => {
+                if acknowledge(&mut client_write, id, jobs.instance())
+                    .await
+                    .is_err()
+                {
+                    // The caller is gone and saw no acknowledgement: nothing runs.
+                    entry.not_started();
+                    return Ok(());
+                }
+                client_write.job = Some(entry);
+            }
+            jobs::Admission::Resume(resume) => {
+                acknowledge(&mut client_write, id, jobs.instance()).await?;
+                // A resume's hang-up ends only its wait, never the call it waits for.
+                let result = tokio::select! {
+                    result = jobs.outcome(id, resume) => result,
+                    () = hang_up(&mut client_read) => return Ok(()),
+                };
+                return write_reply(&mut client_write, &request["id"], result).await;
+            }
+        }
+    }
     if let Some(parsed) = parsed.as_ref().filter(|_| files::handles(name)) {
         let roots = config.files.clone();
         let request = parsed.clone();
@@ -819,16 +874,9 @@ async fn hang_up(reader: &mut (impl AsyncRead + Unpin)) {
 }
 
 /// Writes the worker's failure envelope for a call that never reached a tool.
-async fn reply(
-    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
-    id: Option<Value>,
-    output: &str,
-) -> io::Result<()> {
-    let envelope = json!({"version":2,"id":id,"result":{"status":"failed","output":output}});
-    let mut line = envelope.to_string().into_bytes();
-    line.push(b'\n');
-    writer.write_all(&line).await?;
-    writer.shutdown().await
+async fn reply(reply: &mut Reply<'_>, id: Option<Value>, output: &str) -> io::Result<()> {
+    let id = id.unwrap_or(Value::Null);
+    write_reply(reply, &id, json!({"status":"failed","output":output})).await
 }
 
 #[cfg(test)]
@@ -844,6 +892,13 @@ mod tests {
 
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().expect("temporary directory");
+        let config = test_config(&dir);
+        let socket = config.socket.clone();
+        tokio::spawn(serve(config));
+        Fixture { _dir: dir, socket }
+    }
+
+    fn test_config(dir: &tempfile::TempDir) -> Config {
         let socket = dir.path().join("tools.sock");
         let control = dir.path().join("control");
         std::fs::create_dir_all(&control).expect("control");
@@ -872,8 +927,7 @@ mod tests {
             // The test process owns the directory it just created.
             client_uid: std::fs::metadata(dir.path()).expect("directory").uid(),
         };
-        tokio::spawn(serve(config));
-        Fixture { _dir: dir, socket }
+        config
     }
 
     async fn connect(path: &Path) -> UnixStream {
@@ -918,6 +972,117 @@ mod tests {
             .await
             .expect("request");
         read_line(&mut client).await
+    }
+
+    const WORKSPACE: &str = "2244991a-c2e3-415b-ae5c-054570c91d32";
+
+    /// Runs one call through [`handle`] on a socket pair: the request is written first,
+    /// then the client side is kept (`Some`) or closed before the worker reads it.
+    async fn handled(
+        config: &Config,
+        jobs: &jobs::Jobs,
+        request: &Value,
+        keep_client: bool,
+    ) -> Option<Vec<Value>> {
+        let (mut client, worker) = UnixStream::pair().expect("pair");
+        client
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .expect("request");
+        let client = keep_client.then_some(client);
+        let (active, persistent) = (Active::default(), Persistent::new(config));
+        let _ = handle(worker, config, &active, &persistent, jobs).await;
+        let mut client = client?;
+        let mut text = String::new();
+        client.read_to_string(&mut text).await.expect("reply");
+        Some(
+            text.lines()
+                .map(|line| serde_json::from_str(line).expect("JSON line"))
+                .collect(),
+        )
+    }
+
+    /// The workspace file the write tests use; file tools take absolute workspace paths.
+    fn note(dir: &tempfile::TempDir) -> PathBuf {
+        dir.path()
+            .join("workspaces")
+            .join(WORKSPACE)
+            .join("note.txt")
+    }
+
+    fn write(note: &Path, id: &str, content: &str) -> Value {
+        json!({"version":2,"id":id,"name":"file_write","workspace":WORKSPACE,
+            "arguments":{"path":note,"content":content},"ack":true})
+    }
+
+    #[tokio::test]
+    async fn without_ack_the_reply_is_one_line_as_before() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (config, jobs) = (test_config(&dir), jobs::Jobs::default());
+        let mut request = write(&note(&dir), "plain", "x");
+        request.as_object_mut().expect("object").remove("ack");
+        let lines = handled(&config, &jobs, &request, true)
+            .await
+            .expect("reply");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0]["id"], "plain");
+        assert_eq!(lines[0]["result"]["status"], "success", "{lines:?}");
+        assert!(lines[0].get("ack").is_none());
+    }
+
+    #[tokio::test]
+    async fn an_acknowledged_call_runs_once_and_a_repeat_gets_its_result() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (config, jobs) = (test_config(&dir), jobs::Jobs::default());
+        let note = note(&dir);
+        let lines = handled(&config, &jobs, &write(&note, "w", "first"), true)
+            .await
+            .expect("reply");
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(
+            lines[0],
+            json!({"version":2,"id":"w","ack":true,"instance":jobs.instance()})
+        );
+        assert_eq!(lines[1]["result"]["status"], "success", "{lines:?}");
+        assert_eq!(std::fs::read_to_string(&note).expect("note"), "first");
+        // The same id again does not write again: it answers the stored result.
+        std::fs::write(&note, "changed since").expect("change");
+        let again = handled(&config, &jobs, &write(&note, "w", "first"), true)
+            .await
+            .expect("reply");
+        assert_eq!(again, lines);
+        assert_eq!(
+            std::fs::read_to_string(&note).expect("note"),
+            "changed since"
+        );
+        // A resume of an unknown id runs nothing.
+        let mut resume = write(&note, "other", "never");
+        resume["resume"] = json!(true);
+        let unknown = handled(&config, &jobs, &resume, true).await.expect("reply");
+        assert_eq!(unknown[1]["result"]["error_kind"], "unknown_job");
+        assert_eq!(
+            std::fs::read_to_string(&note).expect("note"),
+            "changed since"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_caller_gone_before_the_acknowledgement_gets_nothing_run() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (config, jobs) = (test_config(&dir), jobs::Jobs::default());
+        let note = note(&dir);
+        // The client closes before the worker reads: the acknowledgement write fails.
+        assert!(handled(&config, &jobs, &write(&note, "gone", "x"), false)
+            .await
+            .is_none());
+        assert!(!note.exists(), "nothing ran without a sent acknowledgement");
+        // A retry with the same id runs it, once.
+        let lines = handled(&config, &jobs, &write(&note, "gone", "x"), true)
+            .await
+            .expect("reply");
+        assert_eq!(lines[0]["ack"], true);
+        assert_eq!(lines[1]["result"]["status"], "success", "{lines:?}");
+        assert_eq!(std::fs::read_to_string(&note).expect("note"), "x");
     }
 
     #[tokio::test]

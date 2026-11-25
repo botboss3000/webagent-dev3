@@ -31,6 +31,8 @@ Rules for every tool call. Each tool's own skill states how it runs.
   write's result is uncertain (for example edit_own_prompt, save_own_skill or
   remove_own_skill after a restart), read the item's current state to see whether it
   took effect.
+- A result with `error_kind` `not_started` (`no_effect: true`) means the tool worker
+  never took the call: nothing happened, and you can simply call the tool again.
 - Never put passwords, device codes or tokens in tool text; credentials go
   through the protected credential card.
 

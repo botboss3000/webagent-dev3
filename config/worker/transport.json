@@ -1,0 +1,12 @@
+{
+  "_instructions": "How the API and loops call the tool worker, read live with each call. Every call asks the worker for an acknowledgement, sent the moment it registers the call and before anything runs. A call the worker never took (its socket refused the connection, or the connection ended before the acknowledgement, as while the worker restarts) is tried again after retry_first_delay_ms, then after twice as long each time, at most retries times (6 from 250 ms: about 16 s in all); if the worker still has not taken it the agent is told it did not start and had no effect. retries 0 turns retrying off. job_table bounds what the worker remembers of calls it acknowledged, so an answer lost on the way back can be asked for again and the same call never runs twice: each result is kept ttl_seconds after it finished, at most max_jobs calls and max_total_bytes of results, and results larger than max_result_bytes are not kept. Memory only; the worker keeps no call's request or secrets.",
+  "schema_version": 1,
+  "retries": 6,
+  "retry_first_delay_ms": 250,
+  "job_table": {
+    "ttl_seconds": 600,
+    "max_jobs": 1024,
+    "max_result_bytes": 1048576,
+    "max_total_bytes": 67108864
+  }
+}

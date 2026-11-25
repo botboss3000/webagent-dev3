@@ -9,6 +9,8 @@ pub enum Stage {
     Preparation,
     Authorization,
     Connect,
+    /// Waiting for the worker's acknowledgement (W1): it never took the call.
+    Acknowledge,
     RequestWrite,
     ResponseRead,
     ResponseValidation,
@@ -32,6 +34,8 @@ pub enum Code {
     MalformedResponse,
     ResponseTooLarge,
     ResponseIdMismatch,
+    /// Every connection ended before the worker acknowledged the call (W1).
+    NotAcknowledged,
     Cancelled,
     TaskPanicked,
     TaskTerminated,
@@ -54,6 +58,10 @@ pub struct Failure {
     pub transport_request_id: Option<String>,
     pub request_id: Option<String>,
     pub os_error: Option<i32>,
+    /// The transport retried the call on its schedule before giving up (W1). Absent in
+    /// older records, which therefore never count as "did not start".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retried: bool,
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -73,6 +81,7 @@ impl Failure {
             transport_request_id: None,
             request_id: None,
             os_error: None,
+            retried: false,
         }
     }
     pub fn transport(
@@ -129,23 +138,39 @@ pub fn request(error: anyhow::Error, args: &Value) -> anyhow::Error {
     failure.into()
 }
 // Preserve historical labels only for records without typed evidence. This is presentation metadata.
-/// A refusal recorded before any request byte left the process proves the call had
-/// no effect. Stop, cancellation and transport failures keep their interruption handling.
+/// A failure that proves the call had no effect: a refusal recorded before any request
+/// byte left the process, or a call the tool worker never took although the transport
+/// retried it ([`not_started`]). Stop, cancellation and other transport failures keep their
+/// interruption handling.
 pub fn refused_before_dispatch(value: &Value) -> Option<Failure> {
     let failure = serde_json::from_value::<Failure>(value.clone()).ok()?;
     (failure.version == 1
         && matches!(failure.delivery, Delivery::NotSent)
-        && matches!(
+        && (matches!(
             failure.code,
             Code::AuthorizationRejected
                 | Code::LegacyAuthorizationRejected
                 | Code::DeploymentAuthorizationRejected
                 | Code::InvalidRequest
-        ))
+        ) || not_started(&failure)))
     .then_some(failure)
 }
-/// Content-free tool result for a refusal; the fixed code is the only failure detail.
+/// The worker never took the call (W1): every connect was refused or ended before its
+/// acknowledgement, through the transport's whole retry schedule.
+fn not_started(failure: &Failure) -> bool {
+    failure.retried
+        && matches!(failure.delivery, Delivery::NotSent)
+        && matches!(failure.stage, Stage::Connect | Stage::Acknowledge)
+        && !matches!(failure.code, Code::Cancelled)
+}
+/// Content-free tool result for a refusal or a call that did not start; the fixed code is
+/// the only failure detail.
 pub fn refused_result(failure: &Failure) -> Value {
+    if not_started(failure) {
+        return json!({"status":"error","error_kind":"not_started","no_effect":true,
+            "code":failure.code,
+            "output":"The tool did not start because the tool worker could not be reached. No effect occurred; you can try again."});
+    }
     json!({"status":"error","error_kind":"refused_before_dispatch","code":failure.code,
         "output":"Refused before dispatch: this tool is not authorized or the request is invalid for this agent, mode or account. No effect occurred."})
 }
@@ -269,7 +294,8 @@ pub fn diagnostic_only_update(previous: &Value, next: &Value) -> bool {
         return false;
     }
     let failure = &next["pending"]["failure"];
-    if !failure.is_object() || project(failure) != *failure
+    if !failure.is_object()
+        || project(failure) != *failure
         || next["latest_tool_failure"] != *failure
     {
         return false;
@@ -282,7 +308,9 @@ pub fn diagnostic_only_update(previous: &Value, next: &Value) -> bool {
         ("tool", &previous["pending"]["name"]),
     ] {
         let expected = identifier(source);
-        if expected.is_null() || failure[field] != expected { return false; }
+        if expected.is_null() || failure[field] != expected {
+            return false;
+        }
     }
     let mut expected = previous.clone();
     expected["pending"]["failure"] = failure.clone();
@@ -290,59 +318,130 @@ pub fn diagnostic_only_update(previous: &Value, next: &Value) -> bool {
     expected == *next
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn only_typed_pre_dispatch_refusals_count_as_no_effect() {
-        let refusal = |stage, code, delivery| serde_json::to_value(Failure::new(stage, code, delivery)).unwrap();
-        let legacy = refusal(Stage::Authorization, Code::LegacyAuthorizationRejected, Delivery::NotSent);
+        let refusal = |stage, code, delivery| {
+            serde_json::to_value(Failure::new(stage, code, delivery)).unwrap()
+        };
+        let legacy = refusal(
+            Stage::Authorization,
+            Code::LegacyAuthorizationRejected,
+            Delivery::NotSent,
+        );
         let failure = refused_before_dispatch(&legacy).unwrap();
         let result = refused_result(&failure);
         assert_eq!(result["code"], "legacy_authorization_rejected");
         assert_eq!(result["status"], "error");
         for value in [
-            refusal(Stage::Authorization, Code::LegacyAuthorizationRejected, Delivery::PossiblySent),
+            refusal(
+                Stage::Authorization,
+                Code::LegacyAuthorizationRejected,
+                Delivery::PossiblySent,
+            ),
             refusal(Stage::Preparation, Code::Cancelled, Delivery::NotSent),
-            refusal(Stage::Authorization, Code::AuthorityStopped, Delivery::NotSent),
+            refusal(
+                Stage::Authorization,
+                Code::AuthorityStopped,
+                Delivery::NotSent,
+            ),
             refusal(Stage::Connect, Code::ConnectionRefused, Delivery::NotSent),
+            refusal(Stage::Acknowledge, Code::NotAcknowledged, Delivery::NotSent),
             json!({"version":2,"stage":"authorization","code":"authorization_rejected","delivery":"not_sent"}),
             Value::Null,
         ] {
             assert!(refused_before_dispatch(&value).is_none(), "{value}");
         }
+        // Retried through the whole schedule: did not start, no effect. A retried stop
+        // or a possibly-sent failure never counts.
+        let retried = |stage, code, delivery| {
+            let mut failure = Failure::new(stage, code, delivery);
+            failure.retried = true;
+            serde_json::to_value(failure).unwrap()
+        };
+        for value in [
+            retried(Stage::Acknowledge, Code::NotAcknowledged, Delivery::NotSent),
+            retried(Stage::Connect, Code::ConnectionRefused, Delivery::NotSent),
+            retried(Stage::Connect, Code::SocketUnavailable, Delivery::NotSent),
+        ] {
+            let result = refused_result(&refused_before_dispatch(&value).unwrap());
+            assert_eq!(result["error_kind"], "not_started", "{value}");
+            assert_eq!(result["no_effect"], true);
+            assert!(result.get("uncertain").is_none());
+            assert_eq!(
+                project(&value)["retried"],
+                true,
+                "the flag survives reprojection"
+            );
+        }
+        for value in [
+            retried(Stage::Connect, Code::Cancelled, Delivery::NotSent),
+            retried(
+                Stage::ResponseRead,
+                Code::DisconnectedResponse,
+                Delivery::PossiblySent,
+            ),
+            retried(
+                Stage::Acknowledge,
+                Code::NotAcknowledged,
+                Delivery::PossiblySent,
+            ),
+        ] {
+            assert!(refused_before_dispatch(&value).is_none(), "{value}");
+        }
+        // An older binary's record has no flag; its connect failure stays uncertain.
+        let old = json!({"version":1,"stage":"connect","code":"connection_refused",
+            "delivery":"not_sent","elapsed_ms":1,"recorded_at":1,"transport_request_id":null,
+            "request_id":null,"os_error":111});
+        assert!(refused_before_dispatch(&old).is_none());
     }
     #[test]
     fn late_single_tool_terminal_diagnostic_exception_rejects_every_other_mutation() {
         let previous = json!({"id":"run","session_id":"session","generation":"generation",
             "status":"cancelled","uncertain":false,"input":[],"run_revision":3,
             "pending":{"id":"attempt","call_id":"call","name":"file_list","state":"executing"}});
-        let error = Failure::new(Stage::ResponseRead,Code::DisconnectedResponse,Delivery::PossiblySent).into();
+        let error = Failure::new(
+            Stage::ResponseRead,
+            Code::DisconnectedResponse,
+            Delivery::PossiblySent,
+        )
+        .into();
         let mut next = previous.clone();
-        record(&mut next,&error,None);
-        assert!(diagnostic_only_update(&previous,&next));
-        for (pointer,value) in [
-            ("/status",json!("running")),("/uncertain",json!(true)),
-            ("/generation",json!("replacement")),("/run_revision",json!(4)),
-            ("/input",json!([{"type":"function_call_output"}])),
-            ("/pending/id",json!("replacement")),("/pending/state",json!("requested")),
-            ("/pending/failure/code",json!("private error")),
-            ("/pending/failure/pending_id",json!("other")),
+        record(&mut next, &error, None);
+        assert!(diagnostic_only_update(&previous, &next));
+        for (pointer, value) in [
+            ("/status", json!("running")),
+            ("/uncertain", json!(true)),
+            ("/generation", json!("replacement")),
+            ("/run_revision", json!(4)),
+            ("/input", json!([{"type":"function_call_output"}])),
+            ("/pending/id", json!("replacement")),
+            ("/pending/state", json!("requested")),
+            ("/pending/failure/code", json!("private error")),
+            ("/pending/failure/pending_id", json!("other")),
         ] {
-            let mut invalid=next.clone();*invalid.pointer_mut(pointer).unwrap()=value;
+            let mut invalid = next.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
             if pointer.starts_with("/pending/failure/") {
-                invalid["latest_tool_failure"]=invalid["pending"]["failure"].clone();
+                invalid["latest_tool_failure"] = invalid["pending"]["failure"].clone();
             }
-            assert!(!diagnostic_only_update(&previous,&invalid),"{pointer}");
+            assert!(!diagnostic_only_update(&previous, &invalid), "{pointer}");
         }
-        let mut invalid=next.clone();invalid["pending"]["failure"]["raw_error"]=json!("private error");
-        invalid["latest_tool_failure"]=invalid["pending"]["failure"].clone();
-        assert!(!diagnostic_only_update(&previous,&invalid));
-        assert!(!diagnostic_only_update(&next,&next),"diagnostics cannot overwrite prior evidence");
-        let mut completed=previous.clone();completed["status"]=json!("completed");
-        let mut completed_next=next.clone();completed_next["status"]=json!("completed");
-        assert!(!diagnostic_only_update(&completed,&completed_next));
+        let mut invalid = next.clone();
+        invalid["pending"]["failure"]["raw_error"] = json!("private error");
+        invalid["latest_tool_failure"] = invalid["pending"]["failure"].clone();
+        assert!(!diagnostic_only_update(&previous, &invalid));
+        assert!(
+            !diagnostic_only_update(&next, &next),
+            "diagnostics cannot overwrite prior evidence"
+        );
+        let mut completed = previous.clone();
+        completed["status"] = json!("completed");
+        let mut completed_next = next.clone();
+        completed_next["status"] = json!("completed");
+        assert!(!diagnostic_only_update(&completed, &completed_next));
     }
 
     #[test]
@@ -624,6 +723,4 @@ mod tests {
         assert_eq!(value["code"], "task_terminated");
         assert!(!value.to_string().contains("synthetic"));
     }
-
-
 }

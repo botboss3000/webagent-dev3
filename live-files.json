@@ -54,6 +54,7 @@
     "config/webapp/app-settings.json",
     "config/worker/*.settings.json",
     "config/worker/command-limits.json",
+    "config/worker/transport.json",
     "docs/*.md",
     "docs/*/*.json",
     "docs/*/*.md",
