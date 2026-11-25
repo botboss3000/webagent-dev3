@@ -60,11 +60,11 @@ impl Store {
             .await?;
         // `agent_id` and `admin` (the requester was an administrator when last checked) serve the
         // per-agent cap; `released` is 0 while held, 1 once the run finished and 2 while it is
-        // stopped, paused or parked (taken again when it resumes). `agent_owner` (the agent's
-        // owner, who pays) serves the owner's total runs at once; `paid` (the owner is on a paid
-        // tier) and `first_at` the paid-tier priority: `first_at` is when the slot goes first in
-        // line and is no longer held back for paid owners (when it was taken for a paid owner's
-        // agent, `free_max_wait_seconds` later for any other).
+        // stopped, paused, parked or in recovery (taken again when it resumes). `agent_owner`
+        // (the agent's owner, who pays) serves the owner's total runs at once; `paid` (the owner
+        // is on a paid tier) and `first_at` the paid-tier priority: `first_at` is when the slot
+        // goes first in line and is no longer held back for paid owners (when it was taken for a
+        // paid owner's agent, `free_max_wait_seconds` later for any other).
         for (column, declaration) in [
             ("replaced_by", "TEXT"),
             ("agent_id", "TEXT"),
@@ -207,7 +207,8 @@ impl Store {
                         ));
                     }
                     // User decision 11-23: a stopped, paused or parked run gives its slot back.
-                    Some("stopped" | "paused" | "parked") => {
+                    // A run in recovery waits for a person's retry or cancel the same way.
+                    Some("stopped" | "paused" | "parked" | "recovery") => {
                         records.push((rid, owner.clone(), owner.clone(), String::new(), Slot::Set));
                     }
                     _ => {}
@@ -250,7 +251,7 @@ impl Store {
                 }
             }
             let open: Vec<String> = sqlx::query_scalar(
-                "SELECT id FROM run_index WHERE status NOT IN ('completed','cancelled','failed') AND status NOT IN ('stopped','paused','parked')",
+                "SELECT id FROM run_index WHERE status NOT IN ('completed','cancelled','failed') AND status NOT IN ('stopped','paused','parked','recovery')",
             )
             .fetch_all(&pool)
             .await?;
@@ -1002,7 +1003,7 @@ enum Slot {
     Hold,
     /// The run finished: released for good.
     Finish,
-    /// The run is stopped, paused or parked: set aside until it resumes.
+    /// The run is stopped, paused, parked or in recovery: set aside until it resumes.
     Set,
     /// The run resumed: held again, at the end of the line.
     Retake,
@@ -1739,6 +1740,117 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(kept, 0);
+    }
+
+    #[tokio::test]
+    async fn a_run_in_recovery_gives_its_slot_back_and_waits_its_turn_when_retried() {
+        let (_root, store) = opened().await;
+        level_runs(&store, "shared_default", 2).await;
+        let user = &free_accounts(&store, &["recover"]).await[0];
+        let me = user.current_user_id().to_owned();
+        let (one, two) = (
+            run_on("one", &me, "shared_default"),
+            run_on("two", &me, "shared_default"),
+        );
+        for r in [&one, &two] {
+            user.reserve_requester_run(r).await.unwrap();
+            user.put(&format!("run:{}", r["id"].as_str().unwrap()), r)
+                .await
+                .unwrap();
+        }
+        let released = |rid: &'static str| {
+            let pool = store.app_pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT released FROM requester_run_slots WHERE run_id=?",
+                )
+                .bind(rid)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        // "one" waits for a recovery decision: its slot is set aside, so a new message is admitted.
+        let mut recovery = one.clone();
+        recovery["status"] = json!("recovery");
+        user.put("run:one", &recovery).await.unwrap();
+        user.reconcile_requester_slots().await.unwrap();
+        assert_eq!(released("one").await, 2);
+        let third = run_on("three", &me, "shared_default");
+        user.reserve_requester_run(&third).await.unwrap();
+        user.put("run:three", &third).await.unwrap();
+        // Retry puts it back in the queue: it holds a slot again, at the end of the line, and
+        // waits behind "two" and "three" rather than exceeding the account's runs at once.
+        user.put("run:one", &one).await.unwrap();
+        assert!(!user
+            .requester_claim_ready_within(&one, "loop-test", capacity(10))
+            .await
+            .unwrap());
+        assert_eq!(released("one").await, 0);
+        let mut finished = two.clone();
+        finished["status"] = json!("completed");
+        user.put("run:two", &finished).await.unwrap();
+        user.reconcile_requester_slots().await.unwrap();
+        assert!(user
+            .requester_claim_ready_within(&one, "loop-test", capacity(10))
+            .await
+            .unwrap());
+    }
+
+    /// A retried recovery run cannot use its given-back place to pass the per-agent cap or the
+    /// server's ceiling: it waits its turn under both.
+    #[tokio::test]
+    async fn a_retried_recovery_run_stays_within_the_agent_cap_and_the_ceiling() {
+        let (_root, store) = opened().await;
+        set_run_limits(&store, json!({"max_active_runs_per_agent":1}));
+        let owners = free_accounts(&store, &["ra", "rb"]).await;
+        let (a, b) = (&owners[0], &owners[1]);
+        let first = run_on("first", a.current_user_id(), "shared_default");
+        a.reserve_requester_run(&first).await.unwrap();
+        a.put("run:first", &first).await.unwrap();
+        assert!(a
+            .requester_claim_ready_within(&first, "loop-test", capacity(10))
+            .await
+            .unwrap());
+        // It goes into recovery: the loop gives back its server place, the reconcile its slot.
+        let mut recovery = first.clone();
+        recovery["status"] = json!("recovery");
+        a.put("run:first", &recovery).await.unwrap();
+        a.release_run_place("first").await.unwrap();
+        a.reconcile_requester_slots().await.unwrap();
+        // Another account's run takes the agent's one place.
+        let other = run_on("other", b.current_user_id(), "shared_default");
+        b.reserve_requester_run(&other).await.unwrap();
+        b.put("run:other", &other).await.unwrap();
+        assert!(b
+            .requester_claim_ready_within(&other, "loop-test", capacity(10))
+            .await
+            .unwrap());
+        // Retried, "first" waits behind it: the agent cap holds.
+        a.put("run:first", &first).await.unwrap();
+        assert!(!a
+            .requester_claim_ready_within(&first, "loop-test", capacity(10))
+            .await
+            .unwrap());
+        let mut done = other.clone();
+        done["status"] = json!("completed");
+        b.put("run:other", &done).await.unwrap();
+        b.reconcile_requester_slots().await.unwrap();
+        b.release_run_place("other").await.unwrap();
+        // The agent has room again, but the server's ordinary ceiling is full: it still waits.
+        going(&store, 9).await;
+        assert!(!a
+            .requester_claim_ready_within(&first, "loop-test", capacity(10))
+            .await
+            .unwrap());
+        sqlx::query("DELETE FROM running_runs WHERE run_id LIKE 'going-%'")
+            .execute(&store.app_pool)
+            .await
+            .unwrap();
+        assert!(a
+            .requester_claim_ready_within(&first, "loop-test", capacity(10))
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
