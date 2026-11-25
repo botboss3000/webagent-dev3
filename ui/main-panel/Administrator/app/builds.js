@@ -1,5 +1,6 @@
 'use strict';
 import {schedulerPanel} from '../builds/scheduler.js';
+import {readLoops, paintLoopsStrip} from './pages/dashboard/loops.js';
 
 // Operator tasks carry their provenance at the end of the summary:
 // "[origin=claude-code; session=<session name>; session_id=<id>]". Only the session name is shown.
@@ -258,6 +259,10 @@ export function mountBuilds(panel, onStatus = () => {}) {
   const scheduler = schedulerPanel();
   // The scheduler's own resource sentence is replaced by the tiles at the top of the page.
   scheduler.root.querySelector(':scope > p').hidden = true;
+  const loopStrip = document.createElement('section');
+  loopStrip.className = 'bq-loops';
+  loopStrip.setAttribute('aria-label', 'Agent loops');
+  loopStrip.hidden = true;
   const resources = document.createElement('section');
   resources.className = 'bq-resources';
   resources.setAttribute('aria-label', 'Build host resources');
@@ -265,7 +270,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
   const more = document.createElement('div');
   more.className = 'bq-more';
   more.append(...scheduler.root.querySelectorAll(':scope > details.build-retained'), board, leftovers);
-  panel.append(toolbar, resources, status, synchronization, list, scheduler.root, more);
+  panel.append(toolbar, resources, loopStrip, status, synchronization, list, scheduler.root, more);
 
   // Draws the scheduler mode, free memory, reserve, pressure and disk use as small tiles at the top.
   function renderResources() {
@@ -1003,6 +1008,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       if (!response.ok) throw Error('Build status unavailable (' + response.status + ')');
       const data = await response.json();
       if (!Array.isArray(data.jobs)) throw Error('Build status response is invalid');
+      readLoops().then(view => { if (!stopped) { loopStrip.hidden = false; paintLoopsStrip(view, loopStrip); } }).catch(() => {});
       if (!stopped) { snapshot = data; onStatus(data.jobs.filter(isActive).length); render(); }
     } catch (error) {
       if (!stopped) { leftovers.hidden = true; onStatus(0); status.hidden = false; status.textContent = error.message; }

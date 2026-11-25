@@ -99,9 +99,81 @@ async fn revision_shadow(State(app): State<App>) -> Api {
     ))
 }
 
+/// A loop row not renewed within this many seconds is stale (the loop renews every 2 s;
+/// `webagent_engine::repository::MEMBER_FRESH_SECONDS` is the readiness limit).
+const LOOP_FRESH_SECONDS: i64 = 10;
+
+/// One loop process as stored: index, count it was started with, start and last-beat times,
+/// whether past start-up recovery.
+type LoopRow = (i64, i64, i64, i64, bool);
+
+/// The Dashboard and Builds pages' loop view: for each loop `0..n` its state, heartbeat age,
+/// runs in progress and accounts assigned. Pure: `now` and every input come from the caller.
+fn loop_view(rows: &[LoopRow], running: &[(i64, i64)], accounts: &[String], now: i64) -> Value {
+    // The count the freshest row was started with; rows of an older count are stale leftovers.
+    let loops = rows.iter().max_by_key(|row| row.3).map_or(0, |row| row.1);
+    let count = u32::try_from(loops).unwrap_or(0);
+    let mut assigned = vec![0u64; count as usize];
+    for account in accounts {
+        if let Some(slot) = assigned.get_mut(webagent_engine::partition::loop_for(account, count) as usize) {
+            *slot += 1;
+        }
+    }
+    let entries: Vec<Value> = (0..loops)
+        .map(|index| {
+            let row = rows.iter().find(|row| row.0 == index && row.1 == loops);
+            let age = row.map(|row| (now - row.3).max(0));
+            let state = match (row, age) {
+                (Some(row), Some(age)) if age <= LOOP_FRESH_SECONDS => {
+                    if row.4 { "serving" } else { "starting" }
+                }
+                (Some(_), _) => "stale",
+                _ => "missing",
+            };
+            let runs = running.iter().find(|r| r.0 == index).map_or(0, |r| r.1);
+            json!({
+                "index": index,
+                "state": state,
+                "heartbeat_age_seconds": age,
+                "started_at": row.map(|row| row.2),
+                "runs_in_progress": runs,
+                "accounts": assigned.get(index as usize).copied().unwrap_or(0),
+            })
+        })
+        .collect();
+    json!({
+        "schema_version": 1,
+        "loops": loops,
+        "accounts_total": accounts.len(),
+        "runs_in_progress": running.iter().map(|r| r.1).sum::<i64>(),
+        "members": entries,
+    })
+}
+
+/// Agent loops and each loop's state (administrator only; read-only; no run or account ids).
+async fn loops(State(app): State<App>) -> Api {
+    let rows: Vec<LoopRow> = sqlx::query_as(
+        "SELECT idx,n,started_at,updated_at,serving FROM loop_members ORDER BY idx",
+    )
+    .fetch_all(&app.store.app_pool)
+    .await
+    .map_err(anyhow::Error::from)?;
+    let running: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT idx,count(*) FROM running_runs GROUP BY idx")
+            .fetch_all(&app.store.app_pool)
+            .await
+            .map_err(anyhow::Error::from)?;
+    let accounts = app.store.all_user_ids().await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    Ok(Json(loop_view(&rows, &running, &accounts, now)))
+}
+
 /// Mount beneath the existing administrator authentication boundary.
 pub(crate) fn router() -> Router<App> {
     Router::new()
+        .route("/loops", get(loops))
         .route("/summary", get(summary))
         .route("/revision-shadow", get(revision_shadow))
         .route("/dashboard", get(dashboard))
@@ -117,6 +189,40 @@ mod tests {
         http::{Request, StatusCode},
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn loop_view_reports_each_loop_with_its_accounts_and_runs() {
+        let accounts: Vec<String> = ["admin", "a", "b", "c", "d", "e"].map(String::from).to_vec();
+        // Loop 0 beat 1 s ago and is serving; loop 1 beat 30 s ago.
+        let rows = [(0, 2, 100, 999, true), (1, 2, 100, 970, true)];
+        let view = loop_view(&rows, &[(0, 3), (1, 1)], &accounts, 1000);
+        assert_eq!(view["loops"], 2);
+        assert_eq!(view["accounts_total"], 6);
+        assert_eq!(view["runs_in_progress"], 4);
+        let members = view["members"].as_array().unwrap();
+        assert_eq!(members[0]["state"], "serving");
+        assert_eq!(members[0]["heartbeat_age_seconds"], 1);
+        assert_eq!(members[0]["runs_in_progress"], 3);
+        assert_eq!(members[1]["state"], "stale");
+        let total: u64 = members.iter().map(|m| m["accounts"].as_u64().unwrap()).sum();
+        assert_eq!(total, 6);
+        // The administrator is always loop 0.
+        assert!(members[0]["accounts"].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn loop_view_marks_a_missing_loop_and_a_starting_one() {
+        let rows = [(1, 3, 100, 1000, false), (2, 3, 100, 1000, true)];
+        let view = loop_view(&rows, &[], &[], 1000);
+        let states: Vec<&str> = view["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(states, ["missing", "starting", "serving"]);
+        assert_eq!(loop_view(&[], &[], &[], 0)["loops"], 0);
+    }
 
     #[tokio::test]
     async fn system_routes_require_admin_and_return_each_counter_group() {

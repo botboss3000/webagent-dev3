@@ -45,6 +45,7 @@ const server=http.createServer(async(req,res)=>{
   '/api/v3/status':{model:'fixture-model',runs:[{id:'run',status:'running',context_controls:{trigger_tokens:100,tail_tokens:20}}]},
   '/health/ready':{ready:true},
   '/api/v3/admin/supply-chain':{schema_version:1,state:'ok',available:true,scanned_at:1700000000,checked_at:1700000100,release:'9850cba2-4b43-4a2d-bd06-6a4c3b8d6e0a',stale_days:8,targets:[{name:'api',by_severity:{HIGH:2},fixable_by_severity:{HIGH:1},fixable_high_critical:[{package:'apt',installed:'2.6.1',fixed:'2.6.2',id:'CVE-2026-109518'}]}],ui_libraries:{missing:false,recorded:{marked:'12.0.0'},mismatch:[]}},
+  '/api/v3/admin/system/loops':{schema_version:1,loops:2,accounts_total:5,runs_in_progress:1,members:[{index:0,state:'serving',heartbeat_age_seconds:1,started_at:1,runs_in_progress:1,accounts:3},{index:1,state:'serving',heartbeat_age_seconds:2,started_at:1,runs_in_progress:0,accounts:2}]},
   '/api/v3/admin/opt-in-tests':{schema_version:1,state:'failed',checked_at:1700000000,groups:[{group:'multi_loop',status:'failed',job_id:'11111111-2222-3333-4444-555555555555',tests:5,failed_tests:['multi_loop_tests::killed_loop']}]},
   '/api/v3/admin/system/revision-shadow':{mode:'shadow',decides:'full recomputation',kinds:{fence:{checks:4,unchanged:3,changed:1,changed_without_effect:1,disagreements:0,last_example:null},tool_check:{checks:2,unchanged:2,changed:0,changed_without_effect:0,disagreements:0,last_example:null}}}
  };
@@ -68,7 +69,7 @@ try{
   mode='live';delay=2000;
   await page.goto('http://127.0.0.1:'+server.address().port+'/fixture');
   const cpu=page.locator('[data-card=cpu]'),system=page.locator('[data-card=system_resources]');
-  await page.waitForFunction(()=>document.querySelectorAll('.dashboard-tile').length===29);
+  await page.waitForFunction(()=>document.querySelectorAll('.dashboard-tile').length===30);
   assert.deepEqual(await page.evaluate(()=>[...new Set([...document.querySelectorAll('.dashboard-tile')].map(tile=>tile.dataset.state))]),['loading']);
   assert.equal(await cpu.locator('.dashboard-pending').evaluate(el=>getComputedStyle(el,'::before').animationName),'dashboard-spin');
   assert.notEqual(await cpu.evaluate(el=>getComputedStyle(el).borderColor),await page.evaluate(()=>{const probe=document.createElement('div');probe.className='dashboard-tile';probe.dataset.state='unavailable';document.querySelector('.dashboard-grid').append(probe);const color=getComputedStyle(probe).borderColor;probe.remove();return color;}));
@@ -84,6 +85,8 @@ try{
   assert.match(await page.locator('[data-card=supply_chain]').innerText(),/apt 2\.6\.1 → 2\.6\.2|Fixable high\/critical findings \(1\)/);
   assert.equal(await page.locator('[data-card=supply_chain] button').isEnabled(),true);
   await page.waitForFunction(()=>document.querySelector('[data-card=opt_in_tests]')?.dataset.state==='error');
+  await page.waitForFunction(()=>document.querySelector('[data-card=agent_loops]')?.dataset.state==='live');
+  assert.match(await page.locator('[data-card=agent_loops]').innerText(),/Loop 1: |Loop 1\s+serving · heartbeat 2 s ago · 0 runs · 2 accounts/);
   assert.match(await page.locator('[data-card=opt_in_tests]').innerText(),/multi_loop: multi_loop_tests::killed_loop/);
   assert.match(await page.locator('[data-card=revision_shadow]').innerText(),/Model dispatch fence: checks\s+4/);
   assert.match(await page.locator('[data-card=active_runs]').innerText(),/Current account across agents/);
@@ -102,7 +105,7 @@ try{
   const health=page.locator('[data-card=health_board]');
   assert.equal(await health.getAttribute('data-state'),'live');
   for(const text of [/API readiness\s+Ready/,/CPU\s+24.5%/,/RAM\s+25.0%/,/Disk used on \/\s+25.0%/,/Database pools\s+1 \/ 1 responding/])assert.match(await health.innerText(),text);
-  assert.equal(await page.locator('.dashboard-tile').count(),29);
+  assert.equal(await page.locator('.dashboard-tile').count(),30);
   assert.equal(await system.getAttribute('data-state'),'partial');
   assert.equal(await system.locator('.dashboard-field[data-available="true"]').count(),8);
   assert.equal(await page.locator('[data-card=metric_chart] svg').count(),1);

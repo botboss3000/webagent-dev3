@@ -404,6 +404,19 @@
       ],
       "fields": [],
       "backend": "connected"
+    },
+    {
+      "id": "agent_loops",
+      "label": "Agent loops",
+      "icon": "refresh-cw",
+      "w": 6,
+      "h": 3,
+      "order": 28,
+      "sections": [
+        "agent_loops"
+      ],
+      "fields": [],
+      "backend": "connected"
     }
   ]
 }

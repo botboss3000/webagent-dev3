@@ -204,6 +204,7 @@ pub(crate) const ROUTES: &[Route] = &[
     none("/api/v3/admin/services/boot_orphan_resume"),
     none("/api/v3/admin/supply-chain"),
     none("/api/v3/admin/system/dashboard"),
+    none("/api/v3/admin/system/loops"),
     none("/api/v3/admin/system/dashboard/{section}"),
     none("/api/v3/admin/system/{metric}"),
     none("/api/v3/admin/system/revision-shadow"),

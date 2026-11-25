@@ -273,6 +273,9 @@ body.light-mode #tab-builds .build-card.task-panel[data-active="true"]{backgroun
 #tab-builds .build-clear-controls{flex-wrap:wrap}
 
 /* Host resources sit at the top of the page as a row of small tiles that wraps on phones. */
+#tab-builds .bq-loops{display:grid;gap:2px;max-width:1200px;margin:0 auto 14px;padding:8px 12px;border:1px solid var(--border,currentColor);border-radius:8px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+#tab-builds .bq-loops[data-tone=danger]{border-color:var(--danger,#c33)}
+#tab-builds .bq-loops[data-tone=success]{border-color:var(--success,#2a7)}
 #tab-builds .bq-resources{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,104px),1fr));gap:8px;max-width:1200px;margin:0 auto 14px}
 /* One resource tile shows a small label over its value. */
 #tab-builds .bq-res{display:grid;gap:2px;min-width:0;padding:8px 10px;border:var(--border-width) solid var(--border-soft);border-radius:var(--r-md);background:var(--bg-elev)}

@@ -2,6 +2,7 @@ import { readDashboard, paintDashboard, metricOptions } from './advanced.js';
 import { readActivity } from './activity.js';
 import { readSupplyChain, paintSupplyChain } from './supply-chain.js';
 import { readOptInTests, paintOptInTests } from './opt-in-tests.js';
+import { readLoops, paintLoops } from './loops.js';
 // The catalog owns tile identity and size; system summary supplies current resource values.
  // Config: ui/main-panel/app/pages/dashboard/cards.json -> cards; frontend tile inventory and pending backend state
 /** Mount resource tiles from the administrator summary; return a polling disposer. */
@@ -56,9 +57,9 @@ export async function mountDashboard(host) {
   const grid=node('div',undefined,'dashboard-grid');
   host.append(heading,notice,toolbar,picker,grid);
   let selected=catalog.cards.map(card=>card.id),editing=false;
-  let activity=new Map(),nextActivityAt=0,dashboardData=null,supplyView=null,supplyTile=null,optInView=null,optInTile=null;
+  let activity=new Map(),nextActivityAt=0,dashboardData=null,supplyView=null,supplyTile=null,optInView=null,optInTile=null,loopsView=null,loopsTile=null;
   // The dependency scan card repaints only when a new read arrives, so its button keeps its state.
-  const paintSupply=()=>{if(supplyTile)paintSupplyChain(supplyView,supplyTile,node);if(optInTile)paintOptInTests(optInView,optInTile,node);};
+  const paintSupply=()=>{if(supplyTile)paintSupplyChain(supplyView,supplyTile,node);if(optInTile)paintOptInTests(optInView,optInTile,node);if(loopsTile)paintLoops(loopsView,loopsTile,node);};
   const updateDashboard=()=>paintDashboard(activityViews,dashboardData,metricSelect.value,node);
   const activityViews=new Map();
   let sample=null,failure='',loading=true,inFlight=false;
@@ -157,6 +158,7 @@ export async function mountDashboard(host) {
     const pendingActivity=Date.now()>=nextActivityAt?readActivity(request.signal):null;
     const pendingSupply=pendingActivity?readSupplyChain(request.signal).catch(()=>null):null;
     const pendingOptIn=pendingActivity?readOptInTests(request.signal).catch(()=>null):null;
+    const pendingLoops=readLoops(request.signal).catch(()=>null);
     const requestedWindow=windowSelect.value,pendingDashboard=readDashboard(request.signal,requestedWindow);
     try{
       const response=await fetch('/api/v3/admin/system/summary',{credentials:'same-origin',cache:'no-store',signal:request.signal});
@@ -168,6 +170,7 @@ export async function mountDashboard(host) {
       if(!stopped){sample=null;loading=false;failure=error.name==='AbortError'?'System metrics request timed out':error.message;}
     }finally{
       if(pendingActivity){const result=await pendingActivity;if(!stopped){activity=result;nextActivityAt=Date.now()+30000;}}
+      {const result=await pendingLoops;if(!stopped&&result){loopsView=result;paintSupply();}}
       if(pendingOptIn){const result=await pendingOptIn;if(!stopped&&result)optInView=result;}
       if(pendingSupply){const result=await pendingSupply;if(!stopped&&result){supplyView=result;paintSupply();}}
       const dashboardResult=await pendingDashboard;if(!stopped&&requestedWindow===windowSelect.value)dashboardData=dashboardResult;
@@ -177,7 +180,7 @@ export async function mountDashboard(host) {
   }
   /** Repaint local layout only; persistence remains explicitly pending. */
   function paint(){
-    views.clear();activityViews.clear();supplyTile=null;optInTile=null;grid.replaceChildren();picker.replaceChildren();count.textContent=selected.length+' tiles · layout changes last until reload';
+    views.clear();activityViews.clear();supplyTile=null;optInTile=null;loopsTile=null;grid.replaceChildren();picker.replaceChildren();count.textContent=selected.length+' tiles · layout changes last until reload';
     for(const [index,id] of selected.entries()){
       const card=catalog.cards.find(item=>item.id===id);
       const tile=node('article',undefined,'dashboard-tile');tile.dataset.card=id;tile.style.setProperty('--tile-span',card.w);
@@ -197,6 +200,7 @@ export async function mountDashboard(host) {
       }
       if(id==='supply_chain')supplyTile={tile,badge,body,needs};
       else if(id==='opt_in_tests')optInTile={tile,badge,body,needs};
+      else if(id==='agent_loops')loopsTile={tile,badge,body,needs};
       else if(wired&&!resources.has(id))activityViews.set(id,{tile,badge,body,needs});
       if(editing){
         const actions=node('div',undefined,'dashboard-tile-actions');
@@ -207,7 +211,7 @@ export async function mountDashboard(host) {
         }tile.append(actions);
       }grid.append(tile);
     }
-    updateMetrics();updateActivity();updateDashboard();if(supplyView||optInView)paintSupply();
+    updateMetrics();updateActivity();updateDashboard();if(supplyView||optInView||loopsView)paintSupply();
     for(const card of catalog.cards){const button=node('button',card.label);button.type='button';button.disabled=selected.includes(card.id);button.onclick=()=>{selected.push(card.id);picker.hidden=true;add.setAttribute('aria-expanded','false');paint();};picker.append(button);}
   }
   add.onclick=()=>{picker.hidden=!picker.hidden;add.setAttribute('aria-expanded',String(!picker.hidden));};
