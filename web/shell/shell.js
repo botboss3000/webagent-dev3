@@ -311,15 +311,11 @@ async function boot() {
 
   state.me = await loadMe();
   state.agents = await loadAgents();
-  // The account footer shows who is signed in; the shell footer echoes the state.
+  // The sidebar's account row shows who is signed in.
   const nameHost = document.getElementById('account-name');
   if (nameHost) nameHost.textContent = state.me?.is_admin ? 'Administrator' : 'Signed out';
   const roleHost = document.getElementById('account-role');
   if (roleHost) roleHost.textContent = state.me?.is_admin ? 'Manage account' : 'Sign in';
-  const statusHost = document.getElementById('footer-status');
-  if (statusHost) {
-    statusHost.textContent = state.me?.is_admin ? 'Signed in as administrator' : 'Signed out';
-  }
 
   renderNav();
 

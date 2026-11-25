@@ -151,7 +151,11 @@ for (const viewport of VIEWPORTS) {
         assert.equal(await page.locator('.main-head').isVisible(), true, 'header is visible');
         assert.equal(await page.locator('.main-foot').isVisible(), true, 'footer is visible');
         assert.equal(await page.locator('#page-title').textContent(), 'All sessions', 'header names the route');
-        assert.equal(await page.locator('#footer-status').textContent(), 'Signed in as administrator');
+        assert.equal(
+          (await page.locator('.main-foot').textContent()).trim(),
+          '',
+          'the footer strip carries nothing',
+        );
         assert.equal(await page.locator('#refresh-button').isVisible(), true, 'the refresh action shows for an administrator');
 
         // The body holds only the placeholder page: title plus one line.
@@ -304,7 +308,11 @@ test('signed-out visitors get no Administrator group and no admin page', async (
     await page.waitForFunction(() => document.getElementById('page-body')?.textContent?.trim().length > 0);
     const body = await page.$eval('#page-body', (node) => node.textContent);
     assert.match(body, /Administrator only/, 'the admin route refuses without the flag');
-    assert.equal(await page.locator('#footer-status').textContent(), 'Signed out');
+    assert.equal(
+      (await page.locator('.main-foot').textContent()).trim(),
+      '',
+      'the footer strip carries nothing signed out either',
+    );
     assert.equal(await page.locator('#refresh-button').isVisible(), false, 'the refresh action stays hidden when signed out');
     assert.deepEqual(errors, []);
     await page.close();
@@ -390,7 +398,7 @@ test('a pull refreshes, and a longer pull runs the hard refresh', async () => {
     assert.equal(databases.includes('webagent-probe'), false, 'the IndexedDB database was deleted');
     // The HttpOnly session cookie is out of page script's reach, so the user stays signed in.
     await page.waitForFunction(
-      () => document.getElementById('footer-status')?.textContent === 'Signed in as administrator',
+      () => document.getElementById('account-name')?.textContent === 'Administrator',
     );
 
     // A plain refresh keeps browser data and does not add the cache-buster.
