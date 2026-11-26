@@ -64,7 +64,11 @@ function applySurface(surface, profile) {
   const spec = profile?.surface || {};
   const controls = [...surface.querySelectorAll('.composer-btn, .composer-input')];
   const tallest = controls.reduce((max, el) => Math.max(max, el.getBoundingClientRect().height), 0);
-  const height = spec.height_px ?? tallest;
+  // Rows stack, so the bar must also cover the grid it holds: the tallest single control
+  // is only the floor for a one-row bar, not for a bar with a field above its buttons.
+  const grid = surface.querySelector('.composer-grid');
+  const stacked = grid ? grid.getBoundingClientRect().height : 0;
+  const height = spec.height_px ?? Math.max(tallest, stacked);
   surface.style.setProperty('--composer-height', `${height}px`);
   surface.style.setProperty('--composer-radius', `${spec.radius_px ?? height / 2}px`);
   const pad = spec.padding_px;
