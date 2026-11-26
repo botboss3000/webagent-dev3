@@ -8,6 +8,7 @@
 import { icon } from '../components/icon/icon.js';
 import { installPullToRefresh, wireRefreshButton } from '../components/refresh/refresh.js';
 import { consumeBack } from './history-back.js';
+import { installViewport } from './viewport.js';
 
 // The phone header switch shows a chat bubble on the panel and a back chevron on chat.
 const CHAT_ICON =
@@ -323,6 +324,8 @@ async function boot() {
   } catch {
     // Without history the app still runs; back then leaves on the first press.
   }
+  // The layout follows the visual viewport, so the composer stays above the soft keyboard.
+  installViewport();
   window.addEventListener('popstate', () => {
     if (consumeBack()) return;
     // Back on the chat page has nothing behind it on a fresh load, so it opens the panel.

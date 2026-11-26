@@ -15,7 +15,9 @@ textarea {
 
 .app {
   display: flex;
-  height: 100dvh;
+  /* Follows visualViewport from web/shell/viewport.js, because dvh does not shrink for the
+     mobile keyboard; the fallback covers a browser without the tracker. */
+  height: var(--app-height, 100dvh);
   gap: var(--shell-gap);
   overflow: hidden;
 }
