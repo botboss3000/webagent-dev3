@@ -4,7 +4,7 @@
   "ceiling_tokens": 250000,
   "characters_per_token": 4,
   "dedup_max_output_bytes": 32768,
-  "max_source_bytes": 1000000,
+  "max_source_bytes": 4000000,
   "max_summary_bytes": 65536,
   "merge_tokens": 50000,
   "min_fold_tokens": 8000,

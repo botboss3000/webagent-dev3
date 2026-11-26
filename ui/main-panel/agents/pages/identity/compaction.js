@@ -60,7 +60,7 @@ export function renderCompaction(host, agent, persist, request) {
     ['ceiling_tokens', 'Ceiling', 'Size at which the agent stops to finish the summary. Below the trigger, the trigger is used. The model’s context limit caps both', 10000, 1000000],
     ['output_tokens', 'Output allowance', 'Tokens the provider is asked to allow for a reply. It counts against the same context window as the request, so a larger allowance leaves less room for history', 1024, 1000000],
     ['summary_tokens', 'Summary allowance', 'Tokens a summary block may use. A larger allowance keeps more detail when a block covers a long stretch of history', 512, 65536],
-    ['max_source_bytes', 'Summary input limit (bytes)', 'Largest history one fold may cover. Raise it to summarize everything up to the verbatim tail instead of only the oldest exchange', 4096, 1048576],
+    ['max_source_bytes', 'Summary input limit (bytes)', 'Largest history one fold may cover. Raise it to summarize everything up to the verbatim tail instead of only the oldest exchange', 4096, 4194304],
     ['max_summary_bytes', 'Summary block limit (bytes)', 'Largest summary block stored in the conversation', 4096, 65536],
     ['merge_tokens', 'Merge threshold', 'Summary blocks above this total are merged into one checkpoint, keeping the newest two', 1, 1000000],
     ['min_fold_tokens', 'Minimum fold', 'Smallest history a manual /compact or task fold will summarize', 1, 1000000],

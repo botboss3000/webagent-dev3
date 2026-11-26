@@ -219,7 +219,7 @@
       ],
       "unit": "bytes",
       "min": 4096,
-      "max": 1048576,
+      "max": 4194304,
       "agent_pointer": "/compaction_thresholds/max_source_bytes",
       "bounds": "validator + proposed",
       "notes": "The same-model summarizer reads the chat's own request; the System summarizer receives this source, so the budget must fit its context window."
