@@ -19,15 +19,11 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* The field is the bar's own surface, so it never draws a ring of its own when clicked. */
-.composer-input:focus {
-  outline: none;
-}
-
-/* Keyboard focus still needs to be visible, or the field cannot be found without a mouse. */
+/* No ring at any time: the caret shows focus and the bar is the field's frame, exactly as
+   the current composer behaves. An outline here read as a white border around the field. */
+.composer-input:focus,
 .composer-input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
 }
 
 .composer-input::placeholder {

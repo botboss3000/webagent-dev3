@@ -91,9 +91,9 @@ function startServer(admin) {
             commands: { fallback: 'message', entries: {} },
             active: {
               rows: {
-                '1': { left: [], center: [], right: [] },
-                '2': { left: ['attach'], center: ['input'], right: ['mic', 'stop', 'send'] },
-                '3': { left: [], center: [], right: [] },
+                '1': { left: [], center: ['input'], right: [] },
+                '2': { left: [], center: [], right: [] },
+                '3': { left: ['attach'], center: [], right: ['mic', 'stop', 'send'] },
               },
             },
             idle: {
@@ -365,29 +365,26 @@ for (const viewport of VIEWPORTS) {
                 .querySelector('#composer .composer-input')
                 ?.parentElement?.getAttribute('data-composer-cell'),
               fieldValue: document.querySelector('#composer .composer-input')?.value ?? null,
-              fieldBetween: (() => {
+              fieldClear: (() => {
                 const input = document.querySelector('#composer .composer-input');
                 const attach = document.querySelector('#composer .composer-btn-attach');
-                const mic = document.querySelector('#composer .composer-btn-mic');
-                if (!input || !attach || !mic) return false;
+                if (!input || !attach) return false;
                 const i = input.getBoundingClientRect();
                 const a = attach.getBoundingClientRect();
-                const m = mic.getBoundingClientRect();
-                const sameLine = Math.abs(i.top + i.height / 2 - (a.top + a.height / 2)) <= 2;
-                return sameLine && i.left >= a.right - 1 && i.right <= m.left + 1;
+                return i.bottom <= a.top + 1;
               })(),
             };
           });
           assert.equal(composer.hasGrid, true, 'the composer grid is mounted');
-          assert.equal(composer.rowCount, 1, 'one row holds the field beside the buttons');
+          assert.equal(composer.rowCount, 2, 'the active composer shows the field row and the buttons row');
           assert.equal(composer.field, true, 'the text field is mounted');
-          assert.equal(composer.fieldRow, '2', 'the field sits in the controls row');
+          assert.equal(composer.fieldRow, '1', 'the active composer puts the field in row 1');
           assert.equal(composer.fieldCell, 'center', 'the field fills the centre cell');
           assert.equal(composer.fieldValue, '', 'the field starts empty');
           assert.equal(
-            composer.fieldBetween,
+            composer.fieldClear,
             true,
-            'the field sits between attach and mic on the same line, not above the buttons',
+            'the field sits clear of the buttons instead of overlapping them',
           );
           assert.deepEqual(composer.left, ['Attach files'], 'attach sits in the left cell');
           assert.deepEqual(

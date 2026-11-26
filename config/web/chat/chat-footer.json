@@ -47,9 +47,9 @@
     },
     "active": {
       "rows": {
-        "1": { "left": [], "center": [], "right": [] },
-        "2": { "left": ["attach"], "center": ["input"], "right": ["mic", "stop", "send"] },
-        "3": { "left": [], "center": [], "right": [] }
+        "1": { "left": [], "center": ["input"], "right": [] },
+        "2": { "left": [], "center": [], "right": [] },
+        "3": { "left": ["attach"], "center": [], "right": ["mic", "stop", "send"] }
       }
     },
     "idle": {
