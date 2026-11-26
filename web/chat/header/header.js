@@ -7,6 +7,7 @@ const CONFIG = '/config/web/chat/chat-header.json';
 
 const CONTROLS = {
   sidebar: () => import('../controls/sidebar/sidebar.js'),
+  chat: () => import('../controls/chat/chat.js'),
 };
 
 const ROWS = 3;

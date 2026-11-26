@@ -528,8 +528,10 @@ body.chat-route #content {
   background: transparent;
 }
 
+/* The chat page is the chat shell's own surface: it brings its own header, so the
+   content header steps out entirely rather than stacking above it. */
 body.chat-route .content-head {
-  border-bottom: none;
+  display: none;
 }
 
 /* ── Sidebar is a column and the phone drawer is a shelf ──────

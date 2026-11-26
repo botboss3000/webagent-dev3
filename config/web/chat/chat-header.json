@@ -11,7 +11,7 @@
   "desktop": {},
   "mobile": {
     "rows": [
-      { "left": ["sidebar"], "center": [], "right": [] },
+      { "left": ["sidebar"], "center": [], "right": ["chat"] },
       { "left": [], "center": [], "right": [] },
       { "left": [], "center": [], "right": [] }
     ]
