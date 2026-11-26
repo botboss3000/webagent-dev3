@@ -125,14 +125,76 @@ async function renderComposer(host, profile, state) {
   return { surface, grid };
 }
 
+/* Keeps what the field holds, where its caret sits and whether it owns focus, so a state
+   change can rebuild the grid without interrupting typing. */
+function snapshotField(host) {
+  const field = host.querySelector('.composer-input');
+  if (!field) return null;
+  return {
+    value: field.value,
+    start: field.selectionStart,
+    end: field.selectionEnd,
+    focused: document.activeElement === field,
+  };
+}
+
+function restoreField(host, saved) {
+  if (!saved) return;
+  const field = host.querySelector('.composer-input');
+  if (!field) return;
+  field.value = saved.value;
+  if (typeof saved.start === 'number' && typeof field.setSelectionRange === 'function') {
+    try {
+      field.setSelectionRange(saved.start, saved.end);
+    } catch {
+      // A field that cannot take a selection keeps its value; the caret lands at the end.
+    }
+  }
+  if (saved.focused) field.focus({ preventScroll: true });
+}
+
+/* Switches the composer between idle and active without losing the draft, caret or focus. */
+export async function applyComposerState(host, state) {
+  if (!host) return null;
+  const next = state === 'idle' ? 'idle' : 'active';
+  if (host.dataset.composerState === next) return null;
+  const saved = snapshotField(host);
+  const mounted = await setComposerState(host, next);
+  restoreField(host, saved);
+  return mounted;
+}
+
+/* Idle while the field is empty and unfocused; active once it holds text or owns focus. */
+function wireComposerState(host) {
+  const sync = () => {
+    const field = host.querySelector('.composer-input');
+    if (!field) return;
+    const engaged = document.activeElement === field || field.value.trim() !== '';
+    void applyComposerState(host, engaged ? 'active' : 'idle');
+  };
+  host.addEventListener('focusin', sync);
+  host.addEventListener('focusout', () => setTimeout(sync, 0));
+  host.addEventListener('input', sync);
+}
+
 /* Mounts the composer into the region the chat partial provides (#composer). */
 export async function mountComposer(host) {
   if (!host) return null;
   const config = await loadConfig();
   const profile = composerProfile(config);
-  const state = host.dataset.composerState === 'idle' ? 'idle' : 'active';
+  // An untouched composer starts idle: one row, the field beside its buttons. A mount whose
+  // config carries no idle shape stays active, because idle would render nothing at all.
+  const requested = host.dataset.composerState;
+  const state =
+    requested === 'active' || requested === 'idle'
+      ? requested
+      : profile?.idle?.rows
+        ? 'idle'
+        : 'active';
   const mounted = await renderComposer(host, profile, state);
+  host.dataset.composerState = state;
   host.dataset.mounted = 'yes';
+  wireComposerState(host);
   return { ...mounted, profile };
 }
 

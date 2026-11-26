@@ -339,6 +339,30 @@ for (const viewport of VIEWPORTS) {
           assert.ok(after > before + 40, `dragging left widened the chat column (${before} -> ${after})`);
           assert.equal(await page.evaluate(() => document.body.classList.contains('chat-resizing')), false);
 
+          // An untouched composer rests idle: one row, the field beside its buttons.
+          const restState = await page.evaluate(() => ({
+            state: document.querySelector('#composer')?.dataset.composerState,
+            rows: document.querySelectorAll('#composer .composer-row').length,
+            row: document
+              .querySelector('#composer .composer-input')
+              ?.closest('.composer-row')
+              ?.getAttribute('data-composer-row'),
+          }));
+          assert.equal(restState.state, 'idle', 'the composer mounts idle');
+          assert.equal(restState.rows, 1, 'idle shows one row');
+          assert.equal(restState.row, '2', 'idle keeps the field in the controls row');
+
+          // Focusing the field promotes it to active, and focus survives the rebuild.
+          await page.click('#composer .composer-input');
+          await page.waitForFunction(
+            () => document.querySelector('#composer')?.dataset.composerState === 'active',
+          );
+          assert.equal(
+            await page.evaluate(() => document.activeElement?.id),
+            'chat-input',
+            'focus survives the idle to active switch',
+          );
+
           // The composer dock is a 3x3 grid: empty rows collapse, row 3 holds the buttons.
           const composer = await page.evaluate(() => {
             const grid = document.querySelector('#composer .composer-grid');
