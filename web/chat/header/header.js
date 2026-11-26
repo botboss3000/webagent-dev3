@@ -51,6 +51,23 @@ async function control(id) {
   }
 }
 
+/* Applies the configured control size: one value for the header, and a control's own value
+   for that button only. Custom properties inherit, so an override needs one line, no rule. */
+function applyControlSizes(grid, profile) {
+  const controls = profile?.controls || {};
+  const shared = controls.default?.size_px;
+  if (typeof shared === 'number' && shared > 0) {
+    grid.style.setProperty('--control-size', `${shared}px`);
+  }
+  for (const [id, settings] of Object.entries(controls)) {
+    if (id === 'default') continue;
+    const size = settings?.size_px;
+    if (typeof size !== 'number' || size <= 0) continue;
+    const element = grid.querySelector(`[data-chat-control="${id}"]`);
+    if (element) element.style.setProperty('--control-size', `${size}px`);
+  }
+}
+
 /* Mounts the header into the region the chat partial provides (.chat-panel-head). */
 export async function mountChatHeader(host) {
   if (!host || host.dataset.mounted === 'yes') return host;
@@ -70,14 +87,19 @@ export async function mountChatHeader(host) {
       cell.className = `chat-head-cell chat-head-cell-${cellName}`;
       cell.dataset.chatHeadCell = cellName;
       for (const id of spec[cellName] || []) {
-        const element = await control(id);
-        if (element) cell.append(element);
+        const settings = profile?.controls?.[id] || {};
+        const element = await control(id, settings);
+        if (element) {
+          element.dataset.chatControl = id;
+          cell.append(element);
+        }
       }
       row.append(cell);
     }
     if (row.querySelector('button')) grid.append(row);
   }
 
+  applyControlSizes(grid, profile);
   host.replaceChildren(grid);
   host.dataset.mounted = 'yes';
   return host;

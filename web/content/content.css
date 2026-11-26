@@ -35,9 +35,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+  width: var(--control-size);
+  height: var(--control-size);
+  min-width: var(--control-size);
   border: none;
   border-radius: var(--r-pill);
   background: none;
@@ -57,10 +57,3 @@
   outline-offset: 2px;
 }
 
-@media (pointer: coarse) {
-  .content-head-btn {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-  }
-}
