@@ -264,13 +264,39 @@ for (const viewport of VIEWPORTS) {
             `main, divider and column fill the stage (${JSON.stringify(shared)})`,
           );
 
-          // The chat button lives in the content header's right slot at every width.
-          assert.equal(await page.locator('#chat-switch').count(), 1, 'the content header carries one chat button');
-          assert.equal(
-            await page.locator('.content-head-right #chat-switch').count(),
-            1,
-            'the chat button sits in the right slot',
-          );
+          // Both header controls must render at button size: a squeezed header once
+          // collapsed these slots to zero width and the buttons became invisible.
+          const headerProbe = await page.evaluate(() => {
+            const read = (selector) => {
+              const el = document.querySelector(selector);
+              if (!el) return { selector, missing: true };
+              const s = getComputedStyle(el);
+              const r = el.getBoundingClientRect();
+              const parent = el.parentElement;
+              const ps = parent ? getComputedStyle(parent) : null;
+              const pr = parent ? parent.getBoundingClientRect() : null;
+              return {
+                selector,
+                display: s.display,
+                width: s.width,
+                minWidth: s.minWidth,
+                height: s.height,
+                box: [Math.round(r.width), Math.round(r.height)],
+                parentDisplay: ps?.display,
+                parentWidth: ps?.width,
+                parentFlex: ps?.flex,
+                parentBox: pr ? [Math.round(pr.width), Math.round(pr.height)] : null,
+              };
+            };
+            return [read('.content-head-left'), read('.content-head-left .sidebar-button')];
+          });
+          for (const selector of ['.content-head-left .sidebar-button', '.content-head-right #chat-switch']) {
+            const box = await page.locator(selector).boundingBox();
+            assert.ok(
+              box && box.width >= 30 && box.height >= 30,
+              `${selector} renders at button size (${JSON.stringify(box)}) probe ${JSON.stringify(headerProbe)}`,
+            );
+          }
 
           // The chat is a column beside the main panel, always visible and edgeless.
           await page.waitForSelector('#chat-panel .chat-surface');

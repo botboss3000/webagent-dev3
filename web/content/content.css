@@ -10,8 +10,24 @@
   min-width: 0;
 }
 
+/* The control slots never shrink: a squeezed header must truncate the title, not
+   collapse the buttons to zero width. */
+.content-head-left,
+.content-head-right {
+  flex: 0 0 auto;
+}
+
 .content-head-centre {
   flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.content-head-centre h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The chat button: the same footprint and states as the shared sidebar button. */
