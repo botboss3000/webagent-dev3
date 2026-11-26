@@ -4,7 +4,7 @@
 #ptr-indicator {
   position: fixed;
   inset: 0 0 auto;
-  z-index: 9999;
+  z-index: var(--z-transient);
   display: flex;
   flex-direction: column;
   align-items: center;

@@ -214,3 +214,16 @@ button {
   font: inherit;
   color: inherit;
 }
+
+/* Stacking scale, lowest first. Surfaces stack over the content, the divider sits above
+   the two surfaces it separates, in-panel overlays sit above the panel, and the phone
+   drawer covers everything so the menu button that opened it cannot float over it. */
+:root {
+  --z-content: 1;
+  --z-chat-composer: 5;
+  --z-chat-divider: 10;
+  --z-chat-head: 20;
+  --z-drawer-backdrop: 30;
+  --z-drawer: 40;
+  --z-transient: 9999;
+}

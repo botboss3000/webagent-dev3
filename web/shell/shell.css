@@ -357,7 +357,7 @@ body.chat-route .content-body {
 
   #sidebar {
     position: fixed;
-    z-index: 40;
+    z-index: var(--z-drawer);
     width: min(280px, calc(100vw - 60px));
     flex-basis: auto;
     transform: translateX(calc(-100% - 12px));
@@ -371,7 +371,7 @@ body.chat-route .content-body {
   #sidebar-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 30;
+    z-index: var(--z-drawer-backdrop);
     background: rgba(0, 0, 0, 0.45);
   }
 
@@ -442,7 +442,7 @@ body.chat-route .content-body {
   flex: 0 0 var(--chat-divider-hit-width, 14px);
   width: var(--chat-divider-hit-width, 14px);
   position: relative;
-  z-index: 10;
+  z-index: var(--z-chat-divider);
   background: transparent;
   cursor: col-resize;
   touch-action: none;
