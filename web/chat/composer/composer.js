@@ -80,10 +80,8 @@ function applySurface(surface, profile) {
   surface.classList.toggle('is-transparent', spec.background === 'transparent');
 }
 
-/* Rows are keyed by number, so a profile can override one row and inherit the rest; the
-   older array shape is still read, so a config written before the keys keeps working. */
+/* Rows are keyed by number, so a profile can override one row and inherit the rest. */
 function rowSpecs(rows) {
-  if (Array.isArray(rows)) return rows;
   if (!rows || typeof rows !== 'object') return [];
   return Object.keys(rows)
     .sort((a, b) => Number(a) - Number(b))

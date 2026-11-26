@@ -85,21 +85,23 @@ function startServer(admin) {
       return send(
         200,
         JSON.stringify({
-          version: 1,
+          version: 2,
           common: {
+            controls: { input: { label: 'Message', placeholder: null, rows: 1 } },
+            commands: { fallback: 'message', entries: {} },
             active: {
-              rows: [
-                { left: [], center: [], right: [] },
-                { left: [], center: [], right: [] },
-                { left: ['attach'], center: [], right: ['mic', 'stop', 'send'] },
-              ],
+              rows: {
+                '1': { left: [], center: ['input'], right: [] },
+                '2': { left: [], center: [], right: [] },
+                '3': { left: ['attach'], center: [], right: ['mic', 'stop', 'send'] },
+              },
             },
             idle: {
-              rows: [
-                { left: [], center: [], right: [] },
-                { left: [], center: [], right: [] },
-                { left: ['attach'], center: [], right: ['mic', 'send'] },
-              ],
+              rows: {
+                '1': { left: [], center: ['input'], right: [] },
+                '2': { left: [], center: [], right: [] },
+                '3': { left: ['attach'], center: [], right: ['mic', 'send'] },
+              },
             },
           },
           desktop: {},
@@ -354,10 +356,23 @@ for (const viewport of VIEWPORTS) {
               mic: Boolean(document.querySelector('.composer-btn-mic svg rect')),
               square: Boolean(document.querySelector('.composer-btn-stop svg rect')),
               triangle: Boolean(document.querySelector('.composer-btn-send svg path')),
+              field: Boolean(document.querySelector('#composer .composer-input')),
+              fieldRow: document
+                .querySelector('#composer .composer-input')
+                ?.closest('.composer-row')
+                ?.getAttribute('data-composer-row'),
+              fieldCell: document
+                .querySelector('#composer .composer-input')
+                ?.parentElement?.getAttribute('data-composer-cell'),
+              fieldValue: document.querySelector('#composer .composer-input')?.value ?? null,
             };
           });
           assert.equal(composer.hasGrid, true, 'the composer grid is mounted');
-          assert.equal(composer.rowCount, 1, 'the two empty rows collapse');
+          assert.equal(composer.rowCount, 2, 'the empty middle row collapses, leaving the field and the buttons');
+          assert.equal(composer.field, true, 'the text field is mounted');
+          assert.equal(composer.fieldRow, '1', 'the field owns row 1');
+          assert.equal(composer.fieldCell, 'center', 'the field fills the centre cell');
+          assert.equal(composer.fieldValue, '', 'the field starts empty');
           assert.deepEqual(composer.left, ['Attach files'], 'attach sits in the left cell');
           assert.deepEqual(
             composer.right,
@@ -385,12 +400,17 @@ for (const viewport of VIEWPORTS) {
               background: styles.backgroundColor,
               border: styles.borderTopWidth,
               padding: styles.paddingTop,
+              grid: el.querySelector('.composer-grid')?.getBoundingClientRect().height ?? 0,
             };
           });
           assert.ok(bar, 'the composer bar is mounted');
           assert.ok(
-            Math.abs(bar.height - bar.tallest) <= 1,
-            `the bar is as tall as its largest control (${bar.height} vs ${bar.tallest})`,
+            Math.abs(bar.height - bar.grid) <= 1,
+            `the bar covers its whole grid (${bar.height} vs ${bar.grid})`,
+          );
+          assert.ok(
+            bar.height + 1 >= bar.tallest,
+            `the bar is never shorter than its largest control (${bar.height} vs ${bar.tallest})`,
           );
           assert.ok(
             Math.abs(bar.radius - bar.height / 2) <= 1,
