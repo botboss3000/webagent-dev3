@@ -9,7 +9,7 @@ import { createSidebarButton } from '../components/sidebar-button/sidebar-button
 function chatButton() {
   const button = document.createElement('button');
   button.type = 'button';
-  button.id = 'chat-switch';
+  button.id = 'chat-button';
   button.className = 'content-head-btn';
   button.setAttribute('aria-label', 'Open chat');
   button.title = 'Open chat';
@@ -42,7 +42,7 @@ export function mountContentHeader(host) {
   note.className = 'content-head-note';
 
   const sidebar = createSidebarButton();
-  sidebar.id = 'menu-open';
+  sidebar.id = 'sidebar-button';
 
   const header = document.createElement('header');
   header.className = 'content-head';

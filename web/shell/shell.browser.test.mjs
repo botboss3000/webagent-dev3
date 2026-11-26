@@ -290,7 +290,7 @@ for (const viewport of VIEWPORTS) {
             };
             return [read('.content-head-left'), read('.content-head-left .sidebar-button')];
           });
-          for (const selector of ['.content-head-left .sidebar-button', '.content-head-right #chat-switch']) {
+          for (const selector of ['.content-head-left .sidebar-button', '.content-head-right #chat-button']) {
             const box = await page.locator(selector).boundingBox();
             assert.ok(
               box && box.width >= 30 && box.height >= 30,
@@ -407,8 +407,8 @@ for (const viewport of VIEWPORTS) {
           assert.equal(headControls, 0, 'the desktop chat header carries no sidebar control');
         } else {
           // Phone: the sidebar is a drawer over the stage.
-          assert.equal(await page.locator('#menu-open').isVisible(), true, 'menu button shows at phone width');
-          await page.click('#menu-open');
+          assert.equal(await page.locator('#sidebar-button').isVisible(), true, 'sidebar button shows at phone width');
+          await page.click('#sidebar-button');
           assert.equal(await page.evaluate(() => document.body.classList.contains('menu-open')), true);
           // The drawer slides in, so wait for the transform to settle before measuring.
           await page.waitForFunction(() => document.querySelector('#sidebar').getBoundingClientRect().x >= 0);
@@ -419,14 +419,14 @@ for (const viewport of VIEWPORTS) {
           assert.equal(await page.evaluate(() => document.body.classList.contains('menu-open')), false);
 
           // The header's chat icon switches to the chat page and back to the panel.
-          assert.equal(await page.locator('#chat-switch').isVisible(), true, 'chat switch shows on a phone');
-          await page.click('#chat-switch');
+          assert.equal(await page.locator('#chat-button').isVisible(), true, 'chat button shows on a phone');
+          await page.click('#chat-button');
           await page.waitForFunction(() => window.location.hash === '#/chat');
           await page.waitForSelector('#page-body .chat-surface');
           await page.waitForFunction(() => document.getElementById('page-title').textContent === 'Chat');
           assert.equal(await page.locator('#page-title').textContent(), 'Chat', 'header switches to the chat');
-          assert.equal(await page.locator('#chat-switch').getAttribute('aria-pressed'), 'true');
-          assert.equal(await page.locator('#chat-switch').getAttribute('aria-label'), 'Back to the panel');
+          assert.equal(await page.locator('#chat-button').getAttribute('aria-pressed'), 'true');
+          assert.equal(await page.locator('#chat-button').getAttribute('aria-label'), 'Back to the panel');
 
           // The column and divider stand down on a phone; the chat is its own page.
           assert.equal(await page.locator('#chat-panel').isVisible(), false, 'no chat panel on a phone');
@@ -447,12 +447,12 @@ for (const viewport of VIEWPORTS) {
           );
           assert.equal(phoneHeadControls, 1, 'the mobile chat header carries the sidebar control');
 
-          await page.click('#chat-switch');
+          await page.click('#chat-button');
           await page.waitForFunction(() => window.location.hash === '#/sessions');
           // The route renders asynchronously, so wait for the header to catch up.
           await page.waitForFunction(() => document.getElementById('page-title').textContent === 'All sessions');
           assert.equal(await page.locator('#page-title').textContent(), 'All sessions', 'and back to the panel');
-          assert.equal(await page.locator('#chat-switch').getAttribute('aria-pressed'), 'false');
+          assert.equal(await page.locator('#chat-button').getAttribute('aria-pressed'), 'false');
         }
 
         assert.deepEqual(errors, [], `no page errors: ${errors.join(' | ')}`);

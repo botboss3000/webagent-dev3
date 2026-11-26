@@ -234,7 +234,7 @@ function noteLine(text) {
 
 // The phone switch points at the chat page, and back at the panel once there.
 function syncChatSwitch() {
-  const button = document.getElementById('chat-switch');
+  const button = document.getElementById('chat-button');
   if (!button) return;
   const onChat = state.route.startsWith('/chat');
   button.setAttribute('aria-pressed', String(onChat));
