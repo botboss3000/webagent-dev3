@@ -57,3 +57,12 @@
   outline-offset: 2px;
 }
 
+
+/* The chat column is always present at desktop width, so the content header carries no chat
+   switch there — clicking it would open a second chat panel inside the content area. On a
+   phone the same button is the only way to the chat page, so it stays. */
+@media (min-width: 801px) {
+  .content-head-right #chat-button {
+    display: none;
+  }
+}

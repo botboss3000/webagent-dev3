@@ -101,7 +101,9 @@ function applySurface(surface, profile) {
   const stacked = grid ? grid.getBoundingClientRect().height : 0;
   const height = spec.height_px ?? Math.max(tallest, stacked);
   surface.style.setProperty('--composer-height', `${height}px`);
-  surface.style.setProperty('--composer-radius', `${spec.radius_px ?? height / 2}px`);
+  // The radius follows one row of controls, not the stacked height: a two-row composer keeps
+  // the same pill ends as a one-row one, so the shape does not change between idle and active.
+  surface.style.setProperty('--composer-radius', `${spec.radius_px ?? tallest / 2}px`);
   const pad = spec.padding_px;
   surface.style.padding = Array.isArray(pad)
     ? pad.map((value) => `${value}px`).join(' ')

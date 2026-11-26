@@ -292,13 +292,18 @@ for (const viewport of VIEWPORTS) {
             };
             return [read('.content-head-left'), read('.content-head-left .sidebar-button')];
           });
-          for (const selector of ['.content-head-left .sidebar-button', '.content-head-right #chat-button']) {
-            const box = await page.locator(selector).boundingBox();
-            assert.ok(
-              box && box.width >= 30 && box.height >= 30,
-              `${selector} renders at button size (${JSON.stringify(box)}) probe ${JSON.stringify(headerProbe)}`,
-            );
-          }
+          // The sidebar button renders at button size; the chat switch is hidden at desktop width,
+          // because the chat column is always present there and a second panel would open.
+          const sidebarBox = await page.locator('.content-head-left .sidebar-button').boundingBox();
+          assert.ok(
+            sidebarBox && sidebarBox.width >= 30 && sidebarBox.height >= 30,
+            `the sidebar button renders at button size (${JSON.stringify(sidebarBox)}) probe ${JSON.stringify(headerProbe)}`,
+          );
+          assert.equal(
+            await page.locator('.content-head-right #chat-button').isVisible(),
+            false,
+            'the desktop content header carries no chat switch',
+          );
 
           // The chat is a column beside the main panel, always visible and edgeless.
           await page.waitForSelector('#chat-panel .chat-surface');
@@ -450,8 +455,8 @@ for (const viewport of VIEWPORTS) {
             `the bar is never shorter than its largest control (${bar.height} vs ${bar.tallest})`,
           );
           assert.ok(
-            Math.abs(bar.radius - bar.height / 2) <= 1,
-            `the radius is half the bar height (${bar.radius} for ${bar.height})`,
+            Math.abs(bar.radius - bar.tallest / 2) <= 1,
+            `the radius follows one row of controls, not the bar height (${bar.radius} vs ${bar.tallest / 2})`,
           );
           assert.notEqual(bar.background, 'rgba(0, 0, 0, 0)', 'the bar carries the panel surface');
           assert.equal(bar.border, '0px', 'the bar has no border');
