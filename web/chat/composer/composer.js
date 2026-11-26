@@ -5,6 +5,7 @@
 const CONFIG = '/config/web/chat/chat-footer.json';
 
 const CONTROLS = {
+  input: () => import('../controls/input/input.js'),
   attach: () => import('../controls/attach/attach.js'),
   stop: () => import('../controls/stop/stop.js'),
   mic: () => import('../controls/mic/mic.js'),
@@ -42,12 +43,15 @@ function composerProfile(config) {
   return merge(common, config?.[narrow ? 'mobile' : 'desktop'] || {});
 }
 
-async function control(id) {
+/* Mounts one control with the settings config gives it. A control switched off in config
+   is not rendered, so a slot can be retired without editing the rows. */
+async function control(id, settings = {}) {
+  if (settings.enabled === false) return null;
   const load = CONTROLS[id];
   if (!load) return null;
   try {
     const module = await load();
-    return module.create ? module.create() : null;
+    return module.create ? module.create(settings) : null;
   } catch {
     return null;
   }
@@ -58,7 +62,7 @@ async function control(id) {
    an absent radius is half the height, and absent padding means no padding at all. */
 function applySurface(surface, profile) {
   const spec = profile?.surface || {};
-  const controls = [...surface.querySelectorAll('.composer-btn')];
+  const controls = [...surface.querySelectorAll('.composer-btn, .composer-input')];
   const tallest = controls.reduce((max, el) => Math.max(max, el.getBoundingClientRect().height), 0);
   const height = spec.height_px ?? tallest;
   surface.style.setProperty('--composer-height', `${height}px`);
@@ -72,29 +76,43 @@ function applySurface(surface, profile) {
   surface.classList.toggle('is-transparent', spec.background === 'transparent');
 }
 
+/* Rows are keyed by number, so a profile can override one row and inherit the rest; the
+   older array shape is still read, so a config written before the keys keeps working. */
+function rowSpecs(rows) {
+  if (Array.isArray(rows)) return rows;
+  if (!rows || typeof rows !== 'object') return [];
+  return Object.keys(rows)
+    .sort((a, b) => Number(a) - Number(b))
+    .map((key) => rows[key] || {});
+}
+
 /* Renders one state (active or idle) into a fresh bar: the surface plus its grid. */
 async function renderComposer(host, profile, state) {
-  const rows = profile?.[state]?.rows || [];
+  const rows = rowSpecs(profile?.[state]?.rows);
   const grid = document.createElement('div');
   grid.className = 'composer-grid';
   grid.dataset.composerState = state;
 
-  for (let index = 0; index < ROWS; index += 1) {
+  for (let index = 0; index < Math.max(ROWS, rows.length); index += 1) {
     const spec = rows[index] || {};
     const row = document.createElement('div');
     row.className = 'composer-row';
-    row.dataset.composerRow = String(index);
+    row.dataset.composerRow = String(index + 1);
+    let filled = 0;
     for (const cellName of CELLS) {
       const cell = document.createElement('div');
       cell.className = `composer-cell composer-cell-${cellName}`;
       cell.dataset.composerCell = cellName;
       for (const id of spec[cellName] || []) {
-        const element = await control(id);
-        if (element) cell.append(element);
+        const element = await control(id, profile?.controls?.[id] || {});
+        if (element) {
+          cell.append(element);
+          filled += 1;
+        }
       }
       row.append(cell);
     }
-    if (row.querySelector('.composer-btn')) grid.append(row);
+    if (filled > 0) grid.append(row);
   }
 
   const surface = document.createElement('div');

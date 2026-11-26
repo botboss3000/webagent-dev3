@@ -1,6 +1,4 @@
 {
-  "_instructions": "Composer placement. A cell lists control ids from web/chat/controls/<id>/ (each with its own <id>.control.json); a control the config does not name is not rendered, and a row whose cells are all empty takes no space. Rows are independent: no row's cells affect another row's widths. common is the base and the active profile overlays it (objects merge, arrays replace, null inherits). active and idle are two states of the same dock.",
-  "version": 1,
   "common": {
     "surface": {
       "background": "panel",
@@ -8,22 +6,75 @@
       "radius_px": null,
       "padding_px": null
     },
+    "controls": {
+      "input": {
+        "label": "Message",
+        "placeholder": null,
+        "rows": 1,
+        "max_rows": null,
+        "enter_behavior": null,
+        "draft_persistence": false
+      },
+      "attach": {
+        "multiple": false
+      },
+      "mic": {
+        "label": "Dictate"
+      },
+      "stop": {
+        "label": "Stop"
+      },
+      "send": {
+        "label": "Send"
+      }
+    },
+    "commands": {
+      "fallback": "message",
+      "entries": {
+        "compact": {
+          "match": "^/compact(?:\\s+(.*))?$",
+          "action": "compact",
+          "deliver": "action",
+          "enabled": true
+        },
+        "login": {
+          "match": "^/login$",
+          "action": "login",
+          "deliver": "action",
+          "enabled": false
+        }
+      }
+    },
     "active": {
-      "rows": [
-        { "left": [], "center": [], "right": [] },
-        { "left": [], "center": [], "right": [] },
-        { "left": ["attach"], "center": [], "right": ["mic", "stop", "send"] }
-      ]
+      "rows": {
+        "1": { "left": [], "center": ["input"], "right": [] },
+        "2": { "left": [], "center": [], "right": [] },
+        "3": { "left": ["attach"], "center": [], "right": ["mic", "stop", "send"] }
+      }
     },
     "idle": {
-      "rows": [
-        { "left": [], "center": [], "right": [] },
-        { "left": [], "center": [], "right": [] },
-        { "left": ["attach"], "center": [], "right": ["mic", "send"] }
-      ]
+      "rows": {
+        "1": { "left": [], "center": ["input"], "right": [] },
+        "2": { "left": [], "center": [], "right": [] },
+        "3": { "left": ["attach"], "center": [], "right": ["mic", "send"] }
+      }
     }
   },
   "desktop": {},
   "mobile": {},
-  "widget": {}
+  "widget": {
+    "controls": {
+      "attach": { "multiple": false }
+    },
+    "active": {
+      "rows": {
+        "3": { "left": [], "center": [], "right": ["send"] }
+      }
+    },
+    "idle": {
+      "rows": {
+        "3": { "left": [], "center": [], "right": ["send"] }
+      }
+    }
+  }
 }
