@@ -7,6 +7,7 @@
 
 import { icon } from '../components/icon/icon.js';
 import { installPullToRefresh, wireRefreshButton } from '../components/refresh/refresh.js';
+import { consumeBack } from './history-back.js';
 
 // The phone header switch shows a chat bubble on the panel and a back chevron on chat.
 const CHAT_ICON =
@@ -307,6 +308,11 @@ async function boot() {
     window.location.hash = href;
   });
   window.addEventListener('hashchange', renderRoute);
+  // A back press goes to the surfaces that claim one before anything else: the router
+  // never needs it, because a hash pop already arrives as a hashchange.
+  window.addEventListener('popstate', () => {
+    consumeBack();
+  });
 
   const account = document.getElementById('account-button');
   account?.addEventListener('click', () => {
