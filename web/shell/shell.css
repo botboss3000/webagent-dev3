@@ -6,7 +6,10 @@
 
 /* Controls carry no padding of their own: this removes the browser's default button
    padding so every inset comes from config. */
-button {
+/* The browser gives buttons and text fields a box of their own; nothing in this UI wants
+   one, and every padding the composer does show comes from its JSON. */
+button,
+textarea {
   padding: 0;
 }
 
