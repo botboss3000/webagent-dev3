@@ -154,6 +154,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
             } else {
                 "no safe retry or eligible backup model remains"
             },
+            kind,
         );
     }
     Ok(())
@@ -162,6 +163,19 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
 /// The chat notice for a model that cannot be reached. It names no model, provider or
 /// recovery detail; those go to the operator row below.
 pub const MODEL_UNREACHABLE: &str = "The model is unreachable";
+
+/// The provider rejected the request because it no longer fits the model's context window.
+pub const CONTEXT_LIMIT: &str = "The conversation no longer fits the model's context window";
+/// A context summary outgrew the summarizer's window before it could run.
+pub const SUMMARY_CONTEXT_LIMIT: &str = "The context summary exceeded the model's context \
+     window; lower the summary input limit or use the same-model summarizer";
+/// The provider's usage limit for this account was reached.
+pub const PROVIDER_QUOTA: &str =
+    "The provider's usage limit for this account was reached; try again after it resets";
+/// The provider rejected the stored credentials.
+pub const PROVIDER_CREDENTIALS: &str = "The provider rejected the stored credentials";
+/// The model is not available from its provider.
+pub const MODEL_UNAVAILABLE: &str = "The model is not available from its provider";
 
 /// The notice's next step, naming the agent administrator's contact email when one is set.
 pub fn model_unreachable_guidance(contact: Option<&str>) -> String {
@@ -177,8 +191,13 @@ pub fn model_unreachable_guidance(contact: Option<&str>) -> String {
 pub const NEEDS_ADMIN: &str = "This agent needs its administrator's attention";
 
 /// Run errors a chat user can act on, or that name nothing internal, shown as written.
-const USER_ERRORS: [&str; 17] = [
+const USER_ERRORS: [&str; 22] = [
     MODEL_UNREACHABLE,
+    CONTEXT_LIMIT,
+    SUMMARY_CONTEXT_LIMIT,
+    PROVIDER_QUOTA,
+    PROVIDER_CREDENTIALS,
+    MODEL_UNAVAILABLE,
     "Cancelled by user",
     "Stopped by global shutoff",
     "Approval withdrawn",
@@ -216,7 +235,20 @@ pub fn public_error(error: &str) -> &str {
 
 /// Whether a run error sends the chat user to the agent administrator.
 pub fn needs_admin(error: &str) -> bool {
-    error == MODEL_UNREACHABLE || public_error(error) == NEEDS_ADMIN
+    matches!(error, MODEL_UNREACHABLE | PROVIDER_CREDENTIALS) || public_error(error) == NEEDS_ADMIN
+}
+
+/// Whether a stopped call carries the operator-only model/provider detail row.
+pub fn unreachable_class(error: &str) -> bool {
+    matches!(
+        error,
+        MODEL_UNREACHABLE
+            | CONTEXT_LIMIT
+            | SUMMARY_CONTEXT_LIMIT
+            | PROVIDER_QUOTA
+            | PROVIDER_CREDENTIALS
+            | MODEL_UNAVAILABLE
+    )
 }
 
 /// The step that sends a chat user to the agent administrator, naming the contact email
@@ -250,7 +282,7 @@ pub async fn admin_contact(
 /// Stop a call whose model could not be reached: the chat shows only `MODEL_UNREACHABLE`,
 /// and an activity row (run logs, administrators only) records the model, provider, what
 /// recovery was tried and the last error.
-pub fn model_unreachable(run: &mut Value, stopped_by: &str) {
+pub fn model_unreachable(run: &mut Value, stopped_by: &str, kind: model_selection::FailureKind) {
     let plan: Option<SelectionPlan> = serde_json::from_value(run["selection_plan"].clone()).ok();
     let policy = plan
         .as_ref()
@@ -278,7 +310,20 @@ pub fn model_unreachable(run: &mut Value, stopped_by: &str) {
     );
     let item = json!({"type":"model_unreachable","model":model,"provider":provider,
         "detail":&detail});
-    run["error"] = json!(MODEL_UNREACHABLE);
+    // Name the actual class of failure the chat user can act on; the operator row keeps the
+    // model, provider and recovery detail below.
+    run["error"] = json!(match kind {
+        model_selection::FailureKind::ContextLimit
+            if run["phase"].as_str() == Some("compacting") =>
+        {
+            SUMMARY_CONTEXT_LIMIT
+        }
+        model_selection::FailureKind::ContextLimit => CONTEXT_LIMIT,
+        model_selection::FailureKind::QuotaExhausted => PROVIDER_QUOTA,
+        model_selection::FailureKind::InvalidCredentials => PROVIDER_CREDENTIALS,
+        model_selection::FailureKind::ModelUnavailable => MODEL_UNAVAILABLE,
+        _ => MODEL_UNREACHABLE,
+    });
     // The chat notice shows this to agent operators only.
     run["unreachable_detail"] = json!(detail);
     retry_activity(run, item);

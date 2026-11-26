@@ -740,7 +740,8 @@ pub(crate) async fn command(
     }
     let result = public_run(&run);
     let resolved = action == "recovery" && status(&run) != "recovery";
-    app.store
+    if let Err(error) = app
+        .store
         .atomic_docs_event(
             vec![
                 (key("run", &id), run),
@@ -752,7 +753,28 @@ pub(crate) async fn command(
             "run_status",
             &result,
         )
-        .await?;
+        .await
+    {
+        if action == "resume" {
+            // A failed run may no longer be resumable (its session or participation moved on).
+            // Name that instead of reporting an anonymous storage fault; the log keeps the cause.
+            tracing::error!(run = %id, error = %format!("{error:#}"), "Run resume failed");
+            return Err(
+                if error
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains("participation")
+                {
+                    conflict(
+                    "The conversation's participation changed; send a new message instead of resuming",
+                )
+                } else {
+                    conflict("The run could not be resumed; send a new message to continue")
+                },
+            );
+        }
+        return Err(error.into());
+    }
     if resolved {
         // The reviewer's decision resolves the uncertain write that held the queue.
         if let Some(sid) = result["session_id"].as_str() {

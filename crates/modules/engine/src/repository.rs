@@ -237,7 +237,7 @@ impl<
                 // operators and installation administrators.
                 let shown_error = error.map(failure::public_error);
                 let mut content = serde_json::json!({"status": status, "error": shown_error});
-                let detail = if error == Some(failure::MODEL_UNREACHABLE) {
+                let detail = if error.is_some_and(failure::unreachable_class) {
                     run["unreachable_detail"].as_str()
                 } else {
                     error.filter(|raw| Some(*raw) != shown_error)

@@ -460,10 +460,11 @@ async fn model_selection_failover_is_ordered_durable_and_revocation_is_live() {
     assert!(app.run_candidate(&restored).await.is_err());
     model_failure(&mut restored, &failure).unwrap();
     assert_eq!(restored["status"], "failed");
-    // The chat notice names no model or provider; the operator row carries them.
+    // The chat notice names the failure class, not the model or provider; the operator row
+    // carries those.
     assert_eq!(
         restored["error"],
-        webagent_engine::runtime::failure::MODEL_UNREACHABLE
+        webagent_engine::runtime::failure::MODEL_UNAVAILABLE
     );
     let row = &restored["_activity_items"]
         .as_array()

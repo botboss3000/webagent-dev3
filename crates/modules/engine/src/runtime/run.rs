@@ -999,20 +999,46 @@ impl<
                 (system_run, selection)
             };
             let summary_source = app.dedup_summary_source(run, &plan.source).await?;
-            let Ok(prompt) = config
-                .prompt_for(&plan, &summary_source)
-                .or_else(|_| config.prompt_for(&plan, &plan.source))
-                .map(|prompt| background_compaction::with_focus(prompt, focus.as_deref()))
-            else {
-                return Ok(());
-            };
-            let input = vec![json!({"role":"user","content":prompt})];
             let instructions = provider::Provider::instructions_for_snapshot(
                 provider::DEFAULT_INSTRUCTIONS,
                 crate::ports::AgentMetadata::root(app.store.records()),
                 app.abilities.source_root(),
             )?;
             let context = config::Config::<C>::read(&app.runtime_path)?.context;
+            // The System prompt carries the source, so keep it inside the model window.
+            let ceiling = context
+                .ceiling(&selection)?
+                .min(workflow_policy.max_context_bytes);
+            let budget = ceiling
+                .saturating_sub(instructions.len())
+                .saturating_sub(config.token_bytes(config.summary_tokens))
+                .saturating_sub(8_192)
+                .saturating_mul(85)
+                / 100;
+            let render = |config: &context_compaction::Config| {
+                config
+                    .prompt_for(&plan, &summary_source)
+                    .or_else(|_| config.prompt_for(&plan, &plan.source))
+            };
+            let prompt = match render(config) {
+                Ok(prompt) => {
+                    if prompt.len() <= budget {
+                        prompt
+                    } else {
+                        // The System prompt carries the source; shorten tool outputs to the
+                        // model's own window instead of letting the provider reject the call.
+                        let mut prompt_config = config.clone();
+                        prompt_config.max_source_bytes = prompt_config.max_source_bytes.min(budget);
+                        render(&prompt_config)
+                            .ok()
+                            .filter(|fitted| fitted.len() <= budget)
+                            .unwrap_or(prompt)
+                    }
+                }
+                Err(_) => return Ok(()),
+            };
+            let prompt = background_compaction::with_focus(prompt, focus.as_deref());
+            let input = vec![json!({"role":"user","content":prompt})];
             if validate_system_summary_input(
                 &context,
                 &selection,
@@ -2671,6 +2697,7 @@ impl<
                                  (workflow.max_attempts)",
                                 workflow_policy.max_attempts
                             ),
+                            webagent_models::model_selection::FailureKind::Protocol,
                         );
                     } else {
                         run["error"] = json!(format!(
@@ -3590,17 +3617,51 @@ impl<
                         X::default_model(),
                     )?;
                     let summary_source = app.dedup_summary_source(&run, &plan.source).await?;
+                    // The System prompt carries the source, so keep it inside the model window:
+                    // shorten tool outputs further than the planner's app-wide cap allowed.
+                    let summary_context = config::Config::<C>::read(&app.runtime_path)?.context;
+                    let system_instructions = provider::Provider::instructions_for_snapshot(
+                        provider::DEFAULT_INSTRUCTIONS,
+                        crate::ports::AgentMetadata::root(app.store.records()),
+                        app.abilities.source_root(),
+                    )?;
+                    let ceiling = summary_context
+                        .ceiling(&selection)?
+                        .min(workflow_policy.max_context_bytes);
+                    let budget = ceiling
+                        .saturating_sub(system_instructions.len())
+                        .saturating_sub(
+                            compaction_config.token_bytes(compaction_config.summary_tokens),
+                        )
+                        .saturating_sub(8_192)
+                        .saturating_mul(85)
+                        / 100;
                     // Restored full tool outputs can outgrow the source the planner sized;
                     // summarize those shortened previews instead of stopping the run.
-                    let prompt = match compaction_config
-                        .prompt_for(&plan, &summary_source)
-                        .or_else(|_| compaction_config.prompt_for(&plan, &plan.source))
-                    {
-                        Ok(prompt) => prompt,
+                    let render = |config: &context_compaction::Config| {
+                        config
+                            .prompt_for(&plan, &summary_source)
+                            .or_else(|_| config.prompt_for(&plan, &plan.source))
+                    };
+                    let prompt = match render(&compaction_config) {
+                        Ok(prompt) => {
+                            if prompt.len() <= budget {
+                                prompt
+                            } else {
+                                // The System prompt carries the source; shorten tool outputs to
+                                // the model's window instead of letting the provider reject it.
+                                let mut prompt_config = compaction_config.clone();
+                                prompt_config.max_source_bytes =
+                                    prompt_config.max_source_bytes.min(budget);
+                                render(&prompt_config)
+                                    .ok()
+                                    .filter(|fitted| fitted.len() <= budget)
+                                    .unwrap_or(prompt)
+                            }
+                        }
                         Err(_) => {
                             run["status"] = json!("paused");
-                            run["error"] =
-                                json!("Context summary source is too large; review this run");
+                            run["error"] = json!(super::failure::SUMMARY_CONTEXT_LIMIT);
                             if let Some(report) = app.native.validation(
                                 app.store.records(),
                                 &run,
@@ -3614,13 +3675,7 @@ impl<
                         }
                     };
                     // Validate the exact summary envelope against System, including on a backup retry.
-                    let summary_context = config::Config::<C>::read(&app.runtime_path)?.context;
                     let summary_input = vec![json!({"role":"user","content":prompt})];
-                    let system_instructions = provider::Provider::instructions_for_snapshot(
-                        provider::DEFAULT_INSTRUCTIONS,
-                        crate::ports::AgentMetadata::root(app.store.records()),
-                        app.abilities.source_root(),
-                    )?;
                     let validation = validate_system_summary_input(
                         &summary_context,
                         &selection,
@@ -3653,9 +3708,7 @@ impl<
                     }
                     if validation.is_err() {
                         run["status"] = json!("paused");
-                        run["error"] = json!(
-                            "System summary input exceeds its context budget; review this run"
-                        );
+                        run["error"] = json!(super::failure::SUMMARY_CONTEXT_LIMIT);
                         app.save(&mut run).await?;
                         return Ok(());
                     }
