@@ -61,20 +61,30 @@ async function control(id, settings = {}) {
   }
 }
 
-/* Applies the configured control size: one value for the whole bar, and a control's own value
-   for that button only. Custom properties inherit, so an override needs one line, no rule. */
+/* The value for this device: the coarse key on a finger, the plain key otherwise. A missing
+   coarse value falls back to the token, never to the configured fine number, so a phone can
+   not silently drop under the 44px touch minimum. */
+function pointerValue(settings, key) {
+  if (!settings) return null;
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  const value = coarse ? settings[`${key}_coarse`] : settings[key];
+  return typeof value === 'number' && value > 0 ? value : null;
+}
+
+/* Applies the configured control size: the surface scale first, then a control's own size and
+   hit target for that button only. Custom properties inherit, so an override is one line. */
 function applyControlSizes(surface, profile) {
   const controls = profile?.controls || {};
-  const shared = controls.default?.size_px;
-  if (typeof shared === 'number' && shared > 0) {
-    surface.style.setProperty('--control-size', `${shared}px`);
-  }
+  const shared = pointerValue(profile?.scale, 'control_px') ?? pointerValue(controls.default, 'size_px');
+  if (shared) surface.style.setProperty('--control-size', `${shared}px`);
   for (const [id, settings] of Object.entries(controls)) {
     if (id === 'default') continue;
-    const size = settings?.size_px;
-    if (typeof size !== 'number' || size <= 0) continue;
     const element = surface.querySelector(`.composer-btn-${id}`);
-    if (element) element.style.setProperty('--control-size', `${size}px`);
+    if (!element) continue;
+    const size = pointerValue(settings, 'size_px');
+    if (size) element.style.setProperty('--control-size', `${size}px`);
+    const hit = pointerValue(settings, 'hit_px');
+    if (hit) element.style.setProperty('--hit-target-min', `${hit}px`);
   }
 }
 
