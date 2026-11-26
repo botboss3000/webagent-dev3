@@ -93,13 +93,13 @@ function startServer(admin) {
               rows: {
                 '1': { left: [], center: ['input'], right: [] },
                 '2': { left: [], center: [], right: [] },
-                '3': { left: ['attach'], center: [], right: ['mic', 'stop', 'send'] },
+                '3': { left: ['attach'], center: [], right: ['stop', 'mic', 'send'] },
               },
             },
             idle: {
               rows: {
                 '1': { left: [], center: [], right: [] },
-                '2': { left: ['attach'], center: ['input'], right: ['mic', 'send'] },
+                '2': { left: ['attach'], center: ['input'], right: ['stop', 'mic', 'send'] },
                 '3': { left: [], center: [], right: [] },
               },
             },
@@ -413,8 +413,8 @@ for (const viewport of VIEWPORTS) {
           assert.deepEqual(composer.left, ['Attach files'], 'attach sits in the left cell');
           assert.deepEqual(
             composer.right,
-            ['Dictate', 'Stop', 'Send'],
-            'mic, stop and send sit in the right cell',
+            ['Stop', 'Dictate', 'Send'],
+            'stop, mic and send sit in the right cell',
           );
           assert.equal(composer.stop, true, 'stop uses the stop variant');
           assert.equal(composer.send, true, 'send uses the send variant');
