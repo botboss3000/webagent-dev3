@@ -1555,7 +1555,20 @@ impl Store {
         kind: &str,
         payload: &Value,
     ) -> Result<()> {
-        self.atomic_admission(docs, sid, kind, payload, None).await
+        self.atomic_admission(docs, sid, kind, payload, None, false)
+            .await
+    }
+    /// Save related documents when deliberately reviving a finished run: the terminal fence
+    /// is lifted, while revision, generation and lease fences still apply.
+    pub async fn atomic_docs_event_override(
+        &self,
+        docs: Vec<(String, Value)>,
+        sid: &str,
+        kind: &str,
+        payload: &Value,
+    ) -> Result<()> {
+        self.atomic_admission(docs, sid, kind, payload, None, true)
+            .await
     }
     /// Admit only supported first-message events with newly prepared session records in the same transaction.
     pub async fn atomic_first_message(
@@ -1569,7 +1582,7 @@ impl Store {
         if !matches!(kind, "message" | "manager_submission" | "human_message") || sid.is_empty() {
             return Err(anyhow!("Invalid first-message admission"));
         }
-        self.atomic_admission(docs, sid, kind, payload, Some(created))
+        self.atomic_admission(docs, sid, kind, payload, Some(created), false)
             .await
     }
     /// Commit related admission documents, public/private messages and loop commands without crossing authority planes.
@@ -1580,6 +1593,7 @@ impl Store {
         kind: &str,
         payload: &Value,
         created: Option<&Value>,
+        override_fence: bool,
     ) -> Result<()> {
         if matches!(kind, "message" | "manager_submission") && payload["role"] == "user" {
             if let Some((_, run)) = docs.iter().find(|(key, _)| key.starts_with("run:")) {
@@ -1703,10 +1717,12 @@ impl Store {
                 if previous["generation"] != run["generation"]
                     || previous["lease_epoch"] != run["lease_epoch"]
                     || previous["run_revision"].as_u64().unwrap_or(0) != expected
-                    || (matches!(
-                        previous["status"].as_str(),
-                        Some("completed" | "cancelled" | "failed")
-                    ) && previous != *run)
+                    || (!override_fence
+                        && matches!(
+                            previous["status"].as_str(),
+                            Some("completed" | "cancelled" | "failed")
+                        )
+                        && previous != *run)
                 {
                     return Err(anyhow!("Run fence rejected stale command"));
                 }

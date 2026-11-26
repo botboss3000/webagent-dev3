@@ -740,21 +740,25 @@ pub(crate) async fn command(
     }
     let result = public_run(&run);
     let resolved = action == "recovery" && status(&run) != "recovery";
-    if let Err(error) = app
-        .store
-        .atomic_docs_event(
-            vec![
-                (key("run", &id), run),
-                (receipt_key, json!({"digest":digest(&body),"result":result})),
-            ],
-            result["session_id"]
-                .as_str()
-                .expect("decision results carry their session"),
-            "run_status",
-            &result,
-        )
-        .await
-    {
+    let documents = vec![
+        (key("run", &id), run),
+        (receipt_key, json!({"digest":digest(&body),"result":result})),
+    ];
+    let session = result["session_id"]
+        .as_str()
+        .expect("decision results carry their session");
+    // Resuming a failed run deliberately revives it: revision, generation and lease fences
+    // still apply, but the finished-run fence is lifted for this one command.
+    let written = if action == "resume" {
+        app.store
+            .atomic_docs_event_override(documents, session, "run_status", &result)
+            .await
+    } else {
+        app.store
+            .atomic_docs_event(documents, session, "run_status", &result)
+            .await
+    };
+    if let Err(error) = written {
         if action == "resume" {
             // A failed run may no longer be resumable (its session or participation moved on).
             // Name that instead of reporting an anonymous storage fault; the log keeps the cause.
