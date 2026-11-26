@@ -15,6 +15,10 @@ const CONTROLS = {
 const ROWS = 3;
 const CELLS = ['left', 'center', 'right'];
 
+// The profile the composer mounted with, reused for state changes: a focus switch must not
+// wait on another config fetch, or the bar lags behind the keyboard.
+let mountedProfile = null;
+
 /* Objects merge, arrays replace, null inherits — the rule the config documents. */
 function merge(base, override) {
   if (override === null || override === undefined) return base;
@@ -192,17 +196,21 @@ export async function mountComposer(host) {
         ? 'idle'
         : 'active';
   const mounted = await renderComposer(host, profile, state);
+  mountedProfile = profile;
   host.dataset.composerState = state;
   host.dataset.mounted = 'yes';
   wireComposerState(host);
   return { ...mounted, profile };
 }
 
-/* Switches between the active and idle geometry from the same config. */
+/* Switches between the active and idle geometry from the same config. The mount's profile is
+   reused so the change lands on the next frame instead of after a config round trip. */
 export async function setComposerState(host, state) {
   if (!host) return null;
-  const config = await loadConfig();
-  const profile = composerProfile(config);
-  host.dataset.composerState = state === 'idle' ? 'idle' : 'active';
-  return renderComposer(host, profile, host.dataset.composerState);
+  const profile = mountedProfile || composerProfile(await loadConfig());
+  const next = state === 'idle' ? 'idle' : 'active';
+  const mounted = await renderComposer(host, profile, next);
+  // Written after the grid exists, so the dataset never claims a state the DOM has not reached.
+  host.dataset.composerState = next;
+  return mounted;
 }
