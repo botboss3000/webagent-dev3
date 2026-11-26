@@ -239,3 +239,29 @@ button {
     --control-size: 44px;
   }
 }
+
+/* The environment families. web/shell/environment.js writes data-pointer on <html> from the
+   primary pointing device; a coarse pointer means a thumb, so it gets bigger targets and a
+   step up in type. Only the touch minimum moves a lot: type steps by one pixel, because 44px
+   is a hit-target rule, not a typography scale. */
+:root {
+  --font-body: 14px;
+  --font-small: 12px;
+  --chip-height: 28px;
+  --chip-pad-x: 10px;
+  --chip-pad-y: 4px;
+  --bubble-pad: 8px;
+  --bubble-radius: 12px;
+  --hit-target-min: 0px;
+}
+
+[data-pointer="coarse"] {
+  --font-body: 15px;
+  --font-small: 13px;
+  --chip-height: 32px;
+  --chip-pad-x: 12px;
+  --chip-pad-y: 6px;
+  --bubble-pad: 10px;
+  --bubble-radius: 14px;
+  --hit-target-min: 44px;
+}

@@ -8,6 +8,7 @@
 import { icon } from '../components/icon/icon.js';
 import { installPullToRefresh, wireRefreshButton } from '../components/refresh/refresh.js';
 import { consumeBack } from './history-back.js';
+import { installEnvironment } from './environment.js';
 import { installViewport } from './viewport.js';
 
 // The phone header switch shows a chat bubble on the panel and a back chevron on chat.
@@ -324,6 +325,8 @@ async function boot() {
   } catch {
     // Without history the app still runs; back then leaves on the first press.
   }
+  // The pointer type drives every size token, so it is settled before anything renders.
+  installEnvironment();
   // The layout follows the visual viewport, so the composer stays above the soft keyboard.
   installViewport();
   window.addEventListener('popstate', () => {
