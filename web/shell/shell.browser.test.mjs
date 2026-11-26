@@ -72,7 +72,7 @@ function startServer(admin) {
         desktop: {},
         mobile: {
           rows: [
-            { left: ['sidebar'], center: [], right: ['chat'] },
+            { left: ['sidebar'], center: [], right: [] },
             { left: [], center: [], right: [] },
             { left: [], center: [], right: [] },
           ],
@@ -447,9 +447,10 @@ for (const viewport of VIEWPORTS) {
           );
           assert.equal(phoneHeadControls, 1, 'the mobile chat header carries the sidebar control');
 
-          // The content header is hidden on the chat route, so the way back is the chat
-          // shell's own control in its header.
-          await page.click('#page-body .chat-panel-head #chat-toggle');
+          // The content header is hidden on the chat route, so the way back is the
+          // sidebar: open it from the chat header and pick the sessions entry.
+          await page.click('#page-body .chat-panel-head .sidebar-button');
+          await page.click('#sidebar-nav [data-href="#/sessions"]');
           await page.waitForFunction(() => window.location.hash === '#/sessions');
           // The route renders asynchronously, so wait for the header to catch up.
           await page.waitForFunction(() => document.getElementById('page-title').textContent === 'All sessions');
