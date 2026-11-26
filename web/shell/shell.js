@@ -243,6 +243,12 @@ function syncChatSwitch() {
   button.innerHTML = onChat ? BACK_ICON : CHAT_ICON;
 }
 
+/** Leave the chat page for the panel without adding another history entry. */
+function closeChatPage() {
+  history.replaceState(history.state, '', '#/sessions');
+  void renderRoute();
+}
+
 async function renderRoute() {
   state.route = currentRoute();
   markActive();
@@ -310,8 +316,17 @@ async function boot() {
   window.addEventListener('hashchange', renderRoute);
   // A back press goes to the surfaces that claim one before anything else: the router
   // never needs it, because a hash pop already arrives as a hashchange.
+  // One spare history entry, so the first back press lands on a same-document entry the
+  // shell can answer; the press after that leaves the app the way the browser normally does.
+  try {
+    history.pushState({ ...history.state, webagentBack: true }, '', location.href);
+  } catch {
+    // Without history the app still runs; back then leaves on the first press.
+  }
   window.addEventListener('popstate', () => {
-    consumeBack();
+    if (consumeBack()) return;
+    // Back on the chat page has nothing behind it on a fresh load, so it opens the panel.
+    if (state.route.startsWith('/chat')) closeChatPage();
   });
 
   const account = document.getElementById('account-button');

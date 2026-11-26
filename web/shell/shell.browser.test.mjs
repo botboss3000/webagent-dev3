@@ -584,6 +584,17 @@ test('a pull refreshes, and a longer pull runs the hard refresh', async () => {
       'a plain refresh keeps browser data',
     );
 
+    // Loading the chat page first and pressing back opens the panel instead of leaving.
+    await page.goto(`${origin}/web/index.html#/chat`, { waitUntil: 'load' });
+    await page.waitForSelector('#page-body .chat-surface');
+    await page.evaluate(() => history.back());
+    await page.waitForFunction(() => window.location.hash === '#/sessions');
+    assert.equal(
+      await page.locator('#page-title').textContent(),
+      'All sessions',
+      'back on the chat page opens the panel',
+    );
+
     assert.deepEqual(errors, [], `no page errors: ${errors.join(' | ')}`);
     await context.close();
   });
