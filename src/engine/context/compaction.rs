@@ -387,6 +387,8 @@ mod model_limit_regression {
     #[test]
     fn summary_chunk_cap_does_not_replace_history_trigger() {
         let mut c = Config::configured().unwrap();
+        // Pin the cap this regression is about, independent of the live default.
+        c.max_source_bytes = 262_144;
         c.system_input_budget = Some(3_688_000);
         let input = vec![
             json!({"role":"user","content":"x".repeat(270_000)}),

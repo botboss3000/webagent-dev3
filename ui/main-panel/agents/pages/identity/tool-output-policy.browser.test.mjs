@@ -28,7 +28,7 @@ try {
     const {renderToolOutputPolicy}=await import('/ui/main-panel/agents/pages/identity/tool-output-policy.js');
     const {vibrationConfigReady}=await import('/ui/shared/vibrate/vibrate.js');await vibrationConfigReady;
     const stored=JSON.parse(localStorage.getItem('dedup-fixture')||'true');
-    const agent={can_manage:canManage,compaction_overridden:true,compaction_thresholds:{trigger_tokens:150000,tail_tokens:20000,ceiling_tokens:250000,summarizer:'self'},compaction_defaults:{trigger_tokens:150000,tail_tokens:20000,summary_tokens:5000,ceiling_tokens:250000,summarizer:'self'},tool_output_policy:{enabled:true,scope:'all_eligible',tools:[],lifetime_calls:6,ordinary_chars:24000,promoted_chars:24000,refresh_on_recall:true,promote_on_edit:true},tool_output_eligible_tools:['file_read']};
+    const agent={can_manage:canManage,compaction_overridden:true,compaction_thresholds:{trigger_tokens:150000,tail_tokens:20000,ceiling_tokens:250000,summarizer:'self'},compaction_defaults:{trigger_tokens:150000,tail_tokens:20000,summary_tokens:5000,max_source_bytes:262144,max_summary_bytes:65536,merge_tokens:50000,min_fold_tokens:8000,tool_result_preview_bytes:8192,output_tokens:64000,ceiling_tokens:250000,summarizer:'self'},tool_output_policy:{enabled:true,scope:'all_eligible',tools:[],lifetime_calls:6,ordinary_chars:24000,promoted_chars:24000,refresh_on_recall:true,promote_on_edit:true},tool_output_eligible_tools:['file_read']};
     if(available)agent.tool_result_deduplication={enabled:stored};
     window.fixture={writes:[],fail:false,agent};
     document.querySelector('#host').replaceChildren();
@@ -57,7 +57,7 @@ try {
   await page.getByLabel('Summary trigger',{exact:true}).fill('160000');
   await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).click();
   await page.getByText('Saved. New model calls use these thresholds.',{exact:true}).waitFor();
-  assert.deepEqual(await page.evaluate(()=>fixture.writes),[{compaction_thresholds:{trigger_tokens:160000,tail_tokens:20000,ceiling_tokens:250000,output_tokens:64000,summarizer:'self'}}]);
+  assert.deepEqual(await page.evaluate(()=>fixture.writes),[{compaction_thresholds:{trigger_tokens:160000,tail_tokens:20000,ceiling_tokens:250000,output_tokens:64000,summary_tokens:5000,max_source_bytes:262144,max_summary_bytes:65536,merge_tokens:50000,min_fold_tokens:8000,tool_result_preview_bytes:8192,summarizer:'self'}}]);
   await page.getByRole('button',{name:'Use app defaults',exact:true}).click();
   await page.getByText('Saved. New model calls use the app defaults.',{exact:true}).waitFor();
   assert.deepEqual((await page.evaluate(()=>fixture.writes)).at(-1),{reset_compaction_thresholds:true});

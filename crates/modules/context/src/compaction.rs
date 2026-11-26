@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 #[cfg(test)]
 use sha2::{Digest, Sha256};
 pub use webagent_context_contracts::context_compaction::*;
-/// Agent overrides affect history folding, while the data-root file retains
-/// summary size, source limits, and every other app-wide safety bound.
+/// Agent overrides affect history folding and its budgets; the data-root file holds
+/// every app-wide default and the validation bounds all overrides must satisfy.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentThresholds {
@@ -18,6 +18,28 @@ pub struct AgentThresholds {
     /// Absent keeps the app's summarizer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summarizer: Option<Summarizer>,
+    /// Absent keeps the app's reply allowance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<usize>,
+    /// Absent keeps the app's summary output budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_tokens: Option<usize>,
+    /// Absent keeps the app's summary input limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_source_bytes: Option<usize>,
+    /// Absent keeps the app's summary size limit and its reserved room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_summary_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_reserve_bytes: Option<usize>,
+    /// Absent keeps the app's block-merge and requested-fold thresholds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_fold_tokens: Option<usize>,
+    /// Absent keeps the app's tool-result preview size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_result_preview_bytes: Option<usize>,
     /// How long the provider keeps the prompt cache, in minutes, for this agent's calls;
     /// absent uses each model's provider setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -76,6 +98,30 @@ impl AgentThresholds {
         }
         if let Some(summarizer) = self.summarizer {
             effective.summarizer = summarizer;
+        }
+        if let Some(tokens) = self.output_tokens {
+            effective.output_tokens = Some(tokens);
+        }
+        if let Some(tokens) = self.summary_tokens {
+            effective.summary_tokens = tokens;
+        }
+        if let Some(bytes) = self.max_source_bytes {
+            effective.max_source_bytes = bytes;
+        }
+        if let Some(bytes) = self.max_summary_bytes {
+            effective.max_summary_bytes = bytes;
+        }
+        if let Some(bytes) = self.summary_reserve_bytes {
+            effective.summary_reserve_bytes = bytes;
+        }
+        if let Some(tokens) = self.merge_tokens {
+            effective.merge_tokens = tokens;
+        }
+        if let Some(tokens) = self.min_fold_tokens {
+            effective.min_fold_tokens = tokens;
+        }
+        if let Some(bytes) = self.tool_result_preview_bytes {
+            effective.tool_result_preview_bytes = bytes;
         }
         if self
             .fold_tasks_retained
@@ -596,6 +642,14 @@ mod tests {
             tail_tokens: 40,
             ceiling_tokens: Some(300),
             summarizer: Some(Summarizer::System),
+            output_tokens: Some(8_000),
+            summary_tokens: Some(20),
+            max_source_bytes: Some(1_000_000),
+            max_summary_bytes: Some(32_768),
+            summary_reserve_bytes: Some(16_384),
+            merge_tokens: Some(40_000),
+            min_fold_tokens: Some(4_000),
+            tool_result_preview_bytes: Some(4_096),
             cache_timeout_minutes: None,
             keep_alive: None,
             fold_tasks_retained: None,
@@ -605,6 +659,14 @@ mod tests {
             (applied.ceiling(), applied.summarizer),
             (300, Summarizer::System)
         );
+        assert_eq!(applied.output_tokens, Some(8_000));
+        assert_eq!(applied.summary_tokens, 20);
+        assert_eq!(applied.max_source_bytes, 1_000_000);
+        assert_eq!(applied.max_summary_bytes, 32_768);
+        assert_eq!(applied.summary_reserve_bytes, 16_384);
+        assert_eq!(applied.merge_tokens, 40_000);
+        assert_eq!(applied.min_fold_tokens, 4_000);
+        assert_eq!(applied.tool_result_preview_bytes, 4_096);
     }
 
     #[test]
@@ -701,6 +763,8 @@ mod model_limit_regression {
     #[test]
     fn summary_chunk_cap_does_not_replace_history_trigger() {
         let mut c = Config::configured().unwrap();
+        // Pin the cap this regression is about, independent of the live default.
+        c.max_source_bytes = 262_144;
         c.system_input_budget = Some(3_688_000);
         let input = vec![
             json!({"role":"user","content":"x".repeat(270_000)}),

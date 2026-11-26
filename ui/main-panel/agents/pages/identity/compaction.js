@@ -55,10 +55,16 @@ export function renderCompaction(host, agent, persist, request) {
     fixed.hidden = true;
   }
   const fields = [
-    ['trigger_tokens', 'Summary trigger', 'Estimated total request tokens, including instructions, tools and the verbatim tail'],
-    ['tail_tokens', 'Verbatim tail', 'Recent estimated tokens to keep word for word'],
-    ['ceiling_tokens', 'Ceiling', 'Size at which the agent stops to finish the summary. Below the trigger, the trigger is used. The model’s context limit caps both'],
-    ['output_tokens', 'Output allowance', 'Tokens the provider is asked to allow for a reply. It counts against the same context window as the request, so a larger allowance leaves less room for history'],
+    ['trigger_tokens', 'Summary trigger', 'Estimated total request tokens, including instructions, tools and the verbatim tail', 10000, 1000000],
+    ['tail_tokens', 'Verbatim tail', 'Recent estimated tokens to keep word for word', 1000, 1000000],
+    ['ceiling_tokens', 'Ceiling', 'Size at which the agent stops to finish the summary. Below the trigger, the trigger is used. The model’s context limit caps both', 10000, 1000000],
+    ['output_tokens', 'Output allowance', 'Tokens the provider is asked to allow for a reply. It counts against the same context window as the request, so a larger allowance leaves less room for history', 1024, 1000000],
+    ['summary_tokens', 'Summary allowance', 'Tokens a summary block may use. A larger allowance keeps more detail when a block covers a long stretch of history', 512, 65536],
+    ['max_source_bytes', 'Summary input limit (bytes)', 'Largest history one fold may cover. Raise it to summarize everything up to the verbatim tail instead of only the oldest exchange', 4096, 1048576],
+    ['max_summary_bytes', 'Summary block limit (bytes)', 'Largest summary block stored in the conversation', 4096, 65536],
+    ['merge_tokens', 'Merge threshold', 'Summary blocks above this total are merged into one checkpoint, keeping the newest two', 1, 1000000],
+    ['min_fold_tokens', 'Minimum fold', 'Smallest history a manual /compact or task fold will summarize', 1, 1000000],
+    ['tool_result_preview_bytes', 'Tool result preview (bytes)', 'Largest tool result kept word for word inside a summary input', 1024, 65536],
   ];
   // An absent ceiling means the trigger.
   const saved = (key) => agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ??
@@ -89,9 +95,9 @@ export function renderCompaction(host, agent, persist, request) {
     onSave: async (values) => {
       status.textContent = '';
       const thresholds = {};
-      for (const [key] of fields) {
+      for (const [key, , , min, max] of fields) {
         const value = Number(values[key]);
-        if (!Number.isSafeInteger(value) || value < 1 || value > 1000000) throw Error('Enter whole numbers from 1 to 1,000,000.');
+        if (!Number.isSafeInteger(value) || value < min || value > max) throw Error('Enter whole numbers within the allowed range.');
         thresholds[key] = value;
       }
       thresholds.summarizer = values.summarizer;
@@ -106,9 +112,9 @@ export function renderCompaction(host, agent, persist, request) {
         thresholds.keep_alive = {enabled:true, limit_minutes:limit};
         for (const [key] of keepStates) thresholds.keep_alive[key] = Boolean(values['keep_alive_' + key]);
       }
-      if (thresholds.tail_tokens + agent.compaction_defaults.summary_tokens >= thresholds.trigger_tokens) {
+      if (thresholds.tail_tokens + thresholds.summary_tokens >= thresholds.trigger_tokens) {
         throw Error('Trigger must exceed the tail plus the summary target (' +
-          agent.compaction_defaults.summary_tokens.toLocaleString() + ').');
+          thresholds.summary_tokens.toLocaleString() + ').');
       }
       agent = await persist({compaction_thresholds: thresholds});
       describe();
@@ -133,8 +139,8 @@ export function renderCompaction(host, agent, persist, request) {
     }}) : null;
   const list = createConfigList(host, {label:'Compaction thresholds'});
   const rows = new Map();
-  for (const [key, title, hint] of fields) {
-    const row = createNumberRow(list, {title, hint, value:saved(key), min:1, max:1000000, disabled:!manage, key, form});
+  for (const [key, title, hint, min, max] of fields) {
+    const row = createNumberRow(list, {title, hint, value:saved(key), min, max, disabled:!manage, key, form});
     // Typing counts as an edit at once, so Save is ready before the field is left.
     row.control.addEventListener('input', () => { form?.set(key, Number(row.control.value)); checkRoom(); });
     rows.set(key, row);

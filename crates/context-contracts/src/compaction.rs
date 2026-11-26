@@ -123,7 +123,7 @@ impl Config {
                 .is_some_and(|tokens| !(1..=1_000_000).contains(&tokens))
             || !(1..=16).contains(&self.characters_per_token)
             || !(1..=65536).contains(&self.summary_reserve_bytes)
-            || !(1..=262144).contains(&self.max_source_bytes)
+            || !(1..=1_048_576).contains(&self.max_source_bytes)
             || !(1024..=65536).contains(&self.tool_result_preview_bytes)
             || !(self.tool_result_preview_bytes..=262144).contains(&self.dedup_max_output_bytes)
             || !(4096..=262144).contains(&self.search_output_bytes)
