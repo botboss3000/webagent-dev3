@@ -61,6 +61,23 @@ async function control(id, settings = {}) {
   }
 }
 
+/* Applies the configured control size: one value for the whole bar, and a control's own value
+   for that button only. Custom properties inherit, so an override needs one line, no rule. */
+function applyControlSizes(surface, profile) {
+  const controls = profile?.controls || {};
+  const shared = controls.default?.size_px;
+  if (typeof shared === 'number' && shared > 0) {
+    surface.style.setProperty('--control-size', `${shared}px`);
+  }
+  for (const [id, settings] of Object.entries(controls)) {
+    if (id === 'default') continue;
+    const size = settings?.size_px;
+    if (typeof size !== 'number' || size <= 0) continue;
+    const element = surface.querySelector(`.composer-btn-${id}`);
+    if (element) element.style.setProperty('--control-size', `${size}px`);
+  }
+}
+
 /* Sizes the bar from its own controls and applies the surface settings the config names.
    There are no fallbacks: an absent height is the tallest control (0 when there is none),
    an absent radius is half the height, and absent padding means no padding at all. */
@@ -124,6 +141,7 @@ async function renderComposer(host, profile, state) {
   const surface = document.createElement('div');
   surface.className = 'composer-surface';
   surface.append(grid);
+  applyControlSizes(surface, profile);
   host.replaceChildren(surface);
   applySurface(surface, profile);
   return { surface, grid };

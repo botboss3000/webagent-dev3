@@ -227,3 +227,15 @@ button {
   --z-drawer: 40;
   --z-transient: 9999;
 }
+
+/* One size for every control in the shell: 34px is the default, and a coarse pointer needs a
+   bigger target. Config may override it per surface and per control; this is the fallback. */
+:root {
+  --control-size: 34px;
+}
+
+@media (pointer: coarse) {
+  :root {
+    --control-size: 44px;
+  }
+}

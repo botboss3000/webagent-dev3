@@ -7,25 +7,31 @@
       "padding_px": null
     },
     "controls": {
+      "default": { "size_px": null },
       "input": {
         "label": "Message",
         "placeholder": null,
         "rows": 1,
         "max_rows": null,
         "enter_behavior": null,
-        "draft_persistence": false
+        "draft_persistence": false,
+        "size_px": null
       },
       "attach": {
-        "multiple": false
+        "multiple": false,
+        "size_px": null
       },
       "mic": {
-        "label": "Dictate"
+        "label": "Dictate",
+        "size_px": null
       },
       "stop": {
-        "label": "Stop"
+        "label": "Stop",
+        "size_px": null
       },
       "send": {
-        "label": "Send"
+        "label": "Send",
+        "size_px": null
       }
     },
     "commands": {
